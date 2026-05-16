@@ -12704,7 +12704,10 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
 }
 
 async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // Public by default — refined prompts are shareable / fun to compare.
+  // Override with SEEKDEEP_CONTEXT_REFINE_EPHEMERAL=on if you want it private.
+  const refineEphemeral = String(process.env.SEEKDEEP_CONTEXT_REFINE_EPHEMERAL || 'off').toLowerCase() === 'on';
+  await interaction.deferReply(refineEphemeral ? { flags: MessageFlags.Ephemeral } : {});
 
   const prompt = seekdeepExtractContextMenuPromptText(targetMessage);
   if (!prompt) {
@@ -12759,7 +12762,10 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
   await interaction.editReply({ content: body });
 }
 async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // Public by default — translations are useful to the whole channel. Override
+  // via SEEKDEEP_CONTEXT_TRANSLATE_EPHEMERAL=on.
+  const translateEphemeral = String(process.env.SEEKDEEP_CONTEXT_TRANSLATE_EPHEMERAL || 'off').toLowerCase() === 'on';
+  await interaction.deferReply(translateEphemeral ? { flags: MessageFlags.Ephemeral } : {});
 
   const prompt = seekdeepExtractContextMenuPromptText(targetMessage);
   if (!prompt) {
@@ -12795,7 +12801,9 @@ async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
 }
 
 async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // Public by default. Override via SEEKDEEP_CONTEXT_COMPARE_EPHEMERAL=on.
+  const compareEphemeral = String(process.env.SEEKDEEP_CONTEXT_COMPARE_EPHEMERAL || 'off').toLowerCase() === 'on';
+  await interaction.deferReply(compareEphemeral ? { flags: MessageFlags.Ephemeral } : {});
 
   const channel = interaction.channel;
   if (!channel?.messages?.fetch) {
