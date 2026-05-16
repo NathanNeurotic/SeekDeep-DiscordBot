@@ -110,6 +110,37 @@ check('image-style presets: 10 defined', STYLES.length === 10);
 const qualitySteps = { low: 12, standard: 28, high: 40 };
 check('image-quality presets: 3 tiers', Object.keys(qualitySteps).length === 3);
 
+// Auto-reaction pattern compile (substring case-insensitive default).
+// Mirrors seekdeepCompileReactionPattern in index.js — must keep in sync.
+function compileReactPattern(raw) {
+  const r = String(raw || '').trim();
+  if (!r) return null;
+  const rx = r.match(/^\/(.+)\/([a-z]*)$/i);
+  if (rx) { try { return new RegExp(rx[1], rx[2].replace(/[^gimsuy]/g, '') || 'i'); } catch { return null; } }
+  const esc = r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${esc}\\b`, 'i');
+}
+const sus = compileReactPattern('sus');
+check('reactrule compile: "sus" matches "that is sus"', sus.test('that is sus') === true);
+check('reactrule compile: "sus" does NOT match "discuss"', sus.test('discuss') === false);
+const regexPat = compileReactPattern('/^lol$/i');
+check('reactrule compile: /^lol$/i matches "lol"', regexPat.test('lol') === true);
+check('reactrule compile: /^lol$/i does NOT match "haha lol"', regexPat.test('haha lol') === false);
+
+// Frustration filter regression — v10.2 update (the "no testicles for you" fix)
+function isFrustrationV2(p) {
+  const s = String(p || '').toLowerCase().trim();
+  if (!s) return false;
+  const w = s.split(/\s+/).filter(Boolean).length;
+  if (w <= 3 && /^(?:no|nah|wrong|incorrect|false|bad|terrible|useless|garbage|bullshit|bs|wtf|what\s+the\s+fuck)\b/.test(s)) return true;
+  if (/^(?:fuck|fucking|shit|damn|goddamn|ugh|argh|jesus|christ|fml|smh|wtf)\b\s*[!.?]*$/.test(s)) return true;
+  if (w <= 6 && /^(?:fuck|screw|damn|f\*+)\s+(?:you|this|that|off|me|it|all\s+of\s+(?:you|this))\b/.test(s)) return true;
+  return false;
+}
+check('frustration v2: "no testicles for you" is NOT flagged', isFrustrationV2('no testicles for you') === false);
+check('frustration v2: "no" alone IS flagged', isFrustrationV2('no') === true);
+check('frustration v2: "no help" IS flagged (short)', isFrustrationV2('no help') === true);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

@@ -13,9 +13,12 @@ import {
   ContextMenuCommandBuilder,
   GatewayIntentBits,
   MessageFlags,
+  ModalBuilder,
   PermissionFlagsBits,
   Partials,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -6114,8 +6117,31 @@ function seekdeepHelpText(source = null) {
     prefix + ' archive search <query>   (find prompts in your archive thread)',
     prefix + ' memory preset add brief | expert | no-emoji | formal | casual | ...',
     prefix + ' memory preset list / remove <key> / clear',
+    '/say text:<text> channel:<#chan> image_url:<url>   (admin-only anonymous post)',
     '```',
-    'Admin-only: persona + digest. SEEKDEEP_ALLOWED_CHANNELS in .env gates which channels respond.',
+    'Admin-only: persona + digest + /say. SEEKDEEP_ALLOWED_CHANNELS in .env gates which channels respond.',
+    '',
+    '## Auto-reactions (admin / Manage Messages)',
+    '```text',
+    prefix + ' reactrule list',
+    prefix + ' reactrule add <emoji> when <pattern>',
+    prefix + ' reactrule add <emoji> when <pattern> in #channel',
+    prefix + ' reactrule add <emoji> for @user',
+    prefix + ' reactrule remove <id>',
+    prefix + ' reactrule toggle <id>',
+    prefix + ' reactrule builtin long_message|forwarded|code_block|image_only|link_only on|off',
+    prefix + ' reactrule export   (attaches JSON; use as a save slot)',
+    prefix + ' reactrule import   (attach a JSON file to your message)',
+    '```',
+    'Built-in stacking reactions auto-apply when their trigger matches (off by default; enable individually).',
+    '',
+    '## Emoji vault (admin / Manage Messages)',
+    '```text',
+    prefix + ' emoji backup   (returns JSON file listing all custom emojis here)',
+    prefix + ' emoji import   (attach a backup JSON to re-create emojis here)',
+    prefix + ' emoji count / list',
+    '```',
+    'Imports skip names that already exist. Bot needs Manage Expressions permission to upload.',
     '',
     '## ' + art + ' Image options on /image',
     '```text',
@@ -6971,6 +6997,13 @@ const commands = [
     .setName('changelog')
     .setDescription('Show the latest SeekDeep commits.'),
   new SlashCommandBuilder()
+    .setName('say')
+    .setDescription('Admin: have the bot say something with no attribution.')
+    .addStringOption((o) => o.setName('text').setDescription('What the bot should say').setRequired(true))
+    .addChannelOption((o) => o.setName('channel').setDescription('Target channel (default: current channel)').setRequired(false))
+    .addStringOption((o) => o.setName('image_url').setDescription('Optional image URL to attach').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
     .setName('status')
     .setDescription('Show local backend status.')
     .addBooleanOption((o) => o.setName('verbose').setDescription('Include map diagnostics + full chat-roles map').setRequired(false)),
@@ -6991,6 +7024,9 @@ const commands = [
     .setType(ApplicationCommandType.Message),
   new ContextMenuCommandBuilder()
     .setName('Compare with previous')
+    .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Force React (SeekDeep)')
     .setType(ApplicationCommandType.Message),
 ].map((c) => c.toJSON());
 
@@ -10562,6 +10598,436 @@ if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEK
 }
 // SEEKDEEP_BIG_FEATURE_SCAFFOLDS_END
 
+// SEEKDEEP_AUTO_REACTIONS_START
+// Persistent auto-reaction rules per guild + a set of built-in stacking rules
+// (long message, forwarded, has code block, etc.).
+//
+// Storage: data/auto-reactions.json
+//   {
+//     "guilds": {
+//       "<guildId>": {
+//         "rules": [
+//           { id, emoji, pattern, scope: 'guild'|'channel'|'user',
+//             target, enabled, createdBy, createdAt }
+//         ],
+//         "builtins": {
+//           long_message: { enabled: true, emoji: '🧶', threshold: 1000 },
+//           forwarded:    { enabled: true, emoji: '📨' },
+//           code_block:   { enabled: true, emoji: '💻' },
+//           image_only:   { enabled: true, emoji: '🖼️' },
+//           link_only:    { enabled: true, emoji: '🔗' },
+//         }
+//       }
+//     }
+//   }
+
+const SEEKDEEP_AUTO_REACTIONS_PATH = path.join(__dirname, 'data', 'auto-reactions.json');
+
+const SEEKDEEP_BUILTIN_REACTIONS_DEFAULT = {
+  long_message: { enabled: false, emoji: '\u{1F9F6}', threshold: 1000, description: 'Messages longer than {threshold} chars (yarn ball = lots of talking)' },
+  forwarded:    { enabled: false, emoji: '\u{1F4E8}', description: 'Forwarded messages (envelope)' },
+  code_block:   { enabled: false, emoji: '\u{1F4BB}', description: 'Messages with a ```code``` block (laptop)' },
+  image_only:   { enabled: false, emoji: '\u{1F5BC}', description: 'Image attachment with no text body (framed picture)' },
+  link_only:    { enabled: false, emoji: '\u{1F517}', description: 'Just a URL with no other body text (chain link)' },
+};
+
+function seekdeepReadAutoReactions() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_AUTO_REACTIONS_PATH)) return { guilds: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { guilds: {} };
+    if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    return parsed;
+  } catch { return { guilds: {} }; }
+}
+
+function seekdeepWriteAutoReactions(data) {
+  try {
+    fs.mkdirSync(path.dirname(SEEKDEEP_AUTO_REACTIONS_PATH), { recursive: true });
+    fs.writeFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Failed to write auto-reactions:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepGetGuildReactionsBucket(data, guildId) {
+  if (!data.guilds[guildId]) {
+    data.guilds[guildId] = { rules: [], builtins: structuredClone(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT) };
+  }
+  if (!Array.isArray(data.guilds[guildId].rules)) data.guilds[guildId].rules = [];
+  if (!data.guilds[guildId].builtins) data.guilds[guildId].builtins = structuredClone(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT);
+  // Fill in missing builtins (forward-compat).
+  for (const [key, defaults] of Object.entries(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT)) {
+    if (!data.guilds[guildId].builtins[key]) data.guilds[guildId].builtins[key] = { ...defaults };
+  }
+  return data.guilds[guildId];
+}
+
+function seekdeepUserCanManageReactions(message) {
+  try {
+    const adminSet = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : new Set();
+    if (adminSet.has(String(message?.author?.id || ''))) return true;
+    const member = message?.member;
+    if (member?.permissions?.has?.('Administrator')) return true;
+    if (member?.permissions?.has?.('ManageGuild')) return true;
+    if (member?.permissions?.has?.('ManageMessages')) return true;
+  } catch {}
+  return false;
+}
+
+function seekdeepCompileReactionPattern(pattern = '') {
+  const raw = String(pattern || '').trim();
+  if (!raw) return null;
+  // /regex/flags syntax for power users.
+  const rxMatch = raw.match(/^\/(.+)\/([a-z]*)$/i);
+  if (rxMatch) {
+    try { return new RegExp(rxMatch[1], rxMatch[2].replace(/[^gimsuy]/g, '') || 'i'); }
+    catch { return null; }
+  }
+  // Otherwise plain substring, case-insensitive, with word boundaries when sensible.
+  const esc = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${esc}\\b`, 'i');
+}
+
+function seekdeepRuleMatches(rule, message, content) {
+  if (!rule || !rule.enabled) return false;
+  // Scope check
+  const channelId = String(message?.channel?.id || '');
+  const userId = String(message?.author?.id || '');
+  if (rule.scope === 'channel' && rule.target && String(rule.target) !== channelId) return false;
+  if (rule.scope === 'user' && rule.target && String(rule.target) !== userId) return false;
+  // Pattern check
+  if (!rule._compiled) rule._compiled = seekdeepCompileReactionPattern(rule.pattern);
+  if (!rule._compiled) return true; // empty pattern = match-all in scope
+  return rule._compiled.test(content);
+}
+
+async function seekdeepApplyAutoReactions(message) {
+  try {
+    if (!message?.guild?.id || message.author?.bot) return;
+    const content = String(message.content || '');
+
+    const data = seekdeepReadAutoReactions();
+    const guildId = String(message.guild.id);
+    const bucket = data.guilds[guildId];
+    if (!bucket) return;
+
+    const toReact = new Set();
+
+    // Custom rules
+    for (const rule of bucket.rules || []) {
+      if (seekdeepRuleMatches(rule, message, content)) {
+        if (rule.emoji) toReact.add(rule.emoji);
+      }
+    }
+
+    // Built-in stacking rules
+    const builtins = bucket.builtins || {};
+    if (builtins.long_message?.enabled && content.length >= Number(builtins.long_message.threshold || 1000)) {
+      toReact.add(builtins.long_message.emoji);
+    }
+    if (builtins.forwarded?.enabled) {
+      const isForward = (message.messageSnapshots && (message.messageSnapshots.size || (Array.isArray(message.messageSnapshots) && message.messageSnapshots.length)));
+      if (isForward) toReact.add(builtins.forwarded.emoji);
+    }
+    if (builtins.code_block?.enabled && /```[\s\S]+?```/.test(content)) {
+      toReact.add(builtins.code_block.emoji);
+    }
+    if (builtins.image_only?.enabled) {
+      const hasImage = message.attachments?.some?.((a) => (a?.contentType || '').startsWith('image/'));
+      if (hasImage && !content.trim()) toReact.add(builtins.image_only.emoji);
+    }
+    if (builtins.link_only?.enabled) {
+      const trimmed = content.trim();
+      if (/^https?:\/\/\S+$/i.test(trimmed)) toReact.add(builtins.link_only.emoji);
+    }
+
+    // Cap at 5 reactions per message (Discord allows more but it gets noisy).
+    const emojiList = Array.from(toReact).slice(0, 5);
+    for (const emoji of emojiList) {
+      try {
+        const resolved = await seekdeepResolveEmojiForReact(emoji, message.guild);
+        await message.react(resolved);
+      } catch (err) {
+        // Custom emoji not in this guild, or unicode rejected: ignore quietly.
+      }
+    }
+  } catch (err) {
+    console.warn('Auto-reaction apply failed:', err?.message || err);
+  }
+}
+
+function seekdeepNewReactionRuleId() {
+  return 'rr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+async function seekdeepHandleReactRuleCommand(message, raw = '') {
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  // Only react on commands that start with "reactrule" or "react rule".
+  if (!/^react\s*rule\b/i.test(stripped)) return false;
+
+  if (!message?.guild?.id) {
+    await message.reply({ content: 'Reaction rules are server-only.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (!seekdeepUserCanManageReactions(message)) {
+    await message.reply({ content: 'You need Manage Messages / Manage Server / Admin to change reaction rules.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const subcommand = stripped.replace(/^react\s*rule\s*/i, '').trim();
+  const data = seekdeepReadAutoReactions();
+  const bucket = seekdeepGetGuildReactionsBucket(data, String(message.guild.id));
+
+  // reactrule list
+  if (!subcommand || /^list$/i.test(subcommand)) {
+    const lines = [`Reaction rules for this server (${bucket.rules.length}):`];
+    if (!bucket.rules.length) lines.push('  (none yet)');
+    for (const r of bucket.rules) {
+      const scopeText = r.scope === 'channel' ? ` in <#${r.target}>` : r.scope === 'user' ? ` for <@${r.target}>` : '';
+      lines.push(`  ${r.enabled ? '[on] ' : '[off]'} ${r.id}  ${r.emoji}  when \`${r.pattern || '(always)'}\`${scopeText}`);
+    }
+    lines.push('', 'Built-in stacking reactions:');
+    for (const [key, b] of Object.entries(bucket.builtins || {})) {
+      lines.push(`  ${b.enabled ? '[on] ' : '[off]'} ${key.padEnd(13, ' ')}  ${b.emoji}  ${b.description ? `- ${b.description.replace('{threshold}', String(b.threshold || ''))}` : ''}`);
+    }
+    lines.push('', 'Commands:');
+    lines.push('  @SeekDeep reactrule add <emoji> when <pattern>');
+    lines.push('  @SeekDeep reactrule add <emoji> when <pattern> in #channel');
+    lines.push('  @SeekDeep reactrule add <emoji> for @user');
+    lines.push('  @SeekDeep reactrule remove <id>');
+    lines.push('  @SeekDeep reactrule toggle <id>');
+    lines.push('  @SeekDeep reactrule builtin <key> on|off');
+    lines.push('  @SeekDeep reactrule export   (attaches JSON)');
+    lines.push('  @SeekDeep reactrule import   (attach a JSON file to your message)');
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // reactrule add <emoji> when <pattern> [in #channel | for @user]
+  const addMatch = subcommand.match(/^add\s+(\S+)\s+(?:when\s+(.+?)(?:\s+in\s+<#(\d+)>)?|for\s+<@!?(\d+)>(?:\s+when\s+(.+))?)\s*$/i);
+  if (addMatch) {
+    const emoji = addMatch[1];
+    const patternA = addMatch[2];
+    const channelTarget = addMatch[3];
+    const userTarget = addMatch[4];
+    const patternB = addMatch[5];
+    const pattern = (patternA || patternB || '').trim();
+    const rule = {
+      id: seekdeepNewReactionRuleId(),
+      emoji,
+      pattern,
+      scope: channelTarget ? 'channel' : userTarget ? 'user' : 'guild',
+      target: channelTarget || userTarget || '',
+      enabled: true,
+      createdBy: message.author?.id || '',
+      createdAt: new Date().toISOString(),
+    };
+    bucket.rules.push(rule);
+    seekdeepWriteAutoReactions(data);
+    const scopeText = rule.scope === 'channel' ? ` in <#${rule.target}>` : rule.scope === 'user' ? ` for <@${rule.target}>` : '';
+    await message.reply({ content: `Added reaction rule \`${rule.id}\`: ${emoji} when \`${pattern || '(always)'}\`${scopeText}`, allowedMentions: { parse: [] } });
+    return true;
+  }
+
+  // reactrule remove <id>
+  const removeMatch = subcommand.match(/^remove\s+(\S+)\s*$/i);
+  if (removeMatch) {
+    const id = removeMatch[1];
+    const idx = bucket.rules.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      await message.reply({ content: `No rule with id \`${id}\`.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    bucket.rules.splice(idx, 1);
+    seekdeepWriteAutoReactions(data);
+    await message.reply({ content: `Removed rule \`${id}\`.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // reactrule toggle <id>
+  const toggleMatch = subcommand.match(/^toggle\s+(\S+)\s*$/i);
+  if (toggleMatch) {
+    const id = toggleMatch[1];
+    const r = bucket.rules.find((rule) => rule.id === id);
+    if (!r) {
+      await message.reply({ content: `No rule with id \`${id}\`.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    r.enabled = !r.enabled;
+    seekdeepWriteAutoReactions(data);
+    await message.reply({ content: `Rule \`${id}\` is now ${r.enabled ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // reactrule builtin <key> on|off
+  const builtinMatch = subcommand.match(/^builtin\s+(\w+)\s+(on|off|enable|disable)\s*$/i);
+  if (builtinMatch) {
+    const key = builtinMatch[1].toLowerCase();
+    const onOff = /^(on|enable)$/i.test(builtinMatch[2]);
+    if (!bucket.builtins[key]) {
+      await message.reply({ content: `Unknown builtin "${key}". Valid: ${Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT).join(', ')}`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    bucket.builtins[key].enabled = onOff;
+    seekdeepWriteAutoReactions(data);
+    await message.reply({ content: `Builtin \`${key}\` is now ${onOff ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // reactrule export
+  if (/^export\s*$/i.test(subcommand)) {
+    const blob = JSON.stringify({ rules: bucket.rules, builtins: bucket.builtins }, null, 2);
+    const buf = Buffer.from(blob, 'utf8');
+    await message.reply({
+      content: `Reaction rules export (${bucket.rules.length} custom rules + builtins).`,
+      files: [{ attachment: buf, name: `seekdeep-react-rules-${message.guild.id}.json` }],
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+
+  // reactrule import (read attachment)
+  if (/^import\s*$/i.test(subcommand)) {
+    const attachment = message.attachments?.first?.();
+    if (!attachment) {
+      await message.reply({ content: 'Attach a JSON file (from `reactrule export`) to the message.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    try {
+      const res = await fetch(attachment.url);
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed.rules)) {
+        bucket.rules = parsed.rules.map((r) => ({ ...r, id: r.id || seekdeepNewReactionRuleId() }));
+      }
+      if (parsed.builtins && typeof parsed.builtins === 'object') {
+        for (const [key, val] of Object.entries(parsed.builtins)) {
+          if (bucket.builtins[key]) Object.assign(bucket.builtins[key], val);
+        }
+      }
+      seekdeepWriteAutoReactions(data);
+      await message.reply({ content: `Imported ${bucket.rules.length} rule(s) + builtins.`, allowedMentions: { repliedUser: false } });
+    } catch (err) {
+      await message.reply({ content: 'Import failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
+    }
+    return true;
+  }
+
+  await message.reply({ content: 'Unknown reactrule subcommand. Try `@SeekDeep reactrule list`.', allowedMentions: { repliedUser: false } });
+  return true;
+}
+// SEEKDEEP_AUTO_REACTIONS_END
+
+// SEEKDEEP_EMOJI_VAULT_START
+// Admin command: "@SeekDeep emoji backup" returns a JSON file listing every
+// custom emoji in this guild (name, id, animated, url). Useful for migrating
+// between servers, or just having a snapshot.
+// "@SeekDeep emoji import" reads an attached JSON file and uploads any emojis
+// that don't already exist by name. Requires ManageGuildExpressions /
+// ManageEmojisAndStickers permission on the bot.
+async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  if (!/^emoji\s+(backup|export|import|restore|count|list)\b/i.test(stripped)) return false;
+
+  if (!message?.guild?.id) {
+    await message.reply({ content: 'Emoji vault is server-only.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  if (!seekdeepUserCanManageReactions(message)) {
+    await message.reply({ content: 'You need Manage Messages / Manage Server / Admin to use the emoji vault.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const sub = stripped.replace(/^emoji\s+/i, '').toLowerCase();
+
+  if (/^(backup|export|count|list)$/.test(sub)) {
+    const emojis = Array.from(message.guild.emojis?.cache?.values?.() || []);
+    const items = emojis.map((e) => ({
+      name: e.name,
+      id: e.id,
+      animated: Boolean(e.animated),
+      url: e.imageURL ? e.imageURL({ size: 256 }) : `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`,
+    }));
+    if (sub === 'count') {
+      await message.reply({ content: `This server has ${items.length} custom emoji(s).`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    if (sub === 'list') {
+      const lines = [`Custom emojis (${items.length}):`, ...items.slice(0, 100).map((e, i) => `${i + 1}. :${e.name}: (${e.animated ? 'animated' : 'static'})`)];
+      if (items.length > 100) lines.push(`... and ${items.length - 100} more.`);
+      await message.reply({ content: lines.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    // backup / export
+    const blob = JSON.stringify({ guildId: message.guild.id, exportedAt: new Date().toISOString(), emojis: items }, null, 2);
+    const buf = Buffer.from(blob, 'utf8');
+    await message.reply({
+      content: `Emoji vault export for ${message.guild.name || 'this server'} (${items.length} emojis).`,
+      files: [{ attachment: buf, name: `seekdeep-emoji-vault-${message.guild.id}.json` }],
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+
+  if (/^(import|restore)$/.test(sub)) {
+    const attachment = message.attachments?.first?.();
+    if (!attachment) {
+      await message.reply({ content: 'Attach the JSON file you got from `emoji backup` (or one from another server).', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    // Bot permission check.
+    const me = message.guild.members?.me;
+    if (!me?.permissions?.has?.(PermissionFlagsBits.ManageGuildExpressions || PermissionFlagsBits.ManageEmojisAndStickers)) {
+      await message.reply({ content: 'I need Manage Expressions / Manage Emojis permission on this server to import.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    try {
+      const res = await fetch(attachment.url);
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      const incoming = Array.isArray(parsed.emojis) ? parsed.emojis : [];
+      if (!incoming.length) {
+        await message.reply({ content: 'No emojis in the imported file.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      const existing = new Set(Array.from(message.guild.emojis?.cache?.values?.() || []).map((e) => e.name?.toLowerCase()));
+      const status = await message.reply({ content: `Importing ${incoming.length} emoji(s). Skipping duplicates by name...`, allowedMentions: { repliedUser: false } });
+      let added = 0, skipped = 0, failed = 0;
+      const failures = [];
+      for (const item of incoming) {
+        const name = String(item?.name || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+        const url = String(item?.url || '').trim();
+        if (!name || !url) { failed += 1; failures.push(`${name || '(no name)'}: bad data`); continue; }
+        if (existing.has(name.toLowerCase())) { skipped += 1; continue; }
+        try {
+          await message.guild.emojis.create({ attachment: url, name });
+          added += 1;
+          existing.add(name.toLowerCase());
+        } catch (err) {
+          failed += 1;
+          failures.push(`${name}: ${(err?.message || 'error').slice(0, 80)}`);
+        }
+      }
+      const summary = [`Done. Added ${added}, skipped ${skipped}, failed ${failed}.`];
+      if (failures.length) summary.push('Failures (first 10):', ...failures.slice(0, 10).map((f) => '  ' + f));
+      try { await status.edit({ content: summary.join('\n').slice(0, 1900) }); }
+      catch { await message.reply({ content: summary.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } }); }
+    } catch (err) {
+      await message.reply({ content: 'Import failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
+    }
+    return true;
+  }
+
+  return false;
+}
+// SEEKDEEP_EMOJI_VAULT_END
+
 // SEEKDEEP_NATURAL_ARCHIVE_FOLLOWUP_START
 // Match natural-language archive-image followups like:
 //   "archive this", "archive it", "archive too", "archive that", "archive the image"
@@ -11483,12 +11949,13 @@ client.on('messageCreate', async (message) => {
 
   if (message.author?.bot || !client.user) return;
 
-  // Channel allowlist / blocklist enforcement. If SEEKDEEP_ALLOWED_CHANNELS is
-  // set, only those channel IDs trigger the bot. SEEKDEEP_BLOCKED_CHANNELS is
-  // always silenced.
+  // Auto-reactions fire on every non-bot human message in the channel, even when
+  // the bot isn't otherwise addressed. Channel allowlist still applies.
   if (typeof seekdeepIsChannelAllowed === 'function' && !seekdeepIsChannelAllowed(message.channel?.id)) {
     return;
   }
+  // Fire-and-forget. Don't await.
+  try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
 
   try {
     const removedArchiveRawContent = String(message?.content || '');
@@ -11575,6 +12042,16 @@ client.on('messageCreate', async (message) => {
 
     // Digest channel admin: "@SeekDeep digest channel here|off"
     if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
+    // Reaction-rule admin command: "@SeekDeep reactrule add :eyes: when sus" etc.
+    if (typeof seekdeepHandleReactRuleCommand === 'function' && await seekdeepHandleReactRuleCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
+    // Emoji vault admin command: "@SeekDeep emoji backup" / "@SeekDeep emoji import"
+    if (typeof seekdeepHandleEmojiVaultCommand === 'function' && await seekdeepHandleEmojiVaultCommand(message, seekdeepArchiveOpenRawContent)) {
       return;
     }
 
@@ -12548,6 +13025,9 @@ async function seekdeepHandleMessageContextMenu(interaction) {
   if (name === 'Compare with previous') {
     return seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage);
   }
+  if (name === 'Force React (SeekDeep)') {
+    return seekdeepHandleContextMenuForceReact(interaction, targetMessage);
+  }
 
   await interaction.reply({
     content: 'Unknown context menu command.',
@@ -12868,10 +13348,143 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, 1900);
   await interaction.editReply({ content: body });
 }
+async function seekdeepHandleContextMenuForceReact(interaction, targetMessage) {
+  // Show a modal asking for emojis to apply to the target message.
+  if (!targetMessage?.id) {
+    await interaction.reply({ content: 'No target message.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  // Permission gate: only the original author of the message OR users with
+  // ManageMessages can force-react. Prevents griefing.
+  let allowed = false;
+  try {
+    if (targetMessage.author?.id === interaction.user?.id) allowed = true;
+    if (interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageMessages)) allowed = true;
+    const adminSet = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : new Set();
+    if (adminSet.has(String(interaction.user?.id || ''))) allowed = true;
+  } catch {}
+  if (!allowed) {
+    await interaction.reply({
+      content: 'You can only Force React on your own messages, or with Manage Messages.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`seekdeep:force-react:${targetMessage.id}`)
+    .setTitle('Force React')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('emojis')
+          .setLabel('Emojis (space-separated, max 5)')
+          .setPlaceholder('🔥 💀 :custom_emoji:')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(200)
+          .setRequired(true)
+      )
+    );
+  await interaction.showModal(modal);
+}
+
+// SEEKDEEP_FORCE_REACT_MODAL_HANDLER_START
+function seekdeepParseEmojiTokens(text = '') {
+  const cleaned = String(text || '').trim();
+  if (!cleaned) return [];
+  // Tokens separated by whitespace or commas. Each token can be:
+  //  - a unicode emoji (we let the API validate)
+  //  - <:name:id> or <a:name:id> custom emoji
+  //  - :name: shortcode (we try to resolve against the guild)
+  return cleaned.split(/[\s,]+/).filter(Boolean).slice(0, 5);
+}
+
+async function seekdeepResolveEmojiForReact(token, guild) {
+  if (!token) return null;
+  // Already formatted as <:name:id> or <a:name:id>
+  const custom = token.match(/^<(a?):([a-zA-Z0-9_~]+):(\d+)>$/);
+  if (custom) {
+    // The string the API accepts for reactions is `name:id` (no <>, no animated prefix).
+    return `${custom[2]}:${custom[3]}`;
+  }
+  // Shortcode :name:
+  const shortMatch = token.match(/^:([a-zA-Z0-9_~]+):$/);
+  if (shortMatch && guild?.emojis?.cache) {
+    const found = guild.emojis.cache.find((e) => e?.name?.toLowerCase() === shortMatch[1].toLowerCase());
+    if (found) return `${found.name}:${found.id}`;
+  }
+  // Otherwise treat as unicode and let the API validate.
+  return token;
+}
+
+async function seekdeepHandleForceReactModalSubmit(interaction) {
+  const customId = String(interaction.customId || '');
+  const m = customId.match(/^seekdeep:force-react:(\d+)$/);
+  if (!m) return false;
+  const targetMessageId = m[1];
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const emojisRaw = interaction.fields.getTextInputValue('emojis');
+  const tokens = seekdeepParseEmojiTokens(emojisRaw);
+  if (!tokens.length) {
+    await interaction.editReply({ content: 'No emojis provided.' });
+    return true;
+  }
+
+  const channel = interaction.channel;
+  let targetMessage = null;
+  try {
+    targetMessage = await channel?.messages?.fetch(targetMessageId);
+  } catch {}
+  if (!targetMessage) {
+    await interaction.editReply({ content: 'Target message no longer accessible.' });
+    return true;
+  }
+
+  let applied = 0;
+  const failed = [];
+  for (const token of tokens) {
+    try {
+      const resolved = await seekdeepResolveEmojiForReact(token, interaction.guild);
+      if (!resolved) { failed.push(token); continue; }
+      await targetMessage.react(resolved);
+      applied += 1;
+    } catch (err) {
+      failed.push(`${token} (${(err?.message || 'rejected').slice(0, 60)})`);
+    }
+  }
+
+  const lines = [`Applied ${applied}/${tokens.length} reaction(s).`];
+  if (failed.length) lines.push(`Failed: ${failed.join(', ')}`);
+  await interaction.editReply({ content: lines.join('\n') });
+  return true;
+}
+// SEEKDEEP_FORCE_REACT_MODAL_HANDLER_END
+
 // SEEKDEEP_CONTEXT_MENU_HANDLERS_END
 
 client.on('interactionCreate', async (interaction) => {
   if (typeof seekdeepHandleSharedArchiveButtonInteractionV4 === 'function' && await seekdeepHandleSharedArchiveButtonInteractionV4(interaction)) return;
+
+  // Modal submissions (Force React etc.).
+  try {
+    if (interaction?.isModalSubmit && interaction.isModalSubmit()) {
+      const customId = String(interaction.customId || '');
+      if (customId.startsWith('seekdeep:force-react:')) {
+        await seekdeepHandleForceReactModalSubmit(interaction);
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('Modal submit handler failed:', err?.stack || err?.message || err);
+    try {
+      const payload = { content: 'Modal action failed: ' + (err?.message || 'unknown error'), flags: MessageFlags.Ephemeral };
+      if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
+      else await interaction.reply(payload);
+    } catch {}
+    return;
+  }
 
   // Right-click message context menu commands. Dispatch before the chat-input
   // gate so these don't fall through to slash-command logic.
@@ -13019,6 +13632,44 @@ client.on('interactionCreate', async (interaction) => {
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
       const log = await seekdeepReadGitChangelog(10);
       await sendLongInteractionReply(interaction, asTextBlock(log || 'No git history available.'));
+      return;
+    }
+
+    if (commandName === 'say') {
+      // Admin-only via Discord's setDefaultMemberPermissions(ManageMessages),
+      // but double-check at runtime (defense in depth).
+      const hasPerm = interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageMessages);
+      const isSeekDeepAdmin = (() => {
+        try {
+          const adminSet = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : new Set();
+          return adminSet.has(String(interaction.user?.id || ''));
+        } catch { return false; }
+      })();
+      if (!hasPerm && !isSeekDeepAdmin) {
+        await interaction.reply({ content: '/say requires Manage Messages permission.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const text = String(interaction.options.getString('text', true) || '').trim();
+      const channelOpt = interaction.options.getChannel('channel') || interaction.channel;
+      const imageUrl = String(interaction.options.getString('image_url') || '').trim();
+      if (!text && !imageUrl) {
+        await interaction.reply({ content: 'Provide text or image_url.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!channelOpt?.send) {
+        await interaction.reply({ content: 'Cannot post to that channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      try {
+        const payload = { content: text || '', allowedMentions: { parse: ['users'] } };
+        if (imageUrl) {
+          payload.files = [{ attachment: imageUrl, name: 'seekdeep-say.png' }];
+        }
+        await channelOpt.send(payload);
+        await interaction.reply({ content: `Posted to <#${channelOpt.id}>.`, flags: MessageFlags.Ephemeral });
+      } catch (err) {
+        await interaction.reply({ content: 'Post failed: ' + (err?.message || 'unknown error').slice(0, 500), flags: MessageFlags.Ephemeral });
+      }
       return;
     }
 
