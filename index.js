@@ -9033,13 +9033,35 @@ function seekdeepIsFrustrationPrompt(prompt = '') {
   const p = seekdeepCompatResearchLower(prompt);
   if (!p) return false;
 
-  return (
-    /^(?:no|nah|wrong|incorrect|false|bad|terrible|useless|garbage|bullshit|bs|wtf|what\s+the\s+fuck)\b/.test(p) ||
-    /^(?:fuck|fucking|shit|damn|goddamn|ugh|argh|jesus|christ|fml|smh|wtf)\b\s*[!.?]*$/.test(p) ||
-    /^(?:fuck|screw|damn|f\*+)\s+(?:you|this|that|off|me|it|all\s+of\s+(?:you|this))\b/.test(p) ||
-    /^(?:i\s+(?:mean|just|literally))\s+fuck\b/.test(p) ||
-    /\b(?:not\s+helpful|did(?:n['â€™]?t| not)\s+help|does(?:n['â€™]?t| not)\s+help|wrong\s+answer|bad\s+answer|made\s+that\s+up|hallucinat(?:ed|ing)|you\s+missed|you\s+ignored|not\s+what\s+i\s+asked|that\s+is(?:n['â€™]?t| not)\s+right|try\s+again|redo\s+that|fix\s+that)\b/.test(p)
-  );
+  const wordCount = p.split(/\s+/).filter(Boolean).length;
+
+  // Bare "no" / "nah" / "wrong" / etc. is frustration only when the WHOLE prompt
+  // is short. "no testicles for you" starts with "no" but is a legitimate (if
+  // weird) subject — must not be flagged. Cap at 3 words so phrases like
+  // "no help" / "no good" still register.
+  if (wordCount <= 3 && /^(?:no|nah|wrong|incorrect|false|bad|terrible|useless|garbage|bullshit|bs|wtf|what\s+the\s+fuck)\b/.test(p)) {
+    return true;
+  }
+
+  // Standalone profanity bursts.
+  if (/^(?:fuck|fucking|shit|damn|goddamn|ugh|argh|jesus|christ|fml|smh|wtf)\b\s*[!.?]*$/.test(p)) return true;
+
+  // "fuck you" / "fuck this" / "screw off" — direct frustration phrases. Cap at
+  // 6 words so "fuck this song from the early 2000s" (a real prompt) doesn't
+  // trip it.
+  if (wordCount <= 6 && /^(?:fuck|screw|damn|f\*+)\s+(?:you|this|that|off|me|it|all\s+of\s+(?:you|this))\b/.test(p)) {
+    return true;
+  }
+
+  // "i mean fuck you"
+  if (/^(?:i\s+(?:mean|just|literally))\s+fuck\b/.test(p)) return true;
+
+  // Negative feedback phrases anywhere in the prompt.
+  if (/\b(?:not\s+helpful|did(?:n['’]?t| not)\s+help|does(?:n['’]?t| not)\s+help|wrong\s+answer|bad\s+answer|made\s+that\s+up|hallucinat(?:ed|ing)|you\s+missed|you\s+ignored|not\s+what\s+i\s+asked|that\s+is(?:n['’]?t| not)\s+right|try\s+again|redo\s+that|fix\s+that)\b/.test(p)) {
+    return true;
+  }
+
+  return false;
 }
 
 function seekdeepIsVagueWebRequest(prompt = '') {
@@ -12634,12 +12656,8 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
     return;
   }
 
-  if (typeof seekdeepIsFrustrationPrompt === 'function' && seekdeepIsFrustrationPrompt(prompt)) {
-    await interaction.editReply({
-      content: 'That message looks like frustration/curse text, not a prompt. Pick a message with the actual visual subject.',
-    });
-    return;
-  }
+  // Right-click is an intentional user action — do NOT block on frustration
+  // heuristics. If the user picked this message on purpose, send it through.
 
   if (typeof seekdeepLogRoute === 'function') {
     seekdeepLogRoute('context-menu-generate-image', prompt);
@@ -12696,20 +12714,14 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
     return;
   }
 
-  // Apply the same image-intent gate as /refine so we don't waste a chat call on
-  // non-image text and produce something like "dogwater".
-  const looksLikeImagePrompt =
-    (typeof isNaturalImagePrompt === 'function' && isNaturalImagePrompt(prompt)) ||
-    (typeof seekdeepHasExplicitImageRequest === 'function' && seekdeepHasExplicitImageRequest(prompt)) ||
-    (typeof seekdeepHasVisualSubjectWords === 'function' && seekdeepHasVisualSubjectWords(prompt)) ||
-    (typeof seekdeepHasVisualStyleWords === 'function' && seekdeepHasVisualStyleWords(prompt));
-  const looksLikeFrustration = typeof seekdeepIsFrustrationPrompt === 'function' && seekdeepIsFrustrationPrompt(prompt);
-
-  if (looksLikeFrustration || !looksLikeImagePrompt) {
+  // Right-click is intentional. Only block on the truly degenerate cases:
+  // one-word standalone-curse messages (where refining would invent "dogwater"-
+  // style nonsense). Multi-word weird-but-substantive prompts go through.
+  const wordCount = String(prompt).split(/\s+/).filter(Boolean).length;
+  const isStandaloneCurse = wordCount <= 2 && (typeof seekdeepIsFrustrationPrompt === 'function') && seekdeepIsFrustrationPrompt(prompt);
+  if (isStandaloneCurse) {
     await interaction.editReply({
-      content: looksLikeFrustration
-        ? 'That message looks like frustration, not an image prompt.'
-        : 'That message doesn\'t look like an image prompt. Refine is for visual subjects (e.g. "a red glass apple on a wooden table, cinematic lighting"). Use Inspect or Generate Image from this if you want different behavior.',
+      content: 'That message is a one-word frustration/curse; refining it would invent nonsense. Pick a message with at least a few descriptive words.',
     });
     return;
   }
