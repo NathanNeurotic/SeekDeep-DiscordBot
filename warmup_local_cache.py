@@ -177,18 +177,26 @@ def warm_models(items: list[tuple[str, str, str, bool]]) -> int:
         return 0
     for role, repo, env_var, required in items:
         tag = "required" if required else "optional"
-        print(f"[SeekDeep] role={role:<16} repo={repo:<55} ({tag}, env={env_var})")
+        # Optional per-model pinning: <ENV_VAR>_REVISION pins to a commit SHA, tag, or branch.
+        # Example: LOCAL_CHAT_MODEL_ID_REVISION=8a5f2c0
+        revision_env = f"{env_var}_REVISION"
+        revision = (os.getenv(revision_env) or "").strip() or None
+        rev_label = f" rev={revision}" if revision else ""
+        print(f"[SeekDeep] role={role:<16} repo={repo:<55} ({tag}, env={env_var}){rev_label}")
         try:
             snapshot_download(
                 repo_id=repo,
                 cache_dir=str(CACHE_DIR),
                 token=HF_TOKEN,
                 resume_download=True,
+                revision=revision,
             )
             print(f"           cached/downloaded OK")
         except Exception as exc:  # noqa: BLE001
             print(f"           FAILED: {exc}")
             print("           Hint: check HF_TOKEN, accept the model's terms on Hugging Face if it is gated, then rerun warmup.")
+            if revision:
+                print(f"           Note: pinned to revision={revision} via {revision_env}. Unset that env var to take latest.")
             if required:
                 failures_required += 1
         print()

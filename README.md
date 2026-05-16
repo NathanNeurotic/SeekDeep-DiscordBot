@@ -146,7 +146,39 @@ User examples:
 @SeekDeep archive status @user
 ```
 
+Natural-language archive of the most recent SeekDeep image in the channel (no button click required):
+
+```text
+@SeekDeep archive this | archive it | archive too | archive that | archive the image
+@SeekDeep save this | save it | save the image
+@SeekDeep add this to my archive | put it in my archive | make it archive too
+@SeekDeep share this | shared archive this | save to shared archive
+```
+
+Each archive entry in the thread now has:
+
+- A **Download** link to the full-resolution image (direct CDN URL).
+- A grey **Delete from Archive** button that removes that single entry and updates the thread's count.
+
+Browse the newest 10 entries in your archive thread via slash command:
+
+```text
+/recent kind:archive
+```
+
 Archive thread names track archived generation entries, not general messages. Archive actions require Discord thread storage to be configured and working.
+
+## Right-click Context Menu Commands
+
+Right-click any Discord message → **Apps** → SeekDeep submenu. Five message context menu commands:
+
+| Command | Action |
+|---|---|
+| **Generate Image from this** | Use the message text as an image prompt, queue Original generation. |
+| **Refine as Image Prompt** | Rewrite the message text as a stronger image prompt. Refuses non-image input. |
+| **Inspect (SeekDeep)** | Ephemeral debug card: IDs, timestamps, attachments, buttons, and any cached SeekDeep image state. |
+| **Translate (SeekDeep)** | Translate / decode the message text to plain English. |
+| **Compare with previous** | Compare this message against the prior non-bot message in the channel. |
 
 ## Chat Model Roles
 
@@ -208,6 +240,16 @@ python warmup_local_cache.py --skip-vision
 
 When a model fails to download, the warmup prints a hint about `HF_TOKEN` and accepting the model's terms on Hugging Face for gated models, then continues with the remaining models. The script exits nonzero if any required model failed.
 
+**Optional: pin a model to a specific commit / tag / branch.** Set `<ENV_VAR>_REVISION` in `.env` to lock the downloaded files so future warmups don't pick up silent upstream updates that change behavior:
+
+```text
+LOCAL_CHAT_MODEL_ID_REVISION=8a5f2c0
+LOCAL_CHAT_REASONING_MODEL_ID_REVISION=main
+LOCAL_IMAGE_MODEL_ID_REVISION=v1.0
+```
+
+Look up commit SHAs on the model's Hugging Face page under "Files and versions" → click a commit. Leaving the `_REVISION` var unset takes the latest default branch.
+
 ### Offline runtime phase
 
 After warmup succeeds for the active models, lock the bot to local cache only:
@@ -254,6 +296,48 @@ npm run prune:model-cache
 npm run purge:model-cache-quarantine
 ```
 
+## Tunables
+
+Common `.env` knobs added since the role-routing refactor:
+
+```text
+# Chat-model quantization. 4bit fits 12-14B models on 24GB VRAM; ~1-2% quality drop.
+LOCAL_CHAT_QUANT=4bit                     # options: 4bit | 8bit | none
+LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat   # roles that skip quant (8B models)
+
+# Context / output
+MAX_CONTEXT_MESSAGES=40                   # rolling memory turns kept
+MAX_CONTEXT_CHARS=24000                   # rolling memory chars kept
+SEEKDEEP_MEMORY_RECENT_ENTRIES=30         # injected context turns
+SEEKDEEP_MEMORY_CONTEXT_CHARS=20000       # injected context chars
+CHAT_MAX_NEW_TOKENS=2400                  # default max output tokens for askChat
+CHAT_TEMPERATURE=0.7                      # default chat creativity
+
+# Web search
+MAX_WEB_RESULTS=12                        # SearXNG hits passed to the model
+
+# Image generation
+SEEKDEEP_IMAGE_COOLDOWN_MS=15000          # per-user image cooldown (15s default)
+SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS=900000   # Original/Refined/Both button TTL (15min)
+SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS=900000  # 'generate me' follow-up TTL (15min)
+SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=600000   # refined-prompt reuse window (10min)
+
+# Logging
+SEEKDEEP_FILE_LOGGING=on                  # mirror console output to logs/seekdeep-YYYY-MM-DD.log
+MODEL_ROUTER_LOG=true                     # [SeekDeep Model Router] role decision lines
+MODEL_LOG_VRAM=false                      # log VRAM allocated/reserved before/after model load
+```
+
+The bot console mirrors to `logs/seekdeep-YYYY-MM-DD.log` by default; set `SEEKDEEP_FILE_LOGGING=off` to disable. Token-like strings (`hf_*`, `sk-*`, Discord token shape) are redacted in the file.
+
+Admin user IDs with priority queue access:
+
+```text
+SEEKDEEP_ADMIN_IDS=123456789012345678,234567890123456789
+```
+
+Image generation jobs from listed admins get queue priority (jump ahead of non-admin pending jobs).
+
 ## Health Checks
 
 Local AI server:
@@ -280,10 +364,17 @@ Python syntax:
 - If image generation is slow after chat/refinement, the server may be switching from the chat model back to the image model.
 - If SearXNG fails, check the Docker container on port `8080`.
 - If archive setup fails, verify the bot has access to the chosen archive channel and can create/manage threads.
+- If `Fallback used: role=fallback_chat ...` appears in a chat reply footer, the originally-routed role failed to load (typically CUDA OOM) and the server fell back to `fallback_chat`. Check `LOCAL_CHAT_QUANT` and consider pinning more roles in `LOCAL_CHAT_QUANT_FULL_ROLES`.
 
 ## Development Notes
 
-The repository currently has an unusable `.git` directory in this local workspace, so stabilization work uses timestamped snapshots under `checkpoints/`.
+The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/` directory was renamed to `.git.broken_*` on init. Checkpoints under `checkpoints/` remain as historical snapshots from before git was set up.
+
+```powershell
+git log --oneline
+git tag                 # v10.0-baseline tags the first commit
+git status              # see local changes
+```
 
 For internal component notes, see [AGENTS.md](AGENTS.md).
 For system requirements, see [REQUIREMENTS.md](REQUIREMENTS.md).

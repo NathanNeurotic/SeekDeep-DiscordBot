@@ -21,6 +21,57 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// SEEKDEEP_FILE_LOGGING_START
+// Mirror console.{log,warn,error} to a daily log file under logs/ so debugging
+// across sessions doesn't depend on scrollback. Opt out by setting
+// SEEKDEEP_FILE_LOGGING=off in .env. Tokens and obvious secrets are redacted
+// when written (URLs from .env are stripped of credentials).
+(function seekdeepInstallFileLogging() {
+  try {
+    const flag = String(process.env.SEEKDEEP_FILE_LOGGING || 'on').toLowerCase();
+    if (flag === 'off' || flag === 'false' || flag === '0' || flag === 'no') return;
+
+    const logsDir = path.join(__dirname, 'logs');
+    try { fs.mkdirSync(logsDir, { recursive: true }); } catch {}
+    const dayStamp = new Date().toISOString().slice(0, 10);
+    const logPath = path.join(logsDir, `seekdeep-${dayStamp}.log`);
+    const stream = fs.createWriteStream(logPath, { flags: 'a' });
+
+    const redact = (s) => {
+      let out = String(s == null ? '' : s);
+      // Discord bot token shape: 24-30+ chars of A-Za-z0-9_- separated by 2 dots.
+      out = out.replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}/g, '[redacted-token]');
+      // Generic Bearer/Authorization headers.
+      out = out.replace(/(authorization\s*[:=]\s*['"]?bearer\s+)[^'"\s]+/gi, '$1[redacted]');
+      // hf_* / sk-* style API keys.
+      out = out.replace(/\b(hf_|sk-)[A-Za-z0-9]{16,}\b/g, '$1[redacted]');
+      return out;
+    };
+    const write = (level, args) => {
+      try {
+        const ts = new Date().toISOString();
+        const text = args.map((a) => {
+          if (typeof a === 'string') return a;
+          try { return JSON.stringify(a); } catch { return String(a); }
+        }).join(' ');
+        stream.write(`[${ts}] [${level}] ${redact(text)}\n`);
+      } catch {}
+    };
+    const _log = console.log.bind(console);
+    const _warn = console.warn.bind(console);
+    const _err = console.error.bind(console);
+    console.log = (...args) => { write('log', args); _log(...args); };
+    console.warn = (...args) => { write('warn', args); _warn(...args); };
+    console.error = (...args) => { write('error', args); _err(...args); };
+
+    _log(`[SeekDeep] file logging enabled -> ${logPath}`);
+  } catch (err) {
+    // If logging setup fails, fall back silently to plain console.
+    try { console.warn('[SeekDeep] file logging setup failed:', err?.message || err); } catch {}
+  }
+})();
+// SEEKDEEP_FILE_LOGGING_END
+
 const TOKEN = process.env.DISCORD_TOKEN || '';
 const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:7865';
 const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || 'http://127.0.0.1:8080';
@@ -86,10 +137,49 @@ function seekdeepSetResponseModel(target, modelUsed) {
 // Updated by runLocalChat() from the server's response. Falls back to LOCAL_CHAT_MODEL_ID.
 let seekdeepLastChatModelId = '';
 let seekdeepLastChatModelRole = '';
+let seekdeepLastChatFallbackInfo = null; // { reason, role, modelId, at }
+
+// Ring buffer of recent chat-role loads, for /status visibility. Newest first.
+const SEEKDEEP_RECENT_CHAT_ROLES = [];
+const SEEKDEEP_RECENT_CHAT_ROLES_MAX = 8;
 
 function seekdeepRememberLastChatModel(modelId, role) {
   if (modelId) seekdeepLastChatModelId = String(modelId);
   if (role) seekdeepLastChatModelRole = String(role);
+  if (modelId || role) {
+    SEEKDEEP_RECENT_CHAT_ROLES.unshift({
+      role: String(role || ''),
+      modelId: String(modelId || ''),
+      at: Date.now(),
+    });
+    while (SEEKDEEP_RECENT_CHAT_ROLES.length > SEEKDEEP_RECENT_CHAT_ROLES_MAX) {
+      SEEKDEEP_RECENT_CHAT_ROLES.pop();
+    }
+  }
+}
+
+function seekdeepRememberLastChatFallback(info) {
+  if (info && info.modelId) {
+    seekdeepLastChatFallbackInfo = {
+      reason: String(info.reason || 'unknown'),
+      role: String(info.role || ''),
+      modelId: String(info.modelId || ''),
+      at: Date.now(),
+    };
+  }
+}
+
+function seekdeepConsumeRecentChatFallback() {
+  if (!seekdeepLastChatFallbackInfo) return null;
+  // Only treat as fresh for ~30 s — after that, assume it's stale info from a
+  // previous chat and don't keep tagging unrelated replies.
+  if (Date.now() - Number(seekdeepLastChatFallbackInfo.at || 0) > 30000) {
+    seekdeepLastChatFallbackInfo = null;
+    return null;
+  }
+  const info = seekdeepLastChatFallbackInfo;
+  seekdeepLastChatFallbackInfo = null;
+  return info;
 }
 
 function seekdeepChatModelLabel() {
@@ -120,11 +210,30 @@ function seekdeepElapsedSeconds(startedAt) {
 
 function seekdeepResponseFooter({ startedAt = null, modelUsed = null } = {}) {
   const model = modelUsed || SEEKDEEP_NO_MODEL_USED_LABEL;
+  const elapsedRaw = seekdeepElapsedSeconds(startedAt);
+  const elapsedNum = Number(elapsedRaw);
+  const isLocalCommand = typeof seekdeepIsNoModelReportLabel === 'function' && seekdeepIsNoModelReportLabel(model);
 
-  return [
-    `Time to Generate: ${seekdeepElapsedSeconds(startedAt)} seconds`,
-    `Model Used: ${model}`,
-  ].join('\n');
+  const lines = [];
+  // Hide "Time to Generate: 0.00 seconds" for local commands — it's noise. Keep
+  // the line whenever the actual generation took meaningful time (>= 0.1 s) or
+  // when a real AI model was used.
+  if (!(isLocalCommand && (!Number.isFinite(elapsedNum) || elapsedNum < 0.1))) {
+    lines.push(`Time to Generate: ${elapsedRaw} seconds`);
+  }
+  lines.push(`Model Used: ${model}`);
+
+  // Surface an auto-fallback that just fired so the user knows the chosen role
+  // didn't load and we used another. Consumed on read so it doesn't tag later
+  // unrelated replies.
+  if (typeof seekdeepConsumeRecentChatFallback === 'function') {
+    const fb = seekdeepConsumeRecentChatFallback();
+    if (fb) {
+      lines.push(`Fallback used: role=${fb.role} model=${fb.modelId} (reason: ${fb.reason})`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function seekdeepIsNoModelReportLabel(modelUsed = '') {
@@ -1408,6 +1517,11 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
     seekdeepRememberLastChatModel(response.model_id, response.model_role);
     if (response.fallback_used) {
       console.log(`[SeekDeep Model Router] fallback used reason=${response.fallback_reason || 'unknown'} role=${response.model_role || 'unknown'} model=${response.model_id || 'unknown'}`);
+      seekdeepRememberLastChatFallback({
+        reason: response.fallback_reason,
+        role: response.model_role,
+        modelId: response.model_id,
+      });
     }
   }
 
@@ -1472,6 +1586,21 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
   return `${answer}${formatSources(sources)}`.trim();
 }
 
+function seekdeepTrimVisionBoilerplate(text = '') {
+  let out = String(text || '').trim();
+  if (!out) return out;
+  // Strip the most common opener boilerplate the Qwen2.5-VL model produces.
+  // Catch phrasings like "This image depicts...", "The image shows...", "This image
+  // appears to depict an animated character, which appears to be...", etc.
+  out = out.replace(/^\s*(?:this|the)\s+(?:image|picture|photo|video|media|clip|gif|scene)\s+(?:depicts|shows|appears\s+to\s+(?:depict|show|be)|features|illustrates|portrays|contains|displays|represents|is\s+(?:of|a|an))\s+/i, '');
+  // "This image depicts an animated character, which appears to be a stylized dog..."
+  // -> drop ", which appears to be" reflexive padding when it follows the strip.
+  out = out.replace(/^(?:an?\s+\w+\s+\w+,\s+)?which\s+appears\s+to\s+be\s+(?:a|an)?\s+/i, '');
+  // Capitalise first letter so the trimmed sentence still reads cleanly.
+  if (out && /^[a-z]/.test(out)) out = out[0].toUpperCase() + out.slice(1);
+  return out.trim();
+}
+
 async function askVision(attachment, prompt) {
   const res = await fetch(attachment.url);
   if (!res.ok) throw new Error(`Could not download attachment: ${res.status} ${res.statusText}`);
@@ -1489,7 +1618,8 @@ async function askVision(attachment, prompt) {
     temperature: 0.0,
   });
 
-  return response.text || '(empty vision response)';
+  const text = response.text || '(empty vision response)';
+  return seekdeepTrimVisionBoilerplate(text);
 }
 
 
@@ -1754,6 +1884,19 @@ async function seekdeepBuildImagePromptChoice(prompt = '', imageModeOptions = {}
 
 function seekdeepPromptChoicePreparationContent(prompt = '') {
   const dynamic = SEEKDEEP_IMAGE_PROMPT_REFINEMENT_ENABLED && SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED;
+
+  // If we already have a cached refined prompt for this input, skip the "may take
+  // a minute" warning — the resolved version will appear in seconds.
+  const cached = dynamic && typeof seekdeepDynamicRefineCacheGet === 'function'
+    ? seekdeepDynamicRefineCacheGet(prompt)
+    : null;
+
+  if (cached?.refinedPrompt) {
+    return [
+      'Preparing image prompt choices (reusing cached refined prompt)...',
+      `Prompt: ${seekdeepClipForDiscord(prompt, 650)}`,
+    ].join('\n');
+  }
 
   return [
     dynamic ? 'Refining image prompt with local chat model...' : 'Preparing image prompt choices...',
@@ -2337,12 +2480,66 @@ function seekdeepCleanDynamicImagePrompt(text = '', originalPrompt = '') {
   return out;
 }
 
+// Memoize dynamic image-prompt refinement keyed on the normalized original prompt.
+// Without this, clicking Refined/Both repeatedly on the same image queue would
+// recompute the SAME refined string for every regenerate, wasting ~5s + a model
+// call each time.
+const SEEKDEEP_DYNAMIC_REFINE_CACHE = globalThis.__seekdeepDynamicRefineCache || new Map();
+globalThis.__seekdeepDynamicRefineCache = SEEKDEEP_DYNAMIC_REFINE_CACHE;
+const SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS = Number(process.env.SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS || 10 * 60 * 1000);
+const SEEKDEEP_DYNAMIC_REFINE_CACHE_MAX = Number(process.env.SEEKDEEP_DYNAMIC_REFINE_CACHE_MAX || 64);
+
+function seekdeepDynamicRefineCacheKey(prompt = '') {
+  return normalizeUserText(prompt || '').trim().toLowerCase();
+}
+
+function seekdeepDynamicRefineCacheGet(prompt = '') {
+  const key = seekdeepDynamicRefineCacheKey(prompt);
+  if (!key) return null;
+  const entry = SEEKDEEP_DYNAMIC_REFINE_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() - Number(entry.at || 0) > SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS) {
+    SEEKDEEP_DYNAMIC_REFINE_CACHE.delete(key);
+    return null;
+  }
+  return entry.value || null;
+}
+
+function seekdeepDynamicRefineCacheSet(prompt = '', value = null) {
+  const key = seekdeepDynamicRefineCacheKey(prompt);
+  if (!key || !value) return;
+  SEEKDEEP_DYNAMIC_REFINE_CACHE.set(key, { value, at: Date.now() });
+  // Trim oldest if oversize.
+  while (SEEKDEEP_DYNAMIC_REFINE_CACHE.size > SEEKDEEP_DYNAMIC_REFINE_CACHE_MAX) {
+    const oldestKey = SEEKDEEP_DYNAMIC_REFINE_CACHE.keys().next().value;
+    if (!oldestKey) break;
+    SEEKDEEP_DYNAMIC_REFINE_CACHE.delete(oldestKey);
+  }
+}
+
 async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo = null) {
   const fallback = fallbackPromptInfo || seekdeepPrepareImagePrompt(prompt);
   const originalPrompt = normalizeUserText(prompt || fallback.originalPrompt || '').trim() || 'image';
 
   if (!SEEKDEEP_IMAGE_PROMPT_REFINEMENT_ENABLED || !SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED) {
     return fallback;
+  }
+
+  // Reuse a recent successful refine for the same prompt instead of re-calling
+  // the chat model. The cached value already passed cleanDynamicImagePrompt's
+  // subject-preservation and not-generic checks, so it's safe to return as-is.
+  const cached = seekdeepDynamicRefineCacheGet(originalPrompt);
+  if (cached && cached.refinedPrompt) {
+    return {
+      ...fallback,
+      originalPrompt: fallback.originalPrompt || originalPrompt,
+      refinedPrompt: cached.refinedPrompt,
+      generationPrompt: cached.refinedPrompt,
+      changed: cached.refinedPrompt !== originalPrompt,
+      dynamicRefinement: true,
+      dynamicRefinementAttempted: true,
+      dynamicRefinementCached: true,
+    };
   }
 
   try {
@@ -2363,6 +2560,9 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
         dynamicRefinementError: 'empty-or-rejected-output',
       };
     }
+
+    // Cache for ~10 min so subsequent regenerates / Refined-button clicks reuse it.
+    seekdeepDynamicRefineCacheSet(originalPrompt, { refinedPrompt });
 
     return {
       ...fallback,
@@ -2797,6 +2997,16 @@ function seekdeepImageQueueCurrentPosition() {
 function seekdeepCreateImageQueueJob({ source = 'unknown', userId = '', channelId = '', prompt = '', width = 1024, height = 1024, seed = null } = {}) {
   seekdeepImageQueueState.sequence += 1;
 
+  // Tag admin-user jobs for queue-priority insertion. Admins are SEEKDEEP_ADMIN_IDS
+  // or ADMIN_USER_IDS in .env (comma-separated user IDs).
+  const isAdmin = (() => {
+    try {
+      if (!userId) return false;
+      const ids = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : null;
+      return ids ? ids.has(String(userId)) : false;
+    } catch { return false; }
+  })();
+
   return {
     id: `imgq_${Date.now()}_${seekdeepImageQueueState.sequence}`,
     source,
@@ -2809,6 +3019,7 @@ function seekdeepCreateImageQueueJob({ source = 'unknown', userId = '', channelI
     enqueuedAt: Date.now(),
     startedAt: null,
     finishedAt: null,
+    priorityAdmin: isAdmin,
   };
 }
 
@@ -3252,7 +3463,20 @@ function seekdeepEnqueueImageJob(job, runner) {
   }
 
   return new Promise((resolve, reject) => {
-    seekdeepImageQueueState.pending.push({ job, runner, resolve, reject });
+    const entry = { job, runner, resolve, reject };
+    // Admin-priority slot: when an admin queues an image job (via SEEKDEEP_ADMIN_IDS),
+    // it jumps to the front of the pending queue (after the currently-running job).
+    // The router job itself sets job.priorityAdmin=true via seekdeepCreateImageQueueJob's
+    // caller when appropriate.
+    if (job?.priorityAdmin) {
+      // Insert before any non-priority jobs but after any earlier priority jobs.
+      let insertAt = 0;
+      const pending = seekdeepImageQueueState.pending;
+      while (insertAt < pending.length && pending[insertAt]?.job?.priorityAdmin) insertAt += 1;
+      pending.splice(insertAt, 0, entry);
+    } else {
+      seekdeepImageQueueState.pending.push(entry);
+    }
     void seekdeepPumpImageQueue();
   });
 }
@@ -5352,6 +5576,14 @@ async function statusText() {
     ? Object.entries(chatRoles).map(([role, modelId]) => `  ${role}: ${modelId || '(unset)'}`)
     : ['  (not reported by /health)'];
 
+  const recentRolesLines = (Array.isArray(SEEKDEEP_RECENT_CHAT_ROLES) && SEEKDEEP_RECENT_CHAT_ROLES.length)
+    ? SEEKDEEP_RECENT_CHAT_ROLES.slice(0, 5).map((entry, idx) => {
+        const ago = entry.at ? Math.max(0, Math.floor((Date.now() - Number(entry.at)) / 1000)) : 0;
+        const agoText = ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m ${ago % 60}s ago`;
+        return `  ${idx + 1}. ${entry.role || '?'} -> ${entry.modelId || '?'} (${agoText})`;
+      })
+    : ['  (none yet)'];
+
   return seekdeepRedactStatusConnectionInfo([
     'Local AI server status',
     '',
@@ -5381,6 +5613,8 @@ async function statusText() {
     `Image: ${health.models?.image}`,
     'Chat roles:',
     ...chatRoleLines,
+    'Recent chat-role loads:',
+    ...recentRolesLines,
     `Offline model loading: ${health.offline_model_loading ? 'YES' : 'NO'}`,
   ].join('\n'));
 }
@@ -5596,8 +5830,18 @@ function seekdeepHelpText(source = null) {
     prefix + ' archive status @user',
     prefix + ' archive status shared',
     '/archivestatus',
+    '/recent kind:archive  (newest 10 entries in your archive thread)',
     '```',
     'Archive storage uses Discord threads only.',
+    '',
+    'Natural-language archive of the most recent image:',
+    '```text',
+    prefix + ' archive this | archive it | archive too | archive that | archive the image',
+    prefix + ' save this | save it | save the image',
+    prefix + ' add this to my archive | put it in my archive | make it archive too',
+    prefix + ' share this | shared archive this | save to shared archive',
+    '```',
+    'Each archive thread entry has Download (full-res) + grey Delete from Archive buttons.',
     '',
     '## ' + counter + ' Archive Count / Thread Names',
     '```text',
@@ -5623,8 +5867,19 @@ function seekdeepHelpText(source = null) {
     '```text',
     prefix + ' recent images [limit]',
     prefix + ' recent prompts',
+    '/recent kind:images|prompts|archive',
     prefix + ' cache status',
     prefix + ' queue status',
+    '```',
+    '',
+    '## Right-click message context menu (Apps -> SeekDeep)',
+    'Right-click any Discord message to access:',
+    '```text',
+    'Generate Image from this   - use message text as image prompt, queue Original',
+    'Refine as Image Prompt     - rewrite message as a stronger image prompt (refuses chat)',
+    'Inspect (SeekDeep)         - debug card: ids, attachments, components, cached state',
+    'Translate (SeekDeep)       - translate / decode message text to plain English',
+    'Compare with previous      - compare this message with the prior non-bot message',
     '```',
     '',
     'Unsupported near-commands return: `Did you mean ...?`',
@@ -6055,7 +6310,7 @@ function seekdeepIsMissingImageSubjectPromptV2(prompt = '') {
 function seekdeepRememberPendingImageSubjectRequestV2(message, options = {}) {
   const key = seekdeepPendingImageSubjectKeyFromMessageV2(message);
   const now = Date.now();
-  const ttlMs = Math.max(30000, Number(process.env.SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS || 2 * 60 * 1000));
+  const ttlMs = Math.max(30000, Number(process.env.SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS || 15 * 60 * 1000));
 
   const existing = SEEKDEEP_PENDING_IMAGE_SUBJECT_REQUESTS_V2.get(key);
   const alreadyPending = Boolean(existing?.expiresAt && Number(existing.expiresAt) > now);
@@ -6391,6 +6646,7 @@ const commands = [
         .addChoices(
           { name: 'images', value: 'images' },
           { name: 'prompts', value: 'prompts' },
+          { name: 'archive', value: 'archive' },
         )
     ),
   new SlashCommandBuilder()
@@ -6407,6 +6663,12 @@ const commands = [
     .setType(ApplicationCommandType.Message),
   new ContextMenuCommandBuilder()
     .setName('Inspect (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Translate (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Compare with previous')
     .setType(ApplicationCommandType.Message),
 ].map((c) => c.toJSON());
 
@@ -7088,7 +7350,12 @@ function seekdeepImageModeOptionsFromPrompt(prompt = '') {
 function seekdeepIsGenericImageFollowupPrompt(prompt = '') {
   const p = normalizeUserText(prompt).toLowerCase().trim();
   if (seekdeepLooksLikeGenerateOnlyPrompt(p)) return true;
-  return /^(generate|create|make|draw|paint|sketch|illustrate|render|show)(\s+me)?(?:\s+(an?\s+)?(image|picture|pic|art|drawing|illustration|it|that|this))?$/i.test(p);
+  // Standalone command without a real subject ("draw it", "make a picture").
+  if (/^(generate|create|make|draw|paint|sketch|illustrate|render|show)(\s+me)?(?:\s+(an?\s+)?(image|picture|pic|art|drawing|illustration|it|that|this))?$/i.test(p)) return true;
+  // Pronoun-only references ("draw him", "draw her", "make her", "image of him", "picture of them").
+  if (/^(generate|create|make|draw|paint|sketch|illustrate|render|show)(\s+me)?\s+(an?\s+(?:image|picture|pic|portrait|drawing|illustration)\s+of\s+)?(him|her|them|that|this|it|us|those|these)\b\s*[.!?]*$/i.test(p)) return true;
+  if (/^(?:an?\s+)?(image|picture|pic|portrait|drawing|illustration|render)\s+of\s+(him|her|them|that|this|it|us|those|these)\b\s*[.!?]*$/i.test(p)) return true;
+  return false;
 }
 
 function seekdeepRefinementStatusLine(enabled = true, dynamicRefinement = false, dynamicRefinementAttempted = false) {
@@ -7396,7 +7663,7 @@ function seekdeepPendingImageSubjectCleanPrompt(prompt = '') {
 function seekdeepRememberPendingImageSubjectRequest(message, options = {}) {
   const key = seekdeepPendingImageSubjectKeyFromMessage(message);
   const now = Date.now();
-  const ttlMs = Math.max(30000, Number(process.env.SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS || 2 * 60 * 1000));
+  const ttlMs = Math.max(30000, Number(process.env.SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS || 15 * 60 * 1000));
   const existing = SEEKDEEP_PENDING_IMAGE_SUBJECT_REQUESTS.get(key);
   const alreadyPending = Boolean(existing?.expiresAt && Number(existing.expiresAt) > now);
 
@@ -7561,6 +7828,18 @@ function seekdeepNeedsImageGrounding(prompt = '') {
 
   if (/\b(bag of bells|bells bag|master sword|pok[eÃ©]ball|mario mushroom|triforce|animal crossing)\b/.test(p)) return true;
 
+  // Named franchise character hits — short prompts that reference a known character
+  // need web grounding so SDXL doesn't invent the wrong species/colours.
+  if (/\b(kk slider|tom nook|isabelle|resetti|blathers|celeste|wilbur|orville|timmy|tommy)\b/.test(p)) return true; // Animal Crossing
+  if (/\b(link|zelda|ganon|ganondorf|sheik|skull kid|tingle|midna)\b/.test(p)) return true; // Zelda
+  if (/\b(pikachu|charizard|bulbasaur|squirtle|mewtwo|eevee|snorlax|gengar)\b/.test(p)) return true; // Pokemon
+  if (/\b(luigi|bowser|peach|yoshi|wario|waluigi|toadette|rosalina|goomba|koopa|shy guy)\b/.test(p)) return true; // Mario
+  if (/\b(kirby|meta knight|king dedede|waddle dee)\b/.test(p)) return true; // Kirby
+  if (/\b(samus|metroid|ridley)\b/.test(p)) return true; // Metroid
+  if (/\b(sonic the hedgehog|tails|knuckles|amy rose|shadow the hedgehog|dr eggman|robotnik)\b/.test(p)) return true; // Sonic
+  if (/\b(master chief|cortana|arbiter)\b/.test(p)) return true; // Halo
+  if (/\b(spyro|ripto|sparx|crash bandicoot|aku aku)\b/.test(p)) return true; // Spyro / Crash
+
   return false;
 }
 
@@ -7611,6 +7890,47 @@ async function seekdeepMaybeGroundImagePrompt(prompt = '') {
     return { prompt: grounded, grounded: true, searchQuery: 'known-subject:toad-from-mario' };
   }
   // SEEKDEEP_KNOWN_TOAD_MARIO_GROUNDING_END
+
+  // SEEKDEEP_KNOWN_CHARACTER_GROUNDING_START
+  // Hand-tuned overrides for franchise characters where SDXL alone reliably
+  // hallucinates the wrong species or colors. Cheap, accurate, no chat-model call.
+  const lower = original.toLowerCase();
+  if (/\bkk slider\b/.test(lower)) {
+    const grounded = 'KK Slider from Animal Crossing, a friendly anthropomorphic white dog with floppy ears and black markings around the eyes, holding an acoustic guitar, simple Nintendo-style cartoon proportions, centered character, no text, no logo';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:kk-slider' };
+  }
+  if (/\btom nook\b/.test(lower)) {
+    const grounded = 'Tom Nook from Animal Crossing, a tanuki (raccoon-dog) with brown fur, dark facial markings, wearing a green apron-like vest, cheerful Nintendo-style cartoon proportions, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:tom-nook' };
+  }
+  if (/\bisabelle\b/.test(lower) && /\b(animal crossing|nook|villager|town)\b/.test(lower)) {
+    const grounded = 'Isabelle from Animal Crossing, a cheerful yellow shih tzu dog with curled side ears, green leaf hair accent, white blouse and dark vest, cute Nintendo-style cartoon proportions, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:isabelle' };
+  }
+  if (/\bspyro\b/.test(lower) && !/\bripto\b/.test(lower)) {
+    const grounded = 'Spyro the purple dragon, small western-style cartoon dragon, vibrant purple scales, golden horns and underbelly, golden wings, large green eyes, cheerful pose, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:spyro-purple-dragon' };
+  }
+  if (/\bripto\b/.test(lower)) {
+    const grounded = 'Ripto from Spyro the Dragon, a short angry yellow-skinned dinosaur-like villain with a large jeweled scepter, small reddish horns, tan robe, scowling expression, cartoon proportions, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:ripto-spyro-villain' };
+  }
+  if (/\bgoomba\b/.test(lower)) {
+    const grounded = 'Goomba from Super Mario, a small brown mushroom-shaped enemy with angry eyebrows, two tiny fang teeth, two small bare feet, no arms, Nintendo-style cartoon proportions, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:goomba' };
+  }
+  if (/\bpikachu\b/.test(lower)) {
+    const grounded = 'Pikachu from Pokemon, a small chubby yellow electric mouse Pokemon, long pointed ears with black tips, red cheeks, lightning-bolt tail, large dark eyes, cheerful pose, Nintendo-style cartoon proportions, centered character, no text';
+    console.log(`[SeekDeep] image prompt grounded:\n  original: ${original}\n  grounded: ${grounded}`);
+    return { prompt: grounded, grounded: true, searchQuery: 'known-subject:pikachu' };
+  }
+  // SEEKDEEP_KNOWN_CHARACTER_GROUNDING_END
 
   const searchQuery = seekdeepBuildImageGroundingSearchQuery(original);
 
@@ -9141,6 +9461,105 @@ function seekdeepBuildArchiveStatusReport(target = null) {
   ].join('\n');
 }
 
+// SEEKDEEP_RECENT_ARCHIVE_REPORT_START
+// Lists this user's most recent archive thread entries (most recent 10) with the
+// stored prompt + timestamp. Useful for browsing what was archived without
+// scrolling the actual thread.
+async function seekdeepBuildRecentArchiveReport(target = null) {
+  const guildId = String(target?.guild?.id || target?.guildId || '').trim();
+  const userId = String(target?.user?.id || target?.author?.id || target?.member?.user?.id || '').trim();
+  const limit = 10;
+
+  if (!guildId) {
+    return 'Recent archive entries (this server)\n\nArchive is only available inside a server.';
+  }
+
+  // Resolve the user's archive thread from config.
+  let thread = null;
+  let threadName = '';
+  try {
+    const config = typeof seekdeepArchiveThreadReadConfig === 'function' ? seekdeepArchiveThreadReadConfig() : { guilds: {} };
+    const guildConfig = config?.guilds?.[guildId] || {};
+    const profile = guildConfig?.userArchives?.[userId] || {};
+    const threadId = profile?.threadId || '';
+    if (!threadId) {
+      return [
+        'Recent archive entries',
+        '',
+        'You do not have an archive thread set up yet for this server.',
+        'Generate an image and press the Archive button, or run `@SeekDeep archive me` to create one.',
+      ].join('\n');
+    }
+    const guild = target?.guild || target?.client?.guilds?.cache?.get?.(guildId) || null;
+    const channels = guild?.channels?.cache || null;
+    // Fetch the thread either via the parent channel's threads cache or directly.
+    if (typeof target?.client?.channels?.fetch === 'function') {
+      thread = await target.client.channels.fetch(threadId).catch(() => null);
+    }
+    threadName = String(thread?.name || profile?.threadName || '');
+  } catch (err) {
+    return 'Recent archive entries\n\nFailed to load archive thread config: ' + (err?.message || err);
+  }
+
+  if (!thread?.messages?.fetch) {
+    return [
+      'Recent archive entries',
+      '',
+      'Found an archive thread in config, but could not fetch its messages.',
+      'It may be deleted or inaccessible.',
+    ].join('\n');
+  }
+
+  let entries = [];
+  try {
+    let before = undefined;
+    for (let page = 0; page < 3 && entries.length < limit; page += 1) {
+      const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+      if (!batch || !batch.size) break;
+      const sorted = Array.from(batch.values()).sort((a, b) => Number(b.createdTimestamp || 0) - Number(a.createdTimestamp || 0));
+      for (const msg of sorted) {
+        const content = String(msg?.content || '');
+        if (!/SeekDeep Image Archive Entry/i.test(content) && !/SeekDeep Shared Archive Entry/i.test(content)) continue;
+        const promptMatch = content.match(/(?:^|\n)Prompt:\s*([^\n]+)/i);
+        const promptText = promptMatch ? promptMatch[1].trim() : '(no prompt recorded)';
+        const at = msg.createdAt ? msg.createdAt.toISOString().replace('T', ' ').slice(0, 19) : '(unknown time)';
+        const attachmentCount = msg.attachments?.size || 0;
+        entries.push({ at, prompt: promptText, attachmentCount, url: msg.url || '' });
+        if (entries.length >= limit) break;
+      }
+      before = sorted[sorted.length - 1]?.id;
+      if (!before) break;
+    }
+  } catch (err) {
+    return 'Recent archive entries\n\nFailed to scan archive thread: ' + (err?.message || err);
+  }
+
+  if (!entries.length) {
+    return [
+      'Recent archive entries',
+      '',
+      `Thread: ${threadName || thread.id}`,
+      '',
+      '(no archived images found in this thread yet)',
+    ].join('\n');
+  }
+
+  const lines = [
+    'Recent archive entries (newest first)',
+    `Thread: ${threadName || thread.id}`,
+    '',
+  ];
+  for (let i = 0; i < entries.length; i += 1) {
+    const e = entries[i];
+    const promptShort = e.prompt.length > 200 ? e.prompt.slice(0, 197) + '...' : e.prompt;
+    lines.push(`${i + 1}. [${e.at}] ${promptShort}`);
+    if (e.attachmentCount) lines.push(`   attachments: ${e.attachmentCount} | jump: ${e.url}`);
+    else lines.push(`   jump: ${e.url}`);
+  }
+  return lines.join('\n');
+}
+// SEEKDEEP_RECENT_ARCHIVE_REPORT_END
+
 // SEEKDEEP_NATURAL_ARCHIVE_FOLLOWUP_START
 // Match natural-language archive-image followups like:
 //   "archive this", "archive it", "archive too", "archive that", "archive the image"
@@ -10108,6 +10527,13 @@ client.on('messageCreate', async (message) => {
   }
 
   if (mentionCount > 1) {
+    // Claim final-reply ownership so any other handler racing toward the same
+    // message bails out instead of also replying. Without this, a long pasted
+    // message with multiple @SeekDeep strings would fire BOTH the warning and a
+    // downstream chat reply.
+    if (typeof seekdeepClaimFinalReply === 'function') {
+      seekdeepClaimFinalReply('message-start', message?.id);
+    }
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await message.reply({
       content: seekdeepAppendResponseFooter(seekdeepMultipleCommandText(), {
@@ -10116,6 +10542,7 @@ client.on('messageCreate', async (message) => {
       }),
       allowedMentions: { repliedUser: false },
     });
+    stopSeekDeepTypingLoopForMessage(message);
     return;
   }
 
@@ -10354,8 +10781,11 @@ client.on('messageCreate', async (message) => {
       seekdeepLogRoute('vision', prompt);
       const rawPrompt = prompt || 'Describe this media clearly.';
       const answer = await askVision(visionTarget.attachment, seekdeepBuildPromptWithMemorySafeV14(rawPrompt, key));
-      seekdeepRememberSafeV13(key, 'user', rawPrompt);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      // Tag both user and assistant entries with a [vision] marker so a follow-up
+      // chat ("tell me about him") sees that the prior turn came from looking at
+      // an actual image — the chat model can ground "him/her/it" against that.
+      seekdeepRememberSafeV13(key, 'user', `[vision-question] ${rawPrompt}`);
+      seekdeepRememberSafeV13(key, 'assistant', `[vision-description] ${answer}`);
       seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
       await sendLongMessageReply(message, answer);
       return;
@@ -10894,6 +11324,12 @@ async function seekdeepHandleMessageContextMenu(interaction) {
   if (name === 'Refine as Image Prompt') {
     return seekdeepHandleContextMenuRefine(interaction, targetMessage);
   }
+  if (name === 'Translate (SeekDeep)') {
+    return seekdeepHandleContextMenuTranslate(interaction, targetMessage);
+  }
+  if (name === 'Compare with previous') {
+    return seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage);
+  }
 
   await interaction.reply({
     content: 'Unknown context menu command.',
@@ -11114,6 +11550,108 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
   const body = ('Refined prompt:\n' + answer).slice(0, 1900);
   await interaction.editReply({ content: body });
 }
+async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const prompt = seekdeepExtractContextMenuPromptText(targetMessage);
+  if (!prompt) {
+    await interaction.editReply({
+      content: 'That message has no text to translate (only attachments/embeds).',
+    });
+    return;
+  }
+
+  if (typeof seekdeepLogRoute === 'function') {
+    seekdeepLogRoute('context-menu-translate', prompt.slice(0, 80));
+  }
+
+  const translatePrompt = [
+    'Translate the following text to English. If it is already English, translate it to plain modern English (decode slang/jargon/leetspeak/emoji-laden text into normal prose).',
+    'Return only the translation. No commentary, no "Sure, here is the translation:" preface, no quotes around the output.',
+    '',
+    'Text:',
+    prompt,
+  ].join('\n');
+
+  let answer = await askChat(translatePrompt, {
+    web: 'off',
+    system: 'You are SeekDeep translation mode. Return only the translated text in plain English. No headings, no quotes, no commentary.',
+    maxNewTokens: Math.min(1800, Math.max(200, prompt.length * 3)),
+    temperature: 0.2,
+    memoryKey: null,
+  });
+  answer = String(answer || '').replace(/^\s*(translation|english|in english)\s*[:\-]\s*/i, '').trim();
+
+  const body = ('Translation:\n' + (answer || '(no output)')).slice(0, 1900);
+  await interaction.editReply({ content: body });
+}
+
+async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const channel = interaction.channel;
+  if (!channel?.messages?.fetch) {
+    await interaction.editReply({ content: 'Cannot fetch channel history.' });
+    return;
+  }
+
+  // Find the previous non-bot, non-system message before the targetMessage.
+  const fetched = await channel.messages.fetch({ limit: 30, before: targetMessage.id }).catch(() => null);
+  if (!fetched) {
+    await interaction.editReply({ content: 'Could not load earlier messages to compare.' });
+    return;
+  }
+
+  const sorted = Array.from(fetched.values()).sort((a, b) => Number(b.createdTimestamp || 0) - Number(a.createdTimestamp || 0));
+  let prevMessage = null;
+  for (const m of sorted) {
+    if (!m || m.system) continue;
+    const text = String(m.content || '').trim();
+    if (!text) continue;
+    // Skip the SeekDeep bot's own footers/queue acks for cleaner compares.
+    if (m.author?.id === interaction.client.user?.id && /^Time to Generate:/i.test(text)) continue;
+    prevMessage = m;
+    break;
+  }
+
+  if (!prevMessage) {
+    await interaction.editReply({ content: 'No earlier message found to compare against.' });
+    return;
+  }
+
+  const aText = String(prevMessage.content || '').trim();
+  const bText = String(targetMessage.content || '').trim();
+  if (!aText || !bText) {
+    await interaction.editReply({ content: 'One of the two messages has no text content; cannot compare.' });
+    return;
+  }
+
+  if (typeof seekdeepLogRoute === 'function') {
+    seekdeepLogRoute('context-menu-compare', `${prevMessage.id}<->${targetMessage.id}`);
+  }
+
+  const comparePrompt = [
+    'Compare these two messages from a Discord conversation. Identify how they relate, what each is asking or saying, any contradictions, and the deltas worth calling out.',
+    'Be concise. Use a short table or bullets. Do not invent details that are not in either message.',
+    '',
+    `Message A (earlier, from ${prevMessage.author?.username || 'user'}):`,
+    aText.slice(0, 1500),
+    '',
+    `Message B (newer, from ${targetMessage.author?.username || 'user'}):`,
+    bText.slice(0, 1500),
+  ].join('\n');
+
+  const answer = await askChat(comparePrompt, {
+    web: 'off',
+    system: 'You are SeekDeep comparison mode. Compare two pieces of text and report the relationship/differences concisely. No filler.',
+    maxNewTokens: 1800,
+    temperature: 0.2,
+    memoryKey: null,
+  });
+
+  const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, 1900);
+  await interaction.editReply({ content: body });
+}
 // SEEKDEEP_CONTEXT_MENU_HANDLERS_END
 
 client.on('interactionCreate', async (interaction) => {
@@ -11163,13 +11701,21 @@ client.on('interactionCreate', async (interaction) => {
       if (commandName === 'archivestatus') kind = 'archive';
       if (commandName === 'recent') {
         const requested = interaction.options.getString('kind') || 'images';
-        kind = requested === 'prompts' ? 'recent-prompts' : 'recent-images';
+        if (requested === 'prompts') kind = 'recent-prompts';
+        else if (requested === 'archive') kind = 'recent-archive';
+        else kind = 'recent-images';
       }
 
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
 
       if (kind === 'recent-images') {
         await seekdeepPostRecentImagesFromInteraction(interaction, 5);
+        return;
+      }
+
+      if (kind === 'recent-archive') {
+        const content = await seekdeepBuildRecentArchiveReport(interaction);
+        await sendLongInteractionReply(interaction, asTextBlock(content));
         return;
       }
 

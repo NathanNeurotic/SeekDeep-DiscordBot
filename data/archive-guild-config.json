@@ -20,14 +20,14 @@
         },
         "741414123711234048": {
           "threadId": "1504896055450534061",
-          "count": 3,
+          "count": 4,
           "countSource": "seekdeep-archive-posts-v3",
           "lastNickname": "GLP-2 Roooo",
-          "updatedAt": "2026-05-15T22:05:06.067Z",
-          "lastCountBackfillAt": "2026-05-15T22:05:03.727Z",
-          "lastCountBackfillScannedMessages": 3,
-          "lastCountBackfillArchiveEntries": 1,
-          "lastArchivedAt": "2026-05-15T22:05:06.066Z"
+          "updatedAt": "2026-05-16T15:57:58.066Z",
+          "lastCountBackfillAt": "2026-05-16T15:57:56.094Z",
+          "lastCountBackfillScannedMessages": 5,
+          "lastCountBackfillArchiveEntries": 2,
+          "lastArchivedAt": "2026-05-16T15:57:58.065Z"
         },
         "1203252560362868766": {
           "threadId": "1504313134683394101",
@@ -39,18 +39,18 @@
       },
       "sharedArchive": {
         "threadId": "1504467609196957808",
-        "threadName": "🪙 • Shared Archive • 24",
-        "count": 24,
+        "threadName": "🪙 • Shared Archive • 25",
+        "count": 25,
         "countSource": "seekdeep-shared-archive-posts-v1",
         "bootstrapSource": "shared-archive-get-or-create",
-        "bootstrapAt": "2026-05-16T05:31:34.175Z",
-        "updatedAt": "2026-05-16T05:31:35.623Z",
-        "lastArchivedAt": "2026-05-16T05:31:35.623Z",
+        "bootstrapAt": "2026-05-16T15:58:01.862Z",
+        "updatedAt": "2026-05-16T15:58:03.860Z",
+        "lastArchivedAt": "2026-05-16T15:58:03.859Z",
         "lastArchivedBy": "640897985382973440",
         "lastArchiveSource": "shared-archive-button-count-finalize-v6",
-        "lastCountScanAt": "2026-05-16T05:31:35.623Z",
-        "lastCountScanMessages": 54,
-        "lastCountScanEntries": 24
+        "lastCountScanAt": "2026-05-16T15:58:03.859Z",
+        "lastCountScanMessages": 56,
+        "lastCountScanEntries": 25
       }
     },
     "741414359967989854": {
