@@ -17,6 +17,8 @@ import {
   PermissionFlagsBits,
   Partials,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
@@ -13549,8 +13551,163 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, 1900);
   await interaction.editReply({ content: body });
 }
+// SEEKDEEP_FORCE_REACT_PICKER_START
+// v10.4.1: Force React replaces the text-input modal with a demonbot-style
+// paginated emoji picker. Shows up to 100 of the guild's custom emoji per
+// page in four collapsible select menus of 25 options each, plus a nav row
+// for Prev/Next/Apply/Cancel. Selection state is per-user-per-target-message,
+// expires after SEEKDEEP_FORCE_REACT_TTL_MS, and is wiped on Apply or Cancel.
+const SEEKDEEP_FORCE_REACT_TTL_MS = Number(process.env.SEEKDEEP_FORCE_REACT_TTL_MS || 600000);
+const SEEKDEEP_FORCE_REACT_BUCKET_SIZE = 25;
+const SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE = 4;
+const SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE =
+  SEEKDEEP_FORCE_REACT_BUCKET_SIZE * SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE; // 100
+const SEEKDEEP_FORCE_REACT_MAX_SELECTED = 5;
+const seekdeepForceReactState = new Map();
+
+function seekdeepForceReactKey(userId, targetMsgId) {
+  return `${String(userId || '')}:${String(targetMsgId || '')}`;
+}
+
+function seekdeepForceReactSweep() {
+  const now = Date.now();
+  for (const [k, v] of seekdeepForceReactState.entries()) {
+    if ((v.lastUpdate || 0) + SEEKDEEP_FORCE_REACT_TTL_MS < now) {
+      seekdeepForceReactState.delete(k);
+    }
+  }
+}
+
+function seekdeepForceReactGet(userId, targetMsgId) {
+  seekdeepForceReactSweep();
+  return seekdeepForceReactState.get(seekdeepForceReactKey(userId, targetMsgId)) || null;
+}
+
+function seekdeepForceReactSet(userId, targetMsgId, patch) {
+  const key = seekdeepForceReactKey(userId, targetMsgId);
+  const prev = seekdeepForceReactState.get(key) || {
+    selected: new Set(),
+    page: 0,
+    channelId: '',
+    guildId: '',
+  };
+  const next = { ...prev, ...patch, lastUpdate: Date.now() };
+  // Ensure selected stays a Set (in case caller passed an array).
+  if (next.selected && !(next.selected instanceof Set)) {
+    next.selected = new Set(next.selected);
+  }
+  seekdeepForceReactState.set(key, next);
+  return next;
+}
+
+function seekdeepForceReactDelete(userId, targetMsgId) {
+  seekdeepForceReactState.delete(seekdeepForceReactKey(userId, targetMsgId));
+}
+
+// Sorted list of {id, name, animated} for the guild's custom emoji. Stable
+// across renders so the bucket math doesn't drift mid-flow.
+function seekdeepForceReactGuildEmojis(guild) {
+  if (!guild?.emojis?.cache) return [];
+  return guild.emojis.cache
+    .map((e) => ({ id: e.id, name: e.name || 'emoji', animated: !!e.animated }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+// Inclusive [start, end) emoji index range for a (page, bucketIdx) cell.
+function seekdeepForceReactBucketRange(page, bucketIdx) {
+  const start = page * SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE + bucketIdx * SEEKDEEP_FORCE_REACT_BUCKET_SIZE;
+  return { start, end: start + SEEKDEEP_FORCE_REACT_BUCKET_SIZE };
+}
+
+// Picker components: up to 4 select menus + 1 nav row.
+function seekdeepBuildForceReactComponents(targetMsgId, guild, state) {
+  const emojis = seekdeepForceReactGuildEmojis(guild);
+  const totalPages = Math.max(1, Math.ceil(emojis.length / SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE));
+  const page = Math.max(0, Math.min(totalPages - 1, Number(state.page || 0)));
+  const slotsLeft = Math.max(0, SEEKDEEP_FORCE_REACT_MAX_SELECTED - state.selected.size);
+
+  const rows = [];
+  for (let b = 0; b < SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE; b++) {
+    const { start, end } = seekdeepForceReactBucketRange(page, b);
+    if (start >= emojis.length) break;
+    const slice = emojis.slice(start, Math.min(end, emojis.length));
+    if (!slice.length) continue;
+
+    const displayStart = b * SEEKDEEP_FORCE_REACT_BUCKET_SIZE + 1;
+    const displayEnd = displayStart + slice.length - 1;
+    const placeholder = `${displayStart}-${displayEnd} of ${emojis.length} (${slotsLeft} slots left)`;
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`seekdeep:fr:sel:${targetMsgId}:${b}`)
+      .setPlaceholder(placeholder)
+      .setMinValues(0)
+      .setMaxValues(Math.max(1, Math.min(SEEKDEEP_FORCE_REACT_MAX_SELECTED, slice.length)));
+
+    for (const e of slice) {
+      const value = `${e.name}:${e.id}`;
+      const opt = new StringSelectMenuOptionBuilder()
+        .setLabel(String(e.name).slice(0, 100))
+        .setValue(value)
+        .setEmoji({ id: e.id, name: e.name, animated: e.animated })
+        .setDefault(state.selected.has(value));
+      select.addOptions(opt);
+    }
+    rows.push(new ActionRowBuilder().addComponents(select));
+  }
+
+  const navButtons = [];
+  navButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:fr:nav:${targetMsgId}:${Math.max(0, page - 1)}`)
+      .setLabel('◀ Prev')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 0)
+  );
+  navButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:fr:noop:${targetMsgId}:${page}`)
+      .setLabel(`Page ${page + 1} of ${totalPages}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true)
+  );
+  navButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:fr:nav:${targetMsgId}:${Math.min(totalPages - 1, page + 1)}`)
+      .setLabel('Next ▶')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page >= totalPages - 1)
+  );
+  navButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:fr:apply:${targetMsgId}`)
+      .setLabel(`\u{1F4A5} Apply (${state.selected.size}/${SEEKDEEP_FORCE_REACT_MAX_SELECTED})`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(state.selected.size === 0)
+  );
+  navButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:fr:cancel:${targetMsgId}`)
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Danger)
+  );
+  rows.push(new ActionRowBuilder().addComponents(...navButtons));
+  return rows;
+}
+
+function seekdeepBuildForceReactContent(state, guild) {
+  if (!state.selected || state.selected.size === 0) {
+    return '\u{1F4A5} Select emojis to react with, then confirm:';
+  }
+  // Render selected emoji as visible glyphs in chat.
+  const cache = guild?.emojis?.cache;
+  const previews = Array.from(state.selected).map((v) => {
+    const [name, id] = String(v).split(':');
+    const animated = cache?.get?.(id)?.animated ? 'a' : '';
+    return `<${animated}:${name}:${id}>`;
+  });
+  return `✅ Selected (${state.selected.size}/${SEEKDEEP_FORCE_REACT_MAX_SELECTED}): ${previews.join(' ')}`;
+}
+
 async function seekdeepHandleContextMenuForceReact(interaction, targetMessage) {
-  // Show a modal asking for emojis to apply to the target message.
   if (!targetMessage?.id) {
     await interaction.reply({ content: 'No target message.', flags: MessageFlags.Ephemeral });
     return;
@@ -13572,118 +13729,215 @@ async function seekdeepHandleContextMenuForceReact(interaction, targetMessage) {
     return;
   }
 
-  const modal = new ModalBuilder()
-    .setCustomId(`seekdeep:force-react:${targetMessage.id}`)
-    .setTitle('Force React')
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('emojis')
-          .setLabel('Emojis (space-separated, max 5)')
-          .setPlaceholder('🔥 💀 :custom_emoji:')
-          .setStyle(TextInputStyle.Short)
-          .setMaxLength(200)
-          .setRequired(true)
-      )
-    );
-  await interaction.showModal(modal);
-}
-
-// SEEKDEEP_FORCE_REACT_MODAL_HANDLER_START
-function seekdeepParseEmojiTokens(text = '') {
-  const cleaned = String(text || '').trim();
-  if (!cleaned) return [];
-  // Tokens separated by whitespace or commas. Each token can be:
-  //  - a unicode emoji (we let the API validate)
-  //  - <:name:id> or <a:name:id> custom emoji
-  //  - :name: shortcode (we try to resolve against the guild)
-  return cleaned.split(/[\s,]+/).filter(Boolean).slice(0, 5);
-}
-
-async function seekdeepResolveEmojiForReact(token, guild) {
-  if (!token) return null;
-  // Already formatted as <:name:id> or <a:name:id>
-  const custom = token.match(/^<(a?):([a-zA-Z0-9_~]+):(\d+)>$/);
-  if (custom) {
-    // The string the API accepts for reactions is `name:id` (no <>, no animated prefix).
-    return `${custom[2]}:${custom[3]}`;
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.reply({
+      content: 'Force React requires a server context.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
   }
-  // Shortcode :name:
-  const shortMatch = token.match(/^:([a-zA-Z0-9_~]+):$/);
-  if (shortMatch && guild?.emojis?.cache) {
-    const found = guild.emojis.cache.find((e) => e?.name?.toLowerCase() === shortMatch[1].toLowerCase());
-    if (found) return `${found.name}:${found.id}`;
+
+  // Make sure the cache is populated. Discord lazy-loads emoji on some shards.
+  if (!guild.emojis.cache.size) {
+    try { await guild.emojis.fetch(); } catch {}
   }
-  // Otherwise treat as unicode and let the API validate.
-  return token;
+  const emojis = seekdeepForceReactGuildEmojis(guild);
+  if (!emojis.length) {
+    await interaction.reply({
+      content: 'This server has no custom emojis to choose from. (You can still add standard unicode reactions via Discord’s built-in picker.)',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const state = seekdeepForceReactSet(interaction.user.id, targetMessage.id, {
+    selected: new Set(),
+    page: 0,
+    channelId: interaction.channel?.id || '',
+    guildId: guild.id,
+  });
+
+  const components = seekdeepBuildForceReactComponents(targetMessage.id, guild, state);
+  const content = seekdeepBuildForceReactContent(state, guild);
+
+  await interaction.reply({
+    content,
+    components,
+    flags: MessageFlags.Ephemeral,
+  });
 }
 
-async function seekdeepHandleForceReactModalSubmit(interaction) {
-  const customId = String(interaction.customId || '');
-  const m = customId.match(/^seekdeep:force-react:(\d+)$/);
-  if (!m) return false;
-  const targetMessageId = m[1];
+// Returns true if it handled the interaction (button OR select).
+async function seekdeepHandleForceReactComponent(interaction) {
+  const customId = String(interaction?.customId || '');
+  if (!customId.startsWith('seekdeep:fr:')) return false;
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const parts = customId.split(':');
+  // ['seekdeep', 'fr', kind, targetMsgId, arg?]
+  const kind = parts[2];
+  const targetMsgId = parts[3];
+  const arg = parts[4];
+  if (!kind || !targetMsgId) return false;
 
-  const emojisRaw = interaction.fields.getTextInputValue('emojis');
-  const tokens = seekdeepParseEmojiTokens(emojisRaw);
-  if (!tokens.length) {
-    await interaction.editReply({ content: 'No emojis provided.' });
+  if (kind === 'noop') {
+    try { await interaction.deferUpdate(); } catch {}
     return true;
   }
 
-  const channel = interaction.channel;
-  let targetMessage = null;
-  try {
-    targetMessage = await channel?.messages?.fetch(targetMessageId);
-  } catch {}
-  if (!targetMessage) {
-    await interaction.editReply({ content: 'Target message no longer accessible.' });
-    return true;
-  }
+  const userId = interaction.user?.id;
+  const guild = interaction.guild;
 
-  let applied = 0;
-  const failed = [];
-  for (const token of tokens) {
+  if (kind === 'cancel') {
+    seekdeepForceReactDelete(userId, targetMsgId);
     try {
-      const resolved = await seekdeepResolveEmojiForReact(token, interaction.guild);
-      if (!resolved) { failed.push(token); continue; }
-      await targetMessage.react(resolved);
-      applied += 1;
-    } catch (err) {
-      failed.push(`${token} (${(err?.message || 'rejected').slice(0, 60)})`);
-    }
+      await interaction.update({ content: 'Force React cancelled.', components: [] });
+    } catch {}
+    return true;
   }
 
-  const lines = [`Applied ${applied}/${tokens.length} reaction(s).`];
-  if (failed.length) lines.push(`Failed: ${failed.join(', ')}`);
-  await interaction.editReply({ content: lines.join('\n') });
-  return true;
+  const state = seekdeepForceReactGet(userId, targetMsgId);
+  if (!state) {
+    try {
+      await interaction.update({
+        content: 'This Force React picker expired. Right-click the message and pick Force React again.',
+        components: [],
+      });
+    } catch {}
+    return true;
+  }
+
+  if (!guild) {
+    try { await interaction.update({ content: 'Lost guild context.', components: [] }); } catch {}
+    return true;
+  }
+
+  if (kind === 'sel') {
+    // Discord sends `interaction.values` = currently-selected values in THIS
+    // menu after the user's change. To keep state consistent we remove the
+    // bucket's contribution from the merged set, then re-add the menu's values.
+    const bucketIdx = Math.max(0, Math.min(SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE - 1, Number(arg || 0)));
+    const emojis = seekdeepForceReactGuildEmojis(guild);
+    const { start, end } = seekdeepForceReactBucketRange(state.page || 0, bucketIdx);
+    const bucketValues = new Set(
+      emojis.slice(start, Math.min(end, emojis.length)).map((e) => `${e.name}:${e.id}`)
+    );
+
+    const newSelected = new Set(state.selected);
+    for (const v of bucketValues) newSelected.delete(v);
+    for (const v of (interaction.values || [])) newSelected.add(v);
+
+    // Hard-cap to MAX_SELECTED keeping insertion order.
+    if (newSelected.size > SEEKDEEP_FORCE_REACT_MAX_SELECTED) {
+      const trimmed = Array.from(newSelected).slice(0, SEEKDEEP_FORCE_REACT_MAX_SELECTED);
+      newSelected.clear();
+      for (const v of trimmed) newSelected.add(v);
+    }
+
+    const next = seekdeepForceReactSet(userId, targetMsgId, { selected: newSelected });
+    const components = seekdeepBuildForceReactComponents(targetMsgId, guild, next);
+    const content = seekdeepBuildForceReactContent(next, guild);
+    try { await interaction.update({ content, components }); } catch {}
+    return true;
+  }
+
+  if (kind === 'nav') {
+    const nextPage = Math.max(0, Number(arg || 0));
+    const next = seekdeepForceReactSet(userId, targetMsgId, { page: nextPage });
+    const components = seekdeepBuildForceReactComponents(targetMsgId, guild, next);
+    const content = seekdeepBuildForceReactContent(next, guild);
+    try { await interaction.update({ content, components }); } catch {}
+    return true;
+  }
+
+  if (kind === 'apply') {
+    const selectedValues = Array.from(state.selected || []);
+    if (!selectedValues.length) {
+      try { await interaction.deferUpdate(); } catch {}
+      return true;
+    }
+    try { await interaction.deferUpdate(); } catch {}
+
+    let targetMessage = null;
+    try {
+      const channel = state.channelId ? await interaction.client.channels.fetch(state.channelId).catch(() => null) : interaction.channel;
+      targetMessage = await (channel || interaction.channel)?.messages?.fetch(targetMsgId);
+    } catch {}
+    if (!targetMessage) {
+      try {
+        await interaction.editReply({
+          content: 'Target message no longer accessible. Reaction not applied.',
+          components: [],
+        });
+      } catch {}
+      seekdeepForceReactDelete(userId, targetMsgId);
+      return true;
+    }
+
+    let applied = 0;
+    const failed = [];
+    for (const v of selectedValues) {
+      try {
+        await targetMessage.react(v);
+        applied += 1;
+      } catch (err) {
+        failed.push(`${v} (${(err?.message || 'rejected').slice(0, 60)})`);
+      }
+    }
+
+    const lines = [`Applied ${applied}/${selectedValues.length} reaction(s).`];
+    if (failed.length) lines.push(`Failed: ${failed.join(', ')}`);
+    try { await interaction.editReply({ content: lines.join('\n'), components: [] }); } catch {}
+    seekdeepForceReactDelete(userId, targetMsgId);
+    return true;
+  }
+
+  return false;
 }
-// SEEKDEEP_FORCE_REACT_MODAL_HANDLER_END
+// SEEKDEEP_FORCE_REACT_PICKER_END
 
 // SEEKDEEP_CONTEXT_MENU_HANDLERS_END
 
 client.on('interactionCreate', async (interaction) => {
   if (typeof seekdeepHandleSharedArchiveButtonInteractionV4 === 'function' && await seekdeepHandleSharedArchiveButtonInteractionV4(interaction)) return;
 
-  // Modal submissions (Force React etc.).
+  // Force React picker components (select menus + nav/apply/cancel buttons).
+  // Dispatch BEFORE the message-context-menu and slash-command gates because
+  // these are MessageComponentInteractions, not commands.
+  try {
+    if (interaction?.isMessageComponent?.() && String(interaction.customId || '').startsWith('seekdeep:fr:')) {
+      const handled = await seekdeepHandleForceReactComponent(interaction);
+      if (handled) return;
+    }
+  } catch (err) {
+    console.error('Force React component handler failed:', err?.stack || err?.message || err);
+    try {
+      const payload = { content: 'Force React failed: ' + (err?.message || 'unknown error'), flags: MessageFlags.Ephemeral };
+      if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
+      else await interaction.reply(payload);
+    } catch {}
+    return;
+  }
+
+  // Legacy modal route — kept for any in-flight `seekdeep:force-react:*`
+  // modals dispatched before v10.4.1's picker rewrite landed. New code path
+  // uses the paginated picker above; this branch will fall through cleanly
+  // once no old modals are pending.
   try {
     if (interaction?.isModalSubmit && interaction.isModalSubmit()) {
       const customId = String(interaction.customId || '');
       if (customId.startsWith('seekdeep:force-react:')) {
-        await seekdeepHandleForceReactModalSubmit(interaction);
+        try {
+          await interaction.reply({
+            content: 'Force React was upgraded to a paginated picker. Right-click the message → Apps → Force React again to use it.',
+            flags: MessageFlags.Ephemeral,
+          });
+        } catch {}
         return;
       }
     }
   } catch (err) {
-    console.error('Modal submit handler failed:', err?.stack || err?.message || err);
-    try {
-      const payload = { content: 'Modal action failed: ' + (err?.message || 'unknown error'), flags: MessageFlags.Ephemeral };
-      if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
-      else await interaction.reply(payload);
-    } catch {}
+    console.error('Legacy modal handler failed:', err?.stack || err?.message || err);
     return;
   }
 

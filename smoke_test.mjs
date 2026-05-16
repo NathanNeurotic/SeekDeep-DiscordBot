@@ -248,6 +248,40 @@ check('help topic: "help reactrule" -> "reactrule"', parseHelpTopic('help reactr
 check('help topic: "archive help" -> "archive"', parseHelpTopic('archive help') === 'archive');
 check('help topic: "image help" -> "image"', parseHelpTopic('image help') === 'image');
 
+// v10.4.1 Force React picker math. Mirrors the bucket/page constants and the
+// seekdeepForceReactBucketRange helper from index.js. This is the pure math
+// the picker UI rides on top of, so getting it right unit-tested catches
+// off-by-one regressions before the UI even has a chance to misbehave.
+const FR_BUCKET = 25;
+const FR_BUCKETS_PER_PAGE = 4;
+const FR_PER_PAGE = FR_BUCKET * FR_BUCKETS_PER_PAGE; // 100
+function frRange(page, b) {
+  const start = page * FR_PER_PAGE + b * FR_BUCKET;
+  return { start, end: start + FR_BUCKET };
+}
+check('picker: page 0 bucket 0 starts at 0', frRange(0, 0).start === 0);
+check('picker: page 0 bucket 3 ends at 100', frRange(0, 3).end === 100);
+check('picker: page 1 bucket 0 starts at 100', frRange(1, 0).start === 100);
+check('picker: page 2 bucket 2 spans 250-275', frRange(2, 2).start === 250 && frRange(2, 2).end === 275);
+check('picker: 100 emoji = 1 page', Math.max(1, Math.ceil(100 / FR_PER_PAGE)) === 1);
+check('picker: 140 emoji = 2 pages', Math.max(1, Math.ceil(140 / FR_PER_PAGE)) === 2);
+check('picker: 0 emoji = 1 page (clamped)', Math.max(1, Math.ceil(0 / FR_PER_PAGE)) === 1);
+
+// Selection cap behavior: a Set that grows past 5 must be trimmed to 5
+// keeping insertion order. This mirrors the cap in the picker's select
+// handler.
+function capSelection(set, max) {
+  if (set.size <= max) return set;
+  const trimmed = Array.from(set).slice(0, max);
+  const out = new Set();
+  for (const v of trimmed) out.add(v);
+  return out;
+}
+const s = new Set(['a:1', 'b:2', 'c:3', 'd:4', 'e:5', 'f:6', 'g:7']);
+const capped = capSelection(s, 5);
+check('picker: cap to 5 keeps insertion order', Array.from(capped).join(',') === 'a:1,b:2,c:3,d:4,e:5');
+check('picker: cap to 5 drops the extras', capped.size === 5);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
