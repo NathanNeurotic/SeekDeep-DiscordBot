@@ -4020,7 +4020,15 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
 function seekdeepRegenerateModeOptions(mode = 'submitted', action = null) {
   const normalized = String(mode || 'submitted').toLowerCase();
   const basePrompt = action?.originalPrompt || action?.prompt || action?.rawPrompt || 'image';
+  const basePromptNorm = normalizeUserText(basePrompt).trim().toLowerCase();
   const existingRefinedPrompt = normalizeUserText(action?.generationPrompt || action?.refinedPrompt || '').trim();
+  // Only treat the stored "refined" prompt as truly refined when it actually
+  // differs from the original. Otherwise (e.g. when the user clicks Refined on
+  // the Original image card, where state.generationPrompt equals the original),
+  // we should fall through to seekdeepPrepareImagePromptDynamic for a real refine
+  // pass rather than re-using the unchanged prompt and showing a confusing
+  // "Refinement: on" with no refined line.
+  const hasDistinctRefined = Boolean(existingRefinedPrompt) && existingRefinedPrompt.toLowerCase() !== basePromptNorm;
   const base = {
     ground: action?.ground !== false && action?.imageModeOptions?.ground !== false,
     cleanPrompt: basePrompt,
@@ -4036,7 +4044,7 @@ function seekdeepRegenerateModeOptions(mode = 'submitted', action = null) {
     return {
       ...base,
       refine: true,
-      ...(existingRefinedPrompt ? {
+      ...(hasDistinctRefined ? {
         preRefinedPrompt: existingRefinedPrompt,
         dynamicRefinement: Boolean(action?.dynamicRefinement || action?.imageModeOptions?.dynamicRefinement),
       } : {}),
@@ -4052,7 +4060,7 @@ function seekdeepRegenerateModeOptions(mode = 'submitted', action = null) {
   return {
     ...base,
     refine: !originallyRaw,
-    ...(!originallyRaw && existingRefinedPrompt ? {
+    ...(!originallyRaw && hasDistinctRefined ? {
       preRefinedPrompt: existingRefinedPrompt,
       dynamicRefinement: Boolean(action?.dynamicRefinement || action?.imageModeOptions?.dynamicRefinement),
     } : {}),
