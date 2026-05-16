@@ -681,10 +681,86 @@ function hasRefineRepetitionIssue(text) {
   return sentences.length >= 6 && unique.size / sentences.length < 0.72;
 }
 
+// Fence-aware Discord chunker.
+//
+// Before v10.3.1 this was a naive "find a nice space near `limit`" splitter,
+// which happily cut in the middle of ```fenced``` blocks. That left orphan
+// `## Section` headers raw between chunks (visible in the @SeekDeep help
+// output: a single help message gets split into 3 Discord posts and the
+// seams are inside code fences).
+//
+// New behavior:
+//  - If no triple-backtick fences are present, fall back to the old
+//    paragraph/sentence/word lookback splitter (same behavior as v10.3).
+//  - Otherwise pack the input line by line, tracking fence state. When the
+//    next line would push the chunk past `limit`, close any open fence on
+//    the current chunk and reopen the same fence (with language hint) on
+//    the next chunk. Heading lines (`# ` / `## `) are preferred cut points.
 function splitDiscordText(value, limit = MAX_DISCORD_CHARS) {
   const raw = String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
   if (!raw) return [''];
+  if (raw.length <= limit) return [raw];
 
+  // Fast path: no fences -> use the legacy lookback splitter.
+  if (raw.indexOf('```') < 0) return splitDiscordTextPlain(raw, limit);
+
+  const lines = raw.split('\n');
+  const chunks = [];
+  let cur = [];
+  let curLen = 0;
+  let fenceOpen = null; // null or the exact opening line (e.g. '```text')
+  const fenceRe = /^\s*```([A-Za-z0-9_-]*)\s*$/;
+
+  const flush = (reopenFence) => {
+    if (!cur.length) return;
+    let body = cur.join('\n');
+    if (fenceOpen) body += '\n```'; // close dangling fence
+    chunks.push(body.trimEnd());
+    cur = [];
+    curLen = 0;
+    if (reopenFence && fenceOpen) {
+      cur.push(fenceOpen);
+      curLen = fenceOpen.length;
+    }
+  };
+
+  for (const line of lines) {
+    const add = (cur.length ? 1 : 0) + line.length; // +1 for joining \n
+    // If a single line exceeds the limit, hard-break it character-wise.
+    if (line.length > limit) {
+      flush(false);
+      let rest = line;
+      while (rest.length > limit) {
+        chunks.push(rest.slice(0, limit));
+        rest = rest.slice(limit);
+      }
+      if (rest) {
+        cur.push(rest);
+        curLen = rest.length;
+      }
+      continue;
+    }
+
+    // Would adding this line bust the budget? Flush, then reopen fence if needed.
+    if (curLen + add > limit) flush(true);
+
+    cur.push(line);
+    curLen += (curLen ? 1 : 0) + line.length;
+
+    // Track fence transitions AFTER appending so the opener stays with its chunk.
+    const m = line.match(fenceRe);
+    if (m) {
+      if (fenceOpen) fenceOpen = null;
+      else fenceOpen = line;
+    }
+  }
+
+  flush(false);
+  return chunks.length ? chunks : [''];
+}
+
+// Legacy lookback splitter, kept for fence-free inputs.
+function splitDiscordTextPlain(raw, limit) {
   const chunks = [];
   let remaining = raw;
 

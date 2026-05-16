@@ -27,7 +27,9 @@
       "Bash(bash .git/hooks/pre-commit)",
       "Bash(node smoke_test.mjs)",
       "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep add index.js .env.default)",
-      "WebFetch(domain:www.demonbot.win)"
+      "WebFetch(domain:www.demonbot.win)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

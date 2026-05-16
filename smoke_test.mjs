@@ -141,6 +141,96 @@ check('frustration v2: "no testicles for you" is NOT flagged', isFrustrationV2('
 check('frustration v2: "no" alone IS flagged', isFrustrationV2('no') === true);
 check('frustration v2: "no help" IS flagged (short)', isFrustrationV2('no help') === true);
 
+// Fence-aware Discord chunker — v10.3.1 fix. Mirrors splitDiscordText in
+// index.js. The whole point is that splitting a long help message never
+// leaves a code fence unbalanced across Discord message boundaries.
+function splitDiscordText(value, limit) {
+  const raw = String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
+  if (!raw) return [''];
+  if (raw.length <= limit) return [raw];
+  if (raw.indexOf('```') < 0) {
+    // Plain fallback — naive lookback splitter.
+    const chunks = [];
+    let remaining = raw;
+    while (remaining.length > limit) {
+      let cut = -1;
+      for (const token of ['\n\n', '\n', '. ', '; ', ', ', ' ']) {
+        const pos = remaining.lastIndexOf(token, limit);
+        if (pos >= Math.floor(limit * 0.45)) { cut = pos + (token.trim() ? token.length : 0); break; }
+      }
+      if (cut < Math.floor(limit * 0.45)) cut = limit;
+      chunks.push(remaining.slice(0, cut).trimEnd());
+      remaining = remaining.slice(cut).trimStart();
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks.length ? chunks : [''];
+  }
+  const lines = raw.split('\n');
+  const chunks = [];
+  let cur = [];
+  let curLen = 0;
+  let fenceOpen = null;
+  const fenceRe = /^\s*```([A-Za-z0-9_-]*)\s*$/;
+  const flush = (reopenFence) => {
+    if (!cur.length) return;
+    let body = cur.join('\n');
+    if (fenceOpen) body += '\n```';
+    chunks.push(body.trimEnd());
+    cur = [];
+    curLen = 0;
+    if (reopenFence && fenceOpen) { cur.push(fenceOpen); curLen = fenceOpen.length; }
+  };
+  for (const line of lines) {
+    const add = (cur.length ? 1 : 0) + line.length;
+    if (line.length > limit) {
+      flush(false);
+      let rest = line;
+      while (rest.length > limit) { chunks.push(rest.slice(0, limit)); rest = rest.slice(limit); }
+      if (rest) { cur.push(rest); curLen = rest.length; }
+      continue;
+    }
+    if (curLen + add > limit) flush(true);
+    cur.push(line);
+    curLen += (curLen ? 1 : 0) + line.length;
+    const m = line.match(fenceRe);
+    if (m) { if (fenceOpen) fenceOpen = null; else fenceOpen = line; }
+  }
+  flush(false);
+  return chunks.length ? chunks : [''];
+}
+
+// Build a help-shaped input with 8 fenced sections, each ~700 chars.
+const helpBlocks = [];
+for (let i = 0; i < 8; i++) {
+  helpBlocks.push('## Section ' + i);
+  helpBlocks.push('```text');
+  for (let j = 0; j < 10; j++) helpBlocks.push('command line ' + i + '.' + j + ' some content');
+  helpBlocks.push('```');
+  helpBlocks.push('after-fence prose line for section ' + i);
+  helpBlocks.push('');
+}
+const helpInput = helpBlocks.join('\n');
+const helpChunks = splitDiscordText(helpInput, 600);
+let unbalanced = 0;
+let overLimit = 0;
+for (const c of helpChunks) {
+  const fences = (c.match(/```/g) || []).length;
+  if (fences % 2 !== 0) unbalanced++;
+  if (c.length > 600) overLimit++;
+}
+check('chunker: produces multiple chunks for long input', helpChunks.length >= 3, 'got ' + helpChunks.length);
+check('chunker: every chunk has balanced ``` fences', unbalanced === 0, unbalanced + ' chunks had unbalanced fences');
+check('chunker: no chunk exceeds limit', overLimit === 0, overLimit + ' chunks over limit');
+
+// Boundary check: when we close a fence mid-section, the next chunk must
+// reopen with the SAME language hint (so syntax highlighting is preserved).
+const reopened = helpChunks.slice(1).filter((c) => c.startsWith('```text')).length;
+check('chunker: reopens ```text on continuation chunks', reopened >= 1);
+
+// No-fence input still works.
+const plainChunks = splitDiscordText('a '.repeat(2000), 100);
+check('chunker: fence-free input still splits', plainChunks.length > 1);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
