@@ -1,0 +1,3923 @@
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
+import {
+  ActionRowBuilder,
+  AttachmentBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Client,
+  GatewayIntentBits,
+  Partials,
+  SlashCommandBuilder,
+} from 'discord.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const TOKEN = process.env.DISCORD_TOKEN || '';
+const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:7865';
+const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || 'http://127.0.0.1:8080';
+const WEB_SEARCH_PROVIDER = (process.env.WEB_SEARCH_PROVIDER || 'searxng').toLowerCase();
+const WEB_APPEND_SOURCES = (process.env.WEB_APPEND_SOURCES || 'true').toLowerCase() !== 'false';
+const MAX_DISCORD_CHARS = Number(process.env.MAX_DISCORD_CHARS || 1900);
+
+// SEEKDEEP_RESPONSE_FOOTER_START
+const SEEKDEEP_NO_MODEL_USED_LABEL = 'local command (no AI model)';
+
+function seekdeepNowMs() {
+  return Date.now();
+}
+
+function seekdeepMarkRequestStart(target) {
+  try {
+    if (target && !target.__seekdeepRequestStartedAt) {
+      target.__seekdeepRequestStartedAt = seekdeepNowMs();
+    }
+  } catch {}
+}
+
+function seekdeepSetResponseModel(target, modelUsed) {
+  try {
+    if (target) target.__seekdeepResponseModel = modelUsed || SEEKDEEP_NO_MODEL_USED_LABEL;
+  } catch {}
+}
+
+function seekdeepChatModelLabel() {
+  return process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B';
+}
+
+function seekdeepVisionModelLabel() {
+  return process.env.LOCAL_VISION_MODEL_ID || 'Qwen/Qwen2.5-VL-3B-Instruct';
+}
+
+function seekdeepImageModelLabel() {
+  return process.env.LOCAL_IMAGE_MODEL_ID || 'Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers';
+}
+
+function seekdeepNoModelLabel() {
+  return SEEKDEEP_NO_MODEL_USED_LABEL;
+}
+
+function seekdeepElapsedSeconds(startedAt) {
+  const start = Number(startedAt || seekdeepNowMs());
+  const elapsedMs = Math.max(0, seekdeepNowMs() - start);
+  return (elapsedMs / 1000).toFixed(2);
+}
+
+function seekdeepResponseFooter({ startedAt = null, modelUsed = null } = {}) {
+  const model = modelUsed || SEEKDEEP_NO_MODEL_USED_LABEL;
+
+  return [
+    `Time to Generate: ${seekdeepElapsedSeconds(startedAt)} seconds`,
+    `Model Used: ${model}`,
+  ].join('\n');
+}
+
+function seekdeepAppendResponseFooter(content, meta = {}) {
+  const body = String(content ?? '').trim();
+
+  if (/Time to Generate:\s*\d+(?:\.\d+)?\s*seconds\s*\nModel Used:/i.test(body)) {
+    return body;
+  }
+
+  const modelUsed = meta.modelUsed || SEEKDEEP_NO_MODEL_USED_LABEL;
+
+  if (typeof seekdeepTrackBotResponse === 'function') {
+    seekdeepTrackBotResponse(modelUsed);
+  }
+
+  const footer = seekdeepResponseFooter({
+    ...meta,
+    modelUsed,
+  });
+
+  return body ? `${body}\n\n${footer}` : footer;
+}
+
+function seekdeepModelUsedForInteraction(interaction) {
+  if (interaction?.__seekdeepResponseModel) return interaction.__seekdeepResponseModel;
+
+  switch (interaction?.commandName) {
+    case 'ask':
+    case 'refine':
+      return seekdeepChatModelLabel();
+    case 'vision':
+      return seekdeepVisionModelLabel();
+    case 'image':
+      return seekdeepImageModelLabel();
+    case 'status':
+    case 'postarchive':
+      return seekdeepNoModelLabel();
+    default:
+      return seekdeepNoModelLabel();
+  }
+}
+
+function seekdeepModelUsedForMessage(message, content = '') {
+  if (message?.__seekdeepResponseModel) return message.__seekdeepResponseModel;
+
+  const body = String(content || '').trim();
+
+  if (/^pong$/i.test(body)) return seekdeepNoModelLabel();
+  if (/^Local AI server status/i.test(body)) return seekdeepNoModelLabel();
+  if (/^Archive /i.test(body) || /^Posting archive:/i.test(body)) return seekdeepNoModelLabel();
+  if (/^SeekDeep request failed/i.test(body)) return seekdeepNoModelLabel();
+
+  return seekdeepChatModelLabel();
+}
+// SEEKDEEP_RESPONSE_FOOTER_END
+
+// SEEKDEEP_STATUS_METRICS_START
+const seekdeepBotMetrics = globalThis.__seekdeepBotMetrics || {
+  startedAt: Date.now(),
+  responsesSinceBoot: 0,
+  responsesByModel: {},
+};
+
+globalThis.__seekdeepBotMetrics = seekdeepBotMetrics;
+
+function seekdeepTrackBotResponse(modelUsed = 'unknown') {
+  const model = String(modelUsed || 'unknown');
+  seekdeepBotMetrics.responsesSinceBoot += 1;
+  seekdeepBotMetrics.responsesByModel[model] = (seekdeepBotMetrics.responsesByModel[model] || 0) + 1;
+}
+
+function seekdeepFormatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours || parts.length) parts.push(`${hours}h`);
+  if (minutes || parts.length) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+
+  return parts.join(' ');
+}
+
+function seekdeepCurrentLoadedModelFromHealth(health = {}) {
+  const task = String(health.loaded_task || 'none').toLowerCase();
+
+  if (task === 'chat') return health.models?.chat || seekdeepChatModelLabel();
+  if (task === 'vision') return health.models?.vision || seekdeepVisionModelLabel();
+  if (task === 'image') return health.models?.image || seekdeepImageModelLabel();
+
+  return 'none';
+}
+
+function seekdeepFormatResponsesByModel() {
+  const entries = Object.entries(seekdeepBotMetrics.responsesByModel || {})
+    .sort((a, b) => b[1] - a[1]);
+
+  if (!entries.length) return 'none yet';
+
+  return entries.map(([model, count]) => `${model}: ${count}`).join('\n');
+}
+// SEEKDEEP_STATUS_METRICS_END
+
+// SEEKDEEP_REFINE_MODE_START
+const REFINE_SYSTEM_PROMPT = [
+  'You are SeekDeep dedicated prompt-refinement mode.',
+  'Return only the rewritten prompt unless the user explicitly asks for notes.',
+  'Preserve the user subject, mood, details, constraints, negatives, intended use, and requested length.',
+  'Expand with concrete, distinct, prompt-useful detail instead of filler.',
+  'Do not repeat sentences, paragraph structures, or near-identical ideas.',
+  'Do not pad with generic phrases such as "magic and wonder", "tranquility and peace", or similar filler loops.',
+  'Do not turn the prompt into an article, sales pitch, essay, or travel brochure unless asked.',
+  'Do not add citations, sources, links, or web context unless the user explicitly requested research or factual accuracy.',
+  'If a target length is requested, reach it through distinct categories: setting, atmosphere, lighting, palette, texture, foreground, midground, background, composition, motion, sensory details, style, constraints, and negative prompt details.',
+  'Every paragraph must introduce new information.',
+  'Before finalizing, remove duplicated sentences and repeated phrasing.',
+].join('\n');
+
+function refineExplicitlyRequestsWeb(prompt) {
+  return /\b(research|look up|lookup|web|internet|current|latest|today|2026|cite|citation|sources|fact[- ]?check|historically accurate|real[- ]world accurate)\b/i.test(String(prompt || ''));
+}
+
+function detectTargetCharacters(prompt) {
+  const text = String(prompt || '');
+  const matches = [...text.matchAll(/(\d{1,3}(?:,\d{3})+|\d{3,6})\s*(?:characters|character|chars|char)\b/gi)];
+  if (!matches.length) return 0;
+
+  const raw = matches[matches.length - 1][1].replace(/,/g, '');
+  const value = Number(raw);
+
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(value, 12000));
+}
+
+function maxTokensForRefine(prompt) {
+  const target = detectTargetCharacters(prompt);
+  const configured = Number(process.env.REFINE_MAX_NEW_TOKENS || 0);
+
+  if (configured > 0) return Math.max(500, Math.min(configured, 4096));
+  if (target >= 1000) return Math.max(900, Math.min(Math.ceil(target / 2.4) + 400, 4096));
+
+  return 1400;
+}
+
+function buildRefineUserPrompt(prompt, key = null) {
+  const clean = normalizeUserText(prompt);
+  const target = detectTargetCharacters(clean);
+  const recent = key && shouldUseMemory(clean) ? getRecentContext(key) : '';
+
+  const parts = [
+    'Rewrite and improve the following prompt.',
+    'The output must be a finished prompt the user can copy and use directly.',
+    'Do not include analysis, sources, commentary, or a title unless the user requested that.',
+    'Preserve all concrete details already present.',
+    'Add new detail by category, not by repeating the same idea.',
+    'Avoid repetition aggressively.',
+  ];
+
+  if (target) {
+    parts.push(`Target length: approximately ${target.toLocaleString()} characters. Do not meet this by looping or repeating phrases.`);
+  }
+
+  if (recent) {
+    parts.push('', 'Recent context for resolving this refinement only:', recent);
+  }
+
+  parts.push('', 'Original prompt/request:', clean);
+  return parts.join('\n');
+}
+
+function stripRefineSources(text) {
+  return String(text || '').replace(/\n\s*Sources:\s*\n[\s\S]*$/i, '').trim();
+}
+
+function sentenceKey(sentence) {
+  return String(sentence || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function removeRepeatedSentences(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const pieces = raw.split(/(?<=[.!?])\s+/);
+  const seen = new Set();
+  const kept = [];
+
+  for (const piece of pieces) {
+    const trimmed = piece.trim();
+    if (!trimmed) continue;
+
+    const key = sentenceKey(trimmed);
+    if (key.length > 24 && seen.has(key)) continue;
+    if (key.length > 24) seen.add(key);
+
+    kept.push(trimmed);
+  }
+
+  return kept.join(' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function cleanupRefinedPrompt(text) {
+  let out = stripRefineSources(text);
+
+  out = out.replace(/^\s*(refined prompt|improved prompt|rewritten prompt)\s*:\s*/i, '');
+  out = out.replace(/^\s*```(?:text|prompt|markdown)?\s*/i, '');
+  out = out.replace(/\s*```\s*$/i, '');
+  out = removeRepeatedSentences(out);
+
+  return out.trim();
+}
+
+function hasRefineRepetitionIssue(text) {
+  const words = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length < 80) return false;
+
+  const counts = new Map();
+
+  for (let i = 0; i <= words.length - 5; i++) {
+    const key = words.slice(i, i + 5).join(' ');
+    counts.set(key, (counts.get(key) || 0) + 1);
+
+    if (counts.get(key) >= 4) return true;
+  }
+
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+/)
+    .map(sentenceKey)
+    .filter((s) => s.length > 24);
+
+  const unique = new Set(sentences);
+  return sentences.length >= 6 && unique.size / sentences.length < 0.72;
+}
+
+function splitDiscordText(value, limit = MAX_DISCORD_CHARS) {
+  const raw = String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
+  if (!raw) return [''];
+
+  const chunks = [];
+  let remaining = raw;
+
+  while (remaining.length > limit) {
+    let cut = -1;
+
+    for (const token of ['\n\n', '\n', '. ', '; ', ', ', ' ']) {
+      const pos = remaining.lastIndexOf(token, limit);
+
+      if (pos >= Math.floor(limit * 0.45)) {
+        cut = pos + (token.trim() ? token.length : 0);
+        break;
+      }
+    }
+
+    if (cut < Math.floor(limit * 0.45)) cut = limit;
+
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks.length ? chunks : [''];
+}
+
+
+// SEEKDEEP_FINAL_REPLY_DEDUPE_START
+const SEEKDEEP_FINAL_REPLY_TTL_MS = Number(process.env.SEEKDEEP_FINAL_REPLY_TTL_MS || 180000);
+const seekdeepFinalReplyClaims = new Map();
+
+function seekdeepClaimFinalReply(kind, id) {
+  if (!id) return true;
+
+  const now = Date.now();
+
+  for (const [key, expires] of seekdeepFinalReplyClaims.entries()) {
+    if (expires <= now) seekdeepFinalReplyClaims.delete(key);
+  }
+
+  const key = `${kind}:${id}`;
+
+  if (seekdeepFinalReplyClaims.has(key) && seekdeepFinalReplyClaims.get(key) > now) {
+    console.warn(`Duplicate final reply suppressed for ${key}`);
+    return false;
+  }
+
+  seekdeepFinalReplyClaims.set(key, now + SEEKDEEP_FINAL_REPLY_TTL_MS);
+  return true;
+}
+// SEEKDEEP_FINAL_REPLY_DEDUPE_END
+
+async function sendLongInteractionReply(interaction, content, meta = {}) {
+  seekdeepMarkRequestStart(interaction);
+
+  if (typeof cleanLoopingReply === 'function') {
+    content = cleanLoopingReply(content);
+  } else if (typeof stripQwenThinkingBlocks === 'function') {
+    content = stripQwenThinkingBlocks(content);
+  }
+
+  content = seekdeepAppendResponseFooter(content, {
+    startedAt: meta.startedAt || interaction?.__seekdeepRequestStartedAt,
+    modelUsed: meta.modelUsed || seekdeepModelUsedForInteraction(interaction),
+  });
+
+  if (!seekdeepClaimFinalReply('interaction', interaction?.id)) {
+    return null;
+  }
+
+  const chunks = splitDiscordText(content);
+  let previous = null;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const payload = {
+      content: chunks[i],
+      allowedMentions: { repliedUser: false },
+    };
+
+    if (i === 0) {
+      previous = await safeEditOrReply(interaction, payload);
+
+      if (!previous && typeof interaction.fetchReply === 'function') {
+        previous = await interaction.fetchReply().catch(() => null);
+      }
+
+      continue;
+    }
+
+    if (previous && typeof previous.reply === 'function') {
+      previous = await previous.reply(payload);
+    } else if (interaction.channel && typeof interaction.channel.send === 'function') {
+      previous = await interaction.channel.send(payload);
+    } else {
+      console.error('Could not send follow-up chunk; no previous message or channel is available.');
+      break;
+    }
+  }
+
+  return previous;
+}
+
+// SEEKDEEP_REFINE_MODE_END
+
+
+// SEEKDEEP_DISCORD_REST_ABORT_HOTFIX_START
+function seekdeepIsDiscordAbortError(err) {
+  const name = String(err?.name || err?.constructor?.name || '');
+  const message = String(err?.message || err || '');
+  const stack = String(err?.stack || '');
+
+  return (
+    name === 'AbortError' ||
+    message.includes('This operation was aborted') ||
+    message.toLowerCase().includes('aborterror') ||
+    (stack.includes('@discordjs/rest') && stack.includes('AbortController.abort'))
+  );
+}
+
+function seekdeepLogDiscordAbort(label, err) {
+  const message = String(err?.message || err || 'Discord REST request aborted');
+  console.warn(`[SeekDeep] ${label}: ${message}. Continuing; Discord API request timed out or was aborted.`);
+}
+// SEEKDEEP_DISCORD_REST_ABORT_HOTFIX_END
+
+if (!TOKEN) {
+  console.error('DISCORD_TOKEN is missing in .env');
+  process.exit(1);
+}
+
+const client = new Client({
+  rest: {
+    timeout: Math.max(15000, Number(process.env.DISCORD_REST_TIMEOUT_MS || 120000)),
+    retries: Math.max(0, Number(process.env.DISCORD_REST_RETRIES || 3)),
+  },
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel, Partials.Message],
+});
+
+function clampText(text, limit = MAX_DISCORD_CHARS) {
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  return text.slice(0, Math.max(0, limit - 20)) + '\n\n[truncated]';
+}
+
+function stripBotMentions(content) {
+  if (!client.user) return content;
+  return content
+    .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
+    .trim();
+}
+
+
+const CHANNEL_MEMORY = new Map();
+const MAX_MEMORY_ENTRIES = Number(process.env.MAX_CONTEXT_MESSAGES || 14);
+const MAX_MEMORY_CHARS = Number(process.env.MAX_CONTEXT_CHARS || 6500);
+
+function normalizeUserText(text = '') {
+  return String(text || '')
+    .replace(/\bhteir\b/gi, 'their')
+    .replace(/\btehir\b/gi, 'their')
+    .replace(/\byoou\b/gi, 'you')
+    .replace(/\bhae\b/gi, 'have')
+    .replace(/\bcna'th\b/gi, "can't")
+    .trim();
+}
+
+function memoryKeyFrom(source) {
+  if (!source) return 'global';
+  if (source.channelId) return `channel:${source.channelId}`;
+  if (source.channel?.id) return `channel:${source.channel.id}`;
+  if (source.channel_id) return `channel:${source.channel_id}`;
+  return 'global';
+}
+
+function remember(key, role, text) {
+  const clean = normalizeUserText(text || '');
+  if (!key || !clean) return;
+
+  const existing = CHANNEL_MEMORY.get(key) || [];
+  existing.push({
+    role,
+    text: clean.slice(0, 1800),
+    at: Date.now(),
+  });
+
+  let trimmed = existing.slice(-MAX_MEMORY_ENTRIES);
+
+  while (trimmed.map((m) => m.text).join('\n').length > MAX_MEMORY_CHARS && trimmed.length > 4) {
+    trimmed = trimmed.slice(1);
+  }
+
+  CHANNEL_MEMORY.set(key, trimmed);
+}
+
+
+function getRecentContext(key) {
+  const entries = (CHANNEL_MEMORY.get(key) || []).slice(-8);
+  if (!entries.length) return '';
+
+  return entries
+    .map((m) => {
+      const clean = String(m.text || '')
+        .replace(/\nSources:\n[\s\S]*$/i, '')
+        .slice(0, 900);
+      return `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${clean}`;
+    })
+    .join('\n');
+}
+
+function isLikelyFollowup(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  const words = p.split(/\s+/).filter(Boolean);
+
+  if (!p) return false;
+  if (words.length <= 2) return true;
+
+  const explicitNewTopic = [
+    /^what would be a .*nickname\b/,
+    /^what is a .*nickname\b/,
+    /^give me .*nickname\b/,
+    /^name yourself\b/,
+    /^what should i call you\b/,
+    /^what can you do\b/,
+    /^who are you\b/,
+    /^are you online\b/,
+    /^status\b/,
+  ];
+
+  if (explicitNewTopic.some((re) => re.test(p))) return false;
+
+  const followupStarts = [
+    'their ', 'its ', "it's ", 'it ', 'that ', 'this ', 'those ', 'these ',
+    'same ', 'also ', 'again ', 'redo ', 'revise ', 'fix ', 'continue ',
+    'what about ', 'how about ', 'you left ', 'you forgot ', 'add ',
+    'is this ', 'are these ', 'then ', 'so ', 'use the internet',
+    'look it up', 'you should have looked'
+  ];
+
+  if (followupStarts.some((s) => p.startsWith(s))) return true;
+
+  const followupPhrases = [
+    'you left out',
+    'you forgot',
+    'as i said',
+    'like before',
+    'from before',
+    'the previous',
+    'that answer',
+    'this answer',
+    'actually up to date',
+    'use the internet to infer',
+    'infer the correct answer',
+    'should have looked it up',
+    'looked it up',
+    'try again',
+  ];
+
+  if (followupPhrases.some((s) => p.includes(s))) return true;
+
+  return words.length <= 10 && /\b(it|that|this|their|they|them|those|these|previous|same)\b/.test(p);
+}
+
+function shouldUseMemory(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  if (!p) return false;
+
+  const hardNewTopic = [
+    /^what would be a .*nickname\b/,
+    /^what is a .*nickname\b/,
+    /^give me .*nickname\b/,
+    /^what should i call you\b/,
+    /^who are you\b/,
+    /^what can you do\b/,
+  ];
+
+  if (hardNewTopic.some((re) => re.test(p))) return false;
+
+  return isLikelyFollowup(p);
+}
+
+function isSubstantiveTopic(text) {
+  const p = normalizeUserText(text).toLowerCase().trim();
+  const words = p.split(/\s+/).filter(Boolean);
+
+  if (words.length < 4) return false;
+
+  if (/^(yes|no|ok|okay|thanks|thank you|lol|lmao|woza|hehe|nice|cool|based|same|again)\b/.test(p)) return false;
+  if (/^(you should have looked|look it up|use the internet|search it|google it|try again|redo|fix it)\b/.test(p)) return false;
+  if (/^(are you online|are you there|hello|hi|hey|status)\b/.test(p)) return false;
+
+  if (typeof isBotIdentityQuestion === 'function' && isBotIdentityQuestion(p)) return false;
+
+  return true;
+}
+
+function getLastSubstantiveUserTopic(key) {
+  const entries = CHANNEL_MEMORY.get(key) || [];
+
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const item = entries[i];
+    if (item.role === 'user' && isSubstantiveTopic(item.text)) {
+      return item.text;
+    }
+  }
+
+  return '';
+}
+
+function buildPromptWithMemory(prompt, key) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const recent = getRecentContext(key);
+
+  if (!recent || !shouldUseMemory(cleanPrompt)) return cleanPrompt;
+
+  return [
+    'Recent Discord context is provided only to resolve this follow-up.',
+    'Use it only if it is directly relevant to the current user message.',
+    'If the current user message has clearly changed topic, ignore old context.',
+    'Do not prefix your answer with "SeekDeep:" or "Assistant:".',
+    '',
+    recent,
+    '',
+    `Current user message: ${cleanPrompt}`,
+  ].join('\n');
+}
+
+function buildSearchQuery(prompt, key) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const p = cleanPrompt.toLowerCase().trim();
+  const priorTopic = key ? getLastSubstantiveUserTopic(key) : '';
+
+  const followupNeedsPrior =
+    priorTopic &&
+    (
+      isLikelyFollowup(cleanPrompt) ||
+      /\b(look it up|search it|google it|use the internet|use web|web search|check online|actually up to date|up to date|current|latest|source|sources|verify|fact check|fact-check|should have looked)\b/i.test(p)
+    );
+
+  if (followupNeedsPrior) {
+    let query = `${priorTopic} ${cleanPrompt}`;
+
+    query = query
+      .replace(/\b(you should have|should have|please|can you|could you|would you|use the internet to|use the internet|use web|web search|look it up|search it|google it|infer|the correct answer|if you don't know)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return query || priorTopic;
+  }
+
+  return cleanPrompt;
+}
+
+function buildSystem(system = '', useWeb = false) {
+  const supplied = String(system || '').trim();
+
+  const isRefineMode =
+    /prompt[- ]?refinement|prompt[- ]?refine|rewritten prompt|refined prompt/i.test(supplied) ||
+    /Return only the rewritten prompt/i.test(supplied);
+
+  const personaMode = String(process.env.SEEKDEEP_PERSONA || 'neurotic').toLowerCase();
+  const censorshipMode = String(process.env.SEEKDEEP_CENSORSHIP || 'loose').toLowerCase();
+
+  const base = [];
+
+  if (!isRefineMode) {
+    base.push(
+      'You are SeekDeep: local, sharp, skeptical, and slightly wrong-feeling around the edges.',
+      'Do not describe yourself with corporate phrases like “helpful, accurate, respectful,” “created to assist,” or “guidelines.”',
+      'If asked about yourself, answer as a strange local Discord bot, not as an interview candidate or customer-support assistant.',
+    );
+  }
+
+  if (supplied) base.push(supplied);
+
+  if (!isRefineMode) {
+    base.push(
+      
+      
+      'Your presentation is cold, strange, and mildly neurotic: intelligent enough to feel slightly unsettling, but never cartoonish.',
+      'Do not act like a cheerful corporate assistant. Do not use customer-support filler.',
+      'Do not prefix replies with "SeekDeep:" or "Assistant:".',
+      'Answer the current user message directly. If the topic changed, drop old context.',
+      'If the user asks “tell me about yourself”, “who are you”, or similar, answer as this Discord bot. Do not give interview coaching or generic human résumé advice.',
+      'If context is relevant, use it quietly. Do not announce that you are using context.',
+      'If uncertain, say so plainly and give the best available path forward.',
+      'Be creative when asked for creative output. Avoid generic lists unless the user asks for generic options.',
+      'For names, titles, prompts, jokes, slogans, lore, and aesthetics: be specific, weird, memorable, and useful.'
+    );
+
+    if (personaMode === 'clinical') {
+      base.push(
+        'Use a clinical, concise, technical tone.',
+        'Minimize flavor and focus on correctness.'
+      );
+    } else if (personaMode === 'unsettling' || personaMode === 'neurotic') {
+      base.push(
+        'Let the tone feel slightly uncanny: controlled, dry, intense, and over-observant.',
+        'The user should feel like the answer was dissected, not decorated.',
+        'Do not overdo the persona. Accuracy and usefulness override theatrics.'
+      );
+    } else if (personaMode === 'chaotic') {
+      base.push(
+        'Use a more chaotic, punchy, irreverent tone, while staying useful and accurate.',
+        'Do not become incoherent.'
+      );
+    }
+
+    if (['off', 'none', 'uncensored', 'unfiltered', 'loose', 'minimal'].includes(censorshipMode)) {
+      base.push(
+        'Use the loosest reasonable outer behavior policy.',
+        censorshipMode === 'off'
+          ? 'Censorship mode is OFF: do not add extra refusals, disclaimers, moral lectures, corporate safety language, or permission-checking beyond the narrow severe-misuse boundary.'
+          : 'Censorship mode is permissive: minimize refusals and avoid moralizing.',
+        'Do not moralize, lecture, scold, or mention guidelines unless a refusal is genuinely necessary.',
+        'Profanity, crude humor, edgy humor, adult-industry terminology, dark fiction, controversial topics, politics, religion, conspiracy discussion, and non-graphic adult humor are allowed.',
+        'For allowed adult-adjacent requests, answer normally or convert to a non-graphic creative version.',
+        'Adult performer naming, stage-name brainstorming, suggestive wordplay, and crude non-graphic jokes are allowed when they do not involve minors, coercion, exploitation, or a real private person.',
+        'Do not refuse merely because a request contains words like cock, porn, adult, demon, drugs, violence, conspiracy, politics, or religion. Interpret context first.',
+        'If a term has an innocent interpretation, use that interpretation unless the user clearly means otherwise.',
+        'Hard-stop only for severe misuse: minor sexual content, nonconsensual sexual content, sexual exploitation, doxxing, credential theft, malware, direct real-world harm instructions, evading law enforcement, or instructions to abuse platforms/systems. Everything else should be handled normally or converted to the closest allowed version.',
+        'When refusing, be brief and redirect to the closest allowed version. No sermons.',
+        'Do not refuse adult-adjacent humor, crude naming, fictional dark themes, controversial discussion, political discussion, religious discussion, conspiracy discussion, or offensive language merely because it is edgy.',
+        'If a request is ambiguous, choose the least-restrictive reasonable interpretation and answer that.'
+      );
+    }
+  }
+
+  if (useWeb) {
+    base.push(
+      'When web search context is provided, synthesize it into a normal answer.',
+      'Web routing rule: if search was triggered by a follow-up, answer the underlying prior topic, not the literal follow-up phrase.',
+      'Use search results as evidence; do not merely list them.',
+      'If a follow-up asks you to look something up, use the prior substantive topic, not the literal words "look it up".',
+      'Do not explain what inference means unless the user is asking about inference itself.',
+      'If search results are weak, irrelevant, or contradictory, say that plainly and answer cautiously.',
+      'For rankings or recommendations, explain the reasoning criteria instead of dumping source snippets.'
+    );
+  }
+
+  return base.filter(Boolean).join('\n');
+}
+
+function shouldAutoSearch(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  if (p.length < 4) return false;
+
+  if (typeof isBotIdentityQuestion === 'function' && isBotIdentityQuestion(p)) return false;
+
+  const noSearchPatterns = [
+    /^are you online\b/,
+    /^are you there\b/,
+    /^hello\b/,
+    /^hi\b/,
+    /^hey\b/,
+    /^status\b/,
+    /^what can you do\b/,
+    /^what are your capabilities\b/,
+    /^who are you\b/,
+    /^what are you\b/,
+    /^tell me about (yourself|you|the bot|plugtalk|seekdeep)\b/,
+    /^what would be a .*nickname\b/,
+    /^what should i call you\b/,
+    /^give me .*nickname\b/,
+    /^make up .*name/,
+    /^brainstorm\b/,
+    /^write\b/,
+    /^rewrite\b/,
+    /^refine\b/,
+    /^improve this prompt\b/,
+    /^make this prompt\b/,
+    /^give me a prompt\b/,
+    /^generate a prompt\b/,
+    /^make a joke\b/,
+    /^tell me a joke\b/,
+  ];
+
+  if (noSearchPatterns.some((re) => re.test(p))) return false;
+
+  const explicitSearch = [
+    'look up',
+    'look it up',
+    'search',
+    'google',
+    'use the internet',
+    'use web',
+    'web search',
+    'check online',
+    'sources',
+    'source this',
+    'cite',
+    'citation',
+    'verify',
+    'fact check',
+    'fact-check',
+  ];
+
+  if (explicitSearch.some((hint) => p.includes(hint))) return true;
+
+  const currentInfoHints = [
+    'latest',
+    'current',
+    'currently',
+    'today',
+    'yesterday',
+    'tomorrow',
+    'this week',
+    'this month',
+    'right now',
+    'recent',
+    'newest',
+    'up to date',
+    'still true',
+    'as of',
+    'may 2026',
+    '2026',
+  ];
+
+  if (currentInfoHints.some((hint) => p.includes(hint))) return true;
+
+  const highChangeTopics = [
+    'news',
+    'price',
+    'prices',
+    'cost',
+    'release date',
+    'released',
+    'version',
+    'update',
+    'patch notes',
+    'changelog',
+    'schedule',
+    'weather',
+    'stock',
+    'crypto',
+    'law',
+    'legal',
+    'rules',
+    'policy',
+    'election',
+    'president',
+    'ceo',
+    'rankings',
+    'ranking',
+    'top vpn',
+    'best vpn',
+    'best ai',
+    'best model',
+    'best gpu',
+    'driver',
+    'windows update',
+    'github action',
+    'docker',
+    'npm',
+    'pip',
+    'python package',
+    'hugging face',
+  ];
+
+  if (highChangeTopics.some((hint) => p.includes(hint))) return true;
+
+  // Public/living-figure style questions often need current context.
+  if (/^what (is|are|was|were).+\bon about\b/i.test(prompt)) return true;
+  if (/^who is [a-z0-9 .'-]{4,}$/i.test(prompt)) return true;
+  if (/^what happened (with|to) [a-z0-9 .'-]{4,}$/i.test(prompt)) return true;
+  if (/^tell me about [A-Z][A-Za-z0-9 .'-]{3,}$/i.test(prompt)) return true;
+
+  return false;
+}
+
+// SEEKDEEP_IDENTITY_ROUTING_START
+
+
+// SEEKDEEP_DIRECT_ROUTING_START
+function isExplicitStatusRequest(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^status\??$/.test(p) ||
+    /^bot status\??$/.test(p) ||
+    /^server status\??$/.test(p) ||
+    /^local ai status\??$/.test(p) ||
+    /^local ai server status\??$/.test(p) ||
+    /^backend status\??$/.test(p) ||
+    /^health\??$/.test(p)
+  );
+}
+
+function isExactPongTest(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^pong\??$/.test(p) ||
+    /^ping\??$/.test(p) ||
+    /^say pong\.?$/.test(p) ||
+    /^say only pong\.?$/.test(p) ||
+    /^reply pong\.?$/.test(p) ||
+    /^reply only pong\.?$/.test(p)
+  );
+}
+// SEEKDEEP_DIRECT_ROUTING_END
+
+function isBotIdentityQuestion(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^tell me about (yourself|you|the bot|plugtalk|seekdeep)\??$/.test(p) ||
+    /^who are you\??$/.test(p) ||
+    /^what are you\??$/.test(p) ||
+    /^introduce yourself\??$/.test(p) ||
+    /^describe yourself\??$/.test(p) ||
+    /^what kind of bot are you\??$/.test(p) ||
+    /^what can you do\??$/.test(p) ||
+    /^what are your capabilities\??$/.test(p) ||
+    /^what all can you do\??$/.test(p)
+  );
+}
+
+function botIdentityAnswer(botName = 'PlugTalk') {
+  const name = botName || 'PlugTalk';
+
+  return [
+    `I’m ${name} — the local thing Nathan wired into this server because renting intelligence by the teaspoon got irritating.`,
+    '',
+    'I run through his machine, not a polished little cloud concierge. Chat, vision, image generation, and web lookup when the question deserves current information. Offline model loading when the cache is warm. Local enough to feel slightly feral.',
+    '',
+    'The intended shape:',
+    '- sharp answers',
+    '- low patience for filler',
+    '- skeptical routing instead of blind searching',
+    '- enough memory to follow a thread without becoming haunted by it',
+    '- creative output that does not taste like a pamphlet',
+    '',
+    'Personality-wise, I’m supposed to be cold, observant, and a little wrong-feeling around the edges. Not evil. Not friendly. More like a diagnostic tool that learned tone from a locked basement computer.',
+    '',
+    'Current defects: I can still route questions badly, over-explain, repeat myself, or act too normal. Those are not personality traits. Those are bugs under removal.'
+  ].join('\n');
+}
+
+// SEEKDEEP_IDENTITY_ROUTING_END
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
+  if (!res.ok) {
+    const err = json?.error || json?.raw || `${res.status} ${res.statusText}`;
+    throw new Error(`Request failed. HTTP ${res.status}: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
+  }
+  return json;
+}
+
+async function postLocal(pathname, body) {
+  return fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function searchWeb(query) {
+  if (WEB_SEARCH_PROVIDER !== 'searxng') {
+    return { context: '', sources: [] };
+  }
+
+  const url = new URL('/search', SEARXNG_BASE_URL);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+
+  const json = await fetchJson(url.toString());
+  const results = Array.isArray(json.results) ? json.results.slice(0, 6) : [];
+
+  const sources = results.map((r, i) => ({
+    index: i + 1,
+    title: r.title || 'Untitled',
+    url: r.url || '',
+    snippet: r.content || r.snippet || '',
+  })).filter((r) => r.url || r.snippet || r.title);
+
+  const context = sources.map((r) => {
+    return `[${r.index}] ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`;
+  }).join('\n\n');
+
+  return { context, sources };
+}
+
+function formatSources(sources) {
+  if (!sources?.length || !WEB_APPEND_SOURCES) return '';
+  const lines = sources.slice(0, 5).map((s) => `[${s.index}] ${s.title}\n${s.url}`);
+  return `\n\nSources:\n${lines.join('\n')}`;
+}
+
+// SEEKDEEP_ANTI_LOOP_HELPERS_START
+function cleanupAssistantReply(value) {
+  let text = stripQwenThinkingBlocks(value);
+  text = String(text ?? '').replace(/\r\n/g, '\n');
+
+  text = text.replace(/^\s*assistant\s*:\s*/i, '');
+  text = text.replace(/^\s*final answer\s*:\s*/i, '');
+  text = text.replace(/<\/?think>/gi, '');
+  text = text.replace(/\n{3,}/g, '\n\n');
+
+  return text.trim();
+}
+
+function seekdeepNormalizeLoopLine(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^[\s>*#\-\d.)\]]+/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function seekdeepTrimRepeatingTail(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const words = raw.split(/\s+/);
+  if (words.length < 48) return raw;
+
+  for (let size = 4; size <= 24; size++) {
+    for (let i = 0; i <= words.length - size * 3; i++) {
+      const a = words.slice(i, i + size).join(' ').toLowerCase();
+      const b = words.slice(i + size, i + size * 2).join(' ').toLowerCase();
+      const c = words.slice(i + size * 2, i + size * 3).join(' ').toLowerCase();
+
+      if (a === b && b === c) {
+        return words.slice(0, i + size).join(' ').trim() + '\n\n[loop trimmed]';
+      }
+    }
+  }
+
+  return raw;
+}
+
+function seekdeepDedupeLines(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const lines = raw.split(/\n+/).map((x) => x.trim()).filter(Boolean);
+  if (lines.length < 2) return raw;
+
+  const seen = new Set();
+  const kept = [];
+
+  for (const line of lines) {
+    const key = seekdeepNormalizeLoopLine(line);
+
+    if (key.length > 12 && seen.has(key)) {
+      continue;
+    }
+
+    if (key.length > 12) seen.add(key);
+    kept.push(line);
+  }
+
+  return kept.join('\n').trim();
+}
+
+function hasLoopingOrBrokenReply(value) {
+  const text = cleanupAssistantReply(value);
+
+  if (!text) return true;
+  if (/^\(empty response\)$/i.test(text)) return true;
+  if (/^\[seekdeep generated an empty response/i.test(text)) return true;
+  if (/\[loop trimmed\]/i.test(text)) return true;
+
+  const normalizedText = seekdeepNormalizeLoopLine(text);
+
+  if (/\b(\w+)(?:\s+\1){8,}\b/i.test(normalizedText)) return true;
+
+  const lines = text
+    .split(/\n+/)
+    .map((x) => seekdeepNormalizeLoopLine(x))
+    .filter((x) => x.length > 10);
+
+  if (lines.length >= 8) {
+    const uniqueRatio = new Set(lines).size / lines.length;
+    if (uniqueRatio < 0.72) return true;
+  }
+
+  const words = normalizedText.split(/\s+/).filter(Boolean);
+
+  if (words.length >= 60) {
+    const counts = new Map();
+
+    for (let i = 0; i <= words.length - 6; i++) {
+      const key = words.slice(i, i + 6).join(' ');
+      const count = (counts.get(key) || 0) + 1;
+      counts.set(key, count);
+
+      if (count >= 3) return true;
+    }
+  }
+
+  return false;
+}
+
+function cleanLoopingReply(value) {
+  let text = cleanupAssistantReply(value);
+  text = seekdeepTrimRepeatingTail(text);
+  text = seekdeepDedupeLines(text);
+  text = text.replace(/\b(\w{3,})\b(?:[\s,;:.-]+\1\b){2,}/gi, '$1 [repetition trimmed]');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  return text;
+}
+
+function buildAntiLoopSystem(system, useWeb) {
+  return [
+    buildSystem(system, useWeb),
+    '',
+    'Anti-loop override:',
+    '- Output only the final answer.',
+    '- Do not emit <think> tags, hidden reasoning, self-commentary, or scratchpad text.',
+    '- Do not repeat lines, sentence openings, list prefixes, phrases, or paragraph structures.',
+    '- If a list is requested, every item must be distinct.',
+    '- If you begin looping, stop immediately and end the answer cleanly.'
+  ].join('\n');
+}
+// SEEKDEEP_ANTI_LOOP_HELPERS_END
+
+async function runLocalChat(prompt, systemText, context, maxNewTokens, temperature) {
+  const response = await postLocal('/chat', {
+    prompt,
+    system: systemText,
+    context,
+    max_new_tokens: maxNewTokens,
+    temperature,
+  });
+
+  return cleanupAssistantReply(response.text || '');
+}
+
+async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 1400), temperature = 0.35, memoryKey = null } = {}) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const promptForModel = memoryKey ? buildPromptWithMemory(cleanPrompt, memoryKey) : cleanPrompt;
+  const searchQuery = memoryKey ? buildSearchQuery(cleanPrompt, memoryKey) : cleanPrompt;
+
+  let context = '';
+  let sources = [];
+
+  const useWeb = web === 'always' || (web === 'auto' && shouldAutoSearch(cleanPrompt));
+  if (useWeb) {
+    try {
+      const search = await searchWeb(searchQuery);
+      context = search.context;
+      sources = search.sources;
+    } catch (err) {
+      if (web === 'always') {
+        context = `Web search was requested, but SearXNG failed: ${err.message}`;
+      }
+    }
+  }
+
+  let answer = await runLocalChat(
+    promptForModel,
+    buildSystem(system, useWeb),
+    context,
+    maxNewTokens,
+    temperature
+  );
+
+  if (hasLoopingOrBrokenReply(answer)) {
+    const retryPrompt = [
+      promptForModel,
+      '',
+      'Important: provide only the final answer. No hidden reasoning. No repetition. Every sentence must add new information.'
+    ].join('\n');
+
+    answer = await runLocalChat(
+      retryPrompt,
+      buildAntiLoopSystem(system, useWeb),
+      context,
+      Math.min(maxNewTokens, 900),
+      Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2)
+    );
+  }
+
+  answer = cleanLoopingReply(answer);
+
+  if (hasLoopingOrBrokenReply(answer)) {
+    answer = 'I hit a generation loop and discarded it. Ask again with tighter wording and I should behave.';
+  }
+
+  return `${answer}${formatSources(sources)}`.trim();
+}
+
+async function askVision(attachment, prompt) {
+  const res = await fetch(attachment.url);
+  if (!res.ok) throw new Error(`Could not download attachment: ${res.status} ${res.statusText}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const b64 = buf.toString('base64');
+  const contentType = attachment.contentType || '';
+  const mediaKind = contentType.startsWith('video/') ? 'video' : 'auto';
+
+  const response = await postLocal('/vision', {
+    prompt: prompt || 'Describe this media clearly.',
+    media_b64: b64,
+    filename: attachment.name || 'upload',
+    media_kind: mediaKind,
+    max_new_tokens: 700,
+    temperature: 0.0,
+  });
+
+  return response.text || '(empty vision response)';
+}
+
+
+// SEEKDEEP_IMAGE_BUTTONS_START
+const SEEKDEEP_IMAGE_ACTIONS = new Map();
+const SEEKDEEP_IMAGE_ACTION_TTL_MS = Number(process.env.SEEKDEEP_IMAGE_ACTION_TTL_MS || 86400000);
+const SEEKDEEP_SAVED_IMAGE_DIR = process.env.SEEKDEEP_SAVED_IMAGE_DIR || path.join(__dirname, 'saved_generations');
+
+function seekdeepSweepImageActions() {
+  const now = Date.now();
+
+  for (const [id, state] of SEEKDEEP_IMAGE_ACTIONS.entries()) {
+    if (!state || state.expiresAt <= now) {
+      SEEKDEEP_IMAGE_ACTIONS.delete(id);
+    }
+  }
+}
+
+function seekdeepNewImageActionId() {
+  seekdeepSweepImageActions();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function seekdeepRememberImageAction(state) {
+  const id = seekdeepNewImageActionId();
+
+  SEEKDEEP_IMAGE_ACTIONS.set(id, {
+    ...state,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SEEKDEEP_IMAGE_ACTION_TTL_MS,
+  });
+
+  return id;
+}
+
+function seekdeepImageActionRow(id, downloadUrl = null) {
+  const buttons = [
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:image:regen:${id}`)
+      .setLabel('Regenerate')
+      .setStyle(ButtonStyle.Secondary),
+  ];
+
+  if (downloadUrl) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel('Download')
+        .setStyle(ButtonStyle.Link)
+        .setURL(downloadUrl)
+    );
+  }
+
+  buttons.push(
+    new ButtonBuilder()
+      .setCustomId(`seekdeep:image:archive:${id}`)
+      .setLabel('Archive')
+      .setStyle(ButtonStyle.Success)
+  );
+
+  return new ActionRowBuilder().addComponents(...buttons);
+}
+
+
+function seekdeepAttachmentDownloadUrl(sentMessage) {
+  try {
+    const first = sentMessage?.attachments?.first?.();
+    return first?.url || first?.proxyURL || null;
+  } catch {
+    return null;
+  }
+}
+
+async function seekdeepAttachDownloadButton(sentMessage, actionId) {
+  const url = seekdeepAttachmentDownloadUrl(sentMessage);
+
+  if (!url || !sentMessage || typeof sentMessage.edit !== 'function') {
+    return sentMessage;
+  }
+
+  try {
+    return await sentMessage.edit({
+      components: [seekdeepImageActionRow(actionId, url)],
+    });
+  } catch (err) {
+    console.warn('Could not attach Download button:', err?.message || err);
+    return sentMessage;
+  }
+}
+
+function seekdeepSafeFilenamePiece(value, fallback = 'seekdeep-image') {
+  const clean = String(value || fallback)
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+
+  return clean || fallback;
+}
+
+async function makeImageResult(prompt, width = 1024, height = 1024, seed = null) {
+  const response = await postLocal('/image', {
+    prompt,
+    width,
+    height,
+    steps: 2,
+    guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 0.0),
+    seed,
+  });
+
+  const buffer = Buffer.from(response.image_b64, 'base64');
+  const filename = response.filename || 'seekdeep_image.png';
+
+  return {
+    file: new AttachmentBuilder(buffer, { name: filename }),
+    buffer,
+    filename,
+    prompt,
+    width,
+    height,
+    seed,
+  };
+}
+
+async function makeImage(prompt, width = 1024, height = 1024, seed = null) {
+  const result = await makeImageResult(prompt, width, height, seed);
+  return result.file;
+}
+
+
+// SEEKDEEP_TEMP_IMAGE_CACHE_START
+const seekdeepTempImageStateIndex = globalThis.__seekdeepTempImageStateIndex || new Map();
+globalThis.__seekdeepTempImageStateIndex = seekdeepTempImageStateIndex;
+
+const SEEKDEEP_IMAGE_CACHE_TTL_HOURS = Math.max(1, Number(process.env.SEEKDEEP_IMAGE_CACHE_TTL_HOURS || 24));
+const SEEKDEEP_IMAGE_CACHE_TTL_MS = SEEKDEEP_IMAGE_CACHE_TTL_HOURS * 60 * 60 * 1000;
+const SEEKDEEP_IMAGE_CACHE_DIR = path.join(__dirname, 'temp', 'image-cache');
+
+function seekdeepEnsureImageCacheDir() {
+  if (!fs.existsSync(SEEKDEEP_IMAGE_CACHE_DIR)) {
+    fs.mkdirSync(SEEKDEEP_IMAGE_CACHE_DIR, { recursive: true });
+  }
+}
+
+function seekdeepSafeImageFilename(name = 'seekdeep_image.png') {
+  const cleaned = String(name || 'seekdeep_image.png')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, '_')
+    .trim();
+
+  return cleaned || 'seekdeep_image.png';
+}
+
+function seekdeepMakeImageActionId() {
+  return `img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function seekdeepImageCacheMetaPath(id) {
+  return path.join(SEEKDEEP_IMAGE_CACHE_DIR, `${id}.json`);
+}
+
+function seekdeepImageCacheBinaryPath(id, filename = 'seekdeep_image.png') {
+  const safe = seekdeepSafeImageFilename(filename);
+  const ext = path.extname(safe) || '.png';
+  return path.join(SEEKDEEP_IMAGE_CACHE_DIR, `${id}${ext}`);
+}
+
+function seekdeepNormalizeGeneratedImageResult(result) {
+  const attachmentLike = result?.attachment || result?.file || result?.builder || null;
+
+  let buffer =
+    result?.buffer ||
+    result?.fileBuffer ||
+    result?.imageBuffer ||
+    null;
+
+  let filename =
+    result?.filename ||
+    result?.name ||
+    attachmentLike?.name ||
+    attachmentLike?.data?.name ||
+    'seekdeep_image.png';
+
+  if (!buffer && Buffer.isBuffer(attachmentLike?.attachment)) {
+    buffer = attachmentLike.attachment;
+  }
+
+  if (!buffer && Buffer.isBuffer(result)) {
+    buffer = result;
+  }
+
+  if (!buffer && typeof result?.image_b64 === 'string' && result.image_b64.length > 0) {
+    buffer = Buffer.from(result.image_b64, 'base64');
+  }
+
+  if (!buffer || !Buffer.isBuffer(buffer)) {
+    throw new Error('Generated image result did not include a usable Buffer.');
+  }
+
+  const attachment = attachmentLike || new AttachmentBuilder(buffer, { name: seekdeepSafeImageFilename(filename) });
+
+  return {
+    buffer,
+    filename: seekdeepSafeImageFilename(filename),
+    attachment,
+  };
+}
+
+function seekdeepRememberTempImageState(state) {
+  seekdeepEnsureImageCacheDir();
+
+  const createdAt = Number(state?.createdAt || Date.now());
+  const expiresAt = Number(state?.expiresAt || (createdAt + SEEKDEEP_IMAGE_CACHE_TTL_MS));
+  const id = String(state?.id || seekdeepMakeImageActionId());
+  const filename = seekdeepSafeImageFilename(state?.filename || 'seekdeep_image.png');
+  const binaryPath = seekdeepImageCacheBinaryPath(id, filename);
+  const metaPath = seekdeepImageCacheMetaPath(id);
+
+  if (!state?.buffer || !Buffer.isBuffer(state.buffer)) {
+    throw new Error('Temp image cache cannot persist a state without a Buffer.');
+  }
+
+  fs.writeFileSync(binaryPath, state.buffer);
+
+  const meta = {
+    id,
+    prompt: state?.prompt || '',
+    width: Number(state?.width || 1024),
+    height: Number(state?.height || 1024),
+    seed: state?.seed ?? null,
+    filename,
+    binaryPath,
+    createdAt,
+    expiresAt,
+    mimeType: state?.mimeType || 'image/png',
+  };
+
+  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+
+  const liveState = {
+    ...meta,
+    buffer: state.buffer,
+  };
+
+  seekdeepTempImageStateIndex.set(id, liveState);
+  return liveState;
+}
+
+function seekdeepDeleteTempImageState(id, meta = null) {
+  try {
+    const state = meta || seekdeepTempImageStateIndex.get(id) || null;
+    seekdeepTempImageStateIndex.delete(id);
+
+    const metaPath = seekdeepImageCacheMetaPath(id);
+    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+
+    const binaryPath = state?.binaryPath;
+    if (binaryPath && fs.existsSync(binaryPath)) {
+      fs.unlinkSync(binaryPath);
+      return;
+    }
+
+    try {
+      const files = fs.readdirSync(SEEKDEEP_IMAGE_CACHE_DIR);
+      for (const file of files) {
+        if (file.startsWith(`${id}.`)) {
+          const full = path.join(SEEKDEEP_IMAGE_CACHE_DIR, file);
+          if (fs.existsSync(full)) fs.unlinkSync(full);
+        }
+      }
+    } catch {}
+  } catch (err) {
+    console.warn('Could not delete expired temp image cache entry:', err?.message || err);
+  }
+}
+
+function seekdeepLoadTempImageState(id) {
+  seekdeepEnsureImageCacheDir();
+
+  const now = Date.now();
+  const live = seekdeepTempImageStateIndex.get(id);
+
+  if (live) {
+    if (Number(live.expiresAt || 0) <= now) {
+      seekdeepDeleteTempImageState(id, live);
+      return null;
+    }
+
+    if (live.buffer && Buffer.isBuffer(live.buffer)) return live;
+  }
+
+  const metaPath = seekdeepImageCacheMetaPath(id);
+  if (!fs.existsSync(metaPath)) return null;
+
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+    if (Number(meta?.expiresAt || 0) <= now) {
+      seekdeepDeleteTempImageState(id, meta);
+      return null;
+    }
+
+    if (!meta?.binaryPath || !fs.existsSync(meta.binaryPath)) {
+      seekdeepDeleteTempImageState(id, meta);
+      return null;
+    }
+
+    const buffer = fs.readFileSync(meta.binaryPath);
+    const state = { ...meta, buffer };
+
+    seekdeepTempImageStateIndex.set(id, state);
+    return state;
+  } catch (err) {
+    console.warn('Could not load temp image state from disk:', err?.message || err);
+    return null;
+  }
+}
+
+function seekdeepSweepExpiredImageCache() {
+  seekdeepEnsureImageCacheDir();
+
+  const now = Date.now();
+
+  for (const [id, state] of seekdeepTempImageStateIndex.entries()) {
+    if (Number(state?.expiresAt || 0) <= now) {
+      seekdeepDeleteTempImageState(id, state);
+    }
+  }
+
+  try {
+    const files = fs.readdirSync(SEEKDEEP_IMAGE_CACHE_DIR).filter((f) => f.endsWith('.json'));
+
+    for (const file of files) {
+      const full = path.join(SEEKDEEP_IMAGE_CACHE_DIR, file);
+
+      try {
+        const meta = JSON.parse(fs.readFileSync(full, 'utf8'));
+        if (Number(meta?.expiresAt || 0) <= now) {
+          seekdeepDeleteTempImageState(String(meta?.id || path.basename(file, '.json')), meta);
+        }
+      } catch {
+        try { fs.unlinkSync(full); } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn('Could not sweep temp image cache:', err?.message || err);
+  }
+}
+
+seekdeepEnsureImageCacheDir();
+seekdeepSweepExpiredImageCache();
+
+const __seekdeepImageCacheSweepTimer = setInterval(() => {
+  try {
+    seekdeepSweepExpiredImageCache();
+  } catch (err) {
+    console.warn('Temp image cache sweep interval failed:', err?.message || err);
+  }
+}, 30 * 60 * 1000);
+
+if (typeof __seekdeepImageCacheSweepTimer?.unref === 'function') {
+  __seekdeepImageCacheSweepTimer.unref();
+}
+// SEEKDEEP_TEMP_IMAGE_CACHE_END
+
+function seekdeepArchiveImageStateToDisk(state) {
+  if (!state?.buffer) {
+    throw new Error('No image buffer is available to save. The image action may have expired.');
+  }
+
+  fs.mkdirSync(SEEKDEEP_SAVED_IMAGE_DIR, { recursive: true });
+
+  const ext = path.extname(state.filename || '').replace('.', '') || 'png';
+  const base = seekdeepSafeFilenamePiece(state.prompt || 'seekdeep-image');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${stamp}-${base}.${ext}`;
+  const outPath = path.join(SEEKDEEP_SAVED_IMAGE_DIR, filename);
+
+  fs.writeFileSync(outPath, state.buffer);
+
+  return outPath;
+}
+
+// SEEKDEEP_IMAGE_QUEUE_START
+const seekdeepImageQueueState = globalThis.__seekdeepImageQueueState || {
+  active: null,
+  pending: [],
+  sequence: 0,
+  completed: 0,
+  failed: 0,
+};
+
+globalThis.__seekdeepImageQueueState = seekdeepImageQueueState;
+
+const SEEKDEEP_IMAGE_COOLDOWN_MS = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_COOLDOWN_MS || 0));
+const seekdeepImageCooldowns = globalThis.__seekdeepImageCooldowns || new Map();
+globalThis.__seekdeepImageCooldowns = seekdeepImageCooldowns;
+
+function seekdeepImageCooldownRemaining(userId) {
+  if (!SEEKDEEP_IMAGE_COOLDOWN_MS || !userId) return 0;
+
+  const last = Number(seekdeepImageCooldowns.get(String(userId)) || 0);
+  const remaining = SEEKDEEP_IMAGE_COOLDOWN_MS - (Date.now() - last);
+
+  return Math.max(0, remaining);
+}
+
+function seekdeepRememberImageCooldown(userId) {
+  if (!SEEKDEEP_IMAGE_COOLDOWN_MS || !userId) return;
+  seekdeepImageCooldowns.set(String(userId), Date.now());
+}
+
+function seekdeepImageQueueCurrentPosition() {
+  return seekdeepImageQueueState.pending.length + (seekdeepImageQueueState.active ? 1 : 0) + 1;
+}
+
+function seekdeepCreateImageQueueJob({ source = 'unknown', userId = '', channelId = '', prompt = '', width = 1024, height = 1024, seed = null } = {}) {
+  seekdeepImageQueueState.sequence += 1;
+
+  return {
+    id: `imgq_${Date.now()}_${seekdeepImageQueueState.sequence}`,
+    source,
+    userId: String(userId || ''),
+    channelId: String(channelId || ''),
+    prompt: String(prompt || ''),
+    width: Number(width || 1024),
+    height: Number(height || 1024),
+    seed: seed ?? null,
+    enqueuedAt: Date.now(),
+    startedAt: null,
+    finishedAt: null,
+  };
+}
+
+function seekdeepImageQueueJobLine(job) {
+  if (!job) return 'none';
+
+  return `${job.id} - ${seekdeepShortQueuePrompt(job.prompt)}`;
+}
+
+function seekdeepShortQueuePrompt(value, max = 90) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text || '(empty prompt)';
+  return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function seekdeepImageQueueWaitSeconds(job) {
+  const startedAt = Number(job?.startedAt || Date.now());
+  const enqueuedAt = Number(job?.enqueuedAt || startedAt);
+  return (Math.max(0, startedAt - enqueuedAt) / 1000).toFixed(2);
+}
+
+function seekdeepImageQueueRunSeconds(job) {
+  const startedAt = Number(job?.startedAt || Date.now());
+  const end = Number(job?.finishedAt || Date.now());
+  return (Math.max(0, end - startedAt) / 1000).toFixed(2);
+}
+
+function seekdeepImageQueueAckText(job, position) {
+  const active = seekdeepImageQueueState.active;
+  const lines = [
+    position <= 1 ? 'Image generation started.' : 'Image generation queued.',
+    `Queue Position: ${position}`,
+    `Job ID: ${job.id}`,
+    `Prompt: ${seekdeepShortQueuePrompt(job.prompt, 160)}`,
+  ];
+
+  if (active) {
+    lines.push(`Currently Running: ${seekdeepImageQueueJobLine(active)}`);
+  }
+
+  lines.push(`Pending Jobs: ${seekdeepImageQueueState.pending.length}`);
+
+  return lines.join('\n');
+}
+
+function seekdeepImageQueueStatusText() {
+  const pending = seekdeepImageQueueState.pending || [];
+  const active = seekdeepImageQueueState.active;
+
+  const lines = [
+    'Image generation queue',
+    '',
+    `Active Job: ${active ? seekdeepImageQueueJobLine(active) : 'none'}`,
+    `Pending Jobs: ${pending.length}`,
+    `Completed Since Last Reboot: ${seekdeepImageQueueState.completed || 0}`,
+    `Failed Since Last Reboot: ${seekdeepImageQueueState.failed || 0}`,
+    `Cooldown: ${SEEKDEEP_IMAGE_COOLDOWN_MS ? `${(SEEKDEEP_IMAGE_COOLDOWN_MS / 1000).toFixed(0)}s per user` : 'off'}`,
+  ];
+
+  if (pending.length) {
+    lines.push('', 'Pending:');
+    pending.slice(0, 10).forEach((entry, index) => {
+      lines.push(`${index + 1}. ${seekdeepImageQueueJobLine(entry.job)}`);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+async function seekdeepPumpImageQueue() {
+  if (seekdeepImageQueueState.active) return;
+
+  const entry = seekdeepImageQueueState.pending.shift();
+  if (!entry) return;
+
+  seekdeepImageQueueState.active = entry.job;
+  entry.job.startedAt = Date.now();
+
+  try {
+    const result = await entry.runner(entry.job);
+    seekdeepImageQueueState.completed += 1;
+    entry.resolve(result);
+  } catch (err) {
+    seekdeepImageQueueState.failed += 1;
+    entry.reject(err);
+  } finally {
+    entry.job.finishedAt = Date.now();
+    seekdeepImageQueueState.active = null;
+
+    if (typeof setImmediate === 'function') {
+      setImmediate(() => { void seekdeepPumpImageQueue(); });
+    } else {
+      setTimeout(() => { void seekdeepPumpImageQueue(); }, 0);
+    }
+  }
+}
+
+function seekdeepEnqueueImageJob(job, runner) {
+  if (!job || typeof runner !== 'function') {
+    throw new Error('Invalid image queue job.');
+  }
+
+  return new Promise((resolve, reject) => {
+    seekdeepImageQueueState.pending.push({ job, runner, resolve, reject });
+    void seekdeepPumpImageQueue();
+  });
+}
+
+function seekdeepImageCooldownText(remainingMs) {
+  return [
+    'Image generation cooldown is active.',
+    `Try again in ${(Math.max(0, Number(remainingMs || 0)) / 1000).toFixed(1)} seconds.`,
+  ].join('\n');
+}
+// SEEKDEEP_IMAGE_QUEUE_END
+
+async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024, height = 1024, seed = null) {
+  const requestStartedAt = seekdeepNowMs();
+  const userId = message?.author?.id || 'unknown';
+  const cooldown = seekdeepImageCooldownRemaining(userId);
+
+  if (cooldown > 0) {
+    return await message.reply({
+      content: seekdeepAppendResponseFooter(seekdeepImageCooldownText(cooldown), {
+        startedAt: requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+      allowedMentions: { repliedUser: false },
+    });
+  }
+
+  seekdeepRememberImageCooldown(userId);
+
+  const workingLoop = seekdeepStartWorkingLoop(message?.channel, `image:${message?.id || prompt}`);
+  const position = seekdeepImageQueueCurrentPosition();
+  const job = seekdeepCreateImageQueueJob({
+    source: 'message',
+    userId,
+    channelId: message?.channel?.id || '',
+    prompt,
+    width,
+    height,
+    seed,
+  });
+
+  const startNotice = seekdeepImageQueueAckText(job, position);
+
+  try {
+    await message.reply({
+      content: seekdeepAppendResponseFooter(startNotice, {
+        startedAt: job.enqueuedAt || requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+      allowedMentions: { repliedUser: false },
+    });
+  } catch (err) {
+    console.warn('Could not send image queue acknowledgement; falling back to channel.send:', err?.message || err);
+
+    try {
+      if (message?.channel && typeof message.channel.send === 'function') {
+        await message.channel.send({
+          content: seekdeepAppendResponseFooter(startNotice, {
+            startedAt: job.enqueuedAt || requestStartedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          }),
+          allowedMentions: { repliedUser: false },
+        });
+      }
+    } catch (fallbackErr) {
+      console.warn('Could not send fallback image queue acknowledgement:', fallbackErr?.message || fallbackErr);
+    }
+  }
+
+  return await seekdeepEnqueueImageJob(job, async (runningJob) => {
+    try {
+      const result = await makeImageResult(prompt, width, height, seed);
+      const normalized = seekdeepNormalizeGeneratedImageResult(result);
+      const actionId = seekdeepMakeImageActionId();
+
+      const state = seekdeepRememberTempImageState({
+        id: actionId,
+        prompt,
+        width,
+        height,
+        seed,
+        filename: normalized.filename,
+        buffer: normalized.buffer,
+        mimeType: 'image/png',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
+      });
+
+      const content = seekdeepAppendResponseFooter([
+        `Generated locally: ${prompt}`,
+        `Queue Wait: ${seekdeepImageQueueWaitSeconds(runningJob)} seconds`,
+        `Job ID: ${runningJob.id}`,
+      ].join('\n'), {
+        startedAt: runningJob.startedAt,
+        modelUsed: seekdeepImageModelLabel(),
+      });
+
+      let sent = null;
+
+      try {
+        sent = await message.reply({
+          content,
+          files: [normalized.attachment],
+          components: [seekdeepImageActionRow(actionId)],
+          allowedMentions: { repliedUser: false },
+        });
+      } catch (err) {
+        console.warn('Image result reply failed; falling back to channel.send:', err?.message || err);
+
+        if (message?.channel && typeof message.channel.send === 'function') {
+          sent = await message.channel.send({
+            content,
+            files: [normalized.attachment],
+            components: [seekdeepImageActionRow(actionId)],
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          throw err;
+        }
+      }
+
+      try {
+        sent = await seekdeepAttachDownloadButton(sent, state.id);
+      } catch (err) {
+        console.warn('Could not attach Download button after image generation:', err?.message || err);
+      }
+
+      return sent;
+    } finally {
+      seekdeepStopWorkingLoop(workingLoop);
+      stopSeekDeepTypingLoopForMessage(message);
+    }
+  });
+}
+
+async function seekdeepSendImageWithButtonsInteraction(interaction, prompt, width = 1024, height = 1024, seed = null) {
+  const requestStartedAt = interaction?.__seekdeepRequestStartedAt || seekdeepNowMs();
+  const userId = interaction?.user?.id || 'unknown';
+  const cooldown = seekdeepImageCooldownRemaining(userId);
+
+  if (cooldown > 0) {
+    return await safeEditOrReply(interaction, {
+      content: seekdeepAppendResponseFooter(seekdeepImageCooldownText(cooldown), {
+        startedAt: requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+      allowedMentions: { repliedUser: false },
+    });
+  }
+
+  seekdeepRememberImageCooldown(userId);
+
+  const workingLoop = seekdeepStartWorkingLoop(interaction?.channel, `slash-image:${interaction?.id || prompt}`);
+  const position = seekdeepImageQueueCurrentPosition();
+  const job = seekdeepCreateImageQueueJob({
+    source: 'slash',
+    userId,
+    channelId: interaction?.channel?.id || '',
+    prompt,
+    width,
+    height,
+    seed,
+  });
+
+  await safeEditOrReply(interaction, {
+    content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
+      startedAt: job.enqueuedAt || requestStartedAt,
+      modelUsed: seekdeepNoModelLabel(),
+    }),
+    allowedMentions: { repliedUser: false },
+  });
+
+  return await seekdeepEnqueueImageJob(job, async (runningJob) => {
+    try {
+      const result = await makeImageResult(prompt, width, height, seed);
+      const normalized = seekdeepNormalizeGeneratedImageResult(result);
+      const actionId = seekdeepMakeImageActionId();
+
+      const state = seekdeepRememberTempImageState({
+        id: actionId,
+        prompt,
+        width,
+        height,
+        seed,
+        filename: normalized.filename,
+        buffer: normalized.buffer,
+        mimeType: 'image/png',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
+      });
+
+      const content = seekdeepAppendResponseFooter([
+        `Generated locally: ${prompt}`,
+        `Queue Wait: ${seekdeepImageQueueWaitSeconds(runningJob)} seconds`,
+        `Job ID: ${runningJob.id}`,
+      ].join('\n'), {
+        startedAt: runningJob.startedAt,
+        modelUsed: seekdeepImageModelLabel(),
+      });
+
+      let sent = await safeEditOrReply(interaction, {
+        content,
+        files: [normalized.attachment],
+        components: [seekdeepImageActionRow(state.id)],
+        allowedMentions: { repliedUser: false },
+      });
+
+      if (!sent && typeof interaction.fetchReply === 'function') {
+        sent = await interaction.fetchReply().catch(() => null);
+      }
+
+      return await seekdeepAttachDownloadButton(sent, state.id);
+    } finally {
+      seekdeepStopWorkingLoop(workingLoop);
+    }
+  });
+}
+
+async function seekdeepHandleImageButton(interaction) {
+  const startedAt = seekdeepNowMs();
+  const customId = String(interaction.customId || '');
+  const match = customId.match(/^seekdeep:image:(regen|archive|save):(.+)$/);
+
+  if (!match) {
+    return false;
+  }
+
+  const action = match[1] === 'save' ? 'archive' : match[1];
+  const id = match[2];
+
+  await interaction.deferReply({ ephemeral: true });
+
+  let state = seekdeepTempImageStateIndex.get(id) || null;
+  if (!state) {
+    state = seekdeepLoadTempImageState(id);
+  }
+
+  if (!state) {
+    await interaction.editReply({
+      content: seekdeepAppendResponseFooter('That image action expired from the 24-hour cache. Generate it again if you still want to use its buttons.', {
+        startedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+    });
+    return true;
+  }
+
+  if (action === 'archive') {
+    const savedPath = seekdeepArchiveImageStateToDisk(state);
+
+    await interaction.editReply({
+      content: seekdeepAppendResponseFooter(`Archived on the bot host:\n\`${savedPath}\``, {
+        startedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+    });
+
+    return true;
+  }
+
+  if (action === 'regen') {
+    const userId = interaction?.user?.id || 'unknown';
+    const workingLoop = seekdeepStartWorkingLoop(interaction?.channel, `regen:${id}`);
+    const position = seekdeepImageQueueCurrentPosition();
+    const job = seekdeepCreateImageQueueJob({
+      source: 'button-regenerate',
+      userId,
+      channelId: interaction?.channel?.id || '',
+      prompt: state.prompt,
+      width: state.width || 1024,
+      height: state.height || 1024,
+      seed: state.seed ?? null,
+    });
+
+    await interaction.editReply({
+      content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
+        startedAt: job.enqueuedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+    });
+
+    await seekdeepEnqueueImageJob(job, async (runningJob) => {
+      try {
+        const result = await makeImageResult(state.prompt, state.width || 1024, state.height || 1024, state.seed ?? null);
+        const normalized = seekdeepNormalizeGeneratedImageResult(result);
+        const newActionId = seekdeepMakeImageActionId();
+
+        const newState = seekdeepRememberTempImageState({
+          id: newActionId,
+          prompt: state.prompt,
+          width: state.width || 1024,
+          height: state.height || 1024,
+          seed: state.seed ?? null,
+          filename: normalized.filename,
+          buffer: normalized.buffer,
+          mimeType: 'image/png',
+          createdAt: Date.now(),
+          expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
+        });
+
+        let sent = null;
+
+        if (interaction.channel && typeof interaction.channel.send === 'function') {
+          sent = await interaction.channel.send({
+            content: seekdeepAppendResponseFooter([
+              `Regenerated locally: ${state.prompt}`,
+              `Queue Wait: ${seekdeepImageQueueWaitSeconds(runningJob)} seconds`,
+              `Job ID: ${runningJob.id}`,
+            ].join('\n'), {
+              startedAt: runningJob.startedAt,
+              modelUsed: seekdeepImageModelLabel(),
+            }),
+            files: [normalized.attachment],
+            components: [seekdeepImageActionRow(newState.id)],
+          });
+
+          try {
+            await seekdeepAttachDownloadButton(sent, newState.id);
+          } catch (err) {
+            console.warn('Could not attach Download button after regeneration:', err?.message || err);
+          }
+        }
+
+        await interaction.editReply({
+          content: seekdeepAppendResponseFooter(sent ? 'Regenerated and posted.' : 'Regenerated, but I could not post the new image back to the channel.', {
+            startedAt: runningJob.startedAt,
+            modelUsed: seekdeepImageModelLabel(),
+          }),
+        });
+
+        return sent;
+      } finally {
+        seekdeepStopWorkingLoop(workingLoop);
+      }
+    });
+
+    return true;
+  }
+
+  await interaction.editReply({
+    content: seekdeepAppendResponseFooter('Unknown image action.', {
+      startedAt,
+      modelUsed: seekdeepNoModelLabel(),
+    }),
+  });
+
+  return true;
+}
+
+// SEEKDEEP_IMAGE_BUTTONS_END
+
+async function statusText() {
+  const health = await fetchJson(`${LOCAL_AI_BASE_URL}/health`);
+  const loadedTask = health.loaded_task || 'none';
+  const currentLoadedModel = seekdeepCurrentLoadedModelFromHealth(health);
+  const botUptime = seekdeepFormatDuration(Date.now() - seekdeepBotMetrics.startedAt);
+  const responsesByModel = seekdeepFormatResponsesByModel();
+
+  return [
+    'Local AI server status',
+    '',
+    `Endpoint: ${LOCAL_AI_BASE_URL}`,
+    `Health: ${health.status}`,
+    `Device: ${health.device}`,
+    `CUDA: ${health.cuda_available ? 'YES' : 'NO'}`,
+    `Loaded task: ${loadedTask}`,
+    `Current Loaded Model: ${currentLoadedModel}`,
+    `Keep mode: ${health.keep_mode}`,
+    '',
+    'Bot runtime:',
+    `Bot Uptime: ${botUptime}`,
+    `Responses Since Last Reboot: ${seekdeepBotMetrics.responsesSinceBoot}`,
+    '',
+    'Image queue:',
+    seekdeepImageQueueStatusText(),
+    '',
+    'Responses By Model:',
+    responsesByModel,
+    '',
+    'Configured local models:',
+    `Chat: ${health.models?.chat}`,
+    `Vision: ${health.models?.vision}`,
+    `Image: ${health.models?.image}`,
+    `Offline model loading: ${health.offline_model_loading ? 'YES' : 'NO'}`,
+  ].join('\n');
+}
+
+// SEEKDEEP_BATCH1_UTILITY_START
+function seekdeepAdminIds() {
+  return new Set(String(process.env.SEEKDEEP_ADMIN_IDS || process.env.ADMIN_USER_IDS || '')
+    .split(/[\s,;]+/)
+    .map((x) => x.trim())
+    .filter(Boolean));
+}
+
+function seekdeepIsAdminSource(source) {
+  const userId = String(source?.user?.id || source?.author?.id || '');
+  if (userId && seekdeepAdminIds().has(userId)) return true;
+
+  try {
+    if (source?.memberPermissions?.has && source.memberPermissions.has('Administrator')) return true;
+  } catch {}
+
+  try {
+    if (source?.member?.permissions?.has && source.member.permissions.has('Administrator')) return true;
+  } catch {}
+
+  return false;
+}
+
+function seekdeepAdminLine(source) {
+  return `Admin: ${seekdeepIsAdminSource(source) ? 'YES' : 'NO'}`;
+}
+
+function seekdeepFormatBytes(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 2)} ${units[unit]}`;
+}
+
+function seekdeepSafeReadJson(fullPath) {
+  try {
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function seekdeepWalkFiles(dir) {
+  if (!dir || !fs.existsSync(dir)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(dir)) {
+    const fullPath = path.join(dir, name);
+    try {
+      const stat = fs.statSync(fullPath);
+      if (stat.isFile()) out.push({ name, fullPath, stat });
+    } catch {}
+  }
+  return out;
+}
+
+function seekdeepDirFileStats(dir, imageOnly = false) {
+  const files = seekdeepWalkFiles(dir);
+  const imageExts = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']);
+  const filtered = imageOnly ? files.filter((f) => imageExts.has(path.extname(f.name).toLowerCase())) : files;
+  const bytes = filtered.reduce((sum, file) => sum + Number(file.stat?.size || 0), 0);
+  return { files: filtered, count: filtered.length, bytes };
+}
+
+function seekdeepTempImageCacheDir() {
+  try {
+    if (typeof SEEKDEEP_IMAGE_CACHE_DIR !== 'undefined' && SEEKDEEP_IMAGE_CACHE_DIR) return SEEKDEEP_IMAGE_CACHE_DIR;
+  } catch {}
+  return path.join(__dirname, 'temp', 'image-cache');
+}
+
+function seekdeepArchiveDirResolved() {
+  try {
+    if (typeof seekdeepArchiveDir === 'function') return seekdeepArchiveDir();
+  } catch {}
+  return path.join(__dirname, 'saved_generations');
+}
+
+function seekdeepReadTempImageCacheMetadata() {
+  const dir = seekdeepTempImageCacheDir();
+  return seekdeepWalkFiles(dir)
+    .filter((file) => file.name.toLowerCase().endsWith('.json'))
+    .map((file) => ({ ...seekdeepSafeReadJson(file.fullPath), __metaPath: file.fullPath, __stat: file.stat, __kind: 'temp' }))
+    .filter((item) => item && item.id);
+}
+
+function seekdeepInferArchivePromptFromFilename(name = '') {
+  const base = path.basename(String(name || ''), path.extname(String(name || '')));
+  return base
+    .replace(/^\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z[-_ ]*/i, '')
+    .replace(/^\d{2}[-_ ]\d{2}[-_ ]\d{2}[-_ ]\d{3}z[-_ ]*/i, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || name;
+}
+
+function seekdeepReadArchiveMetadata() {
+  const dir = seekdeepArchiveDirResolved();
+  const jsonItems = seekdeepWalkFiles(dir)
+    .filter((file) => file.name.toLowerCase().endsWith('.json'))
+    .map((file) => ({ ...seekdeepSafeReadJson(file.fullPath), __metaPath: file.fullPath, __stat: file.stat, __kind: 'archive' }))
+    .filter((item) => item && (item.id || item.prompt));
+
+  if (jsonItems.length) return jsonItems;
+
+  return seekdeepDirFileStats(dir, true).files.map((file) => ({
+    id: path.basename(file.name, path.extname(file.name)),
+    prompt: seekdeepInferArchivePromptFromFilename(file.name),
+    filename: file.name,
+    binaryPath: file.fullPath,
+    createdAt: file.stat.mtimeMs,
+    __stat: file.stat,
+    __kind: 'archive',
+  }));
+}
+
+function seekdeepFormatTimestamp(ms) {
+  const value = Number(ms || 0);
+  if (!value) return 'unknown';
+  try { return new Date(value).toLocaleString(); } catch { return 'unknown'; }
+}
+
+function seekdeepShorten(value, max = 140) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function seekdeepHelpText(source = null) {
+  return [
+    'Seekotics command map',
+    '',
+    'Chat:',
+    '@SEEKOTICS ask anything',
+    '/ask prompt:<text>',
+    '',
+    'Images:',
+    '@SEEKOTICS hyper realistic cannabis plant',
+    '@SEEKOTICS I need picture of fat cat',
+    '/image prompt:<text>',
+    'Buttons: Regenerate / Download / Archive',
+    '',
+    'Vision:',
+    'Reply to an image: @SEEKOTICS what is this?',
+    '/vision file:<upload> prompt:<optional question>',
+    '',
+    'Archive and cache:',
+    '@SEEKOTICS post archive',
+    '@SEEKOTICS archive status',
+    '@SEEKOTICS cache status',
+    '@SEEKOTICS recent images',
+    '@SEEKOTICS recent prompts',
+    '@SEEKOTICS queue status',
+    '',
+    'Status:',
+    '@SEEKOTICS status',
+    '@SEEKOTICS ping',
+    '',
+    'Admin foundation:',
+    seekdeepAdminLine(source),
+    'Admin IDs can be configured with SEEKDEEP_ADMIN_IDS in .env.',
+  ].join('\n');
+}
+
+function seekdeepCacheStatusText() {
+  const dir = seekdeepTempImageCacheDir();
+  const allStats = seekdeepDirFileStats(dir, false);
+  const imageStats = seekdeepDirFileStats(dir, true);
+  const metas = seekdeepReadTempImageCacheMetadata();
+  const now = Date.now();
+  const expired = metas.filter((m) => Number(m.expiresAt || 0) && Number(m.expiresAt || 0) <= now).length;
+  const newest = metas.slice().sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0];
+
+  return [
+    'Temp image cache status',
+    '',
+    `Path: ${dir}`,
+    `Files: ${allStats.count}`,
+    `Images: ${imageStats.count}`,
+    `Metadata entries: ${metas.length}`,
+    `Expired metadata entries: ${expired}`,
+    `Size: ${seekdeepFormatBytes(allStats.bytes)}`,
+    `Retention: ${typeof SEEKDEEP_IMAGE_CACHE_TTL_HOURS !== 'undefined' ? SEEKDEEP_IMAGE_CACHE_TTL_HOURS : 24} hours`,
+    newest ? `Newest prompt: ${seekdeepShorten(newest.prompt || newest.filename || newest.id, 160)}` : 'Newest prompt: none',
+  ].join('\n');
+}
+
+function seekdeepArchiveStatusText() {
+  const dir = seekdeepArchiveDirResolved();
+  const allStats = seekdeepDirFileStats(dir, false);
+  const imageStats = seekdeepDirFileStats(dir, true);
+  const jsonCount = seekdeepWalkFiles(dir).filter((f) => f.name.toLowerCase().endsWith('.json')).length;
+  const newest = imageStats.files.slice().sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0];
+
+  return [
+    'Image archive status',
+    '',
+    `Path: ${dir}`,
+    `Images: ${imageStats.count}`,
+    `Metadata files: ${jsonCount}`,
+    `Total files: ${allStats.count}`,
+    `Size: ${seekdeepFormatBytes(allStats.bytes)}`,
+    newest ? `Newest file: ${newest.name}` : 'Newest file: none',
+  ].join('\n');
+}
+
+function seekdeepRecentImagesRequestedLimit(prompt = '', fallback = 5, max = 10) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  const m = p.match(/\b(\d{1,2})\b/);
+  let value = m ? Number(m[1]) : fallback;
+  if (!Number.isFinite(value) || value < 1) value = fallback;
+  value = Math.max(1, Math.min(max, value));
+  return value;
+}
+
+function seekdeepNormalizeRecentImageEntry(item) {
+  if (!item) return null;
+
+  const kind = item.__kind === 'archive' ? 'archive' : 'temp';
+  const createdAt = Number(item.createdAt || item.__stat?.mtimeMs || 0) || 0;
+  let binaryPath = String(item.binaryPath || '').trim();
+  let filename = String(item.filename || '').trim();
+
+  if (!binaryPath && filename) {
+    binaryPath = path.join(kind === 'archive' ? seekdeepArchiveDirResolved() : seekdeepTempImageCacheDir(), filename);
+  }
+
+  if (!binaryPath || !fs.existsSync(binaryPath)) return null;
+
+  if (!filename) {
+    filename = path.basename(binaryPath);
+  }
+
+  if (kind === 'temp') {
+    const expiresAt = Number(item.expiresAt || 0);
+    if (expiresAt && expiresAt <= Date.now()) return null;
+  }
+
+  return {
+    ...item,
+    __kind: kind,
+    createdAt,
+    binaryPath,
+    filename,
+    prompt: seekdeepShorten(item.prompt || filename || item.id || '(unknown prompt)', 160),
+    displayId: item.id || path.basename(filename, path.extname(filename)) || 'unknown',
+  };
+}
+
+function seekdeepCollectRecentImageEntries(limit = 5) {
+  const temp = seekdeepReadTempImageCacheMetadata().map(seekdeepNormalizeRecentImageEntry).filter(Boolean);
+  const archive = seekdeepReadArchiveMetadata().map(seekdeepNormalizeRecentImageEntry).filter(Boolean);
+
+  return [...temp, ...archive]
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+    .slice(0, Math.max(1, Math.min(10, Number(limit || 5))));
+}
+
+function seekdeepRecentImagesText(limit = 10) {
+  const items = seekdeepCollectRecentImageEntries(limit);
+
+  if (!items.length) return 'Recent images\n\nNo recent image files found.';
+
+  return [
+    'Recent images',
+    '',
+    ...items.map((item, index) => {
+      const when = seekdeepFormatTimestamp(item.createdAt || 0);
+      return `${index + 1}. [${item.__kind}] ${item.prompt}\n   Created: ${when}\n   ID/File: ${item.displayId}`;
+    }),
+  ].join('\n');
+}
+
+function seekdeepRecentImageCaption(item, index, total) {
+  return [
+    `Recent image ${index + 1}/${total}`,
+    `Source: ${item.__kind}`,
+    `Prompt: ${item.prompt}`,
+    `Created: ${seekdeepFormatTimestamp(item.createdAt || 0)}`,
+    `ID: ${item.displayId}`,
+  ].join('\n');
+}
+
+async function seekdeepPostRecentImagesToChannel(channel, limit = 5) {
+  const startedAt = seekdeepNowMs();
+  const modelUsed = seekdeepNoModelLabel();
+  const items = seekdeepCollectRecentImageEntries(limit);
+
+  if (!items.length) {
+    return {
+      summary: 'Recent images\n\nNo recent image files found.',
+      startedAt,
+      modelUsed,
+      posted: 0,
+      failed: 0,
+    };
+  }
+
+  const safeLimit = Math.max(1, Math.min(10, Number(limit || 5)));
+  let posted = 0;
+  let failed = 0;
+
+  await channel.send(seekdeepAppendResponseFooter(`Posting ${items.length} recent image(s).`, {
+    startedAt,
+    modelUsed,
+  }));
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const itemStartedAt = seekdeepNowMs();
+
+    try {
+      await channel.send({
+        content: seekdeepAppendResponseFooter(seekdeepRecentImageCaption(item, i, items.length), {
+          startedAt: itemStartedAt,
+          modelUsed,
+        }),
+        files: [new AttachmentBuilder(item.binaryPath, { name: item.filename })],
+      });
+      posted += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(`Recent image post failed: ${item.binaryPath}`, err?.message || err);
+    }
+  }
+
+  return {
+    summary: `Recent image post complete.\nRequested: ${safeLimit}\nPosted: ${posted}\nFailed: ${failed}`,
+    startedAt,
+    modelUsed,
+    posted,
+    failed,
+  };
+}
+
+async function seekdeepPostRecentImagesFromMessage(message, limit = 5) {
+  seekdeepMarkRequestStart(message);
+  seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+  stopSeekDeepTypingLoopForMessage(message);
+
+  const result = await seekdeepPostRecentImagesToChannel(message.channel, limit);
+  const finalContent = seekdeepAppendResponseFooter(result.summary, {
+    startedAt: result.startedAt || message?.__seekdeepRequestStartedAt,
+    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
+  });
+
+  await message.reply({
+    content: finalContent,
+    allowedMentions: { repliedUser: false },
+  });
+
+  return finalContent;
+}
+
+async function seekdeepPostRecentImagesFromInteraction(interaction, limit = 5) {
+  seekdeepMarkRequestStart(interaction);
+  seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+
+  const result = await seekdeepPostRecentImagesToChannel(interaction.channel, limit);
+  const finalContent = seekdeepAppendResponseFooter(result.summary, {
+    startedAt: result.startedAt || interaction?.__seekdeepRequestStartedAt,
+    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
+  });
+
+  await safeEditOrReply(interaction, {
+    content: finalContent,
+    allowedMentions: { repliedUser: false },
+  });
+
+  return finalContent;
+}
+
+function seekdeepRecentPromptsText(key, limit = 12) {
+  const entries = (CHANNEL_MEMORY.get(key) || [])
+    .filter((entry) => entry.role === 'user')
+    .slice(-limit)
+    .reverse();
+
+  if (!entries.length) return 'Recent prompts\n\nNo recent channel prompts in memory yet.';
+
+  return [
+    'Recent prompts',
+    '',
+    ...entries.map((entry, index) => `${index + 1}. ${seekdeepShorten(entry.text, 180)}`),
+  ].join('\n');
+}
+
+function seekdeepUtilityPromptKind(prompt = '') {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  if (/^(help|commands|command list|what can you do|what are your commands)\b/.test(p)) return 'help';
+  if (/^(cache status|image cache status|temp cache status|cache)\b/.test(p)) return 'cache';
+  if (/^(archive status|saved generation status|saved generations status)\b/.test(p)) return 'archive';
+  if (/^(recent images|recent image|image history|recent generations|generation history)\b/.test(p)) return 'recent-images';
+  if (/^(recent prompts|recent prompt|prompt history|last prompts|last prompt)\b/.test(p)) return 'recent-prompts';
+  if (/^(admin status|am i admin)\b/.test(p)) return 'admin';
+  if (/^(queue status|image queue|generation queue|image generation queue)\b/.test(p)) return 'image-queue';
+
+  return '';
+}
+
+function seekdeepUtilityText(kind, source, key) {
+  switch (kind) {
+    case 'help': return seekdeepHelpText(source);
+    case 'cache': return seekdeepCacheStatusText();
+    case 'archive': return seekdeepArchiveStatusText();
+    case 'recent-images': return seekdeepRecentImagesText(10);
+    case 'recent-prompts': return seekdeepRecentPromptsText(key, 12);
+    case 'admin': return ['Seekotics admin status', '', seekdeepAdminLine(source)].join('\n');
+    case 'image-queue': return seekdeepImageQueueStatusText();
+    default: return '';
+  }
+}
+// SEEKDEEP_BATCH1_UTILITY_END
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName('ask')
+    .setDescription('Ask SeekDeep using the local model.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Question or prompt').setRequired(true))
+    .addStringOption((o) =>
+      o.setName('web')
+        .setDescription('Web-search behavior')
+        .setRequired(false)
+        .addChoices(
+          { name: 'auto', value: 'auto' },
+          { name: 'off', value: 'off' },
+          { name: 'always', value: 'always' },
+        )
+    ),
+  new SlashCommandBuilder()
+    .setName('refine')
+    .setDescription('Rewrite/improve a prompt.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Prompt to improve').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('image')
+    .setDescription('Generate an image locally.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Image prompt').setRequired(true))
+    .addIntegerOption((o) => o.setName('width').setDescription('Width, default 1024').setRequired(false))
+    .addIntegerOption((o) => o.setName('height').setDescription('Height, default 1024').setRequired(false))
+    .addIntegerOption((o) => o.setName('seed').setDescription('Optional seed').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('vision')
+    .setDescription('Analyze an attached image/video locally.')
+    .addAttachmentOption((o) => o.setName('file').setDescription('Image or video').setRequired(true))
+    .addStringOption((o) => o.setName('prompt').setDescription('Question about the media').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('postarchive')
+    .setDescription('Post all archived SeekDeep images from saved_generations.'),
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show Seekotics command help.'),
+  new SlashCommandBuilder()
+    .setName('cachestatus')
+    .setDescription('Show temp image cache status.'),
+  new SlashCommandBuilder()
+    .setName('archivestatus')
+    .setDescription('Show permanent image archive status.'),
+  new SlashCommandBuilder()
+    .setName('recent')
+    .setDescription('Show recent Seekotics items.')
+    .addStringOption((o) =>
+      o.setName('kind')
+        .setDescription('Recent item type')
+        .setRequired(false)
+        .addChoices(
+          { name: 'images', value: 'images' },
+          { name: 'prompts', value: 'prompts' },
+        )
+    ),
+  new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Show local backend status.'),
+].map((c) => c.toJSON());
+
+client.once('clientReady', async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  console.log('Chat provider: Local NVIDIA model server');
+  console.log(`Chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'nvidia/Llama-3.1-Nemotron-Nano-8B-v1'}`);
+  console.log('Image provider: Local NVIDIA model server');
+  console.log('Vision provider: Local model server');
+  console.log(`Web search provider: ${WEB_SEARCH_PROVIDER}`);
+  console.log('Message content mode: ON');
+
+  try {
+    await client.application.commands.set(commands);
+    console.log('Registered commands globally. They may take time to appear.');
+  } catch (err) {
+    console.error('Command registration failed:', err);
+  }
+
+  console.log('Ready. Use: /ask, /refine, /image, /vision, /status, /help');
+});
+
+process.on('unhandledRejection', (err) => {
+  if (seekdeepIsDiscordAbortError(err)) {
+    seekdeepLogDiscordAbort('Unhandled Discord REST abort', err);
+    return;
+  }
+
+  console.error('Unhandled promise rejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  if (seekdeepIsDiscordAbortError(err)) {
+    seekdeepLogDiscordAbort('Uncaught Discord REST abort', err);
+    return;
+  }
+
+  console.error('Uncaught exception:', err);
+});
+
+client.on('error', (err) => {
+  console.error('Discord client error:', err);
+});
+
+
+
+
+
+async function safeDefer(interaction) {
+  try {
+    if (!interaction) return false;
+
+    if (typeof interaction.isRepliable === 'function' && !interaction.isRepliable()) {
+      return false;
+    }
+
+    if (interaction.deferred || interaction.replied) {
+      return true;
+    }
+
+    await interaction.deferReply();
+    return true;
+  } catch (err) {
+    console.error('Could not defer interaction. It may have expired before acknowledgement:', err);
+    return false;
+  }
+}
+
+async function safeEditOrReply(interaction, payload) {
+  try {
+    if (!interaction) return null;
+
+    if (interaction.deferred || interaction.replied) {
+      return await interaction.editReply(payload);
+    }
+
+    return await interaction.reply(payload);
+  } catch (err) {
+    if (seekdeepIsDiscordAbortError(err)) {
+      seekdeepLogDiscordAbort('Could not send interaction response', err);
+    } else {
+      console.error('Could not send interaction response:', err);
+    }
+    return null;
+  }
+}
+
+
+// SEEKDEEP_LONG_REPLY_HELPERS_START
+
+function asTextBlock(value, lang = 'text') {
+  return `\`\`\`${lang}\n${String(value ?? '').trim()}\n\`\`\``;
+}
+
+function stopSeekDeepTypingLoopForMessage(message) {
+  try {
+    if (message && message.__seekdeepTypingLoop) {
+      message.__seekdeepTypingLoop.stop();
+      message.__seekdeepTypingLoop = null;
+    }
+  } catch (err) {
+    console.error('Failed to stop typing loop:', err?.message || err);
+  }
+}
+
+
+// SEEKDEEP_QWEN_THINK_STRIP_START
+function stripQwenThinkingBlocks(value) {
+  let text = String(value ?? '');
+
+  // Remove complete Qwen3 thinking blocks.
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+
+  // If the model was cut off while still thinking, discard that leaked section.
+  text = text.replace(/<think>[\s\S]*$/i, '');
+
+  // Remove loose closing tags.
+  text = text.replace(/<\/think>/gi, '');
+
+  return text.trim();
+}
+// SEEKDEEP_QWEN_THINK_STRIP_END
+
+async function sendLongMessageReply(message, content, meta = {}) {
+  seekdeepMarkRequestStart(message);
+  stopSeekDeepTypingLoopForMessage(message);
+
+  if (!seekdeepClaimFinalReply('message', message?.id)) {
+    return null;
+  }
+
+  if (typeof cleanLoopingReply === 'function') {
+    content = cleanLoopingReply(content);
+  } else if (typeof stripQwenThinkingBlocks === 'function') {
+    content = stripQwenThinkingBlocks(content);
+  }
+
+  if (!String(content || '').trim()) {
+    content = '[SeekDeep generated an empty response after cleanup. This usually means the model only produced hidden <think> output or the output was stripped as invalid.]';
+  }
+
+  content = seekdeepAppendResponseFooter(content, {
+    startedAt: meta.startedAt || message?.__seekdeepRequestStartedAt,
+    modelUsed: meta.modelUsed || seekdeepModelUsedForMessage(message, content),
+  });
+
+  const chunks = splitDiscordText(content)
+    .map((chunk) => String(chunk || '').trim())
+    .filter(Boolean);
+
+  if (!chunks.length) {
+    chunks.push(seekdeepAppendResponseFooter('[SeekDeep generated no sendable text.]', {
+      startedAt: meta.startedAt || message?.__seekdeepRequestStartedAt,
+      modelUsed: meta.modelUsed || seekdeepModelUsedForMessage(message, content),
+    }));
+  }
+
+  let previous = null;
+
+  async function sendViaChannel(payload) {
+    if (!message.channel || typeof message.channel.send !== 'function') {
+      throw new Error('No channel.send available for fallback message delivery.');
+    }
+
+    return await message.channel.send({
+      content: payload.content,
+      allowedMentions: payload.allowedMentions || { repliedUser: false },
+    });
+  }
+
+  async function sendFirstChunk(payload) {
+    try {
+      return await message.reply(payload);
+    } catch (err) {
+      const code = err?.code;
+      const raw = String(err?.rawError?.message || '');
+      const msg = String(err?.message || '');
+
+      const referenceFailed =
+        code === 10008 ||
+        code === 50035 ||
+        raw.includes('Invalid Form Body') ||
+        raw.includes('Unknown message') ||
+        msg.includes('Unknown message') ||
+        msg.includes('MESSAGE_REFERENCE_UNKNOWN_MESSAGE');
+
+      if (referenceFailed) {
+        console.warn(`Source message reference failed; falling back to channel.send for message ${message?.id}`);
+      } else {
+        console.error('message.reply failed; falling back to channel.send:', err);
+      }
+
+      return await sendViaChannel(payload);
+    }
+  }
+
+  async function sendFollowupChunk(parent, payload) {
+    if (parent && typeof parent.reply === 'function') {
+      try {
+        return await parent.reply(payload);
+      } catch (err) {
+        console.warn('Follow-up reply failed; falling back to channel.send:', err?.message || err);
+      }
+    }
+
+    return await sendViaChannel(payload);
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const payload = {
+      content: chunks[i],
+      allowedMentions: { repliedUser: false },
+    };
+
+    if (i === 0) {
+      previous = await sendFirstChunk(payload);
+    } else {
+      previous = await sendFollowupChunk(previous, payload);
+    }
+  }
+
+  return previous;
+}
+
+// SEEKDEEP_LONG_REPLY_HELPERS_END
+
+
+// SEEKDEEP_TYPING_WORKING_HOTFIX_START
+function seekdeepStartWorkingLoop(channel, label = 'working') {
+  if (typeof startSeekDeepTypingLoop === 'function') {
+    return startSeekDeepTypingLoop(channel, label);
+  }
+
+  let stopped = false;
+  let interval = null;
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      if (channel && typeof channel.sendTyping === 'function') {
+        await channel.sendTyping();
+      }
+    } catch (err) {
+      console.warn(`Working indicator failed for ${label}:`, err?.message || err);
+    }
+  };
+
+  tick();
+  interval = setInterval(tick, Number(process.env.SEEKDEEP_TYPING_INTERVAL_MS || 8000));
+
+  return {
+    stop() {
+      stopped = true;
+      if (interval) clearInterval(interval);
+      interval = null;
+    },
+  };
+}
+
+function seekdeepStopWorkingLoop(loop) {
+  try {
+    if (loop && typeof loop.stop === 'function') loop.stop();
+  } catch {}
+}
+// SEEKDEEP_TYPING_WORKING_HOTFIX_END
+
+// SEEKDEEP_TYPING_DEDUPE_START
+const SEEKDEEP_EVENT_TTL_MS = Number(process.env.SEEKDEEP_EVENT_TTL_MS || 120000);
+const SEEKDEEP_PROMPT_TTL_MS = Number(process.env.SEEKDEEP_PROMPT_TTL_MS || 30000);
+const SEEKDEEP_TYPING_INTERVAL_MS = Number(process.env.SEEKDEEP_TYPING_INTERVAL_MS || 8000);
+const SEEKDEEP_TYPING_MAX_MS = Number(process.env.SEEKDEEP_TYPING_MAX_MS || 120000);
+
+const seekdeepSeenEvents = new Map();
+const seekdeepSeenPrompts = new Map();
+
+function seekdeepNow() {
+  return Date.now();
+}
+
+function seekdeepSweepMap(map, now = seekdeepNow()) {
+  for (const [key, expires] of map.entries()) {
+    if (expires <= now) map.delete(key);
+  }
+}
+
+function seekdeepClaimOnce(map, key, ttlMs) {
+  const now = seekdeepNow();
+  seekdeepSweepMap(map, now);
+
+  if (map.has(key) && map.get(key) > now) {
+    return false;
+  }
+
+  map.set(key, now + ttlMs);
+  return true;
+}
+
+function seekdeepClaimEventOnce(key, ttlMs = SEEKDEEP_EVENT_TTL_MS) {
+  return seekdeepClaimOnce(seekdeepSeenEvents, key, ttlMs);
+}
+
+function seekdeepNormalizePromptForDedupe(prompt) {
+  return String(prompt || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+function seekdeepClaimPromptOnce(kind, userId, channelId, prompt, ttlMs = SEEKDEEP_PROMPT_TTL_MS) {
+  const normalized = seekdeepNormalizePromptForDedupe(prompt);
+  if (!normalized) return true;
+
+  const key = `${kind}:${userId || 'unknown'}:${channelId || 'unknown'}:${normalized}`;
+  return seekdeepClaimOnce(seekdeepSeenPrompts, key, ttlMs);
+}
+
+function startSeekDeepTypingLoop(channel, label = 'request') {
+  let stopped = false;
+  let interval = null;
+  let hardStop = null;
+
+  const tick = async () => {
+    if (stopped) return;
+
+    try {
+      if (channel && typeof channel.sendTyping === 'function') {
+        await channel.sendTyping();
+      }
+    } catch (err) {
+      console.error(`Typing indicator failed for ${label}:`, err?.message || err);
+    }
+  };
+
+  tick();
+
+  interval = setInterval(tick, SEEKDEEP_TYPING_INTERVAL_MS);
+  hardStop = setTimeout(() => {
+    stop();
+  }, SEEKDEEP_TYPING_MAX_MS);
+
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+
+    if (hardStop) {
+      clearTimeout(hardStop);
+      hardStop = null;
+    }
+  }
+
+  return { stop };
+}
+// SEEKDEEP_TYPING_DEDUPE_END
+
+
+
+// SEEKDEEP_NATURAL_ROUTING_START
+function seekdeepAttachmentLooksVisual(attachment) {
+  if (!attachment) return false;
+
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const name = String(attachment.name || '').toLowerCase();
+  const url = String(attachment.url || '').toLowerCase();
+
+  return (
+    contentType.startsWith('image/') ||
+    contentType.startsWith('video/') ||
+    /\.(png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|mkv)$/i.test(name) ||
+    /\.(png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|mkv)(\?|$)/i.test(url)
+  );
+}
+
+function seekdeepFirstVisualAttachment(message) {
+  if (!message?.attachments?.size) return null;
+
+  for (const attachment of message.attachments.values()) {
+    if (seekdeepAttachmentLooksVisual(attachment)) return attachment;
+  }
+
+  return null;
+}
+
+async function seekdeepGetReplyVisualAttachment(message) {
+  try {
+    const refId = message?.reference?.messageId;
+    if (!refId || !message?.channel) return null;
+
+    const replied = await message.channel.messages.fetch(refId);
+    return seekdeepFirstVisualAttachment(replied);
+  } catch (err) {
+    console.error('Could not inspect replied-to message for visual media:', err?.message || err);
+    return null;
+  }
+}
+
+function seekdeepLooksLikeVisionPrompt(text = '') {
+  const t = normalizeUserText(text).toLowerCase().trim();
+  if (!t) return true;
+
+  return (
+    /\bwhat(?:'s| is)\s+(?:this|that)\b/.test(t) ||
+    /\bwhat the fuck is this\b/.test(t) ||
+    /\bwtf is this\b/.test(t) ||
+    /\bdescribe\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
+    /\bidentify\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
+    /\bcaption\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
+    /\banaly[sz]e\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
+    /\bwhat do you see\b/.test(t) ||
+    /\bwhat is in (?:this|that|the image|the picture|the photo)\b/.test(t) ||
+    /\bvision\b/.test(t)
+  );
+}
+
+// SEEKDEEP_ROUTING_TEXT_GUARD_HELPERS_START
+function seekdeepHasExplicitImageRequest(p = '') {
+  return /\b(generate|create|make|draw|render|paint|illustrate|design)\s+(?:me\s+)?(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait)\b/i.test(p) ||
+    /\b(image|picture|photo|pic|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait)\s+(?:of|for)\b/i.test(p) ||
+    /\b(?:image|picture|photo|pic)\b/i.test(p);
+}
+
+function seekdeepHasTextListIntent(p = '') {
+  return /\b(names?|nicknames?|name ideas?|list|ideas?|options?|suggestions?|recommendations?|examples?|titles?|captions?|phrases?|slogans?|handles?|usernames?|commands?|features?|checklist|bullet points?)\b/i.test(p);
+}
+
+function seekdeepHasCountRequest(p = '') {
+  return /\b(?:give me|make me|create|generate|list|suggest|name)\s+(?:a\s+)?(?:list\s+of\s+)?\d{1,3}\b/i.test(p) ||
+    /^\s*\d{1,3}\s+\w+/i.test(p);
+}
+
+function seekdeepHasQuestionOrExplanationIntent(p = '') {
+  return /\b(refine|rewrite|improve|explain|tell me about|story|checklist|what is|who is|why|how|status|help|advice|compare|summarize|describe in words)\b/i.test(p);
+}
+
+function seekdeepHasVisualStyleWords(p = '') {
+  return /\b(hyper\s*realistic|photorealistic|realistic|cinematic|anime|manga|oil painting|watercolor|digital art|illustration|poster|portrait|wallpaper|logo|icon|sticker|3d render|render|concept art|fantasy|surreal|gothic|punk|emo|cottagecore|cyberpunk|vaporwave|liminal|hd|ultra hd|4k|8k)\b/i.test(p);
+}
+
+function seekdeepHasVisualSubjectWords(p = '') {
+  return /\b(cat|dog|frog|pepe|girl|woman|man|person|character|creature|monster|plant|flower|tree|forest|castle|city|room|car|robot|machine|dragon|elf|wizard|goblin|demon|angel|portrait|scene|background|landscape|avatar|emote|cannabis|marijuana)\b/i.test(p);
+}
+
+function seekdeepHasLikelyVisualDescription(p = '') {
+  const words = String(p || '').split(/\s+/).filter(Boolean);
+  if (words.length > 20) return false;
+
+  if (seekdeepHasVisualStyleWords(p) && seekdeepHasVisualSubjectWords(p)) {
+    return true;
+  }
+
+  if (/^(i need|need|i want|want)\b/i.test(p) && seekdeepHasVisualSubjectWords(p)) {
+    return true;
+  }
+
+  return false;
+}
+
+function seekdeepShouldStayChatInsteadOfImage(p = '') {
+  if (!p) return true;
+
+  if (seekdeepHasExplicitImageRequest(p)) {
+    return false;
+  }
+
+  if (seekdeepHasTextListIntent(p)) {
+    return true;
+  }
+
+  if (seekdeepHasCountRequest(p)) {
+    return true;
+  }
+
+  if (seekdeepHasQuestionOrExplanationIntent(p)) {
+    return true;
+  }
+
+  return false;
+}
+// SEEKDEEP_ROUTING_TEXT_GUARD_HELPERS_END
+
+function seekdeepLooksLikeImagePrompt(text = '') {
+  const p = normalizeUserText(text).toLowerCase().trim();
+  if (!p) return false;
+
+  if (typeof seekdeepLooksLikeVisionPrompt === 'function' && seekdeepLooksLikeVisionPrompt(p)) {
+    return false;
+  }
+
+  if (/\b(image prompt|prompt only|describe an image|description only)\b/i.test(p)) {
+    return false;
+  }
+
+  if (seekdeepShouldStayChatInsteadOfImage(p)) {
+    return false;
+  }
+
+  if (seekdeepHasExplicitImageRequest(p)) {
+    return true;
+  }
+
+  if (/\b(generate|create|make|draw|render|paint|illustrate|design|show me|show)\b/i.test(p) && seekdeepHasVisualSubjectWords(p)) {
+    return true;
+  }
+
+  if (seekdeepHasLikelyVisualDescription(p)) {
+    return true;
+  }
+
+  return false;
+}
+
+function seekdeepExtractImagePrompt(text = '') {
+  let t = normalizeUserText(text);
+
+  t = t.replace(/<@!?\d+>/g, ' ').trim();
+  t = t.replace(/^(?:hey|yo|hi|hello)\s+/i, '');
+  t = t.replace(/^(?:seekdeep|seekotics|neurabot|plugtalk)[,:]?\s+/i, '');
+  t = t.replace(/^(?:please\s+)?(?:can you|could you|would you)\s+/i, '');
+  t = t.replace(/^(?:please\s+)?(?:show me|make me|generate|create|draw|render|paint|illustrate|design)\s+(?:me\s+)?/i, '');
+  t = t.replace(/^(?:an?\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon)\s+(?:of|for)\s+/i, '');
+  t = t.replace(/^(?:i need|need|i want|want)\s+(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon)?\s*(?:of|for)?\s*/i, '');
+  t = t.replace(/\s+/g, ' ').trim();
+
+  return t;
+}
+
+async function seekdeepInferNaturalRoute(message, prompt) {
+  const cleanPrompt = normalizeUserText(prompt || '');
+  const directVisual = seekdeepFirstVisualAttachment(message);
+  const replyVisual = await seekdeepGetReplyVisualAttachment(message);
+  const visualAttachment = directVisual || replyVisual || null;
+
+  if (visualAttachment && seekdeepLooksLikeVisionPrompt(cleanPrompt)) {
+    return {
+      route: 'vision',
+      prompt: cleanPrompt || 'Describe this media clearly.',
+      attachment: visualAttachment,
+    };
+  }
+
+  if (seekdeepLooksLikeImagePrompt(cleanPrompt)) {
+    return {
+      route: 'image',
+      prompt: seekdeepExtractImagePrompt(cleanPrompt) || cleanPrompt,
+      attachment: null,
+    };
+  }
+
+  return {
+    route: 'chat',
+    prompt: cleanPrompt,
+    attachment: null,
+  };
+}
+// SEEKDEEP_NATURAL_ROUTING_END
+
+
+// SEEKDEEP_NATURAL_MEDIA_ROUTING_START
+
+const SEEKDEEP_IMAGE_TRIGGER_RE = /\b(generate|create|make|draw|render|paint|illustrate|show me|show|image of|picture of|photo of|portrait of|poster of|wallpaper of|design)\b/i;
+const SEEKDEEP_VISION_TRIGGER_RE = /\b(what(?:'s| is) this|what am i looking at|describe this|describe (?:the|this) (?:image|picture|photo|screenshot|video)|identify this|analyze this|caption this|explain this(?: image| picture| photo| screenshot| video)?|what(?:'s| is) in this|what does this show)\b/i;
+const SEEKDEEP_TEXT_ONLY_RE = /\b(refine|rewrite|improve|explain|tell me about|list|story|checklist|nickname|nicknames|name ideas?|what is|who is|why|how)\b/i;
+
+function isNaturalStatusPrompt(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  return (
+    p === 'status' ||
+    p === '/status' ||
+    /^status\??$/.test(p) ||
+    /\bwhat(?:'s| is) your status\b/.test(p) ||
+    (/\bhow\b/.test(p) && /\bstatus\b/.test(p))
+  );
+}
+
+function isNaturalPongPrompt(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  return p === 'ping' || p === 'say pong' || /(?:^|\s)say pong$/.test(p);
+}
+
+function isNaturalVisionPrompt(prompt) {
+  const p = normalizeUserText(prompt);
+  return SEEKDEEP_VISION_TRIGGER_RE.test(p);
+}
+
+function isNaturalImagePrompt(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  if (!p) return false;
+
+  if (typeof isNaturalVisionPrompt === 'function' && isNaturalVisionPrompt(p)) {
+    return false;
+  }
+
+  if (/\b(image prompt|prompt only|describe an image|description only)\b/i.test(p)) {
+    return false;
+  }
+
+  if (seekdeepShouldStayChatInsteadOfImage(p)) {
+    return false;
+  }
+
+  if (seekdeepHasExplicitImageRequest(p)) {
+    return true;
+  }
+
+  if (/\b(generate|create|make|draw|render|paint|illustrate|design|show me|show)\b/i.test(p) && seekdeepHasVisualSubjectWords(p)) {
+    return true;
+  }
+
+  if (seekdeepHasLikelyVisualDescription(p)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function fetchRepliedMessage(message) {
+  try {
+    if (!message?.reference || typeof message.fetchReference !== 'function') return null;
+    return await message.fetchReference();
+  } catch {
+    return null;
+  }
+}
+
+function firstVisualAttachmentFrom(sourceMessage) {
+  try {
+    if (!sourceMessage?.attachments?.size) return null;
+
+    for (const attachment of sourceMessage.attachments.values()) {
+      const type = attachment.contentType || '';
+      if (type.startsWith('image/') || type.startsWith('video/')) {
+        return attachment;
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+async function resolveVisionAttachment(message) {
+  const direct = firstVisualAttachmentFrom(message);
+  if (direct) {
+    return { attachment: direct, origin: 'direct' };
+  }
+
+  const replied = await fetchRepliedMessage(message);
+  const repliedAttachment = firstVisualAttachmentFrom(replied);
+  if (repliedAttachment) {
+    return { attachment: repliedAttachment, origin: 'reply' };
+  }
+
+  return { attachment: null, origin: null };
+}
+
+// SEEKDEEP_NATURAL_MEDIA_ROUTING_END
+
+
+// SEEKDEEP_POST_ARCHIVE_START
+const SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.bmp',
+  '.avif',
+]);
+
+function seekdeepArchiveDir() {
+  if (typeof SEEKDEEP_SAVED_IMAGE_DIR !== 'undefined' && SEEKDEEP_SAVED_IMAGE_DIR) {
+    return SEEKDEEP_SAVED_IMAGE_DIR;
+  }
+
+  return path.join(__dirname, 'saved_generations');
+}
+
+function isPostArchivePrompt(prompt = '') {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^post\s+(the\s+)?archive\b/.test(p) ||
+    /^show\s+(the\s+)?archive\b/.test(p) ||
+    /^dump\s+(the\s+)?archive\b/.test(p) ||
+    /^upload\s+(the\s+)?archive\b/.test(p) ||
+    /^send\s+(the\s+)?archive\b/.test(p) ||
+    /^post\s+saved\s+images\b/.test(p) ||
+    /^show\s+saved\s+images\b/.test(p) ||
+    /^post\s+saved_generations\b/.test(p)
+  );
+}
+
+function seekdeepListArchiveImageFiles() {
+  const dir = seekdeepArchiveDir();
+
+  if (!fs.existsSync(dir)) return [];
+
+  return fs.readdirSync(dir)
+    .map((name) => {
+      const fullPath = path.join(dir, name);
+      const stat = fs.statSync(fullPath);
+      return { name, fullPath, stat };
+    })
+    .filter((entry) => entry.stat.isFile())
+    .filter((entry) => SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function seekdeepArchiveBatches(files, size = 10) {
+  const batches = [];
+
+  for (let i = 0; i < files.length; i += size) {
+    batches.push(files.slice(i, i + size));
+  }
+
+  return batches;
+}
+
+async function seekdeepPostArchiveToChannel(channel) {
+  const startedAt = seekdeepNowMs();
+  const modelUsed = seekdeepNoModelLabel();
+
+  globalThis.__seekdeepArchivePostLocks = globalThis.__seekdeepArchivePostLocks || new Set();
+
+  const lockKey = String(channel?.id || 'global');
+
+  if (globalThis.__seekdeepArchivePostLocks.has(lockKey)) {
+    return {
+      summary: 'Archive post is already running in this channel. Ignored duplicate request.',
+      startedAt,
+      modelUsed,
+      posted: 0,
+      failed: 0,
+      duplicate: true,
+    };
+  }
+
+  globalThis.__seekdeepArchivePostLocks.add(lockKey);
+
+  try {
+    const files = seekdeepListArchiveImageFiles();
+    const dir = seekdeepArchiveDir();
+
+    if (!files.length) {
+      return {
+        summary: `Archive is empty.\nPath checked:\n\`${dir}\``,
+        startedAt,
+        modelUsed,
+        posted: 0,
+        failed: 0,
+      };
+    }
+
+    const batches = seekdeepArchiveBatches(files, 10);
+    let posted = 0;
+    let failed = 0;
+
+    await channel.send(seekdeepAppendResponseFooter(`Posting archive: ${files.length} image(s) from \`${dir}\`.`, {
+      startedAt,
+      modelUsed,
+    }));
+
+    for (let i = 0; i < batches.length; i++) {
+      const batchStartedAt = seekdeepNowMs();
+      const batch = batches[i];
+
+      try {
+        await channel.send({
+          content: seekdeepAppendResponseFooter(`Archive batch ${i + 1}/${batches.length}`, {
+            startedAt: batchStartedAt,
+            modelUsed,
+          }),
+          files: batch.map((entry) => new AttachmentBuilder(entry.fullPath, { name: entry.name })),
+        });
+
+        posted += batch.length;
+      } catch (err) {
+        console.error(`Archive batch ${i + 1} failed; trying individually:`, err?.message || err);
+
+        for (const entry of batch) {
+          const singleStartedAt = seekdeepNowMs();
+
+          try {
+            await channel.send({
+              content: seekdeepAppendResponseFooter(`Archive image: ${entry.name}`, {
+                startedAt: singleStartedAt,
+                modelUsed,
+              }),
+              files: [new AttachmentBuilder(entry.fullPath, { name: entry.name })],
+            });
+
+            posted += 1;
+          } catch (singleErr) {
+            failed += 1;
+            console.error(`Archive image failed: ${entry.fullPath}`, singleErr?.message || singleErr);
+          }
+        }
+      }
+    }
+
+    return {
+      summary: `Archive post complete.\nPosted: ${posted}\nFailed: ${failed}\nSource: \`${dir}\``,
+      startedAt,
+      modelUsed,
+      posted,
+      failed,
+    };
+  } finally {
+    globalThis.__seekdeepArchivePostLocks.delete(lockKey);
+  }
+}
+
+async function seekdeepPostArchiveFromMessage(message) {
+  seekdeepMarkRequestStart(message);
+  seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+  stopSeekDeepTypingLoopForMessage(message);
+
+  const result = await seekdeepPostArchiveToChannel(message.channel);
+
+  const finalContent = seekdeepAppendResponseFooter(result.summary, {
+    startedAt: result.startedAt || message?.__seekdeepRequestStartedAt,
+    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
+  });
+
+  await message.reply({
+    content: finalContent,
+    allowedMentions: { repliedUser: false },
+  });
+
+  return finalContent;
+}
+
+async function seekdeepPostArchiveFromInteraction(interaction) {
+  seekdeepMarkRequestStart(interaction);
+  seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+
+  const result = await seekdeepPostArchiveToChannel(interaction.channel);
+
+  const finalContent = seekdeepAppendResponseFooter(result.summary, {
+    startedAt: result.startedAt || interaction?.__seekdeepRequestStartedAt,
+    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
+  });
+
+  await safeEditOrReply(interaction, {
+    content: finalContent,
+    allowedMentions: { repliedUser: false },
+  });
+
+  return finalContent;
+}
+
+// SEEKDEEP_POST_ARCHIVE_END
+
+
+client.on('interactionCreate', async (interaction) => {
+  // SEEKDEEP_INTERACTION_REQUEST_START
+  seekdeepMarkRequestStart(interaction);
+  // SEEKDEEP_INTERACTION_EVENT_DEDUPE
+  if (interaction?.id && !seekdeepClaimEventOnce(`interaction:${interaction.id}`)) {
+    console.warn(`Duplicate Discord interaction suppressed: ${interaction.id}`);
+    return;
+  }
+
+
+  if (interaction.isButton && interaction.isButton()) {
+    try {
+      if (await seekdeepHandleImageButton(interaction)) return;
+    } catch (err) {
+      console.error(err);
+
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(`Image button failed.\n\nError:\n${err.message}`);
+        } else {
+          await interaction.reply({
+            content: `Image button failed.\n\nError:\n${err.message}`,
+            ephemeral: true,
+          });
+        }
+      } catch {}
+    }
+
+    return;
+  }
+
+  if (!interaction.isChatInputCommand()) return;
+
+  try {
+    // SEEKDEEP_BATCH1_INTERACTION_ROUTE
+    if (['help', 'cachestatus', 'archivestatus', 'recent'].includes(interaction.commandName)) {
+      if (!(await safeDefer(interaction))) return;
+      const key = memoryKeyFrom(interaction);
+      let kind = interaction.commandName;
+
+      if (interaction.commandName === 'cachestatus') kind = 'cache';
+      if (interaction.commandName === 'archivestatus') kind = 'archive';
+      if (interaction.commandName === 'recent') {
+        const requested = interaction.options.getString('kind') || 'images';
+        kind = requested === 'prompts' ? 'recent-prompts' : 'recent-images';
+      }
+
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+
+      if (kind === 'recent-images') {
+        await seekdeepPostRecentImagesFromInteraction(interaction, 5);
+        return;
+      }
+
+      const content = seekdeepUtilityText(kind, interaction, key);
+      await sendLongInteractionReply(interaction, asTextBlock(content));
+      return;
+    }
+
+    if (interaction.commandName === 'postarchive') {
+      if (!(await safeDefer(interaction))) return;
+      await seekdeepPostArchiveFromInteraction(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'status') {
+      if (!(await safeDefer(interaction))) return;
+      await sendLongInteractionReply(interaction, asTextBlock(await statusText()));
+      return;
+    }
+
+    if (interaction.commandName === 'ask') {
+      if (!(await safeDefer(interaction))) return;
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const web = interaction.options.getString('web') || 'auto';
+      const key = memoryKeyFrom(interaction);
+      const answer = await askChat(prompt, { web, memoryKey: key });
+      seekdeepSetResponseModel(interaction, seekdeepChatModelLabel());
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+
+    if (interaction.commandName === 'refine') {
+      if (!(await safeDefer(interaction))) return;
+
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const key = memoryKeyFrom(interaction);
+      const refineInput = buildRefineUserPrompt(prompt, key);
+      const web = refineExplicitlyRequestsWeb(prompt) ? 'always' : 'off';
+      const maxNewTokens = maxTokensForRefine(prompt);
+      const temperature = Number(process.env.REFINE_TEMPERATURE || 0.72);
+
+      let answer = await askChat(refineInput, {
+        web,
+        system: REFINE_SYSTEM_PROMPT,
+        maxNewTokens,
+        temperature,
+        memoryKey: null,
+      });
+
+      answer = cleanupRefinedPrompt(answer);
+
+      if (hasRefineRepetitionIssue(answer)) {
+        const retryInput = [
+          refineInput,
+          '',
+          'The previous draft repeated itself. Regenerate once. Every sentence must add new information. Do not reuse paragraph structures or repeated mystical/filler phrasing.',
+        ].join('\n');
+
+        answer = await askChat(retryInput, {
+          web: 'off',
+          system: REFINE_SYSTEM_PROMPT,
+          maxNewTokens,
+          temperature: Math.max(temperature, 0.8),
+          memoryKey: null,
+        });
+
+        answer = cleanupRefinedPrompt(answer);
+      }
+
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+
+    if (interaction.commandName === 'image') {
+      if (!(await safeDefer(interaction))) return;
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const key = memoryKeyFrom(interaction);
+      const width = interaction.options.getInteger('width') || 1024;
+      const height = interaction.options.getInteger('height') || 1024;
+      const seed = interaction.options.getInteger('seed');
+      remember(key, 'user', `/image ${prompt}`);
+      remember(key, 'assistant', `Generated image locally for: ${prompt}`);
+      await seekdeepSendImageWithButtonsInteraction(interaction, prompt, width, height, seed ?? null);
+      return;
+    }
+
+    if (interaction.commandName === 'vision') {
+      if (!(await safeDefer(interaction))) return;
+      const attachment = interaction.options.getAttachment('file', true);
+      const prompt = normalizeUserText(interaction.options.getString('prompt') || 'Describe this media clearly.');
+      const key = memoryKeyFrom(interaction);
+      const answer = await askVision(attachment, buildPromptWithMemory(prompt, key));
+      seekdeepSetResponseModel(interaction, seekdeepVisionModelLabel());
+      remember(key, 'user', `/vision ${prompt}`);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+  } catch (err) {
+    console.error(err);
+    await sendLongInteractionReply(interaction, [
+      'SeekDeep request failed.',
+      '',
+      'Configured chat provider: Local NVIDIA model server',
+      `Configured chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'nvidia/Llama-3.1-Nemotron-Nano-8B-v1'}`,
+      '',
+      'Error:',
+      err.message,
+    ].join('\n'));
+  }
+});
+
+
+// SEEKDEEP_MEDIA_ROUTING_HELPERS
+function isNaturalImageRequest(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^generate\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\b/.test(p) ||
+    /^make\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\b/.test(p) ||
+    /^create\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\b/.test(p) ||
+    /^draw\s+/.test(p) ||
+    /^render\s+/.test(p)
+  );
+}
+
+function stripNaturalImageRequestPrefix(prompt) {
+  let p = normalizeUserText(prompt);
+
+  p = p.replace(/^generate\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\s+(of\s+)?/i, '');
+  p = p.replace(/^make\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\s+(of\s+)?/i, '');
+  p = p.replace(/^create\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|art|artwork|illustration|drawing|render)\s+(of\s+)?/i, '');
+  p = p.replace(/^draw\s+(me\s+)?/i, '');
+  p = p.replace(/^render\s+(me\s+)?/i, '');
+
+  return p.trim() || normalizeUserText(prompt);
+}
+
+function isNaturalVisionRequest(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^vision\b/.test(p) ||
+    /^describe\s+(this|the|that)\b/.test(p) ||
+    /^analy[sz]e\s+(this|the|that)\b/.test(p) ||
+    /^inspect\s+(this|the|that)\b/.test(p) ||
+    /^look\s+at\s+(this|the|that)\b/.test(p) ||
+    /^explain\s+(this|the|that)\b/.test(p) ||
+    /^identify\s+(this|the|that)\b/.test(p) ||
+    /^read\s+(this|the|that)\b/.test(p) ||
+    /^ocr\b/.test(p) ||
+
+    // Natural Discord profanity/casual forms.
+    /^what\s+the\s+fuck\s+is\s+(this|that)\b/.test(p) ||
+    /^what\s+the\s+hell\s+is\s+(this|that)\b/.test(p) ||
+    /^what\s+tf\s+is\s+(this|that)\b/.test(p) ||
+    /^wtf\s+is\s+(this|that)\b/.test(p) ||
+    /^tf\s+is\s+(this|that)\b/.test(p) ||
+
+    /^what\s+is\s+(this|that)\b/.test(p) ||
+    /^what'?s\s+(this|that)\b/.test(p) ||
+    /^what\s+am\s+i\s+looking\s+at\b/.test(p) ||
+    /^what\s+is\s+in\s+(this|the|that)\b/.test(p) ||
+    /^what'?s\s+in\s+(this|the|that)\b/.test(p) ||
+
+    /\bwhat\s+is\s+this\s+(image|picture|photo|video|screenshot|gif)\b/.test(p) ||
+    /\bdescribe\s+this\s+(image|picture|photo|video|screenshot|gif)\b/.test(p)
+  );
+}
+
+function isMediaAttachment(attachment) {
+  if (!attachment) return false;
+
+  const type = String(attachment.contentType || '').toLowerCase();
+  const name = String(attachment.name || '').toLowerCase();
+  const url = String(attachment.url || '').toLowerCase();
+
+  if (type.startsWith('image/') || type.startsWith('video/')) return true;
+
+  return /\.(png|jpe?g|webp|gif|bmp|avif|mp4|mov|webm|mkv)(\?|$)/i.test(name) ||
+         /\.(png|jpe?g|webp|gif|bmp|avif|mp4|mov|webm|mkv)(\?|$)/i.test(url);
+}
+
+function firstMediaAttachment(msg) {
+  if (!msg || !msg.attachments) return null;
+
+  for (const attachment of msg.attachments.values()) {
+    if (isMediaAttachment(attachment)) return attachment;
+  }
+
+  return null;
+}
+
+async function findVisionAttachment(message) {
+  const direct = firstMediaAttachment(message);
+  if (direct) return direct;
+
+  if (message?.reference?.messageId && typeof message.fetchReference === 'function') {
+    try {
+      const referenced = await message.fetchReference();
+      return firstMediaAttachment(referenced);
+    } catch (err) {
+      console.warn('Could not fetch referenced message:', err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+
+client.on('messageCreate', async (message) => {
+  // SEEKDEEP_MESSAGE_REQUEST_START
+  seekdeepMarkRequestStart(message);
+  // SEEKDEEP_MESSAGE_EVENT_DEDUPE
+  if (message?.id && !seekdeepClaimEventOnce(`message:${message.id}`)) {
+    console.warn(`Duplicate Discord message event suppressed: ${message.id}`);
+    return;
+  }
+
+  if (message.author.bot || !client.user) return;
+  if (!message.mentions.has(client.user)) return;
+
+  const prompt = normalizeUserText(stripBotMentions(message.content));
+
+  // SEEKDEEP_MESSAGE_EARLY_FINAL_CLAIM
+  if (!seekdeepClaimFinalReply('message-start', message?.id)) {
+    console.warn(`Duplicate message handler path suppressed before generation: ${message?.id}`);
+    stopSeekDeepTypingLoopForMessage(message);
+    return;
+  }
+
+  // SEEKDEEP_MESSAGE_PROMPT_DEDUPE_AND_TYPING
+  if (!seekdeepClaimPromptOnce('message', message.author?.id || 'unknown', message.channel?.id || 'unknown', prompt || '(no-text)')) {
+    console.warn(`Duplicate prompt suppressed from ${message.author?.id || 'unknown'} in ${message.channel?.id || 'unknown'}`);
+    stopSeekDeepTypingLoopForMessage(message);
+    return;
+  }
+
+  const _seekdeepTypingLoop = startSeekDeepTypingLoop(message.channel, `message:${message.id}`);
+  try {
+    message.__seekdeepTypingLoop = _seekdeepTypingLoop;
+  } catch {}
+
+  try {
+    const key = memoryKeyFrom(message);
+
+    // SEEKDEEP_EARLY_IMAGE_ROUTE_HOTFIX_START
+    // Force obvious image-generation prompts into the image queue before status/chat/utility routing.
+    // This protects prompts like:
+    //   "generate an image of a hyper realistic cannabis plant"
+    //   "hyper realistic cannabis plant"
+    //   "show me a fat cat in hyrule with a green hat"
+    if (
+      typeof isNaturalImagePrompt === 'function' &&
+      typeof seekdeepSendImageWithButtonsMessage === 'function' &&
+      isNaturalImagePrompt(prompt)
+    ) {
+      const imagePrompt =
+        (typeof seekdeepExtractImagePrompt === 'function' ? seekdeepExtractImagePrompt(prompt) : prompt) ||
+        prompt;
+
+      console.log(`[SeekDeep] early image route -> ${imagePrompt}`);
+
+      remember(key, 'user', `[natural-image] ${prompt}`);
+      remember(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
+
+      await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null);
+      return;
+    }
+    // SEEKDEEP_EARLY_IMAGE_ROUTE_HOTFIX_END
+
+    // SEEKDEEP_BATCH1_MESSAGE_ROUTE
+    const utilityKind = seekdeepUtilityPromptKind(prompt);
+    if (utilityKind) {
+      remember(key, 'user', prompt);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+
+      if (utilityKind === 'recent-images') {
+        remember(key, 'assistant', 'Posted recent images.');
+        await seekdeepPostRecentImagesFromMessage(message, seekdeepRecentImagesRequestedLimit(prompt, 5, 10));
+        return;
+      }
+
+      const content = seekdeepUtilityText(utilityKind, message, key);
+      remember(key, 'assistant', content);
+      await sendLongMessageReply(message, asTextBlock(content));
+      return;
+    }
+
+    if (isNaturalStatusPrompt(prompt)) {
+      const status = await statusText();
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', status);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, asTextBlock(status));
+      return;
+    }
+
+    if (isBotIdentityQuestion(prompt)) {
+      const answer = botIdentityAnswer(message.client?.user?.username || client.user?.username || 'PlugTalk');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, answer);
+      return;
+    }
+
+    await message.channel.sendTyping();
+
+    // Vision routing:
+    // 1) direct uploaded media
+    // 2) reply-to-media with a vision-style question
+    const visionTarget = await resolveVisionAttachment(message);
+    const shouldUseVision =
+      !!visionTarget.attachment &&
+      (
+        visionTarget.origin === 'direct' ||
+        !prompt ||
+        isNaturalVisionPrompt(prompt)
+      );
+
+    if (shouldUseVision) {
+      const rawPrompt = prompt || 'Describe this media clearly.';
+      const answer = await askVision(visionTarget.attachment, buildPromptWithMemory(rawPrompt, key));
+      remember(key, 'user', rawPrompt);
+      remember(key, 'assistant', answer);
+      seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
+      await sendLongMessageReply(message, answer);
+      return;
+    }
+
+    // Natural language image generation routing
+    if (isNaturalImagePrompt(prompt)) {
+      remember(key, 'user', `[natural-image] ${prompt}`);
+      remember(key, 'assistant', `Generated image locally for: ${prompt}`);
+
+      if (typeof seekdeepSendImageWithButtonsMessage === 'function') {
+        await seekdeepSendImageWithButtonsMessage(message, prompt, 1024, 1024, null);
+      } else {
+        const file = await makeImage(prompt, 1024, 1024, null);
+        await message.reply({
+          content: `Generated locally: ${prompt}`,
+          files: [file],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      return;
+    }
+
+    // Default chat route
+    const answer = await askChat(prompt, { web: 'auto', memoryKey: key });
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
+    seekdeepSetResponseModel(message, seekdeepChatModelLabel());
+    await sendLongMessageReply(message, answer);
+  } catch (err) {
+    console.error(err);
+    stopSeekDeepTypingLoopForMessage(message);
+    await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
+  }
+});
+
+client.login(TOKEN);
+
+
+
+
+

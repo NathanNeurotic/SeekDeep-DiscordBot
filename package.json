@@ -1,0 +1,27 @@
+{
+  "name": "seekdeep-discordbot",
+  "version": "10.0.0-fresh-rebuild",
+  "type": "module",
+  "description": "SeekDeep local Discord bot with local chat, vision, image generation, and SearXNG web search.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "bot": "node index.js",
+    "setup:models": ".venv\\Scripts\\python.exe warmup_local_cache.py",
+    "setup:chat-models": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only",
+    "setup:models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --include-optional",
+    "setup:chat-models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only --include-optional",
+    "audit:model-cache": ".venv\\Scripts\\python.exe warmup_local_cache.py --audit-cache --show-unused",
+    "prune:model-cache": ".venv\\Scripts\\python.exe warmup_local_cache.py --prune-unused --quarantine",
+    "purge:model-cache-quarantine": ".venv\\Scripts\\python.exe warmup_local_cache.py --purge-quarantine"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "node-fetch": "^3.3.2",
+    "form-data": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

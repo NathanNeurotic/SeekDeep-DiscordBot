@@ -1,0 +1,51 @@
+# SeekDeep gitignore — keep large/local/secret artifacts out of git.
+
+# Secrets and local config
+.env
+.env.local
+.env.backup*
+.env.bak*
+.env.broken*
+*.env.swp
+
+# Python venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node
+node_modules/
+
+# Local data / runtime
+models/
+outputs/
+outputs_old/
+saved_generations/
+temp/
+logs/
+backups/
+checkpoints/
+diagnostics/
+data/archive-guild-config.json.bak*
+
+# Old broken git directory (renamed during init)
+.git.broken_*
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python build / packaging
+*.egg-info/
+build/
+dist/
+
+# Misc
+*.log
+*.tmp

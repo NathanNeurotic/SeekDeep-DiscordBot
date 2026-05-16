@@ -1,0 +1,591 @@
+﻿from __future__ import annotations
+
+import base64
+import gc
+import io
+import json
+import os
+import re
+import tempfile
+import time
+import traceback
+from pathlib import Path
+from typing import Any, Literal, Optional
+
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from PIL import Image
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+ROOT = Path(__file__).resolve().parent
+MODEL_CACHE_DIR = Path(os.getenv("LOCAL_MODEL_CACHE_DIR", "./models/huggingface"))
+if not MODEL_CACHE_DIR.is_absolute():
+    MODEL_CACHE_DIR = ROOT / MODEL_CACHE_DIR
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+OUTPUT_DIR = ROOT / "outputs"
+OUTPUT_DIR.mkdir(exist_ok=True)
+TEMP_DIR = ROOT / "temp"
+TEMP_DIR.mkdir(exist_ok=True)
+
+CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "nvidia/Llama-3.1-Nemotron-Nano-8B-v1")
+VISION_MODEL_ID = os.getenv("LOCAL_VISION_MODEL_ID", "Qwen/Qwen2.5-VL-3B-Instruct")
+IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers")
+
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
+HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
+MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
+
+app = FastAPI(title="SeekDeep Local AI Server", version="10.0.0-fresh-rebuild")
+
+
+# ---------------------------------------------------------------------------
+# Stable helpers must be defined before any FastAPI route uses them.
+# ---------------------------------------------------------------------------
+
+def cuda_available() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def device_name() -> str:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_name(0)
+        return "CPU"
+    except Exception:
+        return "unknown"
+
+
+def model_dtype():
+    try:
+        import torch
+        forced = os.getenv("LOCAL_TORCH_DTYPE", "auto").lower()
+        if forced == "float16":
+            return torch.float16
+        if forced == "bfloat16":
+            return torch.bfloat16
+        if forced == "float32":
+            return torch.float32
+        if torch.cuda.is_available():
+            return torch.bfloat16
+        return torch.float32
+    except Exception:
+        return None
+
+
+def first_model_device(model: Any):
+    try:
+        return next(model.parameters()).device
+    except Exception:
+        try:
+            import torch
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        except Exception:
+            return "cpu"
+
+
+def move_inputs(value: Any, device: Any) -> Any:
+    try:
+        if hasattr(value, "to"):
+            return value.to(device)
+    except Exception:
+        pass
+
+    if isinstance(value, dict):
+        return {k: move_inputs(v, device) for k, v in value.items()}
+    if isinstance(value, list):
+        return [move_inputs(v, device) for v in value]
+    if isinstance(value, tuple):
+        return tuple(move_inputs(v, device) for v in value)
+    return value
+
+
+def cleanup_cuda() -> None:
+    gc.collect()
+    if cuda_available():
+        try:
+            import torch
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+
+def b64_to_bytes(data: str) -> bytes:
+    if "," in data and data.strip().startswith("data:"):
+        data = data.split(",", 1)[1]
+    return base64.b64decode(data)
+
+
+def image_to_b64_png(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+chat_model = None
+chat_tokenizer = None
+vision_model = None
+vision_processor = None
+vision_tokenizer = None
+image_pipe = None
+loaded_task: Optional[str] = None
+last_loaded_at = 0.0
+
+
+def unload_all() -> None:
+    global chat_model, chat_tokenizer, vision_model, vision_processor, vision_tokenizer, image_pipe, loaded_task
+    chat_model = None
+    chat_tokenizer = None
+    vision_model = None
+    vision_processor = None
+    vision_tokenizer = None
+    image_pipe = None
+    loaded_task = None
+    cleanup_cuda()
+    print("[SeekDeep] unloaded all models", flush=True)
+
+
+def prepare_task(task: str) -> None:
+    global loaded_task
+    if MODEL_KEEP_MODE in {"none", "off", "unload"}:
+        unload_all()
+        loaded_task = task
+        return
+
+    if MODEL_KEEP_MODE in {"task-lru", "lru", "single"} and loaded_task and loaded_task != task:
+        print(f"[SeekDeep] unloading models; switching from {loaded_task} to {task}", flush=True)
+        unload_all()
+
+    loaded_task = task
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    prompt: str
+    system: str = ""
+    context: str = ""
+    max_new_tokens: int = Field(default=700, ge=32, le=4096)
+    temperature: float = Field(default=0.35, ge=0.0, le=2.0)
+
+
+class ImageRequest(BaseModel):
+    prompt: str
+    width: int = Field(default=1024, ge=256, le=1536)
+    height: int = Field(default=1024, ge=256, le=1536)
+    steps: int = Field(default=2, ge=1, le=50)
+    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int] = None
+
+
+class VisionRequest(BaseModel):
+    prompt: str = "Describe this media clearly."
+    media_b64: str
+    filename: str = "upload.png"
+    media_kind: Literal["auto", "image", "video"] = "auto"
+    max_new_tokens: int = Field(default=700, ge=32, le=2048)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Health and utility endpoints
+# ---------------------------------------------------------------------------
+
+
+# SEEKDEEP_SINGLEFLIGHT_MIDDLEWARE_START
+# Serialize heavyweight local model requests. FastAPI can accept overlapping
+# requests, but this project keeps one active local model/task in VRAM at a time.
+# Without this, two Discord events can race-load the same model twice.
+import asyncio as _seekdeep_asyncio
+
+_SEEKDEEP_MODEL_REQUEST_LOCK = _seekdeep_asyncio.Lock()
+_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/unload"}
+
+@app.middleware("http")
+async def seekdeep_singleflight_middleware(request, call_next):
+    if request.url.path in _SEEKDEEP_LOCKED_PATHS:
+        async with _SEEKDEEP_MODEL_REQUEST_LOCK:
+            return await call_next(request)
+    return await call_next(request)
+# SEEKDEEP_SINGLEFLIGHT_MIDDLEWARE_END
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ready",
+        "device": device_name(),
+        "cuda_available": cuda_available(),
+        "loaded_task": loaded_task,
+        "keep_mode": MODEL_KEEP_MODE,
+        "models": {
+            "chat": CHAT_MODEL_ID,
+            "vision": VISION_MODEL_ID,
+            "image": IMAGE_MODEL_ID,
+        },
+        "cache_dir": str(MODEL_CACHE_DIR),
+        "offline_model_loading": HF_LOCAL_FILES_ONLY,
+    }
+
+
+@app.post("/unload")
+def unload_endpoint():
+    unload_all()
+    return {"ok": True, "status": "unloaded"}
+
+
+@app.exception_handler(Exception)
+async def exception_handler(request, exc: Exception):
+    print(f"[SeekDeep] ERROR: {exc!r}", flush=True)
+    traceback.print_exc()
+    return JSONResponse(status_code=500, content={"error": str(exc), "type": type(exc).__name__})
+
+
+# ---------------------------------------------------------------------------
+# Chat
+# ---------------------------------------------------------------------------
+
+def load_chat_model() -> None:
+    global chat_model, chat_tokenizer, last_loaded_at
+
+    if chat_model is not None and chat_tokenizer is not None:
+        return
+
+    prepare_task("chat")
+    print(f"[SeekDeep] loading chat model: {CHAT_MODEL_ID}", flush=True)
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    kwargs = {
+        "cache_dir": str(MODEL_CACHE_DIR),
+        "trust_remote_code": True,
+        "token": HF_TOKEN,
+        "local_files_only": HF_LOCAL_FILES_ONLY,
+    }
+
+    chat_tokenizer = AutoTokenizer.from_pretrained(CHAT_MODEL_ID, **kwargs)
+    chat_model = AutoModelForCausalLM.from_pretrained(
+        CHAT_MODEL_ID,
+        torch_dtype=model_dtype(),
+        device_map=None,
+        low_cpu_mem_usage=True,
+        **kwargs,
+    )
+
+    if cuda_available():
+        chat_model = chat_model.to("cuda")
+
+    chat_model = chat_model.eval()
+    last_loaded_at = time.time()
+    print("[SeekDeep] chat model loaded", flush=True)
+
+
+def build_chat_prompt(system: str, context: str, prompt: str):
+    base_system = system.strip() or (
+        "You are SeekDeep, a locally running Discord assistant. "
+        "Answer directly and naturally. Do not claim you searched the web unless search context is provided. "
+        "Use provided search context as supporting evidence, not as a raw list of results. "
+        "For casual/simple questions, answer without mentioning tools."
+    )
+
+    if context.strip():
+        user_content = (
+            "Use the following context only where relevant. Infer a proper answer; do not merely list results.\n\n"
+            f"{context.strip()}\n\n"
+            f"User question:\n{prompt.strip()}"
+        )
+    else:
+        user_content = prompt.strip()
+
+    return [
+        {"role": "system", "content": base_system},
+        {"role": "user", "content": user_content},
+    ]
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    load_chat_model()
+
+    import torch
+
+    messages = build_chat_prompt(req.system, req.context, req.prompt)
+
+    try:
+        # Qwen3 tends to emit hidden thinking blocks unless explicitly disabled.
+        try:
+            text = chat_tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            text = chat_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    except Exception:
+        text = f"{messages[0]['content']}\n\nUser: {messages[1]['content']}\nAssistant:"
+
+    inputs = chat_tokenizer(text, return_tensors="pt")
+    inputs = move_inputs(inputs, first_model_device(chat_model))
+
+    gen_kwargs = {
+        "max_new_tokens": int(req.max_new_tokens),
+        "do_sample": float(req.temperature) > 0,
+        "temperature": max(float(req.temperature), 0.01),
+        "top_p": 0.9,
+        "pad_token_id": getattr(chat_tokenizer, "eos_token_id", None),
+        "eos_token_id": getattr(chat_tokenizer, "eos_token_id", None),
+    }
+
+    with torch.inference_mode():
+        out = chat_model.generate(**inputs, **gen_kwargs)
+
+    new_tokens = out[0][inputs["input_ids"].shape[-1]:]
+    answer = chat_tokenizer.decode(new_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=False).strip()
+
+    # Safety cleanup in case the model still leaks hidden thinking.
+    answer = re.sub(r"<think>[\s\S]*?</think>", "", answer, flags=re.IGNORECASE).strip()
+    answer = re.sub(r"<think>[\s\S]*$", "", answer, flags=re.IGNORECASE).strip()
+    answer = answer.replace("</think>", "").strip()
+
+    return {"text": answer or "(empty response)"}
+
+
+# ---------------------------------------------------------------------------
+# Vision - Qwen2.5-VL, stable local backend
+# ---------------------------------------------------------------------------
+
+def load_vision_model() -> None:
+    global vision_model, vision_processor, vision_tokenizer, last_loaded_at
+
+    if vision_model is not None and vision_processor is not None:
+        return
+
+    prepare_task("vision")
+    print(f"[SeekDeep] loading vision model: {VISION_MODEL_ID}", flush=True)
+
+    import torch
+    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+    kwargs = {
+        "cache_dir": str(MODEL_CACHE_DIR),
+        "token": HF_TOKEN,
+        "local_files_only": HF_LOCAL_FILES_ONLY,
+    }
+
+    vision_processor = AutoProcessor.from_pretrained(
+        VISION_MODEL_ID,
+        min_pixels=256 * 28 * 28,
+        max_pixels=1280 * 28 * 28,
+        **kwargs,
+    )
+    vision_tokenizer = vision_processor
+
+    vision_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        VISION_MODEL_ID,
+        torch_dtype=model_dtype(),
+        device_map=None,
+        low_cpu_mem_usage=False,
+        **kwargs,
+    )
+
+    if cuda_available():
+        vision_model = vision_model.to("cuda")
+
+    vision_model = vision_model.eval()
+    last_loaded_at = time.time()
+    print("[SeekDeep] vision model loaded", flush=True)
+
+
+def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tuple[list[Image.Image], str]:
+    ext = Path(filename).suffix.lower()
+    is_video = media_kind == "video" or (media_kind == "auto" and ext in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".gif"})
+
+    if not is_video:
+        img = Image.open(io.BytesIO(media_bytes)).convert("RGB")
+        return [img], "image"
+
+    # Video path: sample up to 8 frames.
+    try:
+        import imageio.v3 as iio
+        tmp = TEMP_DIR / f"vision_{int(time.time() * 1000)}{ext or '.mp4'}"
+        tmp.write_bytes(media_bytes)
+        frames = []
+        for idx, frame in enumerate(iio.imiter(tmp)):
+            if idx % 15 == 0:
+                frames.append(Image.fromarray(frame).convert("RGB"))
+            if len(frames) >= 8:
+                break
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if not frames:
+            raise RuntimeError("No frames could be decoded from video.")
+        return frames, "video"
+    except Exception as exc:
+        raise RuntimeError(f"Could not decode video. Try a PNG/JPG first, or install imageio-ffmpeg. Details: {exc}")
+
+
+def generate_vision_answer(prompt: str, frames: list[Image.Image], media_kind: str, max_new_tokens: int, temperature: float) -> str:
+    load_vision_model()
+
+    import torch
+
+    usable_frames = []
+    for frame in frames[:8]:
+        usable_frames.append(frame.convert("RGB"))
+
+    if not usable_frames:
+        raise RuntimeError("No readable image/video frames were provided.")
+
+    user_text = prompt.strip() or "Describe and interpret this media."
+    if media_kind == "video":
+        user_text = f"The input is a video represented by {len(usable_frames)} sampled frames. {user_text}"
+
+    content = [{"type": "image", "image": frame} for frame in usable_frames]
+    content.append({"type": "text", "text": user_text})
+    messages = [{"role": "user", "content": content}]
+
+    chat_text = vision_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = vision_processor(text=[chat_text], images=usable_frames, padding=True, return_tensors="pt")
+
+    device = first_model_device(vision_model)
+    try:
+        inputs = inputs.to(device)
+    except Exception:
+        inputs = move_inputs(inputs, device)
+
+    gen_kwargs = {
+        "max_new_tokens": max(32, min(int(max_new_tokens), 2048)),
+        "do_sample": float(temperature) > 0,
+    }
+    if gen_kwargs["do_sample"]:
+        gen_kwargs["temperature"] = max(float(temperature), 0.01)
+        gen_kwargs["top_p"] = 0.9
+
+    with torch.inference_mode():
+        generated_ids = vision_model.generate(**inputs, **gen_kwargs)
+
+    generated_trimmed = [
+        output_ids[len(input_ids):]
+        for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+    ]
+
+    output_text = vision_processor.batch_decode(
+        generated_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )
+
+    return (output_text[0].strip() if output_text else "").strip() or "(empty vision response)"
+
+
+@app.post("/vision")
+def vision(req: VisionRequest):
+    media_bytes = b64_to_bytes(req.media_b64)
+    frames, actual_kind = load_media_frames(media_bytes, req.filename, req.media_kind)
+    answer = generate_vision_answer(req.prompt, frames, actual_kind, req.max_new_tokens, req.temperature)
+    return {"text": answer, "frames_used": len(frames), "media_kind": actual_kind}
+
+
+# ---------------------------------------------------------------------------
+# Image generation - Sana Sprint requires exactly 2 inference steps.
+# ---------------------------------------------------------------------------
+
+def load_image_pipe() -> None:
+    global image_pipe, last_loaded_at
+
+    if image_pipe is not None:
+        return
+
+    prepare_task("image")
+    print(f"[SeekDeep] loading image model: {IMAGE_MODEL_ID}", flush=True)
+
+    import torch
+    from diffusers import DiffusionPipeline
+
+    kwargs = {
+        "cache_dir": str(MODEL_CACHE_DIR),
+        "token": HF_TOKEN,
+        "local_files_only": HF_LOCAL_FILES_ONLY,
+        "torch_dtype": model_dtype(),
+    }
+
+    image_pipe = DiffusionPipeline.from_pretrained(IMAGE_MODEL_ID, **kwargs)
+
+    if cuda_available():
+        image_pipe = image_pipe.to("cuda")
+
+    try:
+        image_pipe.set_progress_bar_config(disable=True)
+    except Exception:
+        pass
+
+    last_loaded_at = time.time()
+    print("[SeekDeep] image model loaded", flush=True)
+
+
+@app.post("/image")
+def image(req: ImageRequest):
+    load_image_pipe()
+
+    import torch
+
+    width = int(req.width)
+    height = int(req.height)
+    if width % 8:
+        width = width - (width % 8)
+    if height % 8:
+        height = height - (height % 8)
+
+    seed = req.seed
+    generator = None
+    if seed is not None:
+        device = "cuda" if cuda_available() else "cpu"
+        generator = torch.Generator(device=device).manual_seed(int(seed))
+
+    # Sana Sprint SCM pipeline supports exactly 2 steps. Do not use arbitrary steps.
+    args = {
+        "prompt": req.prompt.strip(),
+        "width": width,
+        "height": height,
+        "num_inference_steps": 2,
+        "guidance_scale": float(req.guidance_scale),
+    }
+    if generator is not None:
+        args["generator"] = generator
+
+    result = image_pipe(**args)
+    img = result.images[0]
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_image_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(img),
+        "filename": safe_name,
+        "path": str(out_path),
+        "forced_steps": 2,
+        "seed": seed,
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=7865)
+
+

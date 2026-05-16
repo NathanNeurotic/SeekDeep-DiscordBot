@@ -1,0 +1,90 @@
+{
+  "guilds": {
+    "1256458065834676244": {
+      "archiveChannelId": "1504257627855781958",
+      "configuredBy": "640897985382973440",
+      "configuredAt": "2026-05-14T03:41:31.222Z",
+      "userArchives": {
+        "640897985382973440": {
+          "threadId": "1504257634314879016",
+          "count": 83,
+          "lastNickname": "! ! NathanNeurotic (Ripto)",
+          "updatedAt": "2026-05-16T05:31:47.024Z",
+          "countSource": "seekdeep-archive-posts-v3",
+          "legacyUntrustedCount": 75,
+          "legacyUntrustedCountIgnoredAt": "2026-05-14T05:39:41.502Z",
+          "lastArchivedAt": "2026-05-16T05:31:47.024Z",
+          "lastCountBackfillAt": "2026-05-16T05:31:45.385Z",
+          "lastCountBackfillScannedMessages": 110,
+          "lastCountBackfillArchiveEntries": 81
+        },
+        "741414123711234048": {
+          "threadId": "1504896055450534061",
+          "count": 3,
+          "countSource": "seekdeep-archive-posts-v3",
+          "lastNickname": "GLP-2 Roooo",
+          "updatedAt": "2026-05-15T22:05:06.067Z",
+          "lastCountBackfillAt": "2026-05-15T22:05:03.727Z",
+          "lastCountBackfillScannedMessages": 3,
+          "lastCountBackfillArchiveEntries": 1,
+          "lastArchivedAt": "2026-05-15T22:05:06.066Z"
+        },
+        "1203252560362868766": {
+          "threadId": "1504313134683394101",
+          "count": 0,
+          "countSource": "seekdeep-archive-posts-v3",
+          "lastNickname": "slimpuggamer",
+          "updatedAt": "2026-05-14T05:33:46.768Z"
+        }
+      },
+      "sharedArchive": {
+        "threadId": "1504467609196957808",
+        "threadName": "🪙 • Shared Archive • 24",
+        "count": 24,
+        "countSource": "seekdeep-shared-archive-posts-v1",
+        "bootstrapSource": "shared-archive-get-or-create",
+        "bootstrapAt": "2026-05-16T05:31:34.175Z",
+        "updatedAt": "2026-05-16T05:31:35.623Z",
+        "lastArchivedAt": "2026-05-16T05:31:35.623Z",
+        "lastArchivedBy": "640897985382973440",
+        "lastArchiveSource": "shared-archive-button-count-finalize-v6",
+        "lastCountScanAt": "2026-05-16T05:31:35.623Z",
+        "lastCountScanMessages": 54,
+        "lastCountScanEntries": 24
+      }
+    },
+    "741414359967989854": {
+      "archiveChannelId": "1504328056418992148",
+      "configuredBy": "741414123711234048",
+      "configuredAt": "2026-05-14T03:43:33.497Z",
+      "userArchives": {
+        "741414123711234048": {
+          "threadId": "1504344344520298706",
+          "count": 5,
+          "lastNickname": "𝔸𝕂",
+          "updatedAt": "2026-05-14T12:36:37.455Z",
+          "countSource": "seekdeep-archive-posts-v3",
+          "legacyUntrustedCount": 15,
+          "legacyUntrustedCountIgnoredAt": "2026-05-14T04:34:09.247Z",
+          "lastArchivedAt": "2026-05-14T04:48:46.834Z",
+          "lastCountBackfillAt": "2026-05-14T12:36:37.454Z",
+          "lastCountBackfillScannedMessages": 10,
+          "lastCountBackfillArchiveEntries": 3
+        },
+        "640897985382973440": {
+          "threadId": "1504338233872486510",
+          "count": 3,
+          "lastNickname": "! ! NathanNeurotic (Ripto)",
+          "updatedAt": "2026-05-14T21:44:03.830Z",
+          "countSource": "seekdeep-archive-posts-v3",
+          "legacyUntrustedCount": 1,
+          "legacyUntrustedCountIgnoredAt": "2026-05-14T04:37:26.900Z",
+          "lastArchivedAt": "2026-05-14T21:44:03.829Z",
+          "lastCountBackfillAt": "2026-05-14T21:44:02.401Z",
+          "lastCountBackfillScannedMessages": 5,
+          "lastCountBackfillArchiveEntries": 1
+        }
+      }
+    }
+  }
+}

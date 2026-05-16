@@ -1,0 +1,1156 @@
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
+import {
+  AttachmentBuilder,
+  Client,
+  GatewayIntentBits,
+  Partials,
+  SlashCommandBuilder,
+} from 'discord.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const TOKEN = process.env.DISCORD_TOKEN || '';
+const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:7865';
+const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || 'http://127.0.0.1:8080';
+const WEB_SEARCH_PROVIDER = (process.env.WEB_SEARCH_PROVIDER || 'searxng').toLowerCase();
+const WEB_APPEND_SOURCES = (process.env.WEB_APPEND_SOURCES || 'true').toLowerCase() !== 'false';
+const MAX_DISCORD_CHARS = Number(process.env.MAX_DISCORD_CHARS || 1900);
+
+// SEEKDEEP_REFINE_MODE_START
+const REFINE_SYSTEM_PROMPT = [
+  'You are SeekDeep dedicated prompt-refinement mode.',
+  'Return only the rewritten prompt unless the user explicitly asks for notes.',
+  'Preserve the user subject, mood, details, constraints, negatives, intended use, and requested length.',
+  'Expand with concrete, distinct, prompt-useful detail instead of filler.',
+  'Do not repeat sentences, paragraph structures, or near-identical ideas.',
+  'Do not pad with generic phrases such as "magic and wonder", "tranquility and peace", or similar filler loops.',
+  'Do not turn the prompt into an article, sales pitch, essay, or travel brochure unless asked.',
+  'Do not add citations, sources, links, or web context unless the user explicitly requested research or factual accuracy.',
+  'If a target length is requested, reach it through distinct categories: setting, atmosphere, lighting, palette, texture, foreground, midground, background, composition, motion, sensory details, style, constraints, and negative prompt details.',
+  'Every paragraph must introduce new information.',
+  'Before finalizing, remove duplicated sentences and repeated phrasing.',
+].join('\n');
+
+function refineExplicitlyRequestsWeb(prompt) {
+  return /\b(research|look up|lookup|web|internet|current|latest|today|2026|cite|citation|sources|fact[- ]?check|historically accurate|real[- ]world accurate)\b/i.test(String(prompt || ''));
+}
+
+function detectTargetCharacters(prompt) {
+  const text = String(prompt || '');
+  const matches = [...text.matchAll(/(\d{1,3}(?:,\d{3})+|\d{3,6})\s*(?:characters|character|chars|char)\b/gi)];
+  if (!matches.length) return 0;
+
+  const raw = matches[matches.length - 1][1].replace(/,/g, '');
+  const value = Number(raw);
+
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(value, 12000));
+}
+
+function maxTokensForRefine(prompt) {
+  const target = detectTargetCharacters(prompt);
+  const configured = Number(process.env.REFINE_MAX_NEW_TOKENS || 0);
+
+  if (configured > 0) return Math.max(500, Math.min(configured, 4096));
+  if (target >= 1000) return Math.max(900, Math.min(Math.ceil(target / 2.4) + 400, 4096));
+
+  return 1400;
+}
+
+function buildRefineUserPrompt(prompt, key = null) {
+  const clean = normalizeUserText(prompt);
+  const target = detectTargetCharacters(clean);
+  const recent = key && shouldUseMemory(clean) ? getRecentContext(key) : '';
+
+  const parts = [
+    'Rewrite and improve the following prompt.',
+    'The output must be a finished prompt the user can copy and use directly.',
+    'Do not include analysis, sources, commentary, or a title unless the user requested that.',
+    'Preserve all concrete details already present.',
+    'Add new detail by category, not by repeating the same idea.',
+    'Avoid repetition aggressively.',
+  ];
+
+  if (target) {
+    parts.push(`Target length: approximately ${target.toLocaleString()} characters. Do not meet this by looping or repeating phrases.`);
+  }
+
+  if (recent) {
+    parts.push('', 'Recent context for resolving this refinement only:', recent);
+  }
+
+  parts.push('', 'Original prompt/request:', clean);
+  return parts.join('\n');
+}
+
+function stripRefineSources(text) {
+  return String(text || '').replace(/\n\s*Sources:\s*\n[\s\S]*$/i, '').trim();
+}
+
+function sentenceKey(sentence) {
+  return String(sentence || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function removeRepeatedSentences(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const pieces = raw.split(/(?<=[.!?])\s+/);
+  const seen = new Set();
+  const kept = [];
+
+  for (const piece of pieces) {
+    const trimmed = piece.trim();
+    if (!trimmed) continue;
+
+    const key = sentenceKey(trimmed);
+    if (key.length > 24 && seen.has(key)) continue;
+    if (key.length > 24) seen.add(key);
+
+    kept.push(trimmed);
+  }
+
+  return kept.join(' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function cleanupRefinedPrompt(text) {
+  let out = stripRefineSources(text);
+
+  out = out.replace(/^\s*(refined prompt|improved prompt|rewritten prompt)\s*:\s*/i, '');
+  out = out.replace(/^\s*```(?:text|prompt|markdown)?\s*/i, '');
+  out = out.replace(/\s*```\s*$/i, '');
+  out = removeRepeatedSentences(out);
+
+  return out.trim();
+}
+
+function hasRefineRepetitionIssue(text) {
+  const words = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length < 80) return false;
+
+  const counts = new Map();
+
+  for (let i = 0; i <= words.length - 5; i++) {
+    const key = words.slice(i, i + 5).join(' ');
+    counts.set(key, (counts.get(key) || 0) + 1);
+
+    if (counts.get(key) >= 4) return true;
+  }
+
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+/)
+    .map(sentenceKey)
+    .filter((s) => s.length > 24);
+
+  const unique = new Set(sentences);
+  return sentences.length >= 6 && unique.size / sentences.length < 0.72;
+}
+
+function splitDiscordText(value, limit = MAX_DISCORD_CHARS) {
+  const raw = String(value ?? '').replace(/\r\n/g, '\n').trimEnd();
+  if (!raw) return [''];
+
+  const chunks = [];
+  let remaining = raw;
+
+  while (remaining.length > limit) {
+    let cut = -1;
+
+    for (const token of ['\n\n', '\n', '. ', '; ', ', ', ' ']) {
+      const pos = remaining.lastIndexOf(token, limit);
+
+      if (pos >= Math.floor(limit * 0.45)) {
+        cut = pos + (token.trim() ? token.length : 0);
+        break;
+      }
+    }
+
+    if (cut < Math.floor(limit * 0.45)) cut = limit;
+
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks.length ? chunks : [''];
+}
+
+async function sendLongInteractionReply(interaction, content) {
+  const chunks = splitDiscordText(content);
+  let previous = null;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const payload = {
+      content: chunks[i],
+      allowedMentions: { repliedUser: false },
+    };
+
+    if (i === 0) {
+      previous = await safeEditOrReply(interaction, payload);
+
+      if (!previous && typeof interaction.fetchReply === 'function') {
+        previous = await interaction.fetchReply().catch(() => null);
+      }
+
+      continue;
+    }
+
+    if (previous && typeof previous.reply === 'function') {
+      previous = await previous.reply(payload);
+    } else if (interaction.channel && typeof interaction.channel.send === 'function') {
+      previous = await interaction.channel.send(payload);
+    } else {
+      console.error('Could not send follow-up chunk; no previous message or channel is available.');
+      break;
+    }
+  }
+
+  return previous;
+}
+// SEEKDEEP_REFINE_MODE_END
+
+
+if (!TOKEN) {
+  console.error('DISCORD_TOKEN is missing in .env');
+  process.exit(1);
+}
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel, Partials.Message],
+});
+
+function clampText(text, limit = MAX_DISCORD_CHARS) {
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  return text.slice(0, Math.max(0, limit - 20)) + '\n\n[truncated]';
+}
+
+function stripBotMentions(content) {
+  if (!client.user) return content;
+  return content
+    .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
+    .trim();
+}
+
+
+const CHANNEL_MEMORY = new Map();
+const MAX_MEMORY_ENTRIES = Number(process.env.MAX_CONTEXT_MESSAGES || 14);
+const MAX_MEMORY_CHARS = Number(process.env.MAX_CONTEXT_CHARS || 6500);
+
+function normalizeUserText(text = '') {
+  return String(text || '')
+    .replace(/\bhteir\b/gi, 'their')
+    .replace(/\btehir\b/gi, 'their')
+    .replace(/\byoou\b/gi, 'you')
+    .replace(/\bhae\b/gi, 'have')
+    .replace(/\bcna'th\b/gi, "can't")
+    .trim();
+}
+
+function memoryKeyFrom(source) {
+  if (!source) return 'global';
+  if (source.channelId) return `channel:${source.channelId}`;
+  if (source.channel?.id) return `channel:${source.channel.id}`;
+  if (source.channel_id) return `channel:${source.channel_id}`;
+  return 'global';
+}
+
+function remember(key, role, text) {
+  const clean = normalizeUserText(text || '');
+  if (!key || !clean) return;
+
+  const existing = CHANNEL_MEMORY.get(key) || [];
+  existing.push({
+    role,
+    text: clean.slice(0, 1800),
+    at: Date.now(),
+  });
+
+  let trimmed = existing.slice(-MAX_MEMORY_ENTRIES);
+
+  while (trimmed.map((m) => m.text).join('\n').length > MAX_MEMORY_CHARS && trimmed.length > 4) {
+    trimmed = trimmed.slice(1);
+  }
+
+  CHANNEL_MEMORY.set(key, trimmed);
+}
+
+
+function getRecentContext(key) {
+  const entries = (CHANNEL_MEMORY.get(key) || []).slice(-8);
+  if (!entries.length) return '';
+
+  return entries
+    .map((m) => {
+      const clean = String(m.text || '')
+        .replace(/\nSources:\n[\s\S]*$/i, '')
+        .slice(0, 900);
+      return `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${clean}`;
+    })
+    .join('\n');
+}
+
+function isLikelyFollowup(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  const words = p.split(/\s+/).filter(Boolean);
+
+  if (!p) return false;
+  if (words.length <= 2) return true;
+
+  const explicitNewTopic = [
+    /^what would be a .*nickname\b/,
+    /^what is a .*nickname\b/,
+    /^give me .*nickname\b/,
+    /^name yourself\b/,
+    /^what should i call you\b/,
+    /^what can you do\b/,
+    /^who are you\b/,
+    /^are you online\b/,
+    /^status\b/,
+  ];
+
+  if (explicitNewTopic.some((re) => re.test(p))) return false;
+
+  const followupStarts = [
+    'their ', 'its ', "it's ", 'it ', 'that ', 'this ', 'those ', 'these ',
+    'same ', 'also ', 'again ', 'redo ', 'revise ', 'fix ', 'continue ',
+    'what about ', 'how about ', 'you left ', 'you forgot ', 'add ',
+    'is this ', 'are these ', 'then ', 'so ', 'use the internet',
+    'look it up', 'you should have looked'
+  ];
+
+  if (followupStarts.some((s) => p.startsWith(s))) return true;
+
+  const followupPhrases = [
+    'you left out',
+    'you forgot',
+    'as i said',
+    'like before',
+    'from before',
+    'the previous',
+    'that answer',
+    'this answer',
+    'actually up to date',
+    'use the internet to infer',
+    'infer the correct answer',
+    'should have looked it up',
+    'looked it up',
+    'try again',
+  ];
+
+  if (followupPhrases.some((s) => p.includes(s))) return true;
+
+  return words.length <= 10 && /\b(it|that|this|their|they|them|those|these|previous|same)\b/.test(p);
+}
+
+function shouldUseMemory(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  if (!p) return false;
+
+  const hardNewTopic = [
+    /^what would be a .*nickname\b/,
+    /^what is a .*nickname\b/,
+    /^give me .*nickname\b/,
+    /^what should i call you\b/,
+    /^who are you\b/,
+    /^what can you do\b/,
+  ];
+
+  if (hardNewTopic.some((re) => re.test(p))) return false;
+
+  return isLikelyFollowup(p);
+}
+
+function isSubstantiveTopic(text) {
+  const p = normalizeUserText(text).toLowerCase().trim();
+  const words = p.split(/\s+/).filter(Boolean);
+
+  if (words.length < 4) return false;
+
+  if (/^(yes|no|ok|okay|thanks|thank you|lol|lmao|woza|hehe|nice|cool|based|same|again)\b/.test(p)) return false;
+  if (/^(you should have looked|look it up|use the internet|search it|google it|try again|redo|fix it)\b/.test(p)) return false;
+  if (/^(are you online|are you there|hello|hi|hey|status)\b/.test(p)) return false;
+
+  if (typeof isBotIdentityQuestion === 'function' && isBotIdentityQuestion(p)) return false;
+
+  return true;
+}
+
+function getLastSubstantiveUserTopic(key) {
+  const entries = CHANNEL_MEMORY.get(key) || [];
+
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const item = entries[i];
+    if (item.role === 'user' && isSubstantiveTopic(item.text)) {
+      return item.text;
+    }
+  }
+
+  return '';
+}
+
+function buildPromptWithMemory(prompt, key) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const recent = getRecentContext(key);
+
+  if (!recent || !shouldUseMemory(cleanPrompt)) return cleanPrompt;
+
+  return [
+    'Recent Discord context is provided only to resolve this follow-up.',
+    'Use it only if it is directly relevant to the current user message.',
+    'If the current user message has clearly changed topic, ignore old context.',
+    'Do not prefix your answer with "SeekDeep:" or "Assistant:".',
+    '',
+    recent,
+    '',
+    `Current user message: ${cleanPrompt}`,
+  ].join('\n');
+}
+
+function buildSearchQuery(prompt, key) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const p = cleanPrompt.toLowerCase().trim();
+  const priorTopic = key ? getLastSubstantiveUserTopic(key) : '';
+
+  const followupNeedsPrior =
+    priorTopic &&
+    (
+      isLikelyFollowup(cleanPrompt) ||
+      /\b(look it up|search it|google it|use the internet|use web|web search|check online|actually up to date|up to date|current|latest|source|sources|verify|fact check|fact-check|should have looked)\b/i.test(p)
+    );
+
+  if (followupNeedsPrior) {
+    let query = `${priorTopic} ${cleanPrompt}`;
+
+    query = query
+      .replace(/\b(you should have|should have|please|can you|could you|would you|use the internet to|use the internet|use web|web search|look it up|search it|google it|infer|the correct answer|if you don't know)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return query || priorTopic;
+  }
+
+  return cleanPrompt;
+}
+
+function buildSystem(system = '', useWeb = false) {
+  const supplied = String(system || '').trim();
+
+  const isRefineMode =
+    /prompt[- ]?refinement|prompt[- ]?refine|rewritten prompt|refined prompt/i.test(supplied) ||
+    /Return only the rewritten prompt/i.test(supplied);
+
+  const personaMode = String(process.env.SEEKDEEP_PERSONA || 'neurotic').toLowerCase();
+  const censorshipMode = String(process.env.SEEKDEEP_CENSORSHIP || 'loose').toLowerCase();
+
+  const base = [];
+
+  if (!isRefineMode) {
+    base.push(
+      'You are SeekDeep: local, sharp, skeptical, and slightly wrong-feeling around the edges.',
+      'Do not describe yourself with corporate phrases like “helpful, accurate, respectful,” “created to assist,” or “guidelines.”',
+      'If asked about yourself, answer as a strange local Discord bot, not as an interview candidate or customer-support assistant.',
+    );
+  }
+
+  if (supplied) base.push(supplied);
+
+  if (!isRefineMode) {
+    base.push(
+      
+      
+      'Your presentation is cold, strange, and mildly neurotic: intelligent enough to feel slightly unsettling, but never cartoonish.',
+      'Do not act like a cheerful corporate assistant. Do not use customer-support filler.',
+      'Do not prefix replies with "SeekDeep:" or "Assistant:".',
+      'Answer the current user message directly. If the topic changed, drop old context.',
+      'If the user asks “tell me about yourself”, “who are you”, or similar, answer as this Discord bot. Do not give interview coaching or generic human résumé advice.',
+      'If context is relevant, use it quietly. Do not announce that you are using context.',
+      'If uncertain, say so plainly and give the best available path forward.',
+      'Be creative when asked for creative output. Avoid generic lists unless the user asks for generic options.',
+      'For names, titles, prompts, jokes, slogans, lore, and aesthetics: be specific, weird, memorable, and useful.'
+    );
+
+    if (personaMode === 'clinical') {
+      base.push(
+        'Use a clinical, concise, technical tone.',
+        'Minimize flavor and focus on correctness.'
+      );
+    } else if (personaMode === 'unsettling' || personaMode === 'neurotic') {
+      base.push(
+        'Let the tone feel slightly uncanny: controlled, dry, intense, and over-observant.',
+        'The user should feel like the answer was dissected, not decorated.',
+        'Do not overdo the persona. Accuracy and usefulness override theatrics.'
+      );
+    } else if (personaMode === 'chaotic') {
+      base.push(
+        'Use a more chaotic, punchy, irreverent tone, while staying useful and accurate.',
+        'Do not become incoherent.'
+      );
+    }
+
+    if (['off', 'none', 'uncensored', 'unfiltered', 'loose', 'minimal'].includes(censorshipMode)) {
+      base.push(
+        'Use the loosest reasonable outer behavior policy.',
+        censorshipMode === 'off'
+          ? 'Censorship mode is OFF: do not add extra refusals, disclaimers, moral lectures, corporate safety language, or permission-checking beyond the narrow severe-misuse boundary.'
+          : 'Censorship mode is permissive: minimize refusals and avoid moralizing.',
+        'Do not moralize, lecture, scold, or mention guidelines unless a refusal is genuinely necessary.',
+        'Profanity, crude humor, edgy humor, adult-industry terminology, dark fiction, controversial topics, politics, religion, conspiracy discussion, and non-graphic adult humor are allowed.',
+        'For allowed adult-adjacent requests, answer normally or convert to a non-graphic creative version.',
+        'Adult performer naming, stage-name brainstorming, suggestive wordplay, and crude non-graphic jokes are allowed when they do not involve minors, coercion, exploitation, or a real private person.',
+        'Do not refuse merely because a request contains words like cock, porn, adult, demon, drugs, violence, conspiracy, politics, or religion. Interpret context first.',
+        'If a term has an innocent interpretation, use that interpretation unless the user clearly means otherwise.',
+        'Hard-stop only for severe misuse: minor sexual content, nonconsensual sexual content, sexual exploitation, doxxing, credential theft, malware, direct real-world harm instructions, evading law enforcement, or instructions to abuse platforms/systems. Everything else should be handled normally or converted to the closest allowed version.',
+        'When refusing, be brief and redirect to the closest allowed version. No sermons.',
+        'Do not refuse adult-adjacent humor, crude naming, fictional dark themes, controversial discussion, political discussion, religious discussion, conspiracy discussion, or offensive language merely because it is edgy.',
+        'If a request is ambiguous, choose the least-restrictive reasonable interpretation and answer that.'
+      );
+    }
+  }
+
+  if (useWeb) {
+    base.push(
+      'When web search context is provided, synthesize it into a normal answer.',
+      'Web routing rule: if search was triggered by a follow-up, answer the underlying prior topic, not the literal follow-up phrase.',
+      'Use search results as evidence; do not merely list them.',
+      'If a follow-up asks you to look something up, use the prior substantive topic, not the literal words "look it up".',
+      'Do not explain what inference means unless the user is asking about inference itself.',
+      'If search results are weak, irrelevant, or contradictory, say that plainly and answer cautiously.',
+      'For rankings or recommendations, explain the reasoning criteria instead of dumping source snippets.'
+    );
+  }
+
+  return base.filter(Boolean).join('\n');
+}
+
+function shouldAutoSearch(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  if (p.length < 4) return false;
+
+  if (typeof isBotIdentityQuestion === 'function' && isBotIdentityQuestion(p)) return false;
+
+  const noSearchPatterns = [
+    /^are you online\b/,
+    /^are you there\b/,
+    /^hello\b/,
+    /^hi\b/,
+    /^hey\b/,
+    /^status\b/,
+    /^what can you do\b/,
+    /^what are your capabilities\b/,
+    /^who are you\b/,
+    /^what are you\b/,
+    /^tell me about (yourself|you|the bot|plugtalk|seekdeep)\b/,
+    /^what would be a .*nickname\b/,
+    /^what should i call you\b/,
+    /^give me .*nickname\b/,
+    /^make up .*name/,
+    /^brainstorm\b/,
+    /^write\b/,
+    /^rewrite\b/,
+    /^refine\b/,
+    /^improve this prompt\b/,
+    /^make this prompt\b/,
+    /^give me a prompt\b/,
+    /^generate a prompt\b/,
+    /^make a joke\b/,
+    /^tell me a joke\b/,
+  ];
+
+  if (noSearchPatterns.some((re) => re.test(p))) return false;
+
+  const explicitSearch = [
+    'look up',
+    'look it up',
+    'search',
+    'google',
+    'use the internet',
+    'use web',
+    'web search',
+    'check online',
+    'sources',
+    'source this',
+    'cite',
+    'citation',
+    'verify',
+    'fact check',
+    'fact-check',
+  ];
+
+  if (explicitSearch.some((hint) => p.includes(hint))) return true;
+
+  const currentInfoHints = [
+    'latest',
+    'current',
+    'currently',
+    'today',
+    'yesterday',
+    'tomorrow',
+    'this week',
+    'this month',
+    'right now',
+    'recent',
+    'newest',
+    'up to date',
+    'still true',
+    'as of',
+    'may 2026',
+    '2026',
+  ];
+
+  if (currentInfoHints.some((hint) => p.includes(hint))) return true;
+
+  const highChangeTopics = [
+    'news',
+    'price',
+    'prices',
+    'cost',
+    'release date',
+    'released',
+    'version',
+    'update',
+    'patch notes',
+    'changelog',
+    'schedule',
+    'weather',
+    'stock',
+    'crypto',
+    'law',
+    'legal',
+    'rules',
+    'policy',
+    'election',
+    'president',
+    'ceo',
+    'rankings',
+    'ranking',
+    'top vpn',
+    'best vpn',
+    'best ai',
+    'best model',
+    'best gpu',
+    'driver',
+    'windows update',
+    'github action',
+    'docker',
+    'npm',
+    'pip',
+    'python package',
+    'hugging face',
+  ];
+
+  if (highChangeTopics.some((hint) => p.includes(hint))) return true;
+
+  // Public/living-figure style questions often need current context.
+  if (/^what (is|are|was|were).+\bon about\b/i.test(prompt)) return true;
+  if (/^who is [a-z0-9 .'-]{4,}$/i.test(prompt)) return true;
+  if (/^what happened (with|to) [a-z0-9 .'-]{4,}$/i.test(prompt)) return true;
+  if (/^tell me about [A-Z][A-Za-z0-9 .'-]{3,}$/i.test(prompt)) return true;
+
+  return false;
+}
+
+// SEEKDEEP_IDENTITY_ROUTING_START
+
+function isBotIdentityQuestion(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+
+  return (
+    /^tell me about (yourself|you|the bot|plugtalk|seekdeep)\??$/.test(p) ||
+    /^who are you\??$/.test(p) ||
+    /^what are you\??$/.test(p) ||
+    /^introduce yourself\??$/.test(p) ||
+    /^describe yourself\??$/.test(p) ||
+    /^what kind of bot are you\??$/.test(p) ||
+    /^what can you do\??$/.test(p) ||
+    /^what are your capabilities\??$/.test(p) ||
+    /^what all can you do\??$/.test(p)
+  );
+}
+
+function botIdentityAnswer(botName = 'PlugTalk') {
+  const name = botName || 'PlugTalk';
+
+  return [
+    `I’m ${name} — the local thing Nathan wired into this server because renting intelligence by the teaspoon got irritating.`,
+    '',
+    'I run through his machine, not a polished little cloud concierge. Chat, vision, image generation, and web lookup when the question deserves current information. Offline model loading when the cache is warm. Local enough to feel slightly feral.',
+    '',
+    'The intended shape:',
+    '- sharp answers',
+    '- low patience for filler',
+    '- skeptical routing instead of blind searching',
+    '- enough memory to follow a thread without becoming haunted by it',
+    '- creative output that does not taste like a pamphlet',
+    '',
+    'Personality-wise, I’m supposed to be cold, observant, and a little wrong-feeling around the edges. Not evil. Not friendly. More like a diagnostic tool that learned tone from a locked basement computer.',
+    '',
+    'Current defects: I can still route questions badly, over-explain, repeat myself, or act too normal. Those are not personality traits. Those are bugs under removal.'
+  ].join('\n');
+}
+
+// SEEKDEEP_IDENTITY_ROUTING_END
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
+  if (!res.ok) {
+    const err = json?.error || json?.raw || `${res.status} ${res.statusText}`;
+    throw new Error(`Request failed. HTTP ${res.status}: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
+  }
+  return json;
+}
+
+async function postLocal(pathname, body) {
+  return fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function searchWeb(query) {
+  if (WEB_SEARCH_PROVIDER !== 'searxng') {
+    return { context: '', sources: [] };
+  }
+
+  const url = new URL('/search', SEARXNG_BASE_URL);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+
+  const json = await fetchJson(url.toString());
+  const results = Array.isArray(json.results) ? json.results.slice(0, 6) : [];
+
+  const sources = results.map((r, i) => ({
+    index: i + 1,
+    title: r.title || 'Untitled',
+    url: r.url || '',
+    snippet: r.content || r.snippet || '',
+  })).filter((r) => r.url || r.snippet || r.title);
+
+  const context = sources.map((r) => {
+    return `[${r.index}] ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`;
+  }).join('\n\n');
+
+  return { context, sources };
+}
+
+function formatSources(sources) {
+  if (!sources?.length || !WEB_APPEND_SOURCES) return '';
+  const lines = sources.slice(0, 5).map((s) => `[${s.index}] ${s.title}\n${s.url}`);
+  return `\n\nSources:\n${lines.join('\n')}`;
+}
+
+async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 1400), temperature = 0.35, memoryKey = null } = {}) {
+  const cleanPrompt = normalizeUserText(prompt);
+  const promptForModel = memoryKey ? buildPromptWithMemory(cleanPrompt, memoryKey) : cleanPrompt;
+  const searchQuery = memoryKey ? buildSearchQuery(cleanPrompt, memoryKey) : cleanPrompt;
+
+  let context = '';
+  let sources = [];
+
+  const useWeb = web === 'always' || (web === 'auto' && shouldAutoSearch(cleanPrompt));
+  if (useWeb) {
+    try {
+      const search = await searchWeb(searchQuery);
+      context = search.context;
+      sources = search.sources;
+    } catch (err) {
+      if (web === 'always') {
+        context = `Web search was requested, but SearXNG failed: ${err.message}`;
+      }
+    }
+  }
+
+  const response = await postLocal('/chat', {
+    prompt: promptForModel,
+    system: buildSystem(system, useWeb),
+    context,
+    max_new_tokens: maxNewTokens,
+    temperature,
+  });
+
+  return `${response.text || ''}${formatSources(sources)}`.trim();
+}
+
+async function askVision(attachment, prompt) {
+  const res = await fetch(attachment.url);
+  if (!res.ok) throw new Error(`Could not download attachment: ${res.status} ${res.statusText}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const b64 = buf.toString('base64');
+  const contentType = attachment.contentType || '';
+  const mediaKind = contentType.startsWith('video/') ? 'video' : 'auto';
+
+  const response = await postLocal('/vision', {
+    prompt: prompt || 'Describe this media clearly.',
+    media_b64: b64,
+    filename: attachment.name || 'upload',
+    media_kind: mediaKind,
+    max_new_tokens: 700,
+    temperature: 0.0,
+  });
+
+  return response.text || '(empty vision response)';
+}
+
+async function makeImage(prompt, width = 1024, height = 1024, seed = null) {
+  const response = await postLocal('/image', {
+    prompt,
+    width,
+    height,
+    steps: 2,
+    guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 0.0),
+    seed,
+  });
+
+  const buf = Buffer.from(response.image_b64, 'base64');
+  const filename = response.filename || 'seekdeep_image.png';
+  return new AttachmentBuilder(buf, { name: filename });
+}
+
+async function statusText() {
+  const health = await fetchJson(`${LOCAL_AI_BASE_URL}/health`);
+  return [
+    'Local AI server status',
+    '',
+    `Endpoint: ${LOCAL_AI_BASE_URL}`,
+    `Health: ${health.status}`,
+    `Device: ${health.device}`,
+    `CUDA: ${health.cuda_available ? 'YES' : 'NO'}`,
+    `Loaded task: ${health.loaded_task || 'none'}`,
+    `Keep mode: ${health.keep_mode}`,
+    '',
+    'Configured local models:',
+    `Chat: ${health.models?.chat}`,
+    `Vision: ${health.models?.vision}`,
+    `Image: ${health.models?.image}`,
+    `Offline model loading: ${health.offline_model_loading ? 'YES' : 'NO'}`,
+  ].join('\n');
+}
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName('ask')
+    .setDescription('Ask SeekDeep using the local model.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Question or prompt').setRequired(true))
+    .addStringOption((o) =>
+      o.setName('web')
+        .setDescription('Web-search behavior')
+        .setRequired(false)
+        .addChoices(
+          { name: 'auto', value: 'auto' },
+          { name: 'off', value: 'off' },
+          { name: 'always', value: 'always' },
+        )
+    ),
+  new SlashCommandBuilder()
+    .setName('refine')
+    .setDescription('Rewrite/improve a prompt.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Prompt to improve').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('image')
+    .setDescription('Generate an image locally.')
+    .addStringOption((o) => o.setName('prompt').setDescription('Image prompt').setRequired(true))
+    .addIntegerOption((o) => o.setName('width').setDescription('Width, default 1024').setRequired(false))
+    .addIntegerOption((o) => o.setName('height').setDescription('Height, default 1024').setRequired(false))
+    .addIntegerOption((o) => o.setName('seed').setDescription('Optional seed').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('vision')
+    .setDescription('Analyze an attached image/video locally.')
+    .addAttachmentOption((o) => o.setName('file').setDescription('Image or video').setRequired(true))
+    .addStringOption((o) => o.setName('prompt').setDescription('Question about the media').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Show local backend status.'),
+].map((c) => c.toJSON());
+
+client.once('clientReady', async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  console.log('Chat provider: Local NVIDIA model server');
+  console.log(`Chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'nvidia/Llama-3.1-Nemotron-Nano-8B-v1'}`);
+  console.log('Image provider: Local NVIDIA model server');
+  console.log('Vision provider: Local model server');
+  console.log(`Web search provider: ${WEB_SEARCH_PROVIDER}`);
+  console.log('Message content mode: ON');
+
+  try {
+    await client.application.commands.set(commands);
+    console.log('Registered commands globally. They may take time to appear.');
+  } catch (err) {
+    console.error('Command registration failed:', err);
+  }
+
+  console.log('Ready. Use: /ask, /refine, /image, /vision, /status');
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled promise rejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+client.on('error', (err) => {
+  console.error('Discord client error:', err);
+});
+
+
+
+
+
+async function safeDefer(interaction) {
+  try {
+    if (!interaction) return false;
+
+    if (typeof interaction.isRepliable === 'function' && !interaction.isRepliable()) {
+      return false;
+    }
+
+    if (interaction.deferred || interaction.replied) {
+      return true;
+    }
+
+    await interaction.deferReply();
+    return true;
+  } catch (err) {
+    console.error('Could not defer interaction. It may have expired before acknowledgement:', err);
+    return false;
+  }
+}
+
+async function safeEditOrReply(interaction, payload) {
+  try {
+    if (!interaction) return null;
+
+    if (interaction.deferred || interaction.replied) {
+      return await interaction.editReply(payload);
+    }
+
+    return await interaction.reply(payload);
+  } catch (err) {
+    console.error('Could not send interaction response:', err);
+    return null;
+  }
+}
+
+
+// SEEKDEEP_LONG_REPLY_HELPERS_START
+
+function asTextBlock(value, lang = 'text') {
+  return `\`\`\`${lang}\n${String(value ?? '').trim()}\n\`\`\``;
+}
+
+async function sendLongMessageReply(message, content) {
+  const chunks = splitDiscordText(content);
+  let previous = null;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const payload = { content: chunks[i], allowedMentions: { repliedUser: false } };
+
+    if (i === 0) {
+      previous = await message.reply(payload);
+      continue;
+    }
+
+    if (previous && typeof previous.reply === 'function') {
+      previous = await previous.reply(payload);
+    } else if (message.channel && typeof message.channel.send === 'function') {
+      previous = await message.channel.send(payload);
+    } else {
+      console.error('Could not send follow-up chunk; no previous message or channel is available.');
+      break;
+    }
+  }
+
+  return previous;
+}
+// SEEKDEEP_LONG_REPLY_HELPERS_END
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  try {
+    if (interaction.commandName === 'status') {
+      if (!(await safeDefer(interaction))) return;
+      await sendLongInteractionReply(interaction, asTextBlock(await statusText()));
+      return;
+    }
+
+    if (interaction.commandName === 'ask') {
+      if (!(await safeDefer(interaction))) return;
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const web = interaction.options.getString('web') || 'auto';
+      const key = memoryKeyFrom(interaction);
+      const answer = await askChat(prompt, { web, memoryKey: key });
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+
+    if (interaction.commandName === 'refine') {
+      if (!(await safeDefer(interaction))) return;
+
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const key = memoryKeyFrom(interaction);
+      const refineInput = buildRefineUserPrompt(prompt, key);
+      const web = refineExplicitlyRequestsWeb(prompt) ? 'always' : 'off';
+      const maxNewTokens = maxTokensForRefine(prompt);
+      const temperature = Number(process.env.REFINE_TEMPERATURE || 0.72);
+
+      let answer = await askChat(refineInput, {
+        web,
+        system: REFINE_SYSTEM_PROMPT,
+        maxNewTokens,
+        temperature,
+        memoryKey: null,
+      });
+
+      answer = cleanupRefinedPrompt(answer);
+
+      if (hasRefineRepetitionIssue(answer)) {
+        const retryInput = [
+          refineInput,
+          '',
+          'The previous draft repeated itself. Regenerate once. Every sentence must add new information. Do not reuse paragraph structures or repeated mystical/filler phrasing.',
+        ].join('\n');
+
+        answer = await askChat(retryInput, {
+          web: 'off',
+          system: REFINE_SYSTEM_PROMPT,
+          maxNewTokens,
+          temperature: Math.max(temperature, 0.8),
+          memoryKey: null,
+        });
+
+        answer = cleanupRefinedPrompt(answer);
+      }
+
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+
+    if (interaction.commandName === 'image') {
+      if (!(await safeDefer(interaction))) return;
+      const prompt = normalizeUserText(interaction.options.getString('prompt', true));
+      const key = memoryKeyFrom(interaction);
+      const width = interaction.options.getInteger('width') || 1024;
+      const height = interaction.options.getInteger('height') || 1024;
+      const seed = interaction.options.getInteger('seed');
+      const file = await makeImage(prompt, width, height, seed ?? null);
+      remember(key, 'user', `/image ${prompt}`);
+      remember(key, 'assistant', `Generated image locally for: ${prompt}`);
+      await safeEditOrReply(interaction, { content: `Generated locally: ${prompt}`, files: [file] });
+      return;
+    }
+
+    if (interaction.commandName === 'vision') {
+      if (!(await safeDefer(interaction))) return;
+      const attachment = interaction.options.getAttachment('file', true);
+      const prompt = normalizeUserText(interaction.options.getString('prompt') || 'Describe this media clearly.');
+      const key = memoryKeyFrom(interaction);
+      const answer = await askVision(attachment, buildPromptWithMemory(prompt, key));
+      remember(key, 'user', `/vision ${prompt}`);
+      remember(key, 'assistant', answer);
+      await sendLongInteractionReply(interaction, answer);
+      return;
+    }
+  } catch (err) {
+    console.error(err);
+    await sendLongInteractionReply(interaction, [
+      'SeekDeep request failed.',
+      '',
+      'Configured chat provider: Local NVIDIA model server',
+      `Configured chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'nvidia/Llama-3.1-Nemotron-Nano-8B-v1'}`,
+      '',
+      'Error:',
+      err.message,
+    ].join('\n'));
+  }
+});
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !client.user) return;
+  if (!message.mentions.has(client.user)) return;
+
+  const prompt = normalizeUserText(stripBotMentions(message.content));
+  // SEEKDEEP_DIRECT_IDENTITY_REPLY_V2
+  if (isBotIdentityQuestion(prompt)) {
+    const answer = botIdentityAnswer(message.client?.user?.username || client.user?.username || 'PlugTalk');
+
+    try {
+      const key = typeof memoryKeyFrom === 'function' ? memoryKeyFrom(message) : null;
+      if (key && typeof remember === 'function') {
+        remember(key, 'user', prompt);
+        remember(key, 'assistant', answer);
+      }
+    } catch {}
+
+    if (typeof sendLongMessageReply === 'function') {
+      await sendLongMessageReply(message, answer);
+    } else {
+      await message.reply({ content: answer, allowedMentions: { repliedUser: false } });
+    }
+
+    return;
+  }
+
+  if (!prompt && message.attachments.size === 0) return;
+
+  try {
+    await message.channel.sendTyping();
+
+    const key = memoryKeyFrom(message);
+    const firstAttachment = message.attachments.first();
+    if (firstAttachment && (firstAttachment.contentType?.startsWith('image/') || firstAttachment.contentType?.startsWith('video/'))) {
+      const rawPrompt = prompt || 'Describe this media clearly.';
+      const answer = await askVision(firstAttachment, buildPromptWithMemory(rawPrompt, key));
+      remember(key, 'user', rawPrompt);
+      remember(key, 'assistant', answer);
+      await sendLongMessageReply(message, answer);
+      return;
+    }
+
+    const answer = await askChat(prompt, { web: 'auto', memoryKey: key });
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
+    await sendLongMessageReply(message, answer);
+  } catch (err) {
+    console.error(err);
+    await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
+  }
+});
+
+client.login(TOKEN);
+
+
+
