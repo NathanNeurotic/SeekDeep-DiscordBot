@@ -881,14 +881,14 @@ function stripBotMentions(content) {
     .trim();
 }
 
-function buildSystem(system = '', useWeb = false) {
+function buildSystem(system = '', useWeb = false, personaOverride = '') {
   const supplied = String(system || '').trim();
 
   const isRefineMode =
     /prompt[- ]?refinement|prompt[- ]?refine|rewritten prompt|refined prompt/i.test(supplied) ||
     /Return only the rewritten prompt/i.test(supplied);
 
-  const personaMode = String(process.env.SEEKDEEP_PERSONA || 'neurotic').toLowerCase();
+  const personaMode = String(personaOverride || process.env.SEEKDEEP_PERSONA || 'neurotic').toLowerCase();
   const censorshipMode = String(process.env.SEEKDEEP_CENSORSHIP || 'loose').toLowerCase();
 
   const base = [];
@@ -1641,7 +1641,7 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
   return cleanupAssistantReply(response.text || '');
 }
 
-async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 2400), temperature = Number(process.env.CHAT_TEMPERATURE || 0.65), memoryKey = null, searchQueryOverride = '' } = {}) {
+async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 2400), temperature = Number(process.env.CHAT_TEMPERATURE || 0.65), memoryKey = null, searchQueryOverride = '', personaOverride = '' } = {}) {
   const cleanPrompt = normalizeUserText(prompt);
   const promptForModel = memoryKey ? seekdeepBuildPromptWithMemorySafeV14(cleanPrompt, memoryKey) : cleanPrompt;
   const searchQuery = normalizeUserText(searchQueryOverride || (memoryKey ? seekdeepBuildSearchQuerySafeV15(cleanPrompt, memoryKey) : cleanPrompt));
@@ -1666,7 +1666,7 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
 
   let answer = await runLocalChat(
     promptForModel,
-    buildSystem(system, useWeb),
+    buildSystem(system, useWeb, personaOverride),
     context,
     maxNewTokens,
     temperature,
@@ -3809,6 +3809,16 @@ async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024
         createdAt: Date.now(),
         expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
       });
+      // Remember this as the "last subject" so iterative followups like
+      // "now make her wear a hat" can extend the prior prompt.
+      try {
+        if (typeof seekdeepRememberLastImageSubject === 'function') {
+          seekdeepRememberLastImageSubject(message || interaction, {
+            originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
+            refinedPrompt: result.refinedPrompt || prompt,
+          });
+        }
+      } catch {}
 
       const content = seekdeepAppendResponseFooter([
         `Generated: ${prompt}`,
@@ -3967,6 +3977,16 @@ async function seekdeepSendImageWithButtonsInteraction(interaction, prompt, widt
         createdAt: Date.now(),
         expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
       });
+      // Remember this as the "last subject" so iterative followups like
+      // "now make her wear a hat" can extend the prior prompt.
+      try {
+        if (typeof seekdeepRememberLastImageSubject === 'function') {
+          seekdeepRememberLastImageSubject(message || interaction, {
+            originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
+            refinedPrompt: result.refinedPrompt || prompt,
+          });
+        }
+      } catch {}
 
       const content = seekdeepAppendResponseFooter([
         `Generated: ${prompt}`,
@@ -6071,14 +6091,48 @@ function seekdeepHelpText(source = null) {
     'and "Loaded chat role / Loaded chat model" for what is currently in VRAM.',
     'Bot console prints `[SeekDeep Model Router] role=... reason=...` for each chat.',
     '',
-    '## ' + clock + ' Recent / Cache / Queue',
+    '## ' + clock + ' Recent / Cache / Queue / Errors',
     '```text',
     prefix + ' recent images [limit]',
     prefix + ' recent prompts',
+    prefix + ' recent errors',
+    prefix + ' changelog',
+    prefix + ' stats              (server-wide totals + top contributors)',
+    prefix + ' stats me           (your activity in this server)',
     '/recent kind:images|prompts|archive',
     prefix + ' cache status',
     prefix + ' queue status',
+    '/regen mode:refined|original|both   (regenerate latest channel image)',
+    '/changelog                          (last 10 git commits)',
+    '/status verbose:true                (chat-roles map + map-size diagnostics)',
     '```',
+    '',
+    '## Admin / Customization',
+    '```text',
+    prefix + ' persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]',
+    prefix + ' digest channel here   (or "off"; enable SEEKDEEP_DAILY_DIGEST=on in .env)',
+    prefix + ' archive search <query>   (find prompts in your archive thread)',
+    prefix + ' memory preset add brief | expert | no-emoji | formal | casual | ...',
+    prefix + ' memory preset list / remove <key> / clear',
+    '```',
+    'Admin-only: persona + digest. SEEKDEEP_ALLOWED_CHANNELS in .env gates which channels respond.',
+    '',
+    '## ' + art + ' Image options on /image',
+    '```text',
+    '/image prompt:<text> quality:low|standard|high  style:anime|photoreal|pixel|...',
+    '```',
+    'Quality maps to step counts (12/28/40). 10 style presets.',
+    'Iterative tweaks: after generating an image, say things like',
+    '  "now make her wear a hat" / "with sunglasses" / "same but in winter"',
+    'and the bot will extend the prior refined prompt instead of starting fresh.',
+    '',
+    '## Reaction shortcuts (react to a SeekDeep bot message)',
+    '```text',
+    '\u{1F4E5}  inbox tray         : archive the image to your personal archive',
+    '\u{1F5D1}  wastebasket        : delete the bot message',
+    '\u{1F501}  counterclockwise   : regenerate (refined)',
+    '```',
+    'Only the original requester or admin (SEEKDEEP_ADMIN_IDS) can trigger.',
     '',
     '## Right-click message context menu (Apps -> SeekDeep)',
     'Right-click any Discord message to access:',
@@ -6301,9 +6355,16 @@ function seekdeepRecentPromptsText(key, limit = 12) {
   if (!entries.length) return 'Recent prompts\n\nNo recent channel prompts in memory yet.';
 
   return [
-    'Recent prompts',
+    'Recent prompts (newest first)',
     '',
-    ...entries.map((entry, index) => `${index + 1}. ${seekdeepShorten(entry.text, 180)}`),
+    ...entries.map((entry, index) => {
+      const text = String(entry.text || '').replace(/^\[[^\]]+\]\s*/, '');
+      const shortened = seekdeepShorten(text, 180);
+      return `${index + 1}. ${shortened}`;
+    }),
+    '',
+    'Tip: copy a prompt and prefix with `@SeekDeep` to re-run.',
+    '     Or use `/regen` to regenerate the most recent image without copying.',
   ].join('\n');
 }
 
@@ -6995,6 +7056,9 @@ client.once('clientReady', async () => {
   }
 
   console.log('Ready. Use: /ask, /refine, /image, /vision, /status, /help, /regen, /recent, /changelog');
+
+  // Schedule the daily digest if enabled.
+  try { if (typeof seekdeepScheduleDailyDigest === 'function') seekdeepScheduleDailyDigest(); } catch (err) { console.warn('Daily digest scheduler failed to start:', err?.message || err); }
 });
 
 process.on('unhandledRejection', (err) => {
@@ -9915,6 +9979,567 @@ async function seekdeepBuildRecentArchiveReport(target = null) {
 }
 // SEEKDEEP_RECENT_ARCHIVE_REPORT_END
 
+// SEEKDEEP_ARCHIVE_SEARCH_START
+// Find archive entries in the user's archive thread whose prompt text matches
+// the query. Walks up to ~300 messages back for matches. Used by /archive
+// search and "@SeekDeep archive search <query>" chat command.
+async function seekdeepSearchArchiveByPrompt(target = null, query = '', limit = 10) {
+  const guildId = String(target?.guild?.id || target?.guildId || '').trim();
+  const userId = String(target?.user?.id || target?.author?.id || target?.member?.user?.id || '').trim();
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return 'Provide a search query, e.g. `@SeekDeep archive search red apple`.';
+
+  if (!guildId) return 'Archive search only works inside a server.';
+
+  let thread = null;
+  let threadName = '';
+  try {
+    const config = typeof seekdeepArchiveThreadReadConfig === 'function' ? seekdeepArchiveThreadReadConfig() : { guilds: {} };
+    const guildConfig = config?.guilds?.[guildId] || {};
+    const profile = guildConfig?.userArchives?.[userId] || {};
+    const threadId = profile?.threadId || '';
+    if (!threadId) {
+      return 'You do not have an archive thread set up yet for this server. Generate an image and press Archive first.';
+    }
+    if (typeof target?.client?.channels?.fetch === 'function') {
+      thread = await target.client.channels.fetch(threadId).catch(() => null);
+    }
+    threadName = String(thread?.name || profile?.threadName || '');
+  } catch (err) {
+    return 'Failed to load archive thread: ' + (err?.message || err);
+  }
+
+  if (!thread?.messages?.fetch) return 'Archive thread is inaccessible.';
+
+  const matches = [];
+  try {
+    let before = undefined;
+    let scanned = 0;
+    for (let page = 0; page < 6 && matches.length < limit && scanned < 600; page += 1) {
+      const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+      if (!batch || !batch.size) break;
+      const sorted = Array.from(batch.values()).sort((a, b) => Number(b.createdTimestamp || 0) - Number(a.createdTimestamp || 0));
+      for (const msg of sorted) {
+        scanned += 1;
+        const content = String(msg?.content || '');
+        if (!/SeekDeep Image Archive Entry/i.test(content) && !/SeekDeep Shared Archive Entry/i.test(content)) continue;
+        const promptMatch = content.match(/(?:^|\n)Prompt:\s*([^\n]+)/i);
+        const promptText = promptMatch ? promptMatch[1].trim() : '';
+        if (!promptText.toLowerCase().includes(q)) continue;
+        const at = msg.createdAt ? msg.createdAt.toISOString().replace('T', ' ').slice(0, 19) : '?';
+        matches.push({ at, prompt: promptText, attachmentCount: msg.attachments?.size || 0, url: msg.url || '' });
+        if (matches.length >= limit) break;
+      }
+      before = sorted[sorted.length - 1]?.id;
+      if (!before) break;
+    }
+  } catch (err) {
+    return 'Failed to search archive thread: ' + (err?.message || err);
+  }
+
+  if (!matches.length) {
+    return `Archive search "${query}"\n\nNo matches in your archive thread (${threadName || 'unnamed'}). Searched up to 600 messages.`;
+  }
+
+  const lines = [
+    `Archive search "${query}" - ${matches.length} match(es) in ${threadName || 'archive thread'}`,
+    '',
+  ];
+  for (let i = 0; i < matches.length; i += 1) {
+    const m = matches[i];
+    const promptShort = m.prompt.length > 200 ? m.prompt.slice(0, 197) + '...' : m.prompt;
+    lines.push(`${i + 1}. [${m.at}] ${promptShort}`);
+    lines.push(`   jump: ${m.url}`);
+  }
+  return lines.join('\n');
+}
+
+function seekdeepArchiveSearchQueryFromMessage(value = '') {
+  const raw = String(value || '').toLowerCase();
+  const m = raw.match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)?\s*archive\s+search\s+(.+)$/i);
+  return m ? String(m[1] || '').trim() : '';
+}
+// SEEKDEEP_ARCHIVE_SEARCH_END
+
+// SEEKDEEP_PERSONA_PER_CHANNEL_START
+// Admin-only override of the bot persona/censorship mode for a specific channel
+// or guild. Persisted to data/persona-overrides.json. Admins are detected via
+// SEEKDEEP_ADMIN_IDS or the user holding Manage Server / Manage Channels.
+const SEEKDEEP_PERSONA_OVERRIDES_PATH = path.join(__dirname, 'data', 'persona-overrides.json');
+const SEEKDEEP_VALID_PERSONAS = new Set(['neurotic', 'unsettling', 'clinical', 'chaotic']);
+const SEEKDEEP_VALID_CENSORSHIP = new Set(['off', 'loose', 'minimal']);
+
+function seekdeepReadPersonaOverrides() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_PERSONA_OVERRIDES_PATH)) return { channels: {}, guilds: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { channels: {}, guilds: {} };
+    if (!parsed.channels || typeof parsed.channels !== 'object') parsed.channels = {};
+    if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    return parsed;
+  } catch {
+    return { channels: {}, guilds: {} };
+  }
+}
+
+function seekdeepWritePersonaOverrides(data) {
+  try {
+    fs.mkdirSync(path.dirname(SEEKDEEP_PERSONA_OVERRIDES_PATH), { recursive: true });
+    fs.writeFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, JSON.stringify(data, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Failed to write persona overrides:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepGetEffectivePersona(channelId = '', guildId = '') {
+  const env = String(process.env.SEEKDEEP_PERSONA || 'neurotic').toLowerCase();
+  try {
+    const data = seekdeepReadPersonaOverrides();
+    const ch = data.channels[String(channelId || '')];
+    if (ch?.persona && SEEKDEEP_VALID_PERSONAS.has(String(ch.persona).toLowerCase())) return String(ch.persona).toLowerCase();
+    const g = data.guilds[String(guildId || '')];
+    if (g?.persona && SEEKDEEP_VALID_PERSONAS.has(String(g.persona).toLowerCase())) return String(g.persona).toLowerCase();
+  } catch {}
+  return env;
+}
+
+function seekdeepUserCanChangePersona(message) {
+  try {
+    const adminSet = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : new Set();
+    if (adminSet.has(String(message?.author?.id || ''))) return true;
+    const member = message?.member;
+    if (member?.permissions?.has?.('Administrator')) return true;
+    if (member?.permissions?.has?.('ManageGuild')) return true;
+    if (member?.permissions?.has?.('ManageChannels')) return true;
+  } catch {}
+  return false;
+}
+
+async function seekdeepHandlePersonaCommand(message, raw = '') {
+  const p = String(raw || message?.content || '').trim();
+  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = stripped.match(/^persona(?:\s+(channel|server|guild))?\s+(neurotic|unsettling|clinical|chaotic|reset|show)\s*$/i);
+  if (!m) return false;
+
+  const scope = (m[1] || 'channel').toLowerCase();
+  const action = m[2].toLowerCase();
+
+  if (action === 'show') {
+    const effective = seekdeepGetEffectivePersona(message.channel?.id, message.guild?.id);
+    const data = seekdeepReadPersonaOverrides();
+    const lines = [
+      `Effective persona for this channel: ${effective}`,
+      `  channel override: ${data.channels[String(message.channel?.id || '')]?.persona || '(none)'}`,
+      `  guild override:   ${data.guilds[String(message.guild?.id || '')]?.persona || '(none)'}`,
+      `  env default:      ${process.env.SEEKDEEP_PERSONA || 'neurotic'}`,
+    ];
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (!seekdeepUserCanChangePersona(message)) {
+    await message.reply({ content: 'Only server admins / Manage Server / Manage Channels can change persona.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const data = seekdeepReadPersonaOverrides();
+  if (action === 'reset') {
+    if (scope === 'channel') delete data.channels[String(message.channel?.id || '')];
+    else delete data.guilds[String(message.guild?.id || '')];
+    seekdeepWritePersonaOverrides(data);
+    await message.reply({ content: `Persona override removed (scope: ${scope}).`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (scope === 'channel') {
+    data.channels[String(message.channel?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
+  } else {
+    data.guilds[String(message.guild?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
+  }
+  seekdeepWritePersonaOverrides(data);
+  await message.reply({ content: `Persona for this ${scope} set to: ${action}`, allowedMentions: { repliedUser: false } });
+  return true;
+}
+// SEEKDEEP_PERSONA_PER_CHANNEL_END
+
+// SEEKDEEP_LAST_SUBJECT_MEMORY_START
+// Per-channel+user cache of the last successfully-generated image's full
+// refined prompt + subject keywords. Used so iterative requests like "now
+// make her wear a hat" can extend the previous subject rather than starting
+// fresh from "a hat".
+const SEEKDEEP_LAST_SUBJECT_MEMORY = globalThis.__seekdeepLastSubjectMemory || new Map();
+globalThis.__seekdeepLastSubjectMemory = SEEKDEEP_LAST_SUBJECT_MEMORY;
+const SEEKDEEP_LAST_SUBJECT_TTL_MS = Number(process.env.SEEKDEEP_LAST_SUBJECT_TTL_MS || 15 * 60 * 1000);
+
+function seekdeepLastSubjectKey(target) {
+  const channelId = String(target?.channel?.id || target?.channelId || '');
+  const userId = String(target?.author?.id || target?.user?.id || '');
+  return `${channelId}:${userId}`;
+}
+
+function seekdeepRememberLastImageSubject(target, info = {}) {
+  const key = seekdeepLastSubjectKey(target);
+  if (!key) return;
+  SEEKDEEP_LAST_SUBJECT_MEMORY.set(key, {
+    originalPrompt: String(info.originalPrompt || ''),
+    refinedPrompt: String(info.refinedPrompt || info.originalPrompt || ''),
+    at: Date.now(),
+  });
+  if (SEEKDEEP_LAST_SUBJECT_MEMORY.size > 200) {
+    const oldestKey = SEEKDEEP_LAST_SUBJECT_MEMORY.keys().next().value;
+    if (oldestKey) SEEKDEEP_LAST_SUBJECT_MEMORY.delete(oldestKey);
+  }
+}
+
+function seekdeepGetLastImageSubject(target) {
+  const key = seekdeepLastSubjectKey(target);
+  if (!key) return null;
+  const entry = SEEKDEEP_LAST_SUBJECT_MEMORY.get(key);
+  if (!entry) return null;
+  if (Date.now() - Number(entry.at || 0) > SEEKDEEP_LAST_SUBJECT_TTL_MS) {
+    SEEKDEEP_LAST_SUBJECT_MEMORY.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+// "now make her wear a hat" / "with sunglasses" / "but in winter" / "same but..."
+// These are iterative modifications that should extend the last subject rather
+// than be taken literally.
+function seekdeepLooksLikeIterativeImageModification(prompt = '') {
+  const p = String(prompt || '').toLowerCase().trim();
+  if (!p || p.length > 240) return false;
+  return /^(?:now\s+)?(?:make|change|update|tweak)\s+(?:him|her|them|it|that|this)\s+/i.test(p)
+      || /^(?:with|but|except|now|same\s+(?:but|except))\s+/i.test(p)
+      || /^(?:add|remove|replace)\s+/i.test(p)
+      || /^(?:more|less|fewer|wider|tighter|brighter|darker)\s+/i.test(p);
+}
+
+function seekdeepBuildIterativeImagePrompt(modification = '', prior = null) {
+  if (!prior?.refinedPrompt) return modification;
+  // Strip the leading "now"/"make her"/"with" etc. so the modification reads
+  // naturally appended to the previous subject.
+  const cleaned = String(modification || '').replace(/^(?:now\s+|same\s+but\s+|same\s+except\s+|but\s+)/i, '').trim();
+  return `${prior.refinedPrompt}, ${cleaned}`;
+}
+// SEEKDEEP_LAST_SUBJECT_MEMORY_END
+
+// SEEKDEEP_USER_MEMORY_PRESETS_START
+// Per-user persistent preference toggles ("be brief", "no emoji", "treat me
+// like an expert"). Persisted to data/memory-presets.json. Injected into the
+// chat system prompt for that user's chat calls.
+const SEEKDEEP_MEMORY_PRESETS_PATH = path.join(__dirname, 'data', 'memory-presets.json');
+const SEEKDEEP_KNOWN_PRESETS = {
+  brief: 'The user prefers brief, terse answers. Skip long preambles.',
+  expert: 'The user is an expert. Skip beginner caveats; assume domain knowledge.',
+  'no-emoji': 'Do not use emoji in replies for this user.',
+  'no-followup-questions': 'Do not ask the user clarifying questions; do your best with the prompt as given.',
+  formal: 'Use a formal, professional tone for this user.',
+  casual: 'Use a casual, friendly tone for this user.',
+};
+
+function seekdeepReadMemoryPresets() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_MEMORY_PRESETS_PATH)) return { users: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_MEMORY_PRESETS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { users: {} };
+    if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
+    return parsed;
+  } catch { return { users: {} }; }
+}
+
+function seekdeepWriteMemoryPresets(data) {
+  try {
+    fs.mkdirSync(path.dirname(SEEKDEEP_MEMORY_PRESETS_PATH), { recursive: true });
+    fs.writeFileSync(SEEKDEEP_MEMORY_PRESETS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Failed to write memory presets:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepGetUserMemoryPresetsLines(userId = '') {
+  if (!userId) return [];
+  const data = seekdeepReadMemoryPresets();
+  const set = new Set((data.users[String(userId)]?.presets || []).map((s) => String(s).toLowerCase()));
+  const lines = [];
+  for (const key of set) {
+    if (SEEKDEEP_KNOWN_PRESETS[key]) lines.push(SEEKDEEP_KNOWN_PRESETS[key]);
+  }
+  return lines;
+}
+
+async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
+  const p = String(raw || message?.content || '').trim();
+  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  // Patterns: "memory presets", "memory preset add brief", "memory preset remove brief",
+  // "memory preset list", "memory preset clear"
+  const showMatch = /^memory\s+presets?(?:\s+(?:list|show))?$/i.exec(stripped);
+  const listMatch = /^memory\s+presets?\s+list$/i.exec(stripped);
+  const clearMatch = /^memory\s+presets?\s+clear$/i.exec(stripped);
+  const modMatch = /^memory\s+presets?\s+(add|remove|set)\s+(.+)$/i.exec(stripped);
+
+  if (!showMatch && !listMatch && !clearMatch && !modMatch) return false;
+
+  const userId = String(message?.author?.id || '');
+  const data = seekdeepReadMemoryPresets();
+  const cur = new Set((data.users[userId]?.presets || []).map((s) => String(s).toLowerCase()));
+
+  if (showMatch || listMatch) {
+    const lines = [
+      `Your memory presets: ${[...cur].join(', ') || '(none)'}`,
+      '',
+      'Available preset keys:',
+      ...Object.entries(SEEKDEEP_KNOWN_PRESETS).map(([k, desc]) => `  ${k}  - ${desc}`),
+      '',
+      'Usage:',
+      '  @SeekDeep memory preset add <key>',
+      '  @SeekDeep memory preset remove <key>',
+      '  @SeekDeep memory preset clear',
+    ];
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (clearMatch) {
+    delete data.users[userId];
+    seekdeepWriteMemoryPresets(data);
+    await message.reply({ content: 'Cleared all your memory presets.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (modMatch) {
+    const action = modMatch[1].toLowerCase();
+    const keys = String(modMatch[2]).split(/[\s,]+/).map((s) => s.toLowerCase()).filter(Boolean);
+    const unknown = keys.filter((k) => !SEEKDEEP_KNOWN_PRESETS[k]);
+    if (unknown.length) {
+      await message.reply({ content: `Unknown preset key(s): ${unknown.join(', ')}. Run \`@SeekDeep memory preset list\` for the supported keys.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    if (action === 'add' || action === 'set') {
+      for (const k of keys) cur.add(k);
+    } else if (action === 'remove') {
+      for (const k of keys) cur.delete(k);
+    }
+    data.users[userId] = { presets: [...cur], updatedAt: new Date().toISOString() };
+    seekdeepWriteMemoryPresets(data);
+    await message.reply({ content: `Memory presets updated: ${[...cur].join(', ') || '(none)'}`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  return false;
+}
+// SEEKDEEP_USER_MEMORY_PRESETS_END
+
+// SEEKDEEP_SERVER_STATS_START
+// Lightweight per-server / per-user activity stats. Persisted to
+// data/server-stats.json on each increment. Used by @SeekDeep stats / stats me
+// and a daily digest summary.
+const SEEKDEEP_SERVER_STATS_PATH = path.join(__dirname, 'data', 'server-stats.json');
+function seekdeepReadServerStats() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_SERVER_STATS_PATH)) return { guilds: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_SERVER_STATS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { guilds: {} };
+    if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    return parsed;
+  } catch { return { guilds: {} }; }
+}
+function seekdeepWriteServerStats(data) {
+  try {
+    fs.mkdirSync(path.dirname(SEEKDEEP_SERVER_STATS_PATH), { recursive: true });
+    fs.writeFileSync(SEEKDEEP_SERVER_STATS_PATH, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) { console.warn('Failed to write server stats:', err?.message || err); }
+}
+function seekdeepStatsBucketForGuild(data, guildId) {
+  if (!data.guilds[guildId]) data.guilds[guildId] = { totalImages: 0, totalChats: 0, totalVision: 0, users: {}, dayBuckets: {} };
+  return data.guilds[guildId];
+}
+function seekdeepStatsBucketForUser(bucket, userId) {
+  if (!bucket.users[userId]) bucket.users[userId] = { images: 0, chats: 0, vision: 0 };
+  return bucket.users[userId];
+}
+function seekdeepTrackStatEvent({ guildId, userId, kind }) {
+  if (!guildId) return;
+  const data = seekdeepReadServerStats();
+  const bucket = seekdeepStatsBucketForGuild(data, String(guildId));
+  if (kind === 'image') bucket.totalImages += 1;
+  else if (kind === 'chat') bucket.totalChats += 1;
+  else if (kind === 'vision') bucket.totalVision += 1;
+  if (userId) {
+    const ub = seekdeepStatsBucketForUser(bucket, String(userId));
+    if (kind === 'image') ub.images += 1;
+    else if (kind === 'chat') ub.chats += 1;
+    else if (kind === 'vision') ub.vision += 1;
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  if (!bucket.dayBuckets[day]) bucket.dayBuckets[day] = { images: 0, chats: 0, vision: 0 };
+  if (kind === 'image') bucket.dayBuckets[day].images += 1;
+  else if (kind === 'chat') bucket.dayBuckets[day].chats += 1;
+  else if (kind === 'vision') bucket.dayBuckets[day].vision += 1;
+  // Trim to last 30 days.
+  const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+  for (const d of Object.keys(bucket.dayBuckets)) if (d < cutoff) delete bucket.dayBuckets[d];
+  seekdeepWriteServerStats(data);
+}
+
+function seekdeepServerStatsText({ guildId, userId, scope = 'server' }) {
+  const data = seekdeepReadServerStats();
+  const bucket = data.guilds[String(guildId)] || null;
+  if (!bucket) return 'No stats yet for this server.';
+  const lines = [];
+  if (scope === 'me' && userId) {
+    const u = bucket.users[String(userId)] || { images: 0, chats: 0, vision: 0 };
+    lines.push(`Your activity in this server:`);
+    lines.push(`  images: ${u.images}`);
+    lines.push(`  chats:  ${u.chats}`);
+    lines.push(`  vision: ${u.vision}`);
+  } else {
+    lines.push(`Server totals:`);
+    lines.push(`  images: ${bucket.totalImages}`);
+    lines.push(`  chats:  ${bucket.totalChats}`);
+    lines.push(`  vision: ${bucket.totalVision}`);
+    const userArr = Object.entries(bucket.users || {})
+      .map(([uid, u]) => ({ uid, score: (u.images || 0) + (u.chats || 0) + (u.vision || 0), u }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+    if (userArr.length) {
+      lines.push('', 'Top contributors:');
+      for (const entry of userArr) {
+        lines.push(`  <@${entry.uid}>: ${entry.u.images} images, ${entry.u.chats} chats, ${entry.u.vision} vision`);
+      }
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const todayBucket = bucket.dayBuckets?.[today] || { images: 0, chats: 0, vision: 0 };
+    lines.push('', `Today (${today}): ${todayBucket.images} images, ${todayBucket.chats} chats, ${todayBucket.vision} vision`);
+  }
+  return lines.join('\n');
+}
+
+async function seekdeepHandleStatsCommand(message, raw = '') {
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = /^stats(?:\s+(me|server|here))?\s*$/i.exec(stripped);
+  if (!m) return false;
+  const scope = (m[1] || 'server').toLowerCase() === 'me' ? 'me' : 'server';
+  await message.reply({
+    content: seekdeepServerStatsText({ guildId: message.guild?.id, userId: message.author?.id, scope }),
+    allowedMentions: { parse: [] },
+  });
+  return true;
+}
+// SEEKDEEP_SERVER_STATS_END
+
+// SEEKDEEP_DAILY_DIGEST_START
+// On bot startup, schedule a daily digest at SEEKDEEP_DAILY_DIGEST_HOUR (UTC,
+// 0-23). The digest posts to SEEKDEEP_DAILY_DIGEST_CHANNEL_ID (per guild) if
+// set in the persona-overrides file under guild.digestChannelId. Bot admins
+// can set it via "@SeekDeep digest channel here".
+function seekdeepDailyDigestEnabled() {
+  return String(process.env.SEEKDEEP_DAILY_DIGEST || 'off').toLowerCase() === 'on';
+}
+
+function seekdeepScheduleDailyDigest() {
+  if (!seekdeepDailyDigestEnabled()) return;
+  const targetHour = Math.max(0, Math.min(23, Number(process.env.SEEKDEEP_DAILY_DIGEST_HOUR || 9)));
+  const compute = () => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setUTCHours(targetHour, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    return next.getTime() - now.getTime();
+  };
+  const tick = async () => {
+    try { await seekdeepPostDailyDigests(); } catch (err) { console.warn('Daily digest tick failed:', err?.message || err); }
+    setTimeout(tick, compute());
+  };
+  setTimeout(tick, compute());
+  console.log(`[SeekDeep] daily digest scheduled (UTC hour ${targetHour})`);
+}
+
+async function seekdeepPostDailyDigests() {
+  const data = seekdeepReadServerStats();
+  const today = new Date().toISOString().slice(0, 10);
+  for (const [guildId, bucket] of Object.entries(data.guilds || {})) {
+    try {
+      const overrides = seekdeepReadPersonaOverrides();
+      const channelId = overrides.guilds[guildId]?.digestChannelId;
+      if (!channelId) continue;
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel?.send) continue;
+      const todayBucket = bucket.dayBuckets?.[today] || { images: 0, chats: 0, vision: 0 };
+      const lines = [
+        `:newspaper: SeekDeep daily digest (${today})`,
+        `  images today: ${todayBucket.images}`,
+        `  chats today:  ${todayBucket.chats}`,
+        `  vision today: ${todayBucket.vision}`,
+        '',
+        `Server lifetime: ${bucket.totalImages} images, ${bucket.totalChats} chats, ${bucket.totalVision} vision`,
+      ];
+      await channel.send({ content: lines.join('\n'), allowedMentions: { parse: [] } });
+    } catch (err) {
+      console.warn(`Daily digest post failed for guild ${guildId}:`, err?.message || err);
+    }
+  }
+}
+
+async function seekdeepHandleDigestChannelCommand(message, raw = '') {
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = /^digest\s+channel\s+(here|off|here\s+please)\s*$/i.exec(stripped);
+  if (!m) return false;
+  if (!seekdeepUserCanChangePersona(message)) {
+    await message.reply({ content: 'Only admins / Manage Server can change the digest channel.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const overrides = seekdeepReadPersonaOverrides();
+  const guildId = String(message.guild?.id || '');
+  if (!overrides.guilds[guildId]) overrides.guilds[guildId] = {};
+  if (/off/i.test(m[1])) {
+    delete overrides.guilds[guildId].digestChannelId;
+    seekdeepWritePersonaOverrides(overrides);
+    await message.reply({ content: 'Daily digest channel disabled for this server.', allowedMentions: { repliedUser: false } });
+  } else {
+    overrides.guilds[guildId].digestChannelId = String(message.channel?.id || '');
+    seekdeepWritePersonaOverrides(overrides);
+    await message.reply({ content: `Daily digest will post here. Set SEEKDEEP_DAILY_DIGEST=on in .env and restart to activate.`, allowedMentions: { repliedUser: false } });
+  }
+  return true;
+}
+// SEEKDEEP_DAILY_DIGEST_END
+
+// SEEKDEEP_BIG_FEATURE_SCAFFOLDS_START
+// Feature flags for big features that need additional model downloads.
+// Each flag defaults to off; when on, the path is wired but will return a
+// "model not downloaded" error until the user provisions the required model.
+// See README "Optional features" section.
+//
+// SEEKDEEP_FEATURE_IMG2IMG: enables /image style:img2img and right-click
+//   "Vary this" on an image. Requires the SDXL pipeline to expose img2img,
+//   which it does by default in diffusers >=0.27.
+const SEEKDEEP_FEATURE_IMG2IMG_ENABLED = String(process.env.SEEKDEEP_FEATURE_IMG2IMG || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_UPSCALE_REALESRGAN: enables right-click "Upscale 2x" on
+//   an image. Requires Real-ESRGAN weights downloaded and a Python endpoint.
+const SEEKDEEP_FEATURE_UPSCALE_ENABLED = String(process.env.SEEKDEEP_FEATURE_UPSCALE_REALESRGAN || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_NSFW_GATE: scores generated images via a CLIP NSFW
+//   classifier and either spoiler-wraps or refuses based on threshold.
+const SEEKDEEP_FEATURE_NSFW_GATE_ENABLED = String(process.env.SEEKDEEP_FEATURE_NSFW_GATE || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_TTS_VOICE: enables a voice-channel TTS reader. Requires
+//   Piper / XTTS dependencies. Big lift; flag only for now.
+const SEEKDEEP_FEATURE_TTS_VOICE_ENABLED = String(process.env.SEEKDEEP_FEATURE_TTS_VOICE || 'off').toLowerCase() === 'on';
+
+if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED) {
+  console.log('[SeekDeep] Optional features flagged on:',
+    SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'img2img' : '',
+    SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'upscale-real-esrgan' : '',
+    SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'nsfw-gate' : '',
+    SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'tts-voice' : '',
+  );
+  console.log('[SeekDeep] These features require additional model downloads / Python endpoints — see README "Optional features".');
+}
+// SEEKDEEP_BIG_FEATURE_SCAFFOLDS_END
+
 // SEEKDEEP_NATURAL_ARCHIVE_FOLLOWUP_START
 // Match natural-language archive-image followups like:
 //   "archive this", "archive it", "archive too", "archive that", "archive the image"
@@ -10901,6 +11526,36 @@ client.on('messageCreate', async (message) => {
       ? seekdeepStripBotMentions(seekdeepArchiveOpenRawContent)
       : seekdeepArchiveOpenRawContent;
 
+    // Archive search: "@SeekDeep archive search red apple"
+    const archiveSearchQuery = typeof seekdeepArchiveSearchQueryFromMessage === 'function'
+      ? seekdeepArchiveSearchQueryFromMessage(seekdeepArchiveOpenRawContent)
+      : '';
+    if (archiveSearchQuery) {
+      const report = await seekdeepSearchArchiveByPrompt(message, archiveSearchQuery, 10);
+      await message.reply({ content: report, allowedMentions: { repliedUser: false } });
+      return;
+    }
+
+    // Persona admin command: "@SeekDeep persona channel chaotic" etc.
+    if (typeof seekdeepHandlePersonaCommand === 'function' && await seekdeepHandlePersonaCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
+    // Memory presets per-user: "@SeekDeep memory preset add brief"
+    if (typeof seekdeepHandleMemoryPresetCommand === 'function' && await seekdeepHandleMemoryPresetCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
+    // Server stats: "@SeekDeep stats" / "stats me"
+    if (typeof seekdeepHandleStatsCommand === 'function' && await seekdeepHandleStatsCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
+    // Digest channel admin: "@SeekDeep digest channel here|off"
+    if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
+      return;
+    }
+
     if (await seekdeepHandleArchiveOpenMessage(message, seekdeepArchiveOpenRawContent)) {
       return;
     }
@@ -11283,6 +11938,7 @@ client.on('messageCreate', async (message) => {
 
     if (shouldUseVision) {
       seekdeepLogRoute('vision', prompt);
+      try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'vision' }); } catch {}
       const rawPrompt = prompt || 'Describe this media clearly.';
       const answer = await askVision(visionTarget.attachment, seekdeepBuildPromptWithMemorySafeV14(rawPrompt, key));
       // Tag both user and assistant entries with a [vision] marker so a follow-up
@@ -11348,8 +12004,22 @@ client.on('messageCreate', async (message) => {
       const seekdeepMessageImageModeOptions = typeof seekdeepImageModeOptionsFromPrompt === 'function'
         ? seekdeepImageModeOptionsFromPrompt(seekdeepRawImageRoutePrompt)
         : { refine: true, ground: true, cleanPrompt: seekdeepRawImageRoutePrompt };
-      const imagePrompt = (typeof seekdeepExtractImagePrompt === 'function' ? seekdeepExtractImagePrompt(seekdeepRawImageRoutePrompt) : seekdeepRawImageRoutePrompt) || seekdeepMessageImageModeOptions.cleanPrompt || seekdeepRawImageRoutePrompt;
+      let imagePrompt = (typeof seekdeepExtractImagePrompt === 'function' ? seekdeepExtractImagePrompt(seekdeepRawImageRoutePrompt) : seekdeepRawImageRoutePrompt) || seekdeepMessageImageModeOptions.cleanPrompt || seekdeepRawImageRoutePrompt;
+      // Iterative modification: "now make her wear a hat" / "with sunglasses"
+      // should extend the prior subject rather than be taken literally.
+      try {
+        if (typeof seekdeepLooksLikeIterativeImageModification === 'function' && seekdeepLooksLikeIterativeImageModification(imagePrompt)) {
+          const prior = typeof seekdeepGetLastImageSubject === 'function' ? seekdeepGetLastImageSubject(message) : null;
+          if (prior?.refinedPrompt) {
+            const extended = seekdeepBuildIterativeImagePrompt(imagePrompt, prior);
+            seekdeepLogRoute('image-iterative-extend', extended);
+            imagePrompt = extended;
+            seekdeepMessageImageModeOptions.cleanPrompt = extended;
+          }
+        }
+      } catch {}
       seekdeepLogRoute('image', imagePrompt);
+      try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'image' }); } catch {}
       seekdeepRememberSafeV13(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
         seekdeepRememberSafeV13(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
@@ -11374,10 +12044,20 @@ client.on('messageCreate', async (message) => {
     // SEEKDEEP_PENDING_IMAGE_SUBJECT_REPLY_ROUTE_V1_END
 
     seekdeepLogRoute('chat', prompt);
-    const answer = await askChat(prompt, { web: 'auto', memoryKey: key });
+    const personaOverride = typeof seekdeepGetEffectivePersona === 'function'
+      ? seekdeepGetEffectivePersona(message.channel?.id, message.guild?.id)
+      : '';
+    const userPresetLines = typeof seekdeepGetUserMemoryPresetsLines === 'function'
+      ? seekdeepGetUserMemoryPresetsLines(message.author?.id)
+      : [];
+    const composedSystem = userPresetLines.length
+      ? `User-specific preferences for this user:\n${userPresetLines.map((l) => '- ' + l).join('\n')}`
+      : '';
+    const answer = await askChat(prompt, { web: 'auto', memoryKey: key, personaOverride, system: composedSystem });
     seekdeepRememberSafeV13(key, 'user', prompt);
     seekdeepRememberSafeV13(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
+    try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'chat' }); } catch {}
     await sendLongMessageReply(message, answer);
   } catch (err) {
     console.error(err);
