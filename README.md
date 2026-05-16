@@ -366,6 +366,31 @@ Python syntax:
 - If archive setup fails, verify the bot has access to the chosen archive channel and can create/manage threads.
 - If `Fallback used: role=fallback_chat ...` appears in a chat reply footer, the originally-routed role failed to load (typically CUDA OOM) and the server fell back to `fallback_chat`. Check `LOCAL_CHAT_QUANT` and consider pinning more roles in `LOCAL_CHAT_QUANT_FULL_ROLES`.
 
+## Release Notes
+
+### v10.4 — help topics, vision pin, chunker hardening
+
+- **`@SeekDeep help <topic>`** slices the help to a single section. Topics: `chat`, `image`, `vision`, `archive`, `model`, `recent`, `admin`, `reactrule`, `emoji`, `context`, `all`. Both `help chat` and `chat help` work. `/help` gained a `topic:` option with the same choices.
+- **Vision keep-resident**: set `LOCAL_VISION_KEEP_RESIDENT=on` in `.env` to pin the vision model in VRAM across task switches. Eliminates unload/reload cost when alternating chat ↔ vision (e.g. asking follow-up questions about an image). On a 24GB GPU, chat 8B at 4-bit + vision 3B at fp16 is a comfortable budget. `LOCAL_IMAGE_KEEP_RESIDENT=on` does the same for the SDXL pipe. Explicit `POST /unload` still clears everything regardless of pins.
+- **Fence-aware Discord chunker** (v10.3.1): `splitDiscordText` now tracks open code fences. When a long reply needs to be split across multiple Discord messages, the chunker closes the open ` ``` ` on the cut chunk and reopens with the same language hint on the next. Fixes mangled `@SeekDeep help` output where `## Section` headers appeared between fences as raw markdown.
+
+### v10.3 — demonbot-inspired features
+
+Ports five features from [demonbot.win](https://www.demonbot.win/). Quote Cards and Game Lookup intentionally skipped.
+
+- **Auto Reactions**: per-guild rules in `data/auto-reactions.json`. Substring match by default, or `/regex/flag` form. Built-in stacking triggers (`long_message`, `forwarded`, `code_block`, `image_only`, `link_only`) can be toggled individually. Manage with `@SeekDeep reactrule add/list/remove/toggle/builtin/export/import`.
+- **Force React**: right-click any message → **Force React** opens a modal accepting up to 5 emoji tokens. Permission-gated to message owner, **Manage Messages**, or `SEEKDEEP_ADMIN_IDS`. Resolves custom-emoji names automatically.
+- **`/say`**: admin-only anonymous posting. `Manage Messages` required. Strips `@everyone`, `@here`, and role mentions.
+- **Emoji Vault**: `@SeekDeep emoji backup` returns a JSON of all guild custom emoji; `@SeekDeep emoji import` (with the JSON attached) recreates any missing ones. Needs **Manage Expressions**.
+
+### v10.2
+
+Tier-1 UX wins, strengthening, polish, and several T2/T3 features. Highlights: persona overrides, memory presets, server stats, daily digest, did-you-mean fuzzy suggestions, frustration filter with word-count guards, refined-prompt cache for the regenerate buttons, vision follow-up auto-route, KK-Slider-style proper-noun lookups, image quality/style presets on `/image`.
+
+### v10.1
+
+23-item polish pass: cooldown progress bar, prompt-choice TTL extension, refined-prompt cache, archive numbering fix, full-res Download button + grey Delete-from-Archive button on archive entries, audit/quarantine/purge for the HF cache, role-aware chat model selection (`default_chat` / `quality_text` / `reasoning_code` / `fallback_chat` / `lightweight_chat`) with 4-bit quantization for the big roles on 24GB VRAM.
+
 ## Development Notes
 
 The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/` directory was renamed to `.git.broken_*` on init. Checkpoints under `checkpoints/` remain as historical snapshots from before git was set up.
@@ -374,6 +399,7 @@ The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/`
 git log --oneline
 git tag                 # v10.0-baseline tags the first commit
 git status              # see local changes
+npm run smoke           # run the regression smoke test (no Discord, no model load)
 ```
 
 For internal component notes, see [AGENTS.md](AGENTS.md).

@@ -29,7 +29,8 @@
       "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep add index.js .env.default)",
       "WebFetch(domain:www.demonbot.win)",
       "Bash(taskkill /F /IM node.exe)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(python -m py_compile local_ai_server.py)"
     ]
   }
 }

@@ -6078,11 +6078,14 @@ function seekdeepHelpText(source = null) {
     '## ' + check + ' Start',
     '```text',
     prefix + ' help',
+    prefix + ' help <topic>     (chat / image / vision / archive / model /',
+    '                              recent / admin / reactrule / emoji / context)',
     prefix + ' archive help',
     prefix + ' status',
     prefix + ' ping',
     prefix + ' what model are you using?',
     '```',
+    '/help topic:<choice> also slices the help to one section.',
     '',
     '## ' + speech + ' Chat / Web / Prompting',
     '```text',
@@ -6248,6 +6251,104 @@ function seekdeepHelpText(source = null) {
     '',
     'Unsupported near-commands return: `Did you mean ...?`',
   ].join('\n');
+}
+
+// v10.4: `@SeekDeep help <topic>` returns just one section instead of the
+// full ~150-line dump. Topic matches are predicate-based on the rendered
+// `## ` heading text, so the help text stays the single source of truth.
+function seekdeepHelpTopicSlice(topic, source = null) {
+  const full = seekdeepHelpText(source);
+  const t = String(topic || '').toLowerCase().trim();
+  if (!t || /^(all|full|everything|complete|long)$/.test(t)) return full;
+
+  const lines = full.split('\n');
+  const titleLines = [];
+  const sections = [];
+  let cur = null;
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) {
+      if (cur) sections.push(cur);
+      cur = { heading: line.replace(/^##\s+/, '').replace(/\s+/g, ' ').toLowerCase(), lines: [line] };
+    } else if (cur) {
+      cur.lines.push(line);
+    } else {
+      titleLines.push(line);
+    }
+  }
+  if (cur) sections.push(cur);
+
+  // Strip any leading emoji codepoints + space so the heading is plain words.
+  const strip = (s) => String(s || '').replace(/^[^a-z0-9]*\s*/i, '');
+  const matches = (heading, ...needles) => {
+    const h = strip(heading).toLowerCase();
+    return needles.some((n) => h.includes(n));
+  };
+
+  let predicate = null;
+  switch (t) {
+    case 'start': case 'basic': case 'starter': case 'basics':
+      predicate = (h) => matches(h, 'start'); break;
+    case 'chat': case 'web': case 'prompt': case 'prompting': case 'ask':
+      predicate = (h) => matches(h, 'chat / web', 'prompting'); break;
+    case 'image': case 'images': case 'img': case 'draw': case 'picture': case 'pictures': case 'generate':
+      predicate = (h) => matches(h, 'images', 'image options'); break;
+    case 'vision': case 'look': case 'see':
+      predicate = (h) => matches(h, 'vision'); break;
+    case 'archive': case 'archives': case 'shared':
+      predicate = (h) => matches(h, 'archive'); break;
+    case 'model': case 'models': case 'role': case 'roles':
+      predicate = (h) => matches(h, 'chat model roles'); break;
+    case 'recent': case 'cache': case 'queue': case 'errors': case 'changelog':
+      predicate = (h) => matches(h, 'recent', 'cache', 'queue'); break;
+    case 'admin': case 'persona': case 'digest': case 'memory': case 'say':
+      predicate = (h) => matches(h, 'admin'); break;
+    case 'reactrule': case 'reactrules': case 'autoreact': case 'auto-reactions': case 'autoreactions': case 'reaction': case 'reactions': case 'react':
+      predicate = (h) => matches(h, 'auto-reactions', 'reaction shortcuts'); break;
+    case 'emoji': case 'emojis': case 'vault':
+      predicate = (h) => matches(h, 'emoji vault'); break;
+    case 'context': case 'menu': case 'right-click': case 'rightclick': case 'apps': case 'contextmenu':
+      predicate = (h) => matches(h, 'right-click', 'context menu'); break;
+    default: predicate = null;
+  }
+
+  if (!predicate) {
+    const known = ['start', 'chat', 'image', 'vision', 'archive', 'model', 'recent', 'admin', 'reactrule', 'emoji', 'context', 'all'];
+    return [
+      titleLines.join('\n').trimEnd(),
+      '',
+      'Unknown help topic `' + t + '`. Try one of:',
+      known.map((k) => '`' + k + '`').join(', '),
+      '',
+      'Or `@SeekDeep help` for the full map.',
+    ].join('\n');
+  }
+
+  const picked = sections.filter((s) => predicate(s.heading));
+  if (!picked.length) {
+    return [
+      titleLines.join('\n').trimEnd(),
+      '',
+      'No sections matched topic `' + t + '`. Use `@SeekDeep help` for the full map.',
+    ].join('\n');
+  }
+
+  const body = picked.map((s) => s.lines.join('\n').trimEnd()).join('\n\n');
+  return [titleLines.join('\n').trimEnd(), '', body].join('\n').trimEnd();
+}
+
+// Parse `help <topic>` from a prompt that has already had the mention stripped.
+// Returns the topic string, or '' for plain `help`.
+function seekdeepParseHelpTopic(prompt) {
+  const p = String(prompt || '').toLowerCase().trim();
+  // Forms: "help", "help chat", "chat help", "archive help", "help archive"
+  let m = p.match(/^(?:help|commands)\s+([a-z\-]+)/i);
+  if (m) return m[1];
+  m = p.match(/^([a-z\-]+)\s+(?:help|commands)\b/i);
+  if (m && !/^(?:archive|image|vision|cache|queue|recent|status|model)$/.test(m[1])) return m[1];
+  // archive help / image help etc. should still slice to that topic.
+  m = p.match(/^(archive|archives|image|images|vision|cache|queue|recent|model|models|admin|reactrule|reactrules|emoji|context)\s+(?:help|commands)\b/i);
+  if (m) return m[1];
+  return '';
 }
 
 function seekdeepCacheStatusText() {
@@ -7036,7 +7137,25 @@ const commands = [
     .addStringOption((o) => o.setName('prompt').setDescription('Question about the media').setRequired(false)),
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show SeekDeep command help.'),
+    .setDescription('Show SeekDeep command help.')
+    .addStringOption((o) =>
+      o.setName('topic')
+        .setDescription('Show only one section instead of the full help.')
+        .setRequired(false)
+        .addChoices(
+          { name: 'start', value: 'start' },
+          { name: 'chat', value: 'chat' },
+          { name: 'image', value: 'image' },
+          { name: 'vision', value: 'vision' },
+          { name: 'archive', value: 'archive' },
+          { name: 'model roles', value: 'model' },
+          { name: 'recent / cache / queue', value: 'recent' },
+          { name: 'admin', value: 'admin' },
+          { name: 'reactrule', value: 'reactrule' },
+          { name: 'emoji vault', value: 'emoji' },
+          { name: 'context menu', value: 'context' },
+          { name: 'all', value: 'all' },
+        )),
   new SlashCommandBuilder()
     .setName('cachestatus')
     .setDescription('Show temp image cache status.'),
@@ -12439,7 +12558,13 @@ client.on('messageCreate', async (message) => {
         return;
       }
 
-      const content = seekdeepUtilityText(utilityKind, message, key);
+      let content;
+      if (utilityKind === 'help') {
+        const topic = seekdeepParseHelpTopic(prompt);
+        content = topic ? seekdeepHelpTopicSlice(topic, message) : seekdeepHelpText(message);
+      } else {
+        content = seekdeepUtilityText(utilityKind, message, key);
+      }
       seekdeepRememberSafeV13(key, 'assistant', content);
       if (utilityKind === 'help') {
         await sendLongMessageReply(message, content);
@@ -13627,6 +13752,13 @@ client.on('interactionCreate', async (interaction) => {
       if (kind === 'archive' && typeof seekdeepBuildArchiveStatusReportV2 === 'function') {
         const content = await seekdeepBuildArchiveStatusReportV2(interaction);
         await sendLongInteractionReply(interaction, asTextBlock(content));
+        return;
+      }
+
+      if (kind === 'help') {
+        const topic = String(interaction.options.getString('topic') || '').trim();
+        const content = topic ? seekdeepHelpTopicSlice(topic, interaction) : seekdeepHelpText(interaction);
+        await sendLongInteractionReply(interaction, content);
         return;
       }
 

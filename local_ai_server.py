@@ -39,6 +39,18 @@ HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
+# v10.4: opt-in pins to keep specific models resident in VRAM across task
+# switches. Useful when you want chat+vision to coexist (e.g. asking
+# follow-up questions about an image without paying the unload/reload
+# cost). The explicit POST /unload endpoint still clears everything.
+#
+# VRAM budget on a 24GB GPU:
+#   chat 8B fp16 (~16GB) + vision 3B fp16 (~6GB) = ~22GB tight but works.
+#   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) = comfortable.
+#   chat 14B 4bit (~9GB) + vision 3B fp16 (~6GB) = comfortable.
+KEEP_RESIDENT_VISION = os.getenv("LOCAL_VISION_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
+KEEP_RESIDENT_IMAGE = os.getenv("LOCAL_IMAGE_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
+
 # ---------------------------------------------------------------------------
 # Chat model role routing
 # ---------------------------------------------------------------------------
@@ -277,20 +289,31 @@ def unload_chat_model() -> None:
     _log_vram("after chat unload")
 
 
-def unload_all() -> None:
+def unload_all(force: bool = False) -> None:
+    """Drop loaded models. With `force=False`, respects KEEP_RESIDENT_VISION /
+    KEEP_RESIDENT_IMAGE pins so the pinned task survives task-LRU switches.
+    The explicit POST /unload endpoint passes force=True and ignores pins."""
     global chat_model, chat_tokenizer, vision_model, vision_processor, vision_tokenizer, image_pipe, loaded_task
     global loaded_chat_role, loaded_chat_model_id
     chat_model = None
     chat_tokenizer = None
-    vision_model = None
-    vision_processor = None
-    vision_tokenizer = None
-    image_pipe = None
+    keep_vision = (not force) and KEEP_RESIDENT_VISION
+    keep_image = (not force) and KEEP_RESIDENT_IMAGE
+    if not keep_vision:
+        vision_model = None
+        vision_processor = None
+        vision_tokenizer = None
+    if not keep_image:
+        image_pipe = None
     loaded_task = None
     loaded_chat_role = None
     loaded_chat_model_id = None
     cleanup_cuda()
-    print("[SeekDeep] unloaded all models", flush=True)
+    pin_note = ""
+    if keep_vision or keep_image:
+        pinned = [name for name, on in (("vision", keep_vision), ("image", keep_image)) if on]
+        pin_note = f" (kept resident: {', '.join(pinned)})"
+    print(f"[SeekDeep] unloaded models{pin_note}", flush=True)
 
 
 def prepare_task(task: str) -> None:
@@ -301,6 +324,17 @@ def prepare_task(task: str) -> None:
         return
 
     if MODEL_KEEP_MODE in {"task-lru", "lru", "single"} and loaded_task and loaded_task != task:
+        # When the next task is the pinned one and it's already loaded, skip
+        # the unload entirely. (Saves an unload/reload cycle for vision when
+        # alternating chat<->vision and KEEP_RESIDENT_VISION is on.)
+        if task == "vision" and KEEP_RESIDENT_VISION and vision_model is not None:
+            print(f"[SeekDeep] keep-resident: vision already loaded; staying", flush=True)
+            loaded_task = task
+            return
+        if task == "image" and KEEP_RESIDENT_IMAGE and image_pipe is not None:
+            print(f"[SeekDeep] keep-resident: image already loaded; staying", flush=True)
+            loaded_task = task
+            return
         print(f"[SeekDeep] unloading models; switching from {loaded_task} to {task}", flush=True)
         unload_all()
 
@@ -375,6 +409,10 @@ def health():
         "chat_quant_mode": _normalized_chat_quant_mode(),
         "chat_quant_full_roles": sorted(LOCAL_CHAT_QUANT_FULL_ROLES),
         "keep_mode": MODEL_KEEP_MODE,
+        "keep_resident": {
+            "vision": KEEP_RESIDENT_VISION,
+            "image": KEEP_RESIDENT_IMAGE,
+        },
         "models": {
             "chat": CHAT_MODEL_ID,
             "vision": VISION_MODEL_ID,
@@ -387,7 +425,8 @@ def health():
 
 @app.post("/unload")
 def unload_endpoint():
-    unload_all()
+    # Explicit user request ignores keep-resident pins.
+    unload_all(force=True)
     return {"ok": True, "status": "unloaded"}
 
 

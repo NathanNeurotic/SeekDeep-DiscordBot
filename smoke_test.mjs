@@ -231,6 +231,23 @@ check('chunker: reopens ```text on continuation chunks', reopened >= 1);
 const plainChunks = splitDiscordText('a '.repeat(2000), 100);
 check('chunker: fence-free input still splits', plainChunks.length > 1);
 
+// v10.4 help topic parser. Mirrors seekdeepParseHelpTopic in index.js.
+function parseHelpTopic(prompt) {
+  const p = String(prompt || '').toLowerCase().trim();
+  let m = p.match(/^(?:help|commands)\s+([a-z\-]+)/i);
+  if (m) return m[1];
+  m = p.match(/^([a-z\-]+)\s+(?:help|commands)\b/i);
+  if (m && !/^(?:archive|image|vision|cache|queue|recent|status|model)$/.test(m[1])) return m[1];
+  m = p.match(/^(archive|archives|image|images|vision|cache|queue|recent|model|models|admin|reactrule|reactrules|emoji|context)\s+(?:help|commands)\b/i);
+  if (m) return m[1];
+  return '';
+}
+check('help topic: "help" -> empty', parseHelpTopic('help') === '');
+check('help topic: "help chat" -> "chat"', parseHelpTopic('help chat') === 'chat');
+check('help topic: "help reactrule" -> "reactrule"', parseHelpTopic('help reactrule') === 'reactrule');
+check('help topic: "archive help" -> "archive"', parseHelpTopic('archive help') === 'archive');
+check('help topic: "image help" -> "image"', parseHelpTopic('image help') === 'image');
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
