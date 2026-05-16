@@ -30,7 +30,8 @@
       "WebFetch(domain:www.demonbot.win)",
       "Bash(taskkill /F /IM node.exe)",
       "Bash(git commit -m ' *)",
-      "Bash(python -m py_compile local_ai_server.py)"
+      "Bash(python -m py_compile local_ai_server.py)",
+      "Bash(npm install *)"
     ]
   }
 }

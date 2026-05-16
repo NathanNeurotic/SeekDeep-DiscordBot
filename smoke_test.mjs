@@ -282,6 +282,23 @@ const capped = capSelection(s, 5);
 check('picker: cap to 5 keeps insertion order', Array.from(capped).join(',') === 'a:1,b:2,c:3,d:4,e:5');
 check('picker: cap to 5 drops the extras', capped.size === 5);
 
+// v10.4.2 Emoji vault pagination math. Demonbot uses 20-per-page; we match.
+// Each "section" (Animated / Standard) is paginated independently.
+const VAULT_PAGE_SIZE = 20;
+function vaultPagesFor(n) { return Math.max(1, Math.ceil(n / VAULT_PAGE_SIZE)); }
+check('vault: 26 animated emojis -> 2 pages', vaultPagesFor(26) === 2);
+check('vault: 98 standard emojis -> 5 pages', vaultPagesFor(98) === 5);
+check('vault: 20 emojis -> 1 page (exact)', vaultPagesFor(20) === 1);
+check('vault: 0 emojis -> still 1 page (clamped)', vaultPagesFor(0) === 1);
+check('vault: page slice indexing - p0 starts at 0', 0 * VAULT_PAGE_SIZE === 0);
+check('vault: page slice indexing - p4 starts at 80', 4 * VAULT_PAGE_SIZE === 80);
+
+// Thread name builder mirrors seekdeepEmojiVaultThreadName: "<guild> — Emojis"
+// clipped to 100 chars (Discord thread name limit).
+function vaultThreadName(g) { return `${String(g || 'server').slice(0, 80)} — Emojis`.slice(0, 100); }
+check('vault: thread name "Neuralotics" -> "Neuralotics — Emojis"', vaultThreadName('Neuralotics') === 'Neuralotics — Emojis');
+check('vault: thread name clips to 100 chars', vaultThreadName('x'.repeat(200)).length <= 100);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

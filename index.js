@@ -6218,11 +6218,13 @@ function seekdeepHelpText(source = null) {
     '',
     '## Emoji vault (admin / Manage Messages)',
     '```text',
-    prefix + ' emoji backup   (returns JSON file listing all custom emojis here)',
-    prefix + ' emoji import   (attach a backup JSON to re-create emojis here)',
+    prefix + ' emoji backup   (opens/refreshes a "<Server> — Emojis" thread)',
+    prefix + ' emoji import   (attach the JSON manifest OR the ZIP file)',
     prefix + ' emoji count / list',
     '```',
-    'Imports skip names that already exist. Bot needs Manage Expressions permission to upload.',
+    'Backup creates a dedicated thread with paginated emoji previews, attaches',
+    'a JSON manifest, AND a ZIP containing every emoji image for portable restore.',
+    'Imports skip names that already exist. Bot needs Manage Expressions permission.',
     '',
     '## ' + art + ' Image options on /image',
     '```text',
@@ -11120,12 +11122,136 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
 // SEEKDEEP_AUTO_REACTIONS_END
 
 // SEEKDEEP_EMOJI_VAULT_START
-// Admin command: "@SeekDeep emoji backup" returns a JSON file listing every
-// custom emoji in this guild (name, id, animated, url). Useful for migrating
-// between servers, or just having a snapshot.
-// "@SeekDeep emoji import" reads an attached JSON file and uploads any emojis
-// that don't already exist by name. Requires ManageGuildExpressions /
-// ManageEmojisAndStickers permission on the bot.
+// v10.4.2: Emoji vault now creates a dedicated thread named after the guild
+// ("{Guild Name} — Emojis"), with a pinned anchor message, then posts
+// paginated formatted listings (Animated section, then Standard section)
+// with emoji previews + names + IDs. It also attaches a JSON manifest AND
+// a ZIP of every emoji image so the backup is portable.
+//
+// Commands ("@SeekDeep emoji ..."):
+//   backup / export   : create/refresh the vault thread + JSON + ZIP
+//   count             : quick reply with custom emoji count
+//   list              : short text list (kept for compatibility)
+//   import / restore  : create emojis from an attached JSON or ZIP
+const SEEKDEEP_EMOJI_VAULT_ANCHOR_SUFFIX = ' — Emojis — do not delete this message.';
+const SEEKDEEP_EMOJI_VAULT_PAGE_SIZE = 20;
+
+function seekdeepEmojiVaultThreadName(guild) {
+  const name = String(guild?.name || 'server').slice(0, 80);
+  // Discord thread name limit is 100 chars; reserve room for the suffix.
+  return `${name} — Emojis`.slice(0, 100);
+}
+
+// Returns the JSZip class lazily so the require cost only happens when used.
+async function seekdeepEmojiVaultLoadJSZip() {
+  const mod = await import('jszip');
+  return mod.default || mod;
+}
+
+// Look for an existing vault thread under the same parent channel as `message`.
+// Falls back to a fresh thread named after the guild.
+async function seekdeepEmojiVaultFindOrCreateThread(message, guild) {
+  const channel = message?.channel;
+  if (!channel?.threads?.create) {
+    throw new Error('Emoji vault can only be created from a text channel that supports threads.');
+  }
+
+  const wantName = seekdeepEmojiVaultThreadName(guild);
+  const anchorText = `${guild?.name || 'Server'}${SEEKDEEP_EMOJI_VAULT_ANCHOR_SUFFIX}`;
+
+  // Look through active threads first.
+  try {
+    const active = await channel.threads.fetchActive();
+    for (const t of active.threads.values()) {
+      if (String(t.name || '').toLowerCase() === wantName.toLowerCase()) return t;
+    }
+  } catch {}
+  // Then archived.
+  try {
+    const archived = await channel.threads.fetchArchived({ limit: 50 });
+    for (const t of archived.threads.values()) {
+      if (String(t.name || '').toLowerCase() === wantName.toLowerCase()) {
+        try { await t.setArchived(false); } catch {}
+        return t;
+      }
+    }
+  } catch {}
+
+  // Create a fresh one anchored to a new starter message.
+  const starter = await channel.send({ content: anchorText, allowedMentions: { parse: [] } });
+  const thread = await channel.threads.create({
+    name: wantName,
+    startMessage: starter,
+    autoArchiveDuration: 1440,
+    reason: 'SeekDeep emoji vault',
+  });
+  return thread;
+}
+
+// Format one page of emoji listings the way demonbot.win does: numbered
+// inline list, each entry as `<emoji-preview> N.) \`name\` \`id\``,
+// followed by a footer line "X emojis · GuildName · Page Y of Z".
+function seekdeepEmojiVaultFormatPage({ guildName, kind, slice, totalForKind, page, totalPages, startIndex }) {
+  const header = page === 0
+    ? `**${kind} Emojis (${totalForKind})**`
+    : `**${kind} Emojis cont.**`;
+  const lines = slice.map((e, i) => {
+    const n = startIndex + i + 1;
+    const preview = e.animated ? `<a:${e.name}:${e.id}>` : `<:${e.name}:${e.id}>`;
+    return `${preview} ${n}.)  \`${e.name}\`  \`${e.id}\``;
+  });
+  const footer = `_${totalForKind} emojis · ${guildName} · Page ${page + 1} of ${totalPages}_`;
+  return [header, lines.join('  '), footer].join('\n');
+}
+
+// Fetch every emoji image and bundle them into a ZIP buffer. Each file is
+// named `<name>__<id>.<ext>` so duplicates by name remain unique. Capped at
+// `maxBytes` to avoid blowing past Discord's per-file upload limit.
+async function seekdeepEmojiVaultBuildZip(emojis, { guildName = 'server', maxBytes = 24 * 1024 * 1024 } = {}) {
+  const JSZip = await seekdeepEmojiVaultLoadJSZip();
+  const zip = new JSZip();
+  const folder = zip.folder(`emojis_${String(guildName).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}`) || zip;
+
+  let downloaded = 0;
+  let failed = 0;
+  // Limit concurrency to keep memory + CDN load reasonable.
+  const concurrency = 8;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < emojis.length) {
+      const idx = cursor++;
+      const e = emojis[idx];
+      const ext = e.animated ? 'gif' : 'png';
+      const url = `https://cdn.discordapp.com/emojis/${e.id}.${ext}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) { failed += 1; continue; }
+        const ab = await res.arrayBuffer();
+        folder.file(`${e.name}__${e.id}.${ext}`, Buffer.from(ab));
+        downloaded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(1, emojis.length)) }, () => worker());
+  await Promise.all(workers);
+
+  // Manifest inside the ZIP so the import flow can read it directly.
+  folder.file('manifest.json', JSON.stringify({
+    guildName,
+    exportedAt: new Date().toISOString(),
+    count: emojis.length,
+    emojis: emojis.map((e) => ({ id: e.id, name: e.name, animated: !!e.animated })),
+  }, null, 2));
+
+  const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  if (buf.length > maxBytes) {
+    return { ok: false, reason: `ZIP would be ${(buf.length / 1024 / 1024).toFixed(2)} MB; exceeds ${(maxBytes / 1024 / 1024).toFixed(0)} MB cap.`, downloaded, failed };
+  }
+  return { ok: true, buffer: buf, downloaded, failed, files: downloaded };
+}
+
 async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
   const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
   if (!/^emoji\s+(backup|export|import|restore|count|list)\b/i.test(stripped)) return false;
@@ -11140,84 +11266,202 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
   }
 
   const sub = stripped.replace(/^emoji\s+/i, '').toLowerCase();
+  const guild = message.guild;
 
-  if (/^(backup|export|count|list)$/.test(sub)) {
-    const emojis = Array.from(message.guild.emojis?.cache?.values?.() || []);
-    const items = emojis.map((e) => ({
-      name: e.name,
-      id: e.id,
-      animated: Boolean(e.animated),
-      url: e.imageURL ? e.imageURL({ size: 256 }) : `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`,
-    }));
-    if (sub === 'count') {
-      await message.reply({ content: `This server has ${items.length} custom emoji(s).`, allowedMentions: { repliedUser: false } });
-      return true;
-    }
-    if (sub === 'list') {
-      const lines = [`Custom emojis (${items.length}):`, ...items.slice(0, 100).map((e, i) => `${i + 1}. :${e.name}: (${e.animated ? 'animated' : 'static'})`)];
-      if (items.length > 100) lines.push(`... and ${items.length - 100} more.`);
-      await message.reply({ content: lines.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } });
-      return true;
-    }
-    // backup / export
-    const blob = JSON.stringify({ guildId: message.guild.id, exportedAt: new Date().toISOString(), emojis: items }, null, 2);
-    const buf = Buffer.from(blob, 'utf8');
+  // Make sure the emoji cache is populated.
+  if (!guild.emojis.cache.size) { try { await guild.emojis.fetch(); } catch {} }
+  const allEmojis = Array.from(guild.emojis.cache.values())
+    .map((e) => ({ id: e.id, name: e.name || 'emoji', animated: !!e.animated }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  if (sub === 'count') {
+    const animated = allEmojis.filter((e) => e.animated).length;
+    const standard = allEmojis.length - animated;
     await message.reply({
-      content: `Emoji vault export for ${message.guild.name || 'this server'} (${items.length} emojis).`,
-      files: [{ attachment: buf, name: `seekdeep-emoji-vault-${message.guild.id}.json` }],
+      content: `This server has ${allEmojis.length} custom emoji(s) — ${animated} animated, ${standard} static.`,
       allowedMentions: { repliedUser: false },
     });
+    return true;
+  }
+
+  if (sub === 'list') {
+    const lines = [`Custom emojis (${allEmojis.length}):`, ...allEmojis.slice(0, 100).map((e, i) => `${i + 1}. :${e.name}: (${e.animated ? 'animated' : 'static'})`)];
+    if (allEmojis.length > 100) lines.push(`... and ${allEmojis.length - 100} more.`);
+    await message.reply({ content: lines.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (/^(backup|export)$/.test(sub)) {
+    if (!allEmojis.length) {
+      await message.reply({ content: 'This server has no custom emojis to back up.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    let thread;
+    try {
+      thread = await seekdeepEmojiVaultFindOrCreateThread(message, guild);
+    } catch (err) {
+      await message.reply({ content: 'Could not open/create vault thread: ' + (err?.message || 'unknown error'), allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    const status = await message.reply({
+      content: `Backing up ${allEmojis.length} emoji(s) to ${thread}. Fetching images for the ZIP...`,
+      allowedMentions: { repliedUser: false },
+    });
+
+    // Partition: animated first, then static. Each gets its own pagination.
+    const animated = allEmojis.filter((e) => e.animated);
+    const standard = allEmojis.filter((e) => !e.animated);
+    const guildName = guild.name || 'Server';
+
+    const postSection = async (kind, list) => {
+      if (!list.length) return;
+      const totalPages = Math.max(1, Math.ceil(list.length / SEEKDEEP_EMOJI_VAULT_PAGE_SIZE));
+      for (let page = 0; page < totalPages; page++) {
+        const startIndex = page * SEEKDEEP_EMOJI_VAULT_PAGE_SIZE;
+        const slice = list.slice(startIndex, startIndex + SEEKDEEP_EMOJI_VAULT_PAGE_SIZE);
+        const body = seekdeepEmojiVaultFormatPage({
+          guildName, kind, slice, totalForKind: list.length, page, totalPages, startIndex,
+        });
+        try {
+          await thread.send({ content: body.slice(0, 1990), allowedMentions: { parse: [] } });
+        } catch (err) {
+          await message.reply({ content: `Failed to post page ${page + 1} of ${kind}: ${err?.message || err}`, allowedMentions: { repliedUser: false } });
+        }
+      }
+    };
+
+    await postSection('Animated', animated);
+    await postSection('Standard', standard);
+
+    // JSON manifest.
+    const manifest = {
+      gid: guild.id,
+      guildName,
+      exportedAt: new Date().toISOString(),
+      count: allEmojis.length,
+      emojis: allEmojis.map((e) => ({
+        id: e.id,
+        name: e.name,
+        animated: e.animated,
+        url: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`,
+      })),
+    };
+    const jsonBuf = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+    try {
+      await thread.send({
+        content: 'Emoji vault data:',
+        files: [{ attachment: jsonBuf, name: `emojis_${guild.id}.json` }],
+        allowedMentions: { parse: [] },
+      });
+    } catch (err) {
+      await message.reply({ content: 'JSON upload failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
+    }
+
+    // ZIP of every emoji image.
+    let zipResult = null;
+    try {
+      zipResult = await seekdeepEmojiVaultBuildZip(allEmojis, { guildName });
+    } catch (err) {
+      zipResult = { ok: false, reason: err?.message || String(err) };
+    }
+    if (zipResult?.ok) {
+      const safeName = String(guildName).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40);
+      try {
+        await thread.send({
+          content: `Emoji backup zip — ${zipResult.files} files · drag into Import Emojis on the portal to restore`,
+          files: [{ attachment: zipResult.buffer, name: `emojis_${safeName}.zip` }],
+          allowedMentions: { parse: [] },
+        });
+      } catch (err) {
+        await thread.send({ content: 'ZIP upload failed: ' + (err?.message || err) }).catch(() => null);
+      }
+    } else {
+      await thread.send({ content: `ZIP not produced: ${zipResult?.reason || 'unknown error'}` }).catch(() => null);
+    }
+
+    const summary = `Emoji image backup — ${zipResult?.files || 0} files. Vault thread: ${thread}`;
+    try { await status.edit({ content: summary }); }
+    catch { await message.reply({ content: summary, allowedMentions: { repliedUser: false } }); }
     return true;
   }
 
   if (/^(import|restore)$/.test(sub)) {
     const attachment = message.attachments?.first?.();
     if (!attachment) {
-      await message.reply({ content: 'Attach the JSON file you got from `emoji backup` (or one from another server).', allowedMentions: { repliedUser: false } });
+      await message.reply({ content: 'Attach the JSON manifest OR the emoji-backup ZIP from `emoji backup`.', allowedMentions: { repliedUser: false } });
       return true;
     }
 
-    // Bot permission check.
-    const me = message.guild.members?.me;
+    const me = guild.members?.me;
     if (!me?.permissions?.has?.(PermissionFlagsBits.ManageGuildExpressions || PermissionFlagsBits.ManageEmojisAndStickers)) {
       await message.reply({ content: 'I need Manage Expressions / Manage Emojis permission on this server to import.', allowedMentions: { repliedUser: false } });
       return true;
     }
 
+    const name = String(attachment.name || '').toLowerCase();
+    const isZip = name.endsWith('.zip');
+    const status = await message.reply({ content: `Importing from ${attachment.name}...`, allowedMentions: { repliedUser: false } });
+
+    const existing = new Set(Array.from(guild.emojis.cache.values()).map((e) => String(e.name || '').toLowerCase()));
+    let added = 0, skipped = 0, failed = 0;
+    const failures = [];
+
     try {
       const res = await fetch(attachment.url);
-      const text = await res.text();
-      const parsed = JSON.parse(text);
-      const incoming = Array.isArray(parsed.emojis) ? parsed.emojis : [];
-      if (!incoming.length) {
-        await message.reply({ content: 'No emojis in the imported file.', allowedMentions: { repliedUser: false } });
-        return true;
-      }
-      const existing = new Set(Array.from(message.guild.emojis?.cache?.values?.() || []).map((e) => e.name?.toLowerCase()));
-      const status = await message.reply({ content: `Importing ${incoming.length} emoji(s). Skipping duplicates by name...`, allowedMentions: { repliedUser: false } });
-      let added = 0, skipped = 0, failed = 0;
-      const failures = [];
-      for (const item of incoming) {
-        const name = String(item?.name || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
-        const url = String(item?.url || '').trim();
-        if (!name || !url) { failed += 1; failures.push(`${name || '(no name)'}: bad data`); continue; }
-        if (existing.has(name.toLowerCase())) { skipped += 1; continue; }
-        try {
-          await message.guild.emojis.create({ attachment: url, name });
-          added += 1;
-          existing.add(name.toLowerCase());
-        } catch (err) {
-          failed += 1;
-          failures.push(`${name}: ${(err?.message || 'error').slice(0, 80)}`);
+      const ab = await res.arrayBuffer();
+
+      if (isZip) {
+        const JSZip = await seekdeepEmojiVaultLoadJSZip();
+        const zip = await JSZip.loadAsync(Buffer.from(ab));
+        const files = Object.values(zip.files).filter((f) => !f.dir && /\.(png|gif|webp|jpe?g)$/i.test(f.name));
+        for (const file of files) {
+          // Filename is `<name>__<id>.<ext>`; strip __ID to recover original name.
+          const base = String(file.name).split('/').pop() || file.name;
+          const m = base.match(/^(.+?)__(\d+)\.(png|gif|webp|jpe?g)$/i) || base.match(/^(.+?)\.(png|gif|webp|jpe?g)$/i);
+          const rawName = (m?.[1] || base.replace(/\.[^.]+$/, '')).slice(0, 32);
+          const safe = rawName.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+          if (!safe) { failed += 1; failures.push(`${base}: bad name`); continue; }
+          if (existing.has(safe.toLowerCase())) { skipped += 1; continue; }
+          try {
+            const data = await file.async('nodebuffer');
+            await guild.emojis.create({ attachment: data, name: safe });
+            added += 1;
+            existing.add(safe.toLowerCase());
+          } catch (err) {
+            failed += 1;
+            failures.push(`${safe}: ${(err?.message || 'error').slice(0, 80)}`);
+          }
+        }
+      } else {
+        // JSON manifest path.
+        const parsed = JSON.parse(Buffer.from(ab).toString('utf8'));
+        const incoming = Array.isArray(parsed.emojis) ? parsed.emojis : [];
+        for (const item of incoming) {
+          const rawName = String(item?.name || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+          const url = String(item?.url || (item?.id ? `https://cdn.discordapp.com/emojis/${item.id}.${item.animated ? 'gif' : 'png'}` : '')).trim();
+          if (!rawName || !url) { failed += 1; failures.push(`${rawName || '(no name)'}: bad data`); continue; }
+          if (existing.has(rawName.toLowerCase())) { skipped += 1; continue; }
+          try {
+            await guild.emojis.create({ attachment: url, name: rawName });
+            added += 1;
+            existing.add(rawName.toLowerCase());
+          } catch (err) {
+            failed += 1;
+            failures.push(`${rawName}: ${(err?.message || 'error').slice(0, 80)}`);
+          }
         }
       }
-      const summary = [`Done. Added ${added}, skipped ${skipped}, failed ${failed}.`];
-      if (failures.length) summary.push('Failures (first 10):', ...failures.slice(0, 10).map((f) => '  ' + f));
-      try { await status.edit({ content: summary.join('\n').slice(0, 1900) }); }
-      catch { await message.reply({ content: summary.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } }); }
     } catch (err) {
       await message.reply({ content: 'Import failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
+      return true;
     }
+
+    const summary = [`Done. Added ${added}, skipped ${skipped}, failed ${failed}.`];
+    if (failures.length) summary.push('Failures (first 10):', ...failures.slice(0, 10).map((f) => '  ' + f));
+    try { await status.edit({ content: summary.join('\n').slice(0, 1900) }); }
+    catch { await message.reply({ content: summary.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } }); }
     return true;
   }
 
