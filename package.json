@@ -7,6 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node index.js",
+    "test": "node smoke_test.mjs",
+    "smoke": "node smoke_test.mjs",
     "setup:models": ".venv\\Scripts\\python.exe warmup_local_cache.py",
     "setup:chat-models": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only",
     "setup:models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --include-optional",

@@ -97,6 +97,45 @@ async function seekdeepReadGitChangelog(limit = 10) {
 }
 // SEEKDEEP_CHANGELOG_END
 
+// SEEKDEEP_ERROR_LOG_START
+// In-memory ring buffer of recent warnings/errors. Wraps console.warn/error
+// after file logging so they survive log rotation in-process for the
+// "recent errors" admin command.
+const SEEKDEEP_RECENT_ERRORS = [];
+const SEEKDEEP_RECENT_ERRORS_MAX = 50;
+function seekdeepCaptureRecentError(level, args) {
+  try {
+    const ts = new Date().toISOString();
+    const msg = (args || []).map((a) => {
+      if (typeof a === 'string') return a;
+      try { return JSON.stringify(a); } catch { return String(a); }
+    }).join(' ').slice(0, 600);
+    SEEKDEEP_RECENT_ERRORS.unshift({ ts, level, msg });
+    while (SEEKDEEP_RECENT_ERRORS.length > SEEKDEEP_RECENT_ERRORS_MAX) SEEKDEEP_RECENT_ERRORS.pop();
+  } catch {}
+}
+{
+  const _w = console.warn.bind(console);
+  const _e = console.error.bind(console);
+  console.warn = (...args) => { seekdeepCaptureRecentError('warn', args); _w(...args); };
+  console.error = (...args) => { seekdeepCaptureRecentError('error', args); _e(...args); };
+}
+
+function seekdeepRecentErrorsText(limit = 20) {
+  const items = SEEKDEEP_RECENT_ERRORS.slice(0, Math.max(1, Math.min(50, Number(limit) || 20)));
+  if (!items.length) return 'Recent errors\n\n(none)';
+  return ['Recent errors (newest first):', '', ...items.map((e) => `[${e.ts}] [${e.level}] ${e.msg}`)].join('\n');
+}
+// SEEKDEEP_ERROR_LOG_END
+
+// SEEKDEEP_RATE_LIMIT_AWARENESS_START
+// Discord.js emits rate-limit events as warnings. Capture them so a flood of
+// 429s during burst activity becomes visible in /status verbose + recent errors
+// rather than silently slowing replies. Hook is installed in clientReady (below)
+// because `client` isn't constructed yet at this point in the module.
+const SEEKDEEP_RATE_LIMIT_STATS = { count: 0, lastAt: 0, lastRoute: '', lastTimeoutMs: 0 };
+// SEEKDEEP_RATE_LIMIT_AWARENESS_END
+
 const TOKEN = process.env.DISCORD_TOKEN || '';
 const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:7865';
 
@@ -232,6 +271,8 @@ function seekdeepRememberLastChatFallback(info) {
       reason: String(info.reason || 'unknown'),
       role: String(info.role || ''),
       modelId: String(info.modelId || ''),
+      failedRole: String(info.failedRole || ''),
+      failedModelId: String(info.failedModelId || ''),
       at: Date.now(),
     };
   }
@@ -297,7 +338,8 @@ function seekdeepResponseFooter({ startedAt = null, modelUsed = null } = {}) {
   if (typeof seekdeepConsumeRecentChatFallback === 'function') {
     const fb = seekdeepConsumeRecentChatFallback();
     if (fb) {
-      lines.push(`Fallback used: role=${fb.role} model=${fb.modelId} (reason: ${fb.reason})`);
+      const chain = fb.failedRole ? `Tried: ${fb.failedRole}${fb.failedModelId ? ` (${fb.failedModelId})` : ''} -> ${fb.role} (${fb.modelId})` : `Used: ${fb.role} (${fb.modelId})`;
+      lines.push(`Fallback used: ${chain} | reason: ${fb.reason}`);
     }
   }
 
@@ -1585,11 +1627,13 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
   if (response && typeof response === 'object') {
     seekdeepRememberLastChatModel(response.model_id, response.model_role);
     if (response.fallback_used) {
-      console.log(`[SeekDeep Model Router] fallback used reason=${response.fallback_reason || 'unknown'} role=${response.model_role || 'unknown'} model=${response.model_id || 'unknown'}`);
+      console.log(`[SeekDeep Model Router] fallback used reason=${response.fallback_reason || 'unknown'} role=${response.model_role || 'unknown'} model=${response.model_id || 'unknown'} (originally requested ${modelRole || 'default_chat'})`);
       seekdeepRememberLastChatFallback({
         reason: response.fallback_reason,
         role: response.model_role,
         modelId: response.model_id,
+        failedRole: modelRole || 'default_chat',
+        failedModelId: response.failed_model_id || '',
       });
     }
   }
@@ -3615,9 +3659,15 @@ function seekdeepEnqueueImageJob(job, runner) {
 }
 
 function seekdeepImageCooldownText(remainingMs) {
+  const remaining = Math.max(0, Number(remainingMs || 0));
+  const total = SEEKDEEP_IMAGE_COOLDOWN_MS > 0 ? SEEKDEEP_IMAGE_COOLDOWN_MS : 1;
+  const ratio = Math.max(0, Math.min(1, 1 - (remaining / total)));
+  const barLen = 12;
+  const filled = Math.round(ratio * barLen);
+  const bar = '█'.repeat(filled) + '▒'.repeat(Math.max(0, barLen - filled));
   return [
     'Image generation cooldown is active.',
-    `Try again in ${(Math.max(0, Number(remainingMs || 0)) / 1000).toFixed(1)} seconds.`,
+    `Try again in ${(remaining / 1000).toFixed(1)} seconds. [${bar}]`,
   ].join('\n');
 }
 // SEEKDEEP_IMAGE_QUEUE_END
@@ -6400,8 +6450,13 @@ function seekdeepCommandSuggestionText(prompt = '') {
   }
 
   if (!best) return '';
-  const allowedDistance = p.length <= 6 ? 2 : Math.max(2, Math.ceil(Math.min(p.length, best.alias.length) * 0.34));
-  const closeEnough = best.distance <= allowedDistance || best.sharedWords >= 1;
+  // Tighter fuzzy threshold: was 0.34 of the shorter length, which fired on
+  // genuinely unrelated typos. Cap at 25% and require at least one shared word
+  // for longer inputs.
+  const minLen = Math.min(p.length, best.alias.length);
+  const allowedDistance = p.length <= 6 ? 2 : Math.max(2, Math.ceil(minLen * 0.25));
+  const longInputNeedsSharedWord = p.length >= 12;
+  const closeEnough = best.distance <= allowedDistance && (!longInputNeedsSharedWord || best.sharedWords >= 1);
   if (!closeEnough) return '';
 
   return ['Did you mean `' + best.command + '`?', '', 'Use `@SeekDeep help` for the full supported command map.'].join('\n');
@@ -6687,6 +6742,8 @@ function seekdeepUtilityPromptKind(prompt = '') {
   if (/^(archive status|saved generation status|saved generations status)\b/.test(p)) return 'archive';
   if (/^(recent images|recent image|image history|recent generations|generation history)\b/.test(p)) return 'recent-images';
   if (/^(recent prompts|recent prompt|prompt history|last prompts|last prompt)\b/.test(p)) return 'recent-prompts';
+  if (/^(recent errors|recent error|error log|errors)\b/.test(p)) return 'recent-errors';
+  if (/^(changelog|change log|commits|git log)\b/.test(p)) return 'changelog';
   if (typeof seekdeepIsTextRegenerateImagePrompt === 'function' && seekdeepIsTextRegenerateImagePrompt(p)) return 'regenerate-image';
   if (/^(admin status|am i admin)\b/.test(p)) return 'admin';
 
@@ -6700,6 +6757,8 @@ function seekdeepUtilityText(kind, source, key) {
     case 'archive': return seekdeepArchiveStatusText();
     case 'recent-images': return seekdeepRecentImagesText(10);
     case 'recent-prompts': return seekdeepRecentPromptsText(key, 12);
+    case 'recent-errors': return seekdeepRecentErrorsText(20);
+    case 'changelog': return '(use /changelog for a fresh git log — chat fallback)';
     case 'admin': return ['SeekDeep admin status', '', seekdeepAdminLine(source)].join('\n');
     case 'image-queue': return seekdeepImageQueueStatusText();
     default: return '';
@@ -6873,6 +6932,17 @@ const commands = [
     .setName('Compare with previous')
     .setType(ApplicationCommandType.Message),
 ].map((c) => c.toJSON());
+
+// Install Discord rate-limit listener now that `client` exists.
+try {
+  client.rest?.on?.('rateLimited', (info) => {
+    SEEKDEEP_RATE_LIMIT_STATS.count += 1;
+    SEEKDEEP_RATE_LIMIT_STATS.lastAt = Date.now();
+    SEEKDEEP_RATE_LIMIT_STATS.lastRoute = String(info?.route || info?.path || '');
+    SEEKDEEP_RATE_LIMIT_STATS.lastTimeoutMs = Number(info?.timeToReset || info?.retryAfter || 0);
+    console.warn(`[SeekDeep] Discord rate-limited: route=${SEEKDEEP_RATE_LIMIT_STATS.lastRoute} retry_in=${SEEKDEEP_RATE_LIMIT_STATS.lastTimeoutMs}ms (session total: ${SEEKDEEP_RATE_LIMIT_STATS.count})`);
+  });
+} catch {}
 
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);

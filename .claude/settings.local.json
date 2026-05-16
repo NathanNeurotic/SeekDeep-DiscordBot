@@ -21,7 +21,11 @@
       "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep commit -m ' *)",
       "Bash(git tag *)",
       "Bash(./.venv/Scripts/python.exe -m py_compile warmup_local_cache.py local_ai_server.py)",
-      "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep add -A)"
+      "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep add -A)",
+      "Bash(git -c user.email=seekdeep@local -c user.name=SeekDeep add index.js)",
+      "Bash(chmod +x .git/hooks/pre-commit)",
+      "Bash(bash .git/hooks/pre-commit)",
+      "Bash(node smoke_test.mjs)"
     ]
   }
 }

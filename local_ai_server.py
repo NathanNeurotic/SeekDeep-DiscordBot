@@ -53,7 +53,7 @@ CHAT_ROLE_ENV = {
 
 MODEL_AUTO_FALLBACK = os.getenv("MODEL_AUTO_FALLBACK", "true").lower() in {"1", "true", "yes", "on"}
 MODEL_ROUTER_LOG = os.getenv("MODEL_ROUTER_LOG", "true").lower() in {"1", "true", "yes", "on"}
-MODEL_LOG_VRAM = os.getenv("MODEL_LOG_VRAM", "false").lower() in {"1", "true", "yes", "on"}
+MODEL_LOG_VRAM = os.getenv("MODEL_LOG_VRAM", "true").lower() in {"1", "true", "yes", "on"}
 
 # Chat-model quantization mode: 4bit (recommended for laptops), 8bit, or none/off/fp16/bf16.
 LOCAL_CHAT_QUANT = (os.getenv("LOCAL_CHAT_QUANT", "4bit") or "").strip().lower()
@@ -626,6 +626,7 @@ def chat(req: ChatRequest):
                         "model_id": model_id,
                         "fallback_used": True,
                         "fallback_reason": reason,
+                        "failed_model_id": failed_model_id,
                     }
                 except Exception as fb_exc:
                     fb_reason = _classify_chat_load_failure(fb_exc)
