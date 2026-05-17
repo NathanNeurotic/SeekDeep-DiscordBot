@@ -584,7 +584,7 @@ function maxTokensForRefine(prompt) {
 function buildRefineUserPrompt(prompt, key = null) {
   const clean = normalizeUserText(prompt);
   const target = detectTargetCharacters(clean);
-  const recent = key && seekdeepShouldUseMemorySafeV13(clean) ? seekdeepGetRecentContextSafeV13(key) : '';
+  const recent = key && shouldUseMemory(clean) ? getRecentContext(key) : '';
 
   const parts = [
     'Rewrite and improve the following prompt.',
@@ -1751,8 +1751,8 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
 
 async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 2400), temperature = Number(process.env.CHAT_TEMPERATURE || 0.65), memoryKey = null, searchQueryOverride = '', personaOverride = '' } = {}) {
   const cleanPrompt = normalizeUserText(prompt);
-  const promptForModel = memoryKey ? seekdeepBuildPromptWithMemorySafeV14(cleanPrompt, memoryKey) : cleanPrompt;
-  const searchQuery = normalizeUserText(searchQueryOverride || (memoryKey ? seekdeepBuildSearchQuerySafeV15(cleanPrompt, memoryKey) : cleanPrompt));
+  const promptForModel = memoryKey ? buildPromptWithMemory(cleanPrompt, memoryKey) : cleanPrompt;
+  const searchQuery = normalizeUserText(searchQueryOverride || (memoryKey ? buildSearchQuery(cleanPrompt, memoryKey) : cleanPrompt));
 
   const modelRole = seekdeepSelectChatModelRole(cleanPrompt, 'chat');
 
@@ -6832,8 +6832,8 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
   if (recentAssistant) {
     if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-missing-subject-context-fill', recentAssistant.slice(0, 80));
     if (typeof remember === 'function' && key) {
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', 'Using recent context as image subject.');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', 'Using recent context as image subject.');
     }
     if (typeof seekdeepSetResponseModel === 'function' && typeof seekdeepNoModelLabel === 'function') {
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
@@ -6863,8 +6863,8 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-missing-subject', prompt);
   if (typeof remember === 'function' && key) {
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', 'What should I generate an image of?');
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', 'What should I generate an image of?');
   }
   if (typeof seekdeepSetResponseModel === 'function' && typeof seekdeepNoModelLabel === 'function') {
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
@@ -6898,8 +6898,8 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-pending-subject', pending.prompt);
   if (typeof remember === 'function' && key) {
-    seekdeepRememberSafeV13(key, 'user', '[pending-image-subject] ' + pending.prompt);
-    seekdeepRememberSafeV13(key, 'assistant', 'Queued pending image subject.');
+    remember(key, 'user', '[pending-image-subject] ' + pending.prompt);
+    remember(key, 'assistant', 'Queued pending image subject.');
   }
   if (typeof seekdeepSetResponseModel === 'function' && typeof seekdeepNoModelLabel === 'function') {
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
@@ -8275,7 +8275,7 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
   if (!pending?.prompt) return false;
 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-pending-subject', pending.prompt);
-  if (typeof remember === 'function' && key) seekdeepRememberSafeV13(key, 'user', `[pending-image-subject] ${pending.prompt}`);
+  if (typeof remember === 'function' && key) remember(key, 'user', `[pending-image-subject] ${pending.prompt}`);
 
   const wantsOriginal = Boolean(pending.wantsOriginal);
   const wantsRefined = Boolean(pending.wantsRefined);
@@ -9256,8 +9256,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
   if (!pending?.topic && seekdeepIsResearchFollowupPrompt(p) && !seekdeepLooksLikeComparisonItemsFollowup(p)) {
     seekdeepLogRoute('research-followup-missing-context', prompt);
     const answer = 'Pros/cons of what exactly? Send the models/items again, and I will compare them instead of guessing.';
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, answer);
     return true;
@@ -9274,8 +9274,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
       searchQueryOverride: seekdeepBuildFocusedResearchSearchQuery(pending.topic, seekdeepResearchFollowupMode(p)),
     });
 
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
     await sendLongMessageReply(message, answer);
     seekdeepSetPendingResearchTask(key, { ...pending, kind: pending.kind || 'comparison', lastAnswer: answer });
@@ -9285,8 +9285,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
   if (seekdeepIsFrustrationPrompt(p)) {
     seekdeepLogRoute('frustration-recovery', prompt);
     const recovery = 'Fair. I gave a bad answer. Send the exact thing you want compared or searched and Iâ€™ll correct it with sources.';
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', recovery);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', recovery);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, recovery);
     return true;
@@ -9296,8 +9296,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
     seekdeepLogRoute('research-topic-needed', prompt);
     const answer = "Yes. Send the exact thing you want searched or compared. For product specs, generations, prices, or current info, I'll use web search instead of guessing.";
     seekdeepSetPendingResearchTask(key, { kind: 'research-topic-needed', topic: '', sourcePrompt: p });
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, answer);
     return true;
@@ -9316,8 +9316,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
         searchQueryOverride: seekdeepBuildFocusedResearchSearchQuery(pending.topic, 'table'),
       });
 
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
       seekdeepSetResponseModel(message, seekdeepChatModelLabel());
       await sendLongMessageReply(message, answer);
       seekdeepSetPendingResearchTask(key, { kind: 'table', topic: pending.topic, lastAnswer: answer });
@@ -9326,8 +9326,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
 
     const answer = 'Yes. Send the exact items/models you want compared, and Iâ€™ll make a table with sourced specs instead of guessing.';
     seekdeepSetPendingResearchTask(key, { kind: 'table-awaiting-items', topic: '', sourcePrompt: p });
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, answer);
     return true;
@@ -9347,8 +9347,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
       searchQueryOverride: seekdeepBuildFocusedResearchSearchQuery(mergedTopic, 'table'),
     });
 
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
     await sendLongMessageReply(message, answer);
     seekdeepSetPendingResearchTask(key, { kind: 'table', topic: mergedTopic, lastAnswer: answer });
@@ -9367,8 +9367,8 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
       searchQueryOverride: seekdeepBuildFocusedResearchSearchQuery(topic, 'research'),
     });
 
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
     await sendLongMessageReply(message, answer);
     seekdeepSetPendingResearchTask(key, { kind: 'comparison', topic, lastAnswer: answer });
@@ -12091,29 +12091,12 @@ function buildSearchQuery(prompt, key) {
     .trim() || priorTopic;
 }
 
-function seekdeepBuildSearchQuerySafeV15(prompt, key) {
-  return buildSearchQuery(prompt, key);
-}
-
-function seekdeepBuildPromptWithMemorySafeV14(prompt, key) {
-  return buildPromptWithMemory(prompt, key);
-}
-
-function seekdeepMemoryKeyFromSafeV13(source) {
-  return memoryKeyFrom(source);
-}
-
-function seekdeepRememberSafeV13(key, role, value) {
-  return remember(key, role, value);
-}
-
-function seekdeepGetRecentContextSafeV13(key) {
-  return getRecentContext(key);
-}
-
-function seekdeepShouldUseMemorySafeV13(prompt = '') {
-  return shouldUseMemory(prompt);
-}
+// v10.6: deleted six passthrough wrappers — buildSearchQuery,
+// buildPromptWithMemory, memoryKeyFrom,
+// remember, getRecentContext,
+// shouldUseMemory. Each was a one-liner `return realFn(...)`
+// with the un-suffixed function defined directly above. All 89 call sites
+// have been rewritten to invoke the un-suffixed functions directly.
 
 // Return the most recent 'assistant' memory entry text for this channel/user key.
 // Skips entries that are obviously status / archive / queue notices so we don't reuse
@@ -12325,7 +12308,7 @@ client.on('messageCreate', async (message) => {
   if (!seekdeepMessageAddressesBot) {
     if (typeof seekdeepPeekPendingImageSubjectRequestV2 === 'function' && seekdeepPeekPendingImageSubjectRequestV2(message)) {
       const pendingPrompt = normalizeUserText(String(message.content || ''));
-      const pendingKey = seekdeepMemoryKeyFromSafeV13(message);
+      const pendingKey = memoryKeyFrom(message);
       if (typeof seekdeepHandlePendingImageSubjectReplyV2 === 'function' && await seekdeepHandlePendingImageSubjectReplyV2(message, pendingPrompt, pendingKey)) {
         return;
       }
@@ -12405,7 +12388,7 @@ client.on('messageCreate', async (message) => {
   } catch {}
 
   try {
-    const key = seekdeepMemoryKeyFromSafeV13(message);
+    const key = memoryKeyFrom(message);
 
 	    // SEEKDEEP_REPLY_TRANSLATE_ROUTE_START
 	    if (seekdeepReplyPromptInfo?.replyTranslateRequested && seekdeepReplyPromptInfo.replyContext) {
@@ -12425,8 +12408,8 @@ client.on('messageCreate', async (message) => {
         temperature: 0.1,
       });
 
-      seekdeepRememberSafeV13(key, 'user', `[reply-translate] ${prompt}`);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', `[reply-translate] ${prompt}`);
+      remember(key, 'assistant', answer);
       seekdeepSetResponseModel(message, seekdeepChatModelLabel());
       await sendLongMessageReply(message, answer);
 	      return;
@@ -12439,8 +12422,8 @@ client.on('messageCreate', async (message) => {
 	      const askPrompt = normalizeUserText(seekdeepAskMatch[1]);
 	      seekdeepLogRoute('chat-ask', askPrompt);
 	      const answer = await askChat(askPrompt, { web: 'auto', memoryKey: key });
-	      seekdeepRememberSafeV13(key, 'user', prompt);
-	      seekdeepRememberSafeV13(key, 'assistant', answer);
+	      remember(key, 'user', prompt);
+	      remember(key, 'assistant', answer);
 	      seekdeepSetResponseModel(message, seekdeepChatModelLabel());
 	      await sendLongMessageReply(message, answer);
 	      return;
@@ -12450,8 +12433,8 @@ client.on('messageCreate', async (message) => {
 	    // SEEKDEEP_DIRECT_IMAGE_ALIAS_MESSAGE_ROUTE_START
     if (typeof seekdeepIsBareConfirmationPrompt === 'function' && seekdeepIsBareConfirmationPrompt(prompt)) {
       seekdeepLogRoute('bare-confirmation-local', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', 'No pending confirmation command is active.');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', 'No pending confirmation command is active.');
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, ['No pending confirmation command is active.', '', 'Use a full command instead:', '@SeekDeep draw me <image idea>', '@SeekDeep generate <image idea>'].join('\n'));
       return;
@@ -12462,8 +12445,8 @@ client.on('messageCreate', async (message) => {
       : '';
     if (removedArchiveCommandText) {
       seekdeepLogRoute('removed-archive-command', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', removedArchiveCommandText);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', removedArchiveCommandText);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, removedArchiveCommandText);
       return;
@@ -12496,12 +12479,12 @@ client.on('messageCreate', async (message) => {
         : ((typeof seekdeepExtractImagePrompt === 'function' ? seekdeepExtractImagePrompt(prompt) : prompt) || seekdeepMessageImageModeOptions.cleanPrompt || prompt);
       if (!seekdeepConversationalEditReplyImageContext && typeof seekdeepStripDirectImageVerb === 'function') imagePrompt = seekdeepStripDirectImageVerb(imagePrompt) || seekdeepStripDirectImageVerb(prompt) || imagePrompt;
       seekdeepLogRoute('image-direct-alias', imagePrompt);
-      seekdeepRememberSafeV13(key, 'user', '[direct-image] ' + prompt);
+      remember(key, 'user', '[direct-image] ' + prompt);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
-        seekdeepRememberSafeV13(key, 'assistant', 'Prepared image prompt choices for: ' + imagePrompt);
+        remember(key, 'assistant', 'Prepared image prompt choices for: ' + imagePrompt);
         await seekdeepSendImagePromptChoiceMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
-        seekdeepRememberSafeV13(key, 'assistant', 'Queued image locally for: ' + imagePrompt);
+        remember(key, 'assistant', 'Queued image locally for: ' + imagePrompt);
         await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       }
       return;
@@ -12523,8 +12506,8 @@ client.on('messageCreate', async (message) => {
     // Hard local commands always win before AI chat/image routing.
     if (isNaturalPongPrompt(prompt) || isExactPongTest(prompt)) {
       seekdeepLogRoute('pong', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', 'pong');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', 'pong');
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, 'pong');
       return;
@@ -12532,16 +12515,16 @@ client.on('messageCreate', async (message) => {
 
     if (utilityKind === 'post-archive') {
       seekdeepLogRoute('post-archive', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', 'Posting archive.');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', 'Posting archive.');
       await seekdeepPostArchiveFromMessage(message);
       return;
     }
 
     if (utilityKind === 'regenerate-image') {
       seekdeepLogRoute('regenerate-image', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', 'Regenerating latest cached image.');
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', 'Regenerating latest cached image.');
       await seekdeepRegenerateLatestImageFromMessage(message);
       return;
     }
@@ -12549,8 +12532,8 @@ client.on('messageCreate', async (message) => {
     if (utilityKind === 'model-status') {
       seekdeepLogRoute('model-status', prompt);
       const status = await statusText();
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', status);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', status);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, asTextBlock(status));
       return;
@@ -12558,11 +12541,11 @@ client.on('messageCreate', async (message) => {
 
     if (utilityKind) {
       seekdeepLogRoute(utilityKind, prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
+      remember(key, 'user', prompt);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
 
       if (utilityKind === 'recent-images') {
-        seekdeepRememberSafeV13(key, 'assistant', 'Posted recent images.');
+        remember(key, 'assistant', 'Posted recent images.');
         await seekdeepPostRecentImagesFromMessage(message, seekdeepRecentImagesRequestedLimit(prompt, 5, 10));
         return;
       }
@@ -12574,7 +12557,7 @@ client.on('messageCreate', async (message) => {
       } else {
         content = seekdeepUtilityText(utilityKind, message, key);
       }
-      seekdeepRememberSafeV13(key, 'assistant', content);
+      remember(key, 'assistant', content);
       if (utilityKind === 'help') {
         await sendLongMessageReply(message, content);
       } else {
@@ -12587,8 +12570,8 @@ client.on('messageCreate', async (message) => {
     const seekdeepSuggestedCommandText = typeof seekdeepCommandSuggestionText === 'function' ? seekdeepCommandSuggestionText(prompt) : '';
     if (seekdeepSuggestedCommandText) {
       seekdeepLogRoute('command-suggestion', prompt);
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', seekdeepSuggestedCommandText);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', seekdeepSuggestedCommandText);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, asTextBlock(seekdeepSuggestedCommandText));
       return;
@@ -12598,8 +12581,8 @@ client.on('messageCreate', async (message) => {
     if (isNaturalStatusPrompt(prompt) || isExplicitStatusRequest(prompt)) {
       seekdeepLogRoute('status', prompt);
       const status = await statusText();
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', status);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', status);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, asTextBlock(status));
       return;
@@ -12608,8 +12591,8 @@ client.on('messageCreate', async (message) => {
     if (isBotIdentityQuestion(prompt)) {
       seekdeepLogRoute('identity', prompt);
       const answer = botIdentityAnswer(message.client?.user?.username || client.user?.username || 'SeekDeep');
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, answer);
       return;
@@ -12634,9 +12617,9 @@ client.on('messageCreate', async (message) => {
         seekdeepLogRoute('vision-followup-cached', prompt);
         const rawPrompt = prompt;
         const cachedAttachment = { url: recent.url, contentType: recent.contentType || '', name: recent.name || 'upload' };
-        const answer = await askVision(cachedAttachment, seekdeepBuildPromptWithMemorySafeV14(rawPrompt, key));
-        seekdeepRememberSafeV13(key, 'user', `[vision-question] ${rawPrompt}`);
-        seekdeepRememberSafeV13(key, 'assistant', `[vision-description] ${answer}`);
+        const answer = await askVision(cachedAttachment, buildPromptWithMemory(rawPrompt, key));
+        remember(key, 'user', `[vision-question] ${rawPrompt}`);
+        remember(key, 'assistant', `[vision-description] ${answer}`);
         seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
         // Refresh the cache so subsequent follow-ups also work.
         seekdeepRememberRecentVisionTarget(message, recent);
@@ -12649,12 +12632,12 @@ client.on('messageCreate', async (message) => {
       seekdeepLogRoute('vision', prompt);
       try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'vision' }); } catch {}
       const rawPrompt = prompt || 'Describe this media clearly.';
-      const answer = await askVision(visionTarget.attachment, seekdeepBuildPromptWithMemorySafeV14(rawPrompt, key));
+      const answer = await askVision(visionTarget.attachment, buildPromptWithMemory(rawPrompt, key));
       // Tag both user and assistant entries with a [vision] marker so a follow-up
       // chat ("tell me about him") sees that the prior turn came from looking at
       // an actual image — the chat model can ground "him/her/it" against that.
-      seekdeepRememberSafeV13(key, 'user', `[vision-question] ${rawPrompt}`);
-      seekdeepRememberSafeV13(key, 'assistant', `[vision-description] ${answer}`);
+      remember(key, 'user', `[vision-question] ${rawPrompt}`);
+      remember(key, 'assistant', `[vision-description] ${answer}`);
       seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
       // Cache the attachment so the user can ask follow-up questions about the
       // same image without re-uploading (e.g. "tell me more about this image").
@@ -12687,8 +12670,8 @@ client.on('messageCreate', async (message) => {
         temperature: 0.1,
         maxNewTokens: 500,
       });
-      seekdeepRememberSafeV13(key, 'user', `[reply-translate] ${prompt}\n${seekdeepReplyPromptInfo.replyContext}`);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', `[reply-translate] ${prompt}\n${seekdeepReplyPromptInfo.replyContext}`);
+      remember(key, 'assistant', answer);
       seekdeepSetResponseModel(message, seekdeepChatModelLabel());
       await sendLongMessageReply(message, answer);
       return;
@@ -12729,12 +12712,12 @@ client.on('messageCreate', async (message) => {
       } catch {}
       seekdeepLogRoute('image', imagePrompt);
       try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'image' }); } catch {}
-      seekdeepRememberSafeV13(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
+      remember(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
-        seekdeepRememberSafeV13(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
+        remember(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
         await seekdeepSendImagePromptChoiceMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
-        seekdeepRememberSafeV13(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
+        remember(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
         await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       }
       return;
@@ -12763,8 +12746,8 @@ client.on('messageCreate', async (message) => {
       ? `User-specific preferences for this user:\n${userPresetLines.map((l) => '- ' + l).join('\n')}`
       : '';
     const answer = await askChat(prompt, { web: 'auto', memoryKey: key, personaOverride, system: composedSystem });
-    seekdeepRememberSafeV13(key, 'user', prompt);
-    seekdeepRememberSafeV13(key, 'assistant', answer);
+    remember(key, 'user', prompt);
+    remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
     try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'chat' }); } catch {}
     await sendLongMessageReply(message, answer);
@@ -13435,7 +13418,7 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
     seekdeepLogRoute('context-menu-refine', prompt);
   }
 
-  const key = typeof seekdeepMemoryKeyFromSafeV13 === 'function' ? seekdeepMemoryKeyFromSafeV13(interaction) : null;
+  const key = typeof memoryKeyFrom === 'function' ? memoryKeyFrom(interaction) : null;
   const refineInput = buildRefineUserPrompt(prompt, key);
   const maxNewTokens = maxTokensForRefine(prompt);
   const temperature = Number(process.env.REFINE_TEMPERATURE || 0.72);
@@ -14010,7 +13993,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (['help', 'cachestatus', 'archivestatus', 'recent'].includes(commandName)) {
       if (!(await safeDefer(interaction))) return;
-      const key = seekdeepMemoryKeyFromSafeV13(interaction);
+      const key = memoryKeyFrom(interaction);
       let kind = commandName;
 
       if (commandName === 'cachestatus') kind = 'cache';
@@ -14171,11 +14154,11 @@ client.on('interactionCreate', async (interaction) => {
       if (!(await safeDefer(interaction))) return;
       const prompt = normalizeUserText(interaction.options.getString('prompt', true));
       const web = interaction.options.getString('web') || 'auto';
-      const key = seekdeepMemoryKeyFromSafeV13(interaction);
+      const key = memoryKeyFrom(interaction);
       const answer = await askChat(prompt, { web, memoryKey: key });
       seekdeepSetResponseModel(interaction, seekdeepChatModelLabel());
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
       await sendLongInteractionReply(interaction, answer);
       return;
     }
@@ -14184,7 +14167,7 @@ client.on('interactionCreate', async (interaction) => {
       if (!(await safeDefer(interaction))) return;
 
       const prompt = normalizeUserText(interaction.options.getString('prompt', true));
-      const key = seekdeepMemoryKeyFromSafeV13(interaction);
+      const key = memoryKeyFrom(interaction);
 
       // /refine is for image prompts. If the input doesn't look like an image prompt
       // (no visual intent, no subject), refuse with guidance so we don't waste a chat
@@ -14245,8 +14228,8 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       seekdeepSetResponseModel(interaction, seekdeepChatModelLabel());
-      seekdeepRememberSafeV13(key, 'user', prompt);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
       await sendLongInteractionReply(interaction, answer);
       return;
     }
@@ -14254,7 +14237,7 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'image') {
       if (!(await safeDefer(interaction))) return;
       const prompt = normalizeUserText(interaction.options.getString('prompt', true));
-      const key = seekdeepMemoryKeyFromSafeV13(interaction);
+      const key = memoryKeyFrom(interaction);
       const width = interaction.options.getInteger('width') || 1024;
       const height = interaction.options.getInteger('height') || 1024;
       const seed = interaction.options.getInteger('seed');
@@ -14276,13 +14259,13 @@ client.on('interactionCreate', async (interaction) => {
       }
       const cleanImagePrompt = seekdeepImageModeOptions.cleanPrompt || prompt;
 
-      seekdeepRememberSafeV13(key, 'user', `/image ${prompt}`);
+      remember(key, 'user', `/image ${prompt}`);
 
       if (seekdeepShouldUsePromptChoicePreview(seekdeepImageModeOptions)) {
-        seekdeepRememberSafeV13(key, 'assistant', `Prepared image prompt choices for: ${cleanImagePrompt}`);
+        remember(key, 'assistant', `Prepared image prompt choices for: ${cleanImagePrompt}`);
         await seekdeepSendImagePromptChoiceInteraction(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
       } else {
-        seekdeepRememberSafeV13(key, 'assistant', `Generated image locally for: ${cleanImagePrompt}`);
+        remember(key, 'assistant', `Generated image locally for: ${cleanImagePrompt}`);
         await seekdeepSendImageWithButtonsInteraction(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
       }
       return;
@@ -14292,11 +14275,11 @@ client.on('interactionCreate', async (interaction) => {
       if (!(await safeDefer(interaction))) return;
       const attachment = interaction.options.getAttachment('file', true);
       const prompt = normalizeUserText(interaction.options.getString('prompt') || 'Describe this media clearly.');
-      const key = seekdeepMemoryKeyFromSafeV13(interaction);
-      const answer = await askVision(attachment, seekdeepBuildPromptWithMemorySafeV14(prompt, key));
+      const key = memoryKeyFrom(interaction);
+      const answer = await askVision(attachment, buildPromptWithMemory(prompt, key));
       seekdeepSetResponseModel(interaction, seekdeepVisionModelLabel());
-      seekdeepRememberSafeV13(key, 'user', `/vision ${prompt}`);
-      seekdeepRememberSafeV13(key, 'assistant', answer);
+      remember(key, 'user', `/vision ${prompt}`);
+      remember(key, 'assistant', answer);
       await sendLongInteractionReply(interaction, answer);
       return;
     }
