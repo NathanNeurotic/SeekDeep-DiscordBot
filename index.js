@@ -2651,7 +2651,17 @@ function seekdeepDynamicImagePromptLooksGeneric(originalPrompt = '', candidatePr
   return genericCount >= 2 && candidate.length < original.length + 90;
 }
 
-function seekdeepCleanDynamicImagePrompt(text = '', originalPrompt = '') {
+// v10.13: returns { value: string, reason: string }. `value` is empty string
+// when the candidate was rejected; `reason` documents why (so the caller can
+// log it for debugging — previously the rejection was silent and we'd just
+// see "Refinement Source: static rules after AI refinement was unavailable"
+// with no clue which validator killed it).
+//
+// Also: preamble-stripper for benign conversational openers that small chat
+// models add even when answering correctly (e.g. "Sure, here's the refined
+// image prompt: ..."). Previously the refusal-detector regex was too
+// trigger-happy on these.
+function seekdeepCleanDynamicImagePromptDetailed(text = '', originalPrompt = '') {
   let out = cleanupRefinedPrompt(cleanupAssistantReply(text));
 
   out = out
@@ -2661,13 +2671,43 @@ function seekdeepCleanDynamicImagePrompt(text = '', originalPrompt = '') {
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
 
-  if (!out) return '';
-  if (/^(?:i can|i cannot|i can't|sorry|sure|here(?:'s| is)|okay)\b/i.test(out)) return '';
-  if (out.length > SEEKDEEP_IMAGE_PROMPT_MAX_CHARS) out = out.slice(0, SEEKDEEP_IMAGE_PROMPT_MAX_CHARS).replace(/[,;:\s]+$/g, '').trim();
-  if (!seekdeepDynamicImagePromptPreservesSubject(originalPrompt, out)) return '';
-  if (seekdeepDynamicImagePromptLooksGeneric(originalPrompt, out)) return '';
+  if (!out) return { value: '', reason: 'empty-after-cleanup' };
 
-  return out;
+  // Strip benign conversational preamble BEFORE the refusal check. Small
+  // models often answer correctly but lead with "Sure, here's the refined
+  // image prompt:" — we shouldn't reject a real refinement just because it
+  // wore a polite hat. Real refusals ("I can't help with that", "Sorry, I
+  // won't do that") survive this strip because they don't fit the
+  // <opener><separator><payload> shape.
+  const preambleMatch = out.match(/^(?:sure|okay|ok|alright|got\s+it|yes|yep|absolutely|of\s+course|here\s+(?:is|are|'s)|here\s+you\s+(?:go|are))\b[\s,.:;!\-—]*(.*)$/i);
+  if (preambleMatch && preambleMatch[1] && preambleMatch[1].trim().length >= Math.max(8, Math.ceil(originalPrompt.length / 2))) {
+    // Strip a second-pass "Here's the refined prompt:" / "Here is the prompt:"
+    // header that often follows the polite opener.
+    out = preambleMatch[1]
+      .replace(/^\s*(?:here(?:'s| is)|the)?\s*(?:refined|final|new|updated)?\s*(?:image\s+)?prompt\s*[:\-]\s*/i, '')
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .trim();
+    if (!out) return { value: '', reason: 'empty-after-preamble-strip' };
+  }
+
+  // Real refusal detector — runs on the post-preamble text so only genuine
+  // refusals are caught.
+  if (/^(?:i\s+(?:can(?:not|'t)?|won't|will\s+not|don't|refuse)|sorry|unfortunately|as\s+an?\s+ai)\b/i.test(out)) {
+    return { value: '', reason: 'refusal-detected' };
+  }
+
+  if (out.length > SEEKDEEP_IMAGE_PROMPT_MAX_CHARS) out = out.slice(0, SEEKDEEP_IMAGE_PROMPT_MAX_CHARS).replace(/[,;:\s]+$/g, '').trim();
+  if (!seekdeepDynamicImagePromptPreservesSubject(originalPrompt, out)) return { value: '', reason: 'subject-not-preserved' };
+  if (seekdeepDynamicImagePromptLooksGeneric(originalPrompt, out)) return { value: '', reason: 'too-generic' };
+
+  return { value: out, reason: 'ok' };
+}
+
+// Backward-compat thin wrapper: callers that just want the string value can
+// keep using seekdeepCleanDynamicImagePrompt. The detailed variant above is
+// for the refinement pipeline that wants to log the rejection reason.
+function seekdeepCleanDynamicImagePrompt(text = '', originalPrompt = '') {
+  return seekdeepCleanDynamicImagePromptDetailed(text, originalPrompt).value;
 }
 
 // Memoize dynamic image-prompt refinement keyed on the normalized original prompt.
@@ -2742,12 +2782,20 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
       { timeoutMs: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS, modelRole: 'default_chat' }
     );
 
-    const refinedPrompt = seekdeepCleanDynamicImagePrompt(answer, originalPrompt);
+    const cleaned = seekdeepCleanDynamicImagePromptDetailed(answer, originalPrompt);
+    const refinedPrompt = cleaned.value;
     if (!refinedPrompt) {
+      // v10.13: emit the exact rejection reason + a model-output excerpt so
+      // future "Refinement Source: static rules after AI refinement was
+      // unavailable" messages have a debug trail in the bot console / log.
+      const rawExcerpt = String(answer || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      console.warn(
+        `[SeekDeep] dynamic refine rejected (${cleaned.reason}) for ${JSON.stringify(originalPrompt.slice(0, 80))} -> ${JSON.stringify(rawExcerpt)}`,
+      );
       return {
         ...fallback,
         dynamicRefinementAttempted: true,
-        dynamicRefinementError: 'empty-or-rejected-output',
+        dynamicRefinementError: cleaned.reason || 'empty-or-rejected-output',
       };
     }
 
@@ -14476,6 +14524,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepFormatGpuBar,
     seekdeepFormatGpuStats,
     seekdeepParseGpuWatchInterval,
+    // v10.13: image-prompt refine cleaner (with detailed rejection reasons)
+    seekdeepCleanDynamicImagePromptDetailed,
     // Force-react picker constants (so tests can read them without re-declaring)
     forceReactConstants: {
       bucketSize: SEEKDEEP_FORCE_REACT_BUCKET_SIZE,

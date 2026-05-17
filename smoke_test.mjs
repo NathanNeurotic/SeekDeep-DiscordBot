@@ -247,6 +247,67 @@ check('gpu watch: "vram watch 10" -> 10', T.seekdeepParseGpuWatchInterval('vram 
 check('gpu watch: "gpu watch 1" clamps to 2', T.seekdeepParseGpuWatchInterval('gpu watch 1') === 2);
 check('gpu watch: "gpu watch 999" clamps to 60', T.seekdeepParseGpuWatchInterval('gpu watch 999') === 60);
 
+// v10.13: dynamic image-prompt cleaner regressions
+console.log('16. Dynamic image-prompt refine cleaner (real seekdeepCleanDynamicImagePromptDetailed).');
+const clean = T.seekdeepCleanDynamicImagePromptDetailed;
+
+// The actual case from the bot report: "a vanilla ant colony" + benign opener.
+const realCase = clean(
+  "Sure, here's the refined image prompt: a vanilla ant colony with translucent amber tunnels, soft macro lighting, hyper-detailed",
+  'a vanilla ant colony',
+);
+check('cleaner: strips "Sure, here\'s..." preamble', realCase.reason === 'ok' && /vanilla ant colony/i.test(realCase.value));
+
+const realCase2 = clean(
+  "Here is the refined prompt: a brass lantern in a foggy forest, cinematic light shafts, painterly, 4k",
+  'a brass lantern in a foggy forest',
+);
+check('cleaner: strips "Here is the refined prompt:" preamble', realCase2.reason === 'ok');
+
+const realCase3 = clean(
+  "Okay! a serene mountain lake at dawn, mirror-still water, alpenglow on peaks",
+  'a serene mountain lake at dawn',
+);
+check('cleaner: strips "Okay!" preamble', realCase3.reason === 'ok');
+
+// Real refusal — must still be rejected.
+const refusal = clean(
+  "I can't help with that request.",
+  'something benign',
+);
+check('cleaner: actual refusal still rejected', refusal.reason === 'refusal-detected');
+
+const refusalApology = clean(
+  'Sorry, I cannot produce content of that nature.',
+  'something benign',
+);
+check('cleaner: "Sorry, I cannot..." rejected', refusalApology.reason === 'refusal-detected');
+
+// Empty output is still rejected.
+const empty = clean('   \n\n  ', 'a banana');
+check('cleaner: empty output rejected', empty.reason === 'empty-after-cleanup');
+
+// Subject not preserved -> rejected.
+const lostSubject = clean(
+  'a vast oil painting of waves crashing at sunset',
+  'a vanilla ant colony',
+);
+check('cleaner: subject-not-preserved is detected', lostSubject.reason === 'subject-not-preserved');
+
+// Too generic -> rejected.
+const genericOutput = clean(
+  'a banana, stylized illustration, clear details, expressive subject, beautiful composition',
+  'a banana',
+);
+check('cleaner: generic-only refine rejected', genericOutput.reason === 'too-generic');
+
+// Reason field is always present and non-empty.
+check('cleaner: success has reason="ok"', realCase.reason === 'ok');
+check('cleaner: reason field is always a non-empty string',
+  typeof realCase.reason === 'string' && realCase.reason.length > 0 &&
+  typeof refusal.reason === 'string' && refusal.reason.length > 0,
+);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
