@@ -300,10 +300,6 @@ function seekdeepChatModelLabel() {
   return seekdeepLastChatModelId || process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B';
 }
 
-function seekdeepDefaultChatModelLabel() {
-  return process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B';
-}
-
 function seekdeepVisionModelLabel() {
   return process.env.LOCAL_VISION_MODEL_ID || 'Qwen/Qwen2.5-VL-3B-Instruct';
 }
@@ -788,6 +784,44 @@ function splitDiscordTextPlain(raw, limit) {
   return chunks.length ? chunks : [''];
 }
 
+// v10.5: fetch helper with two safety layers for user-supplied URLs (Discord
+// attachment downloads, etc.). Audit flagged the raw `await fetch(attachment.url)`
+// sites as missing timeouts and size caps — a hostile or malformed upload could
+// stall the handler or exhaust memory.
+//
+// 1. AbortController-based timeout (default 30s).
+// 2. Pre-check of `Content-Length` header; if present and > maxBytes, reject
+//    before consuming the body. This isn't bulletproof (a server can lie or
+//    omit the header) but it stops the obvious abuse case cheaply.
+//
+// Returns the raw Response. Caller still does `.arrayBuffer()` / `.text()` etc.
+const SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS = Number(process.env.SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS || 30000);
+const SEEKDEEP_FETCH_DEFAULT_MAX_BYTES = Number(process.env.SEEKDEEP_FETCH_DEFAULT_MAX_BYTES || 50 * 1024 * 1024);
+
+async function seekdeepFetchWithLimits(url, options = {}) {
+  const {
+    timeoutMs = SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS,
+    maxBytes = SEEKDEEP_FETCH_DEFAULT_MAX_BYTES,
+    ...rest
+  } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  try {
+    const res = await fetch(url, { ...rest, signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+    }
+    const cl = Number(res.headers?.get?.('content-length') || 0);
+    if (Number.isFinite(cl) && cl > 0 && cl > maxBytes) {
+      controller.abort();
+      throw new Error(`Attachment too large: ${cl} bytes > ${maxBytes} byte cap`);
+    }
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
 const SEEKDEEP_FINAL_REPLY_TTL_MS = Number(process.env.SEEKDEEP_FINAL_REPLY_TTL_MS || 180000);
@@ -924,13 +958,6 @@ const client = new Client({
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 });
-
-function clampText(text, limit = MAX_DISCORD_CHARS) {
-  if (!text) return '';
-  if (text.length <= limit) return text;
-  return text.slice(0, Math.max(0, limit - 20)) + '\n\n[truncated]';
-}
-
 
 // SEEKDEEP_NORMALIZE_USER_TEXT_REPAIR_V12_START
 function normalizeUserText(text = '') {
@@ -1796,8 +1823,10 @@ function seekdeepTrimVisionBoilerplate(text = '') {
 }
 
 async function askVision(attachment, prompt) {
-  const res = await fetch(attachment.url);
-  if (!res.ok) throw new Error(`Could not download attachment: ${res.status} ${res.statusText}`);
+  // Vision attachments are typically <10 MB images/short videos. Use the
+  // shared helper so a hostile or stuck attachment URL can't hang the
+  // worker indefinitely.
+  const res = await seekdeepFetchWithLimits(attachment.url, { timeoutMs: 60000 });
   const buf = Buffer.from(await res.arrayBuffer());
   const b64 = buf.toString('base64');
   const contentType = attachment.contentType || '';
@@ -1836,19 +1865,6 @@ function seekdeepNewImageActionId() {
   seekdeepSweepImageActions();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
-
-function seekdeepRememberImageAction(state) {
-  const id = seekdeepNewImageActionId();
-
-  SEEKDEEP_IMAGE_ACTIONS.set(id, {
-    ...state,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + SEEKDEEP_IMAGE_ACTION_TTL_MS,
-  });
-
-  return id;
-}
-
 
 // SEEKDEEP_ARCHIVE_GUILD_SCOPE_START
 
@@ -1901,15 +1917,6 @@ function seekdeepArchiveScopedKey(target = null, key = '') {
   return `${scope}:${cleanKey}`;
 }
 
-function seekdeepArchiveUserScopedKey(target = null, userId = '') {
-  const uid = String(userId || target?.user?.id || target?.author?.id || 'unknown');
-  return seekdeepArchiveScopedKey(target, `user:${uid}`);
-}
-
-function seekdeepArchiveThreadScopedKey(target = null, userId = '') {
-  const uid = String(userId || target?.user?.id || target?.author?.id || 'unknown');
-  return seekdeepArchiveScopedKey(target, `thread:${uid}`);
-}
 // SEEKDEEP_ARCHIVE_GUILD_SCOPE_END
 
 
@@ -1951,34 +1958,6 @@ function seekdeepImageActionComponents(actionId, downloadUrl = null) {
 
   return [primary, new ActionRowBuilder().addComponents(...secondaryButtons)];
 }
-
-function seekdeepImageActionRow(actionId, downloadUrl = null) {
-  // Backward-compatible fallback for old callers. New message sends should use seekdeepImageActionComponents(...).
-  const buttons = [
-    new ButtonBuilder()
-      .setCustomId(`seekdeep:regen:original:${actionId}`)
-      .setLabel('Original')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId(`seekdeep:regen:refined:${actionId}`)
-      .setLabel('Refined')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`seekdeep:regen:both:${actionId}`)
-      .setLabel('Both')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`seekdeep:archive:${actionId}`)
-      .setLabel('Archive')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`seekdeep:sharedarchive:${actionId}`)
-      .setLabel('Shared Archive')
-      .setStyle(ButtonStyle.Primary),
-  ];
-  return new ActionRowBuilder().addComponents(...buttons);
-}
-
 
 // SEEKDEEP_PREGEN_PROMPT_CHOICE_START
 const SEEKDEEP_PENDING_IMAGE_PROMPTS = globalThis.__seekdeepPendingImagePrompts || new Map();
@@ -2970,12 +2949,6 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
   };
 }
 
-async function makeImage(prompt, width = 1024, height = 1024, seed = null) {
-  const result = await makeImageResult(prompt, width, height, seed, {});
-  return result.file;
-}
-
-
 // SEEKDEEP_TEMP_IMAGE_CACHE_START
 const seekdeepTempImageStateIndex = globalThis.__seekdeepTempImageStateIndex || new Map();
 globalThis.__seekdeepTempImageStateIndex = seekdeepTempImageStateIndex;
@@ -3214,10 +3187,6 @@ if (typeof __seekdeepImageCacheSweepTimer?.unref === 'function') {
   __seekdeepImageCacheSweepTimer.unref();
 }
 // SEEKDEEP_TEMP_IMAGE_CACHE_END
-
-function seekdeepArchiveImageStateToDisk(state) {
-  throw new Error('Disk archive storage is disabled. Configure Discord thread archive storage and retry.');
-}
 
 // SEEKDEEP_IMAGE_QUEUE_START
 const seekdeepImageQueueState = globalThis.__seekdeepImageQueueState || {
@@ -4804,23 +4773,6 @@ async function seekdeepArchiveThreadResolveCountFromThread(thread, profile = {})
   if (!scan.ok) return { count: trusted, trusted, scannedCount: 0, scannedMessages: scan.scanned || 0, scanOk: false, reason: scan.reason || '' };
   const resolved = scan.ok ? Math.max(0, Number(scan.count || 0) || 0) : trusted;
   return { count: resolved, trusted, scannedCount: scan.count, scannedMessages: scan.scanned || 0, scanOk: true };
-}
-
-function seekdeepArchiveMakeUserTargetFromMessage(message, user) {
-  const targetUser = user || message?.author || message?.user || null;
-  const member = targetUser?.id && message?.guild?.members?.cache?.get
-    ? (message.guild.members.cache.get(targetUser.id) || null)
-    : null;
-  return {
-    guild: message?.guild || null,
-    guildId: message?.guild?.id || '',
-    channel: message?.channel || null,
-    client: message?.client || null,
-    message,
-    author: targetUser,
-    user: targetUser,
-    member: member || (targetUser ? { user: targetUser, displayName: targetUser.globalName || targetUser.username || targetUser.id } : null),
-  };
 }
 
 async function seekdeepFindUserArchiveThreadWithoutCreate(channel, target, user, subject, profile = {}) {
@@ -8025,34 +7977,6 @@ function seekdeepExtractImagePrompt(text = '') {
   return t;
 }
 
-async function seekdeepInferNaturalRoute(message, prompt) {
-  const cleanPrompt = normalizeUserText(prompt || '');
-  const directVisual = seekdeepFirstVisualAttachment(message);
-  const replyVisual = await seekdeepGetReplyVisualAttachment(message);
-  const visualAttachment = directVisual || replyVisual || null;
-
-  if (visualAttachment && seekdeepLooksLikeVisionPrompt(cleanPrompt)) {
-    return {
-      route: 'vision',
-      prompt: cleanPrompt || 'Describe this media clearly.',
-      attachment: visualAttachment,
-    };
-  }
-
-  if (seekdeepLooksLikeImagePrompt(cleanPrompt)) {
-    return {
-      route: 'image',
-      prompt: seekdeepExtractImagePrompt(cleanPrompt) || cleanPrompt,
-      attachment: null,
-    };
-  }
-
-  return {
-    route: 'chat',
-    prompt: cleanPrompt,
-    attachment: null,
-  };
-}
 // SEEKDEEP_NATURAL_ROUTING_END
 
 
@@ -8853,42 +8777,8 @@ const SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS = new Set([
   '.avif',
 ]);
 
-function seekdeepArchiveDir(target = null) 
-{
-  const scopeDir = seekdeepSanitizeArchiveScopeKey(seekdeepGuildArchiveScopeFromTarget(target));
-  const base = seekdeepArchiveDirForTarget(seekdeepArchiveTargetFallback(typeof archiveTarget !== 'undefined' ? archiveTarget : null));
-  fs.mkdirSync(base, { recursive: true });
-  return base;
-}
-
 function isPostArchivePrompt(prompt = '') {
   return false;
-}
-
-function seekdeepListArchiveImageFiles() {
-  const dir = seekdeepArchiveDirForTarget(seekdeepArchiveTargetFallback(typeof archiveTarget !== 'undefined' ? archiveTarget : null));
-
-  if (!fs.existsSync(dir)) return [];
-
-  return fs.readdirSync(dir)
-    .map((name) => {
-      const fullPath = path.join(dir, name);
-      const stat = fs.statSync(fullPath);
-      return { name, fullPath, stat };
-    })
-    .filter((entry) => entry.stat.isFile())
-    .filter((entry) => SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function seekdeepArchiveBatches(files, size = 10) {
-  const batches = [];
-
-  for (let i = 0; i < files.length; i += size) {
-    batches.push(files.slice(i, i + size));
-  }
-
-  return batches;
 }
 
 async function seekdeepPostArchiveToChannel(channel) {
@@ -8953,13 +8843,6 @@ async function seekdeepPostArchiveFromInteraction(interaction) {
 // If you need migration, copy old records into the relevant guild:<guildId> scope manually.
 // SEEKDEEP_ARCHIVE_GUILD_SCOPE_MIGRATION_NOTE_END
 
-function seekdeepArchiveScopeLabel(target = null) {
-  const scope = seekdeepGuildArchiveScopeFromTarget(target);
-  if (scope.startsWith('guild:')) return 'this server';
-  if (scope.startsWith('dm:')) return 'this DM';
-  return 'current archive scope';
-}
-
 function seekdeepArchiveDirForTarget(target = null) {
   const scopeDir = seekdeepSanitizeArchiveScopeKey(seekdeepGuildArchiveScopeFromTarget(target));
   const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
@@ -8969,13 +8852,6 @@ function seekdeepArchiveDirForTarget(target = null) {
   } catch {}
   return out;
 }
-
-function seekdeepRedactArchivePathForDiscord(value = '') {
-  return String(value || '')
-    .replace(/[A-Z]:\\[^\n\r`]+/gi, '[local archive path hidden]')
-    .replace(/\/(?:home|Users|mnt|var|tmp)\/[^\n\r`]+/gi, '[local archive path hidden]');
-}
-
 
 function seekdeepIsPrivilegedArchiveCommand(commandName = '') {
   return /^(?:purgearchive|setarchive|archiveconfig|archiveadmin|cleararchive)$/i.test(String(commandName || ''));
@@ -9604,23 +9480,6 @@ async function seekdeepResolveReplyContextText(message) {
   }
 }
 
-function seekdeepLooksLikeReplyVisualPrompt(replyText = '') {
-  const p = normalizeUserText(replyText).trim();
-  if (!p) return false;
-
-  // Do not treat obvious text/research/translation content as an image prompt.
-  if (typeof seekdeepShouldKeepPromptAsChatBeforeImage === 'function' && seekdeepShouldKeepPromptAsChatBeforeImage(p)) return false;
-  if (/\b(translate|translation|what does this mean|explain|why|how|when|where|who|what|search|internet|web|table|code|script|powershell)\b/i.test(p)) return false;
-
-  // Use current image route detectors when available.
-  if (typeof seekdeepLooksLikeShortNamedVisualSubject === 'function' && seekdeepLooksLikeShortNamedVisualSubject(p)) return true;
-  if (typeof seekdeepLooksLikeGroundableVisualSubject === 'function' && seekdeepLooksLikeGroundableVisualSubject(p)) return true;
-  if (typeof seekdeepLooksLikeVisualRequest === 'function' && seekdeepLooksLikeVisualRequest(p)) return true;
-  if (typeof isNaturalImagePrompt === 'function' && isNaturalImagePrompt(p)) return true;
-
-  return false;
-}
-
 function seekdeepIsReplyTranslationRequest(prompt = '') {
   const p = normalizeUserText(prompt).toLowerCase().trim();
   return /^(translate|translation)\b/.test(p) || /\btranslate\s+(this|that|it|message|reply)\s+(to|into)\s+english\b/.test(p) || /^what\s+does\s+this\s+say\s+in\s+english\b/.test(p);
@@ -9845,109 +9704,6 @@ async function seekdeepArchiveTrustedOrBackfilledCount(thread, profile = {}) {
 }
 // SEEKDEEP_ARCHIVE_STATUS_TARGET_ROUTE_V2_END
 
-function seekdeepArchiveStatusTargetFallback(target = null) {
-  if (target) return target;
-  if (typeof interaction !== 'undefined' && interaction) return interaction;
-  if (typeof message !== 'undefined' && message) return message;
-  return {};
-}
-
-function seekdeepArchiveScopeLabelForTarget(target = null) {
-  const safeTarget = seekdeepArchiveStatusTargetFallback(target);
-  if (safeTarget?.guild?.id || safeTarget?.guildId || safeTarget?.message?.guild?.id || safeTarget?.message?.guildId) {
-    return 'this server';
-  }
-  return 'this DM';
-}
-
-function seekdeepArchiveDirForStatusTarget(target = null) {
-  const safeTarget = seekdeepArchiveStatusTargetFallback(target);
-
-  if (typeof seekdeepArchiveDirForTarget === 'function') {
-    return seekdeepArchiveDirForTarget(safeTarget);
-  }
-
-  const guildId = safeTarget?.guild?.id || safeTarget?.guildId || safeTarget?.message?.guild?.id || safeTarget?.message?.guildId || '';
-  const userId = safeTarget?.author?.id || safeTarget?.user?.id || safeTarget?.member?.user?.id || 'unknown';
-  const scope = guildId ? `guild-${guildId}` : `dm-${userId}`;
-  const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-  const dir = path.join(baseDir, 'saved_generations', 'archives', scope);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch {}
-  return dir;
-}
-
-function seekdeepFormatBytesCompact(bytes = 0) {
-  const n = Number(bytes || 0);
-  if (!Number.isFinite(n) || n <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = n;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-function seekdeepLocalArchiveStatsForTarget(target = null) {
-  const safeTarget = target || {};
-  const guildId = safeTarget?.guild?.id || safeTarget?.guildId || safeTarget?.message?.guild?.id || safeTarget?.message?.guildId || '';
-  const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
-  const dirs = [];
-
-  if (guildId) {
-    dirs.push(path.join(baseDir, 'saved_generations', 'archives', `guild-${guildId}`));
-  }
-
-  dirs.push(path.join(baseDir, 'saved_generations', 'archives'));
-  dirs.push(path.join(baseDir, 'saved_generations'));
-
-  const seen = new Set();
-  const stats = {
-    files: 0,
-    images: 0,
-    metadata: 0,
-    migratedMarkers: 0,
-    bytes: 0,
-    newest: null,
-  };
-
-  for (const dir of dirs) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      for (const name of fs.readdirSync(dir)) {
-        const fullPath = path.join(dir, name);
-        if (seen.has(fullPath)) continue;
-        seen.add(fullPath);
-
-        let stat = null;
-        try {
-          stat = fs.statSync(fullPath);
-        } catch {}
-
-        if (!stat || !stat.isFile()) continue;
-
-        stats.files += 1;
-        stats.bytes += Number(stat.size || 0);
-
-        if (/\.(?:png|jpe?g|webp|gif)$/i.test(name)) stats.images += 1;
-        if (/\.json$/i.test(name)) stats.metadata += 1;
-        if (/\.discord-thread-migrated$/i.test(name)) stats.migratedMarkers += 1;
-
-        if (!stats.newest || Number(stat.mtimeMs || 0) > Number(stats.newest.mtimeMs || 0)) {
-          stats.newest = { name, mtimeMs: stat.mtimeMs };
-        }
-      }
-    } catch (err) {
-      console.warn('SeekDeep local archive stats scan failed:', err?.message || err);
-    }
-  }
-
-  return stats;
-}
-
 async function seekdeepFindArchiveThreadByName(channel, threadName) {
   if (!channel?.threads) return null;
 
@@ -10146,14 +9902,6 @@ async function seekdeepHandleArchiveOpenMessage(message, prompt = '') {
   });
 
   return true;
-}
-
-function seekdeepBuildArchiveStatusReport(target = null) {
-  return [
-    'Image archive status',
-    'Archive storage uses Discord threads only.',
-    'Use `@SeekDeep archive status` or `/archivestatus` for live thread status.',
-  ].join('\n');
 }
 
 // SEEKDEEP_RECENT_ARCHIVE_REPORT_START
@@ -11130,7 +10878,9 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       return true;
     }
     try {
-      const res = await fetch(attachment.url);
+      // ReactRule import JSON is tiny (KB-scale). Cap at 1 MB to keep
+      // malformed/oversized files from hanging the handler.
+      const res = await seekdeepFetchWithLimits(attachment.url, { timeoutMs: 15000, maxBytes: 1024 * 1024 });
       const text = await res.text();
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed.rules)) {
@@ -11326,7 +11076,7 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
   if (sub === 'list') {
     const lines = [`Custom emojis (${allEmojis.length}):`, ...allEmojis.slice(0, 100).map((e, i) => `${i + 1}. :${e.name}: (${e.animated ? 'animated' : 'static'})`)];
     if (allEmojis.length > 100) lines.push(`... and ${allEmojis.length - 100} more.`);
-    await message.reply({ content: lines.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } });
+    await message.reply({ content: lines.join('\n').slice(0, MAX_DISCORD_CHARS), allowedMentions: { repliedUser: false } });
     return true;
   }
 
@@ -11448,7 +11198,10 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
     const failures = [];
 
     try {
-      const res = await fetch(attachment.url);
+      // Emoji vault imports can be JSON manifests (tiny) or ZIPs (up to ~24 MB
+      // — see SEEKDEEP_EMOJI_VAULT_MAX_BYTES). Cap at 32 MB to give a little
+      // headroom over the export cap.
+      const res = await seekdeepFetchWithLimits(attachment.url, { timeoutMs: 60000, maxBytes: 32 * 1024 * 1024 });
       const ab = await res.arrayBuffer();
 
       if (isZip) {
@@ -11499,8 +11252,8 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
 
     const summary = [`Done. Added ${added}, skipped ${skipped}, failed ${failed}.`];
     if (failures.length) summary.push('Failures (first 10):', ...failures.slice(0, 10).map((f) => '  ' + f));
-    try { await status.edit({ content: summary.join('\n').slice(0, 1900) }); }
-    catch { await message.reply({ content: summary.join('\n').slice(0, 1900), allowedMentions: { repliedUser: false } }); }
+    try { await status.edit({ content: summary.join('\n').slice(0, MAX_DISCORD_CHARS) }); }
+    catch { await message.reply({ content: summary.join('\n').slice(0, MAX_DISCORD_CHARS), allowedMentions: { repliedUser: false } }); }
     return true;
   }
 
@@ -11841,31 +11594,6 @@ async function seekdeepScanThreadArchiveEntryStats(thread, marker = 'SeekDeep Sh
   return stats;
 }
 
-async function seekdeepScanThreadArchiveEntryCount(thread, marker = 'SeekDeep Shared Archive Entry') {
-  const stats = await seekdeepScanThreadArchiveEntryStats(thread, marker);
-  return stats.ok ? stats.count : 0;
-}
-
-async function seekdeepFindSharedArchiveThreadForStatus(channel, guild = null) {
-  if (!channel) return null;
-  const guildId = String(guild?.id || channel?.guild?.id || '').trim();
-  const profile = guildId ? seekdeepSharedArchiveGetProfile(guildId) : {};
-  const desiredPrefix = seekdeepSharedArchiveThreadBuildName(0).replace(/\s+0$/, '');
-  const findCandidate = (threads) => threads?.find?.((thread) => {
-    const name = String(thread?.name || '');
-    return (profile.threadId && thread?.id === profile.threadId) || name === 'Shared' || name.startsWith(desiredPrefix);
-  }) || null;
-
-  const active = await channel.threads.fetchActive().catch(() => null);
-  let thread = findCandidate(active?.threads);
-  if (thread) return thread;
-
-  const archivedPublic = await channel.threads.fetchArchived({ type: 'public' }).catch(() => null);
-  thread = findCandidate(archivedPublic?.threads);
-  if (thread?.archived) await thread.setArchived(false, 'SeekDeep shared archive lookup').catch(() => null);
-  return thread || null;
-}
-
 async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
   const thread = archiveInfo?.thread || null;
   const guildId = String(thread?.guild?.id || thread?.parent?.guild?.id || archiveInfo?.channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
@@ -12193,10 +11921,6 @@ const SEEKDEEP_MEMORY_COMPAT_STORE_V13 = globalThis.__seekdeepMemoryCompatStoreV
 globalThis.__seekdeepMemoryCompatStoreV13 = SEEKDEEP_MEMORY_COMPAT_STORE_V13;
 
 function seekdeepNormalizeUserTextSafeV12(value = '') {
-  return normalizeUserText(value);
-}
-
-function seekdeepMemoryNormalizeSafeV13(value = '') {
   return normalizeUserText(value);
 }
 
@@ -13168,7 +12892,7 @@ async function seekdeepSharedArchiveButtonAckV4(interaction) {
 }
 
 async function seekdeepSharedArchiveButtonRespondV4(interaction, content) {
-  const payload = { content: String(content || '').slice(0, 1900), allowedMentions: { parse: [] } };
+  const payload = { content: String(content || '').slice(0, MAX_DISCORD_CHARS), allowedMentions: { parse: [] } };
   try {
     if (interaction?.deferred) return await interaction.editReply(payload);
     if (interaction?.replied) return await interaction.followUp({ ...payload, ephemeral: true });
@@ -13295,7 +13019,7 @@ async function seekdeepSharedArchiveButtonManualArchiveV4(interaction) {
     'Prompt: ' + prompt,
     'Images: ' + files.length,
     'Archived: ' + archivedAt,
-  ].join('\n').slice(0, 1900);
+  ].join('\n').slice(0, MAX_DISCORD_CHARS);
 
   const sentManualArchiveMsg = await thread.send({
     content: entryContent,
@@ -13619,7 +13343,7 @@ async function seekdeepHandleContextMenuInspect(interaction, targetMessage) {
     if (seekdeepState.jobId) lines.push(`  jobId: ${seekdeepState.jobId}`);
   }
 
-  const body = lines.join('\n').slice(0, 1900);
+  const body = lines.join('\n').slice(0, MAX_DISCORD_CHARS);
   await interaction.editReply({ content: '```\n' + body + '\n```' });
 }
 
@@ -13736,7 +13460,7 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
     answer = cleanupRefinedPrompt(answer);
   }
 
-  const body = ('Refined prompt:\n' + answer).slice(0, 1900);
+  const body = ('Refined prompt:\n' + answer).slice(0, MAX_DISCORD_CHARS);
   await interaction.editReply({ content: body });
 }
 async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
@@ -13774,7 +13498,7 @@ async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
   });
   answer = String(answer || '').replace(/^\s*(translation|english|in english)\s*[:\-]\s*/i, '').trim();
 
-  const body = ('Translation:\n' + (answer || '(no output)')).slice(0, 1900);
+  const body = ('Translation:\n' + (answer || '(no output)')).slice(0, MAX_DISCORD_CHARS);
   await interaction.editReply({ content: body });
 }
 
@@ -13843,7 +13567,7 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
     memoryKey: null,
   });
 
-  const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, 1900);
+  const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, MAX_DISCORD_CHARS);
   await interaction.editReply({ content: body });
 }
 // SEEKDEEP_FORCE_REACT_PICKER_START
@@ -14601,11 +14325,57 @@ client.on('interactionCreate', async (interaction) => {
 });
 // SEEKDEEP_SLASH_ROUTER_RESTORE_V1_END
 
-client.login(TOKEN);
+// v10.5: test-mode gate. When SEEKDEEP_TEST_MODE=1, skip the Discord login
+// so test harnesses can `import('./index.js')` to access the bot's helpers
+// (pure functions, regex predicates, formatters) without spinning up a live
+// gateway connection. The rest of the module's top-level state still runs
+// — only the network connection is suppressed.
+if (process.env.SEEKDEEP_TEST_MODE === '1') {
+  // Expose internal helpers on globalThis so smoke_test.mjs can exercise the
+  // REAL implementations instead of mirroring them inline (which had drifted
+  // out of sync at least twice between v10.2 and v10.3.1). Whitelist only
+  // pure, side-effect-free helpers — nothing that touches the Discord client,
+  // network, or filesystem.
+  globalThis.__seekdeepTest = {
+    // String / regex predicates
+    splitDiscordText,
+    seekdeepIsFrustrationPrompt,
+    seekdeepCompileReactionPattern,
+    // Help routing
+    seekdeepHelpText,
+    seekdeepHelpTopicSlice,
+    seekdeepParseHelpTopic,
+    // Emoji vault math
+    seekdeepEmojiVaultThreadName,
+    seekdeepEmojiVaultFormatPage,
+    // Force-react picker math
+    seekdeepForceReactBucketRange,
+    // Force-react picker constants (so tests can read them without re-declaring)
+    forceReactConstants: {
+      bucketSize: SEEKDEEP_FORCE_REACT_BUCKET_SIZE,
+      bucketsPerPage: SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE,
+      emojiPerPage: SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE,
+      maxSelected: SEEKDEEP_FORCE_REACT_MAX_SELECTED,
+    },
+    emojiVaultConstants: {
+      pageSize: SEEKDEEP_EMOJI_VAULT_PAGE_SIZE,
+    },
+    chunkerConstants: {
+      maxDiscordChars: MAX_DISCORD_CHARS,
+    },
+  };
+  console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
+} else {
+  client.login(TOKEN);
+}
 
 // SEEKDEEP_PROMPT_CHOICE_EMERGENCY_START
 const SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN = globalThis.__SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN || new Set();
 globalThis.__SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN = SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN;
+// v10.5: the emergency-seen TTL was hardcoded as 300000 (5 min) at two
+// separate sites. Same value, same purpose, no env override. Naming it once
+// here removes the duplication and lets ops tune it without code edits.
+const SEEKDEEP_EMERGENCY_SEEN_TTL_MS = Math.max(60000, Number(process.env.SEEKDEEP_EMERGENCY_SEEN_TTL_MS || 300000));
 
 async function seekdeepEmergencyHandlePromptChoiceButton(interaction) {
   const customId = String(interaction?.customId || '');
@@ -14624,7 +14394,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
     SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.add(interaction.id);
     setTimeout(() => {
       try { SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.delete(interaction.id); } catch {}
-    }, 300000).unref?.();
+    }, SEEKDEEP_EMERGENCY_SEEN_TTL_MS).unref?.();
   }
 
   const action = match[1];
@@ -14891,7 +14661,7 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
     SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.add(interaction.id);
     setTimeout(() => {
       try { SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.delete(interaction.id); } catch {}
-    }, 300000).unref?.();
+    }, SEEKDEEP_EMERGENCY_SEEN_TTL_MS).unref?.();
   }
 
   try {
