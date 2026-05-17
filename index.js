@@ -2135,20 +2135,29 @@ function seekdeepPromptChoiceProxyMessage(interaction, requesterId = '', suffix 
 }
 
 
-async function seekdeepSendImagePromptChoiceMessage(message, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = {}) {
-  const startedAt = seekdeepNowMs();
-  const requesterId = message?.author?.id || 'unknown';
+// v10.7: consolidated. Both the Message and Interaction variants posted a
+// "preparing..." reply, awaited seekdeepBuildImagePromptChoice (which can
+// take several seconds when SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT is on),
+// then edited the same reply with the final choice payload + button row.
+// The Message version used reply→edit; the Interaction version used
+// safeEditOrReply twice. seekdeepReplyToTarget(..., { previousReply })
+// handles both code paths transparently.
+async function seekdeepSendImagePromptChoice(target, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = {}) {
+  const isInteraction = typeof target?.deferReply === 'function' || typeof target?.editReply === 'function';
+  const startedAt = (isInteraction ? target?.__seekdeepRequestStartedAt : null) || seekdeepNowMs();
+  const requesterId = (isInteraction ? target?.user?.id : target?.author?.id) || 'unknown';
+
   const preparingPayload = {
     content: seekdeepAppendResponseFooter(seekdeepPromptChoicePreparationContent(prompt), {
       startedAt,
       modelUsed: (SEEKDEEP_IMAGE_PROMPT_REFINEMENT_ENABLED && SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED) ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
     }),
-    allowedMentions: { repliedUser: false },
+    components: [],
   };
 
-  let preparingMessage = null;
+  let preparingReply = null;
   try {
-    preparingMessage = await message.reply(preparingPayload);
+    preparingReply = await seekdeepReplyToTarget(target, preparingPayload);
   } catch (err) {
     console.warn('Could not send image prompt refinement status:', err?.message || err);
   }
@@ -2156,9 +2165,9 @@ async function seekdeepSendImagePromptChoiceMessage(message, prompt, width = 102
   try {
     const choice = await seekdeepBuildImagePromptChoice(prompt, imageModeOptions);
     const id = seekdeepRememberPendingImagePrompt({
-      source: 'message',
+      source: isInteraction ? 'interaction' : 'message',
       requesterId,
-      channelId: message?.channel?.id || '',
+      channelId: target?.channel?.id || '',
       originalPrompt: choice.originalPrompt,
       rawPrompt: choice.rawPrompt,
       refinedPrompt: choice.refinedPrompt,
@@ -2177,60 +2186,12 @@ async function seekdeepSendImagePromptChoiceMessage(message, prompt, width = 102
         modelUsed: choice.dynamicRefinement ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
       }),
       components: [seekdeepPendingPromptChoiceRow(id)],
-      allowedMentions: { repliedUser: false },
     };
 
-    if (preparingMessage && typeof preparingMessage.edit === 'function') {
-      try {
-        return await preparingMessage.edit(finalPayload);
-      } catch (err) {
-        console.warn('Could not edit image prompt refinement status:', err?.message || err);
-      }
-    }
-
-    return await message.reply(finalPayload);
+    return await seekdeepReplyToTarget(target, finalPayload, { previousReply: preparingReply });
   } finally {
-    stopSeekDeepTypingLoopForMessage(message);
+    if (!isInteraction) stopSeekDeepTypingLoopForMessage(target);
   }
-}
-
-async function seekdeepSendImagePromptChoiceInteraction(interaction, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = {}) {
-  const startedAt = interaction?.__seekdeepRequestStartedAt || seekdeepNowMs();
-  const requesterId = interaction?.user?.id || 'unknown';
-  await safeEditOrReply(interaction, {
-    content: seekdeepAppendResponseFooter(seekdeepPromptChoicePreparationContent(prompt), {
-      startedAt,
-      modelUsed: (SEEKDEEP_IMAGE_PROMPT_REFINEMENT_ENABLED && SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED) ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
-    }),
-    components: [],
-    allowedMentions: { repliedUser: false },
-  });
-
-  const choice = await seekdeepBuildImagePromptChoice(prompt, imageModeOptions);
-  const id = seekdeepRememberPendingImagePrompt({
-    source: 'interaction',
-    requesterId,
-    channelId: interaction?.channel?.id || '',
-    originalPrompt: choice.originalPrompt,
-    rawPrompt: choice.rawPrompt,
-    refinedPrompt: choice.refinedPrompt,
-    dynamicRefinement: choice.dynamicRefinement,
-    dynamicRefinementAttempted: choice.dynamicRefinementAttempted,
-    dynamicRefinementError: choice.dynamicRefinementError || '',
-    width,
-    height,
-    seed,
-    ground: choice.imageOptions?.ground !== false,
-  });
-
-  return await safeEditOrReply(interaction, {
-    content: seekdeepAppendResponseFooter(seekdeepPromptChoiceContent(choice, requesterId), {
-      startedAt,
-      modelUsed: choice.dynamicRefinement ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
-    }),
-    components: [seekdeepPendingPromptChoiceRow(id)],
-    allowedMentions: { repliedUser: false },
-  });
 }
 
 async function seekdeepHandlePromptChoiceButton(interaction) {
@@ -6479,39 +6440,18 @@ async function seekdeepPostRecentImagesToChannel(channel, limit = 5) {
   };
 }
 
-async function seekdeepPostRecentImagesFromMessage(message, limit = 5) {
-  seekdeepMarkRequestStart(message);
-  seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-  stopSeekDeepTypingLoopForMessage(message);
+// v10.7: consolidated. Was two near-identical Message/Interaction variants.
+async function seekdeepPostRecentImages(target, limit = 5) {
+  seekdeepMarkRequestStart(target);
+  seekdeepSetResponseModel(target, seekdeepNoModelLabel());
 
-  const result = await seekdeepPostRecentImagesToChannel(message.channel, limit);
+  const result = await seekdeepPostRecentImagesToChannel(target.channel, limit);
   const finalContent = seekdeepAppendResponseFooter(result.summary, {
-    startedAt: result.startedAt || message?.__seekdeepRequestStartedAt,
+    startedAt: result.startedAt || target?.__seekdeepRequestStartedAt,
     modelUsed: result.modelUsed || seekdeepNoModelLabel(),
   });
 
-  await message.reply({
-    content: finalContent,
-    allowedMentions: { repliedUser: false },
-  });
-
-  return finalContent;
-}
-
-async function seekdeepPostRecentImagesFromInteraction(interaction, limit = 5) {
-  seekdeepMarkRequestStart(interaction);
-  seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
-
-  const result = await seekdeepPostRecentImagesToChannel(interaction.channel, limit);
-  const finalContent = seekdeepAppendResponseFooter(result.summary, {
-    startedAt: result.startedAt || interaction?.__seekdeepRequestStartedAt,
-    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
-  });
-
-  await safeEditOrReply(interaction, {
-    content: finalContent,
-    allowedMentions: { repliedUser: false },
-  });
+  await seekdeepReplyToTarget(target, { content: finalContent });
 
   return finalContent;
 }
@@ -7393,6 +7333,45 @@ function stopSeekDeepTypingLoopForMessage(message) {
   } catch (err) {
     console.error('Failed to stop typing loop:', err?.message || err);
   }
+}
+
+// v10.7: target-agnostic reply helper. Detects whether `target` is a Discord
+// Message (has `.reply()` but no `.deferReply`) or an Interaction (has
+// `.deferReply` / `.editReply`) and dispatches accordingly. Stops the message
+// typing loop as a side effect for Message targets — Interactions use the
+// defer/reply state machine instead and don't need that.
+//
+// If `previousReply` is supplied (a Message handle returned from an earlier
+// call), the Message path will EDIT that handle instead of sending a fresh
+// reply. This matches the Interaction.editReply semantics: one logical
+// "this command's reply" message that mutates as work progresses. Falls
+// back to a fresh reply if the edit fails.
+//
+// This kills several Message-vs-Interaction wrapper pairs that existed only
+// because the two Discord.js shapes have different reply APIs.
+async function seekdeepReplyToTarget(target, payload, options = {}) {
+  if (!target) return null;
+  const { previousReply = null } = options;
+  // Interaction: has deferReply/editReply on the prototype. safeEditOrReply
+  // already handles the "is it replied/deferred, do I edit or reply fresh"
+  // logic so previousReply is irrelevant here.
+  if (typeof target.deferReply === 'function' || typeof target.editReply === 'function') {
+    return await safeEditOrReply(target, payload);
+  }
+  // Message-shaped: has .reply but no deferReply.
+  if (typeof target.reply === 'function') {
+    try { stopSeekDeepTypingLoopForMessage(target); } catch {}
+    const merged = { allowedMentions: { repliedUser: false }, ...payload };
+    if (previousReply && typeof previousReply.edit === 'function') {
+      try {
+        return await previousReply.edit(merged);
+      } catch (err) {
+        console.warn('Could not edit prior reply; sending fresh reply instead:', err?.message || err);
+      }
+    }
+    return await target.reply(merged);
+  }
+  return null;
 }
 
 
@@ -8794,41 +8773,21 @@ async function seekdeepPostArchiveToChannel(channel) {
   };
 }
 
-async function seekdeepPostArchiveFromMessage(message) {
-  seekdeepMarkRequestStart(message);
-  seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-  stopSeekDeepTypingLoopForMessage(message);
+// v10.7: consolidated. Was two near-identical Message/Interaction variants;
+// both code paths used identical content/payload — only the reply API
+// differed. seekdeepReplyToTarget abstracts that.
+async function seekdeepPostArchive(target) {
+  seekdeepMarkRequestStart(target);
+  seekdeepSetResponseModel(target, seekdeepNoModelLabel());
 
-  const result = await seekdeepPostArchiveToChannel(message.channel);
+  const result = await seekdeepPostArchiveToChannel(target.channel);
 
   const finalContent = seekdeepAppendResponseFooter(result.summary, {
-    startedAt: result.startedAt || message?.__seekdeepRequestStartedAt,
+    startedAt: result.startedAt || target?.__seekdeepRequestStartedAt,
     modelUsed: result.modelUsed || seekdeepNoModelLabel(),
   });
 
-  await message.reply({
-    content: finalContent,
-    allowedMentions: { repliedUser: false },
-  });
-
-  return finalContent;
-}
-
-async function seekdeepPostArchiveFromInteraction(interaction) {
-  seekdeepMarkRequestStart(interaction);
-  seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
-
-  const result = await seekdeepPostArchiveToChannel(interaction.channel);
-
-  const finalContent = seekdeepAppendResponseFooter(result.summary, {
-    startedAt: result.startedAt || interaction?.__seekdeepRequestStartedAt,
-    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
-  });
-
-  await safeEditOrReply(interaction, {
-    content: finalContent,
-    allowedMentions: { repliedUser: false },
-  });
+  await seekdeepReplyToTarget(target, { content: finalContent });
 
   return finalContent;
 }
@@ -12482,7 +12441,7 @@ client.on('messageCreate', async (message) => {
       remember(key, 'user', '[direct-image] ' + prompt);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
         remember(key, 'assistant', 'Prepared image prompt choices for: ' + imagePrompt);
-        await seekdeepSendImagePromptChoiceMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
+        await seekdeepSendImagePromptChoice(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
         remember(key, 'assistant', 'Queued image locally for: ' + imagePrompt);
         await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
@@ -12517,7 +12476,7 @@ client.on('messageCreate', async (message) => {
       seekdeepLogRoute('post-archive', prompt);
       remember(key, 'user', prompt);
       remember(key, 'assistant', 'Posting archive.');
-      await seekdeepPostArchiveFromMessage(message);
+      await seekdeepPostArchive(message);
       return;
     }
 
@@ -12546,7 +12505,7 @@ client.on('messageCreate', async (message) => {
 
       if (utilityKind === 'recent-images') {
         remember(key, 'assistant', 'Posted recent images.');
-        await seekdeepPostRecentImagesFromMessage(message, seekdeepRecentImagesRequestedLimit(prompt, 5, 10));
+        await seekdeepPostRecentImages(message, seekdeepRecentImagesRequestedLimit(prompt, 5, 10));
         return;
       }
 
@@ -12715,7 +12674,7 @@ client.on('messageCreate', async (message) => {
       remember(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
         remember(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
-        await seekdeepSendImagePromptChoiceMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
+        await seekdeepSendImagePromptChoice(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
         remember(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
         await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
@@ -14008,7 +13967,7 @@ client.on('interactionCreate', async (interaction) => {
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
 
       if (kind === 'recent-images') {
-        await seekdeepPostRecentImagesFromInteraction(interaction, 5);
+        await seekdeepPostRecentImages(interaction, 5);
         return;
       }
 
@@ -14039,7 +13998,7 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'postarchive') {
       if (!(await safeDefer(interaction))) return;
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
-      await seekdeepPostArchiveFromInteraction(interaction);
+      await seekdeepPostArchive(interaction);
       return;
     }
 
@@ -14263,7 +14222,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (seekdeepShouldUsePromptChoicePreview(seekdeepImageModeOptions)) {
         remember(key, 'assistant', `Prepared image prompt choices for: ${cleanImagePrompt}`);
-        await seekdeepSendImagePromptChoiceInteraction(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
+        await seekdeepSendImagePromptChoice(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
       } else {
         remember(key, 'assistant', `Generated image locally for: ${cleanImagePrompt}`);
         await seekdeepSendImageWithButtonsInteraction(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
