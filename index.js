@@ -4506,6 +4506,12 @@ function seekdeepArchiveThreadBuildName(subject, count = 0) {
   return seekdeepArchiveThreadClampName(parts.join(' ' + bullet + ' '));
 }
 
+// Generates the OLD plain-ASCII archive thread name format
+// (`archive-<username>-<idSuffix>`) used before the v10 coin-emoji rename.
+// This is intentionally kept alongside seekdeepArchiveUserThreadName so the
+// thread-discovery fallback can still locate legacy threads created with
+// the old naming scheme. Do not delete unless you also migrate all existing
+// legacy archive threads in the wild — they would become orphaned.
 function seekdeepLegacyArchiveUserThreadName(user) {
   user = user || {};
   const username = String(user.username || user.globalName || user.displayName || user.id || 'unknown-user')
@@ -7529,42 +7535,17 @@ function startSeekDeepTypingLoop(channel, label = 'request') {
 
 
 // SEEKDEEP_NATURAL_ROUTING_START
-function seekdeepAttachmentLooksVisual(attachment) {
-  if (!attachment) return false;
-
-  const contentType = String(attachment.contentType || '').toLowerCase();
-  const name = String(attachment.name || '').toLowerCase();
-  const url = String(attachment.url || '').toLowerCase();
-
-  return (
-    contentType.startsWith('image/') ||
-    contentType.startsWith('video/') ||
-    /\.(png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|mkv)$/i.test(name) ||
-    /\.(png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|mkv)(\?|$)/i.test(url)
-  );
-}
-
-function seekdeepFirstVisualAttachment(message) {
-  if (!message?.attachments?.size) return null;
-
-  for (const attachment of message.attachments.values()) {
-    if (seekdeepAttachmentLooksVisual(attachment)) return attachment;
-  }
-
-  return null;
-}
-
+// v10.10: seekdeepAttachmentLooksVisual + seekdeepFirstVisualAttachment were
+// near-duplicates of seekdeepLooksLikeVisualAttachment + firstVisualAttachmentFrom
+// further down the file. The successors are strictly more thorough — they
+// also handle proxyURL, more file extensions (avif/tiff/m4v), and walk
+// messageSnapshots (forwarded messages) + embeds (linked images). The only
+// behavior loss is SVG detection on raw attachment URLs, which is fine
+// because vision models can't process SVG anyway. All call sites now go
+// through the successors.
 async function seekdeepGetReplyVisualAttachment(message) {
-  try {
-    const refId = message?.reference?.messageId;
-    if (!refId || !message?.channel) return null;
-
-    const replied = await message.channel.messages.fetch(refId);
-    return seekdeepFirstVisualAttachment(replied);
-  } catch (err) {
-    console.error('Could not inspect replied-to message for visual media:', err?.message || err);
-    return null;
-  }
+  const replied = await fetchRepliedMessage(message);
+  return replied ? firstVisualAttachmentFrom(replied) : null;
 }
 
 function seekdeepLooksLikeVisionPrompt(text = '') {
@@ -7917,7 +7898,7 @@ async function seekdeepGetGeneratedImageReplyContext(message = null) {
 
   const content = String(replied.content || '');
   const hasGeneratedMarker = /^(?:Generated:|Refined Prompt:|Refinement:|Job ID:\s*imgq_)/im.test(content);
-  const hasImageAttachment = Array.from(replied.attachments?.values?.() || []).some((attachment) => seekdeepAttachmentLooksVisual(attachment));
+  const hasImageAttachment = Array.from(replied.attachments?.values?.() || []).some((attachment) => seekdeepLooksLikeVisualAttachment(attachment));
   const hasSeekdeepImageButtons = Array.from(replied.components || []).some((row) =>
     Array.from(row?.components || []).some((component) => /^seekdeep:(?:regen|archive|sharedarchive|shared-archive|shared_archive):/i.test(String(component?.customId || '')))
   );
