@@ -6257,6 +6257,11 @@ function seekdeepHelpText(source = null) {
     'Inspect (SeekDeep)         - debug card: ids, attachments, components, cached state',
     'Translate (SeekDeep)       - translate / decode message text to plain English',
     'Compare with previous      - compare this message with the prior non-bot message',
+    // Same flag-gating pattern as the emoji vault: only mention Force React
+    // in help when SEEKDEEP_FEATURE_FORCE_REACT is on. Default off in v10.4.4.
+    ...(SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? [
+      'Force React (SeekDeep)     - paginated emoji picker; reacts up to 5 to the message',
+    ] : []),
     '```',
     '',
     'Unsupported near-commands return: `Did you mean ...?`',
@@ -7230,9 +7235,17 @@ const commands = [
   new ContextMenuCommandBuilder()
     .setName('Compare with previous')
     .setType(ApplicationCommandType.Message),
-  new ContextMenuCommandBuilder()
-    .setName('Force React (SeekDeep)')
-    .setType(ApplicationCommandType.Message),
+  // Force React is feature-flagged via SEEKDEEP_FEATURE_FORCE_REACT. We read
+  // the env var directly here (instead of the SEEKDEEP_FEATURE_FORCE_REACT_ENABLED
+  // const) because that const is declared further down the file and this
+  // array literal evaluates at module-init top level, before the const
+  // initializer runs. When the flag is off, the entry is excluded so the
+  // right-click Apps submenu hides "Force React (SeekDeep)" on next sync.
+  ...(String(process.env.SEEKDEEP_FEATURE_FORCE_REACT || 'off').toLowerCase() === 'on' ? [
+    new ContextMenuCommandBuilder()
+      .setName('Force React (SeekDeep)')
+      .setType(ApplicationCommandType.Message),
+  ] : []),
 ].map((c) => c.toJSON());
 
 // Install Discord rate-limit listener now that `client` exists.
@@ -10796,14 +10809,22 @@ const SEEKDEEP_FEATURE_TTS_VOICE_ENABLED = String(process.env.SEEKDEEP_FEATURE_T
 //   feature in the same servers and we don't want two bots fighting over
 //   one thread. Flip to "on" if you want SeekDeep to own the vault flow.
 const SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED = String(process.env.SEEKDEEP_FEATURE_EMOJI_VAULT || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_FORCE_REACT: gates the right-click "Force React (SeekDeep)"
+//   context menu command and its paginated picker. Defaulted off in v10.4.4
+//   for the same demonbot-coexistence reason as the emoji vault. With this
+//   off, the entry disappears from the right-click Apps submenu on next
+//   command sync, the dispatcher refuses the route, and the picker
+//   component handler stays out of the interaction chain.
+const SEEKDEEP_FEATURE_FORCE_REACT_ENABLED = String(process.env.SEEKDEEP_FEATURE_FORCE_REACT || 'off').toLowerCase() === 'on';
 
-if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED) {
+if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED || SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
   console.log('[SeekDeep] Optional features flagged on:',
     SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'img2img' : '',
     SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'upscale-real-esrgan' : '',
     SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'nsfw-gate' : '',
     SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'tts-voice' : '',
     SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'emoji-vault' : '',
+    SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'force-react' : '',
   );
   console.log('[SeekDeep] These features require additional model downloads / Python endpoints — see README "Optional features".');
 }
@@ -13491,6 +13512,18 @@ async function seekdeepHandleMessageContextMenu(interaction) {
     return seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage);
   }
   if (name === 'Force React (SeekDeep)') {
+    // v10.4.4: defensive gate. The registration block already excludes the
+    // command when the flag is off, but Discord may still dispatch an
+    // already-cached entry while the next command sync propagates.
+    if (!SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
+      try {
+        await interaction.reply({
+          content: 'Force React is currently disabled on this bot.',
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {}
+      return;
+    }
     return seekdeepHandleContextMenuForceReact(interaction, targetMessage);
   }
 
@@ -14034,6 +14067,19 @@ async function seekdeepHandleContextMenuForceReact(interaction, targetMessage) {
 async function seekdeepHandleForceReactComponent(interaction) {
   const customId = String(interaction?.customId || '');
   if (!customId.startsWith('seekdeep:fr:')) return false;
+
+  // v10.4.4: if the feature was disabled after a picker message was already
+  // sent (e.g. user opened the picker, admin flipped the flag mid-session),
+  // tear down the lingering UI gracefully rather than acting on it.
+  if (!SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
+    try {
+      await interaction.update({
+        content: 'Force React is currently disabled on this bot.',
+        components: [],
+      });
+    } catch {}
+    return true;
+  }
 
   const parts = customId.split(':');
   // ['seekdeep', 'fr', kind, targetMsgId, arg?]
