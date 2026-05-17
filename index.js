@@ -2328,7 +2328,7 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
         seekdeepLogRoute(routeName, selectionPrompt);
       }
 
-      await seekdeepSendImageWithButtonsMessage(
+      await seekdeepSendImageWithButtons(
         messageProxy,
         selectionPrompt,
         width,
@@ -3683,10 +3683,32 @@ function seekdeepImageCooldownText(remainingMs) {
 }
 // SEEKDEEP_IMAGE_QUEUE_END
 
-async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = null) {
+// v10.8: consolidated. Was two 200+ line Message/Interaction variants that
+// drifted apart over time. The Interaction variant lost the missing-context
+// path (slash always has a prompt, so missingContext is unreachable there),
+// the explicit-content fallback (safeEditOrReply handles it for Interactions
+// natively), and the channel.send fallback (interactions can't channel.send).
+// The Message variant grew dead defensive code (an empty duplicate
+// seekdeepRefinedPromptLine call reading vars that never existed in scope).
+//
+// This unified version:
+//  - Routes all reply traffic through seekdeepReplyToTarget where possible,
+//    keeping the Message-specific explicit-content + channel.send fallback
+//    inline for the image-with-attachment send (where Discord can block).
+//  - Branches the missing-context path on target shape so slash commands
+//    skip it cheaply.
+//  - Tags queue jobs with source: 'slash' for Interaction targets and
+//    'message' for Message targets (preserves telemetry).
+//  - Uses the cleaner single-call seekdeepRefinedPromptLine pattern from
+//    the Interaction variant (dropping the Message variant's dead code).
+//  - Captures last-subject from `target` (was a latent `message || interaction`
+//    expression in the Interaction variant where `message` was always
+//    undefined).
+async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = null) {
+  const isInteraction = typeof target?.deferReply === 'function' || typeof target?.editReply === 'function';
   prompt = seekdeepGroundBotanicalSlangPrompt(prompt);
 
-  const requestStartedAt = seekdeepNowMs();
+  const requestStartedAt = (isInteraction ? target?.__seekdeepRequestStartedAt : null) || seekdeepNowMs();
 
   // SEEKDEEP_RAW_IMAGE_SEND_OPTIONS_START
   const seekdeepImageModeOptions = {
@@ -3702,57 +3724,60 @@ async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024
   const seekdeepSuppressQueueAck = Boolean(seekdeepImageModeOptions.silentAck || seekdeepImageModeOptions.suppressQueueAck);
   // SEEKDEEP_RAW_IMAGE_SEND_OPTIONS_END
 
+  // Missing-context path: only meaningful for Message targets. Slash command
+  // /image has a required `prompt:` option so missingContext is unreachable
+  // there. Keep behavior bit-identical to the legacy Message variant.
+  if (!isInteraction) {
+    const seekdeepResolvedImagePrompt = seekdeepResolveImagePromptFromContext(target, prompt);
+    if (seekdeepResolvedImagePrompt.missingContext) {
+      const pendingSubjectInfo = typeof seekdeepRememberPendingImageSubjectRequest === 'function'
+        ? seekdeepRememberPendingImageSubjectRequest(target, { width, height, seed, imageModeOptions: seekdeepImageModeOptions })
+        : null;
 
+      if (pendingSubjectInfo?.alreadyPending && seekdeepSuppressQueueAck) return null;
 
-  // SEEKDEEP_GENERIC_IMAGE_CONTEXT_RESOLUTION_START
-  const seekdeepResolvedImagePrompt = seekdeepResolveImagePromptFromContext(message, prompt);
-  if (seekdeepResolvedImagePrompt.missingContext) {
-    const pendingSubjectInfo = typeof seekdeepRememberPendingImageSubjectRequest === 'function'
-      ? seekdeepRememberPendingImageSubjectRequest(message, { width, height, seed, imageModeOptions: seekdeepImageModeOptions })
-      : null;
-
-    if (pendingSubjectInfo?.alreadyPending && seekdeepSuppressQueueAck) return null;
-
-    seekdeepStopTypingSafelyForMessage(message);
-    try {
-      return await message.reply({
-        content: seekdeepAppendResponseFooter('What should I generate an image of?', {
-          startedAt: requestStartedAt,
-          modelUsed: seekdeepNoModelLabel(),
-        }),
-        allowedMentions: { repliedUser: false },
-      });
-    } finally {
-      seekdeepStopTypingSafelyForMessage(message);
+      seekdeepStopTypingSafelyForMessage(target);
+      try {
+        return await seekdeepReplyToTarget(target, {
+          content: seekdeepAppendResponseFooter('What should I generate an image of?', {
+            startedAt: requestStartedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          }),
+        });
+      } finally {
+        seekdeepStopTypingSafelyForMessage(target);
+      }
     }
+    if (seekdeepResolvedImagePrompt.resolvedFromContext) {
+      console.log(`[SeekDeep] image prompt context reused: ${prompt} -> ${seekdeepResolvedImagePrompt.prompt}`);
+    }
+    prompt = seekdeepResolvedImagePrompt.prompt;
   }
-  if (seekdeepResolvedImagePrompt.resolvedFromContext) {
-    console.log(`[SeekDeep] image prompt context reused: ${prompt} -> ${seekdeepResolvedImagePrompt.prompt}`);
-  }
-  prompt = seekdeepResolvedImagePrompt.prompt;
-  // SEEKDEEP_GENERIC_IMAGE_CONTEXT_RESOLUTION_END
 
-  const userId = message?.author?.id || 'unknown';
+  const userId = (isInteraction ? target?.user?.id : target?.author?.id) || 'unknown';
   const cooldown = seekdeepImageCooldownRemaining(userId);
 
   if (!seekdeepSkipImageCooldown && cooldown > 0) {
-    return await message.reply({
+    return await seekdeepReplyToTarget(target, {
       content: seekdeepAppendResponseFooter(seekdeepImageCooldownText(cooldown), {
         startedAt: requestStartedAt,
         modelUsed: seekdeepNoModelLabel(),
       }),
-      allowedMentions: { repliedUser: false },
     });
   }
 
   if (!seekdeepSkipImageCooldown) seekdeepRememberImageCooldown(userId);
 
-  const workingLoop = seekdeepStartWorkingLoop(message?.channel, `image:${message?.id || prompt}`);
+  // Preserve telemetry: queue jobs distinguish slash vs message origin, and
+  // the working-loop key prefix uses the same convention.
+  const loopKeyPrefix = isInteraction ? 'slash-image' : 'image';
+  const targetId = isInteraction ? target?.id : target?.id;
+  const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
   const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
-    source: 'message',
+    source: isInteraction ? 'slash' : 'message',
     userId,
-    channelId: message?.channel?.id || '',
+    channelId: target?.channel?.id || '',
     prompt,
     width,
     height,
@@ -3763,19 +3788,17 @@ async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024
 
   if (!seekdeepSuppressQueueAck) {
     try {
-      await message.reply({
+      await seekdeepReplyToTarget(target, {
         content: seekdeepAppendResponseFooter(startNotice, {
           startedAt: job.enqueuedAt || requestStartedAt,
           modelUsed: seekdeepNoModelLabel(),
         }),
-        allowedMentions: { repliedUser: false },
       });
     } catch (err) {
       console.warn('Could not send image queue acknowledgement; falling back to channel.send:', err?.message || err);
-
       try {
-        if (message?.channel && typeof message.channel.send === 'function') {
-          await message.channel.send({
+        if (target?.channel && typeof target.channel.send === 'function') {
+          await target.channel.send({
             content: seekdeepAppendResponseFooter(startNotice, {
               startedAt: job.enqueuedAt || requestStartedAt,
               modelUsed: seekdeepNoModelLabel(),
@@ -3796,24 +3819,24 @@ async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024
       const actionId = seekdeepMakeImageActionId();
 
       const state = seekdeepRememberTempImageState({
-          id: actionId,
-          prompt,
-          originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
-          refinedPrompt: result.refinedPrompt || prompt,
-          generationPrompt: result.generationPrompt || result.refinedPrompt || prompt,
-          dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
-          dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
-          width,
-          height,
-          seed,
+        id: actionId,
+        prompt,
+        originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
+        refinedPrompt: result.refinedPrompt || prompt,
+        generationPrompt: result.generationPrompt || result.refinedPrompt || prompt,
+        dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
+        dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
+        width,
+        height,
+        seed,
+        refine: seekdeepImageModeOptions.refine !== false,
+        ground: seekdeepImageModeOptions.ground !== false,
+        imageModeOptions: {
           refine: seekdeepImageModeOptions.refine !== false,
           ground: seekdeepImageModeOptions.ground !== false,
-          imageModeOptions: {
-            refine: seekdeepImageModeOptions.refine !== false,
-            ground: seekdeepImageModeOptions.ground !== false,
-            dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
-            dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
-          },
+          dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
+          dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
+        },
         filename: normalized.filename,
         buffer: normalized.buffer,
         mimeType: 'image/png',
@@ -3824,175 +3847,7 @@ async function seekdeepSendImageWithButtonsMessage(message, prompt, width = 1024
       // "now make her wear a hat" can extend the prior prompt.
       try {
         if (typeof seekdeepRememberLastImageSubject === 'function') {
-          seekdeepRememberLastImageSubject(message || interaction, {
-            originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
-            refinedPrompt: result.refinedPrompt || prompt,
-          });
-        }
-      } catch {}
-
-      const content = seekdeepAppendResponseFooter([
-        `Generated: ${prompt}`,
-        seekdeepRefinedPromptLine(prompt, seekdeepExtractRefinedPrompt(typeof result !== 'undefined' ? result : undefined, typeof imageResult !== 'undefined' ? imageResult : undefined, typeof data !== 'undefined' ? data : undefined, typeof payload !== 'undefined' ? payload : undefined, typeof normalized !== 'undefined' ? normalized : undefined)),
-        seekdeepRefinedPromptLine(prompt, typeof refinedPrompt !== 'undefined' ? refinedPrompt : (typeof imagePrompt !== 'undefined' ? imagePrompt : '')),
-        seekdeepGroundingStatusLine(result?.grounding, result?.imageOptions),
-        seekdeepRefinementStatusLine(result?.refinementEnabled !== false, result?.imageOptions?.dynamicRefinement, result?.imageOptions?.dynamicRefinementAttempted || result?.dynamicRefinementAttempted),
-        `Queue Wait: ${seekdeepImageQueueWaitSeconds(runningJob)} seconds`,
-        `Job ID: ${runningJob.id}`,
-      ].filter(Boolean).join('\n'), {
-        startedAt: runningJob.startedAt,
-        modelUsed: seekdeepImageModelLabel(),
-      });
-
-      let sent = null;
-
-      try {
-        sent = await message.reply({
-          content,
-          files: [normalized.attachment],
-          components: seekdeepImageActionComponents(actionId),
-          allowedMentions: { repliedUser: false },
-        });
-      } catch (err) {
-        // SEEKDEEP_EXPLICIT_CONTENT_MESSAGE_FALLBACK_START
-        if (seekdeepIsDiscordExplicitContentBlock(err)) {
-          console.warn('Discord blocked generated image attachment for this message; sending text-only notice.');
-
-          try {
-            sent = await message.reply({
-              content: seekdeepAppendResponseFooter(seekdeepExplicitContentBlockedText(), {
-                startedAt: runningJob.startedAt,
-                modelUsed: seekdeepImageModelLabel(),
-              }),
-              allowedMentions: { repliedUser: false },
-            });
-          } catch (fallbackErr) {
-            console.warn('Could not send explicit-content fallback reply:', fallbackErr?.message || fallbackErr);
-          }
-
-          return sent;
-        }
-        // SEEKDEEP_EXPLICIT_CONTENT_MESSAGE_FALLBACK_END
-
-        console.warn('Image result reply failed; falling back to channel.send:', err?.message || err);
-
-        if (message?.channel && typeof message.channel.send === 'function') {
-          sent = await message.channel.send({
-            content,
-            files: [normalized.attachment],
-            components: seekdeepImageActionComponents(actionId),
-            allowedMentions: { repliedUser: false },
-          });
-        } else {
-          throw err;
-        }
-      }
-
-      try {
-        sent = await seekdeepAttachDownloadButton(sent, state.id);
-      } catch (err) {
-        console.warn('Could not attach Download button after image generation:', err?.message || err);
-      }
-
-      return sent;
-    } finally {
-      seekdeepStopWorkingLoop(workingLoop);
-      stopSeekDeepTypingLoopForMessage(message);
-    }
-  });
-}
-
-async function seekdeepSendImageWithButtonsInteraction(interaction, prompt, width = 1024, height = 1024, seed = null, imageModeOptions = null) {
-  prompt = seekdeepGroundBotanicalSlangPrompt(prompt);
-
-  const requestStartedAt = interaction?.__seekdeepRequestStartedAt || seekdeepNowMs();
-
-  // SEEKDEEP_RAW_IMAGE_SEND_OPTIONS_INTERACTION_START
-  const seekdeepImageModeOptions = {
-    ...(typeof seekdeepImageModeOptionsFromPrompt === 'function' ? seekdeepImageModeOptionsFromPrompt(prompt) : {}),
-    ...(imageModeOptions || {}),
-  };
-  prompt = seekdeepImageModeOptions.cleanPrompt || seekdeepCleanImageModeTokens(prompt) || prompt;
-  const seekdeepSkipImageCooldown = Boolean(seekdeepImageModeOptions.skipCooldown);
-  const seekdeepSuppressQueueAck = Boolean(seekdeepImageModeOptions.silentAck || seekdeepImageModeOptions.suppressQueueAck);
-  // SEEKDEEP_RAW_IMAGE_SEND_OPTIONS_INTERACTION_END
-
-
-  // SEEKDEEP_INTERACTION_IMAGE_MODE_OPTIONS_START
-  // SEEKDEEP_INTERACTION_IMAGE_MODE_OPTIONS_END
-  const userId = interaction?.user?.id || 'unknown';
-  const cooldown = seekdeepImageCooldownRemaining(userId);
-
-  if (!seekdeepSkipImageCooldown && cooldown > 0) {
-    return await safeEditOrReply(interaction, {
-      content: seekdeepAppendResponseFooter(seekdeepImageCooldownText(cooldown), {
-        startedAt: requestStartedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-      allowedMentions: { repliedUser: false },
-    });
-  }
-
-  if (!seekdeepSkipImageCooldown) seekdeepRememberImageCooldown(userId);
-
-  const workingLoop = seekdeepStartWorkingLoop(interaction?.channel, `slash-image:${interaction?.id || prompt}`);
-  const position = seekdeepImageQueueCurrentPosition();
-  const job = seekdeepCreateImageQueueJob({
-    source: 'slash',
-    userId,
-    channelId: interaction?.channel?.id || '',
-    prompt,
-    width,
-    height,
-    seed,
-  });
-
-  if (!seekdeepSuppressQueueAck) {
-    await safeEditOrReply(interaction, {
-      content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
-        startedAt: job.enqueuedAt || requestStartedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-      allowedMentions: { repliedUser: false },
-    });
-  }
-
-  return await seekdeepEnqueueImageJob(job, async (runningJob) => {
-    try {
-      const result = await makeImageResult(prompt, width, height, seed, seekdeepImageModeOptions);
-      const normalized = seekdeepNormalizeGeneratedImageResult(result);
-      const actionId = seekdeepMakeImageActionId();
-
-      const state = seekdeepRememberTempImageState({
-          id: actionId,
-          prompt,
-          originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
-          refinedPrompt: result.refinedPrompt || prompt,
-          generationPrompt: result.generationPrompt || result.refinedPrompt || prompt,
-          dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
-          dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
-          width,
-          height,
-          seed,
-          refine: seekdeepImageModeOptions.refine !== false,
-          ground: seekdeepImageModeOptions.ground !== false,
-          imageModeOptions: {
-            refine: seekdeepImageModeOptions.refine !== false,
-            ground: seekdeepImageModeOptions.ground !== false,
-            dynamicRefinement: Boolean(result.promptRefined && result.imageOptions?.dynamicRefinement),
-            dynamicRefinementAttempted: Boolean(result.imageOptions?.dynamicRefinementAttempted || result.dynamicRefinementAttempted),
-          },
-        filename: normalized.filename,
-        buffer: normalized.buffer,
-        mimeType: 'image/png',
-        createdAt: Date.now(),
-        expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
-      });
-      // Remember this as the "last subject" so iterative followups like
-      // "now make her wear a hat" can extend the prior prompt.
-      try {
-        if (typeof seekdeepRememberLastImageSubject === 'function') {
-          seekdeepRememberLastImageSubject(message || interaction, {
+          seekdeepRememberLastImageSubject(target, {
             originalPrompt: seekdeepImageModeOptions.cleanPrompt || prompt,
             refinedPrompt: result.refinedPrompt || prompt,
           });
@@ -4011,20 +3866,63 @@ async function seekdeepSendImageWithButtonsInteraction(interaction, prompt, widt
         modelUsed: seekdeepImageModelLabel(),
       });
 
-      let sent = await safeEditOrReply(interaction, {
+      let sent = null;
+      const imagePayload = {
         content,
         files: [normalized.attachment],
-        components: seekdeepImageActionComponents(state.id),
-        allowedMentions: { repliedUser: false },
-      });
+        components: seekdeepImageActionComponents(actionId),
+      };
 
-      if (!sent && typeof interaction.fetchReply === 'function') {
-        sent = await interaction.fetchReply().catch(() => null);
+      try {
+        sent = await seekdeepReplyToTarget(target, imagePayload);
+        // Interactions sometimes return null from safeEditOrReply on edge cases;
+        // fetch the actual reply so the Download button can be attached below.
+        if (!sent && isInteraction && typeof target.fetchReply === 'function') {
+          sent = await target.fetchReply().catch(() => null);
+        }
+      } catch (err) {
+        // SEEKDEEP_EXPLICIT_CONTENT_MESSAGE_FALLBACK_START
+        // Message targets only — safeEditOrReply handles this for Interactions.
+        if (!isInteraction && seekdeepIsDiscordExplicitContentBlock(err)) {
+          console.warn('Discord blocked generated image attachment for this message; sending text-only notice.');
+          try {
+            sent = await seekdeepReplyToTarget(target, {
+              content: seekdeepAppendResponseFooter(seekdeepExplicitContentBlockedText(), {
+                startedAt: runningJob.startedAt,
+                modelUsed: seekdeepImageModelLabel(),
+              }),
+            });
+          } catch (fallbackErr) {
+            console.warn('Could not send explicit-content fallback reply:', fallbackErr?.message || fallbackErr);
+          }
+          return sent;
+        }
+        // SEEKDEEP_EXPLICIT_CONTENT_MESSAGE_FALLBACK_END
+
+        // Message-only channel.send fallback. Interactions don't have this
+        // path because safeEditOrReply already wraps its own error handling.
+        if (!isInteraction) {
+          console.warn('Image result reply failed; falling back to channel.send:', err?.message || err);
+          if (target?.channel && typeof target.channel.send === 'function') {
+            sent = await target.channel.send({ ...imagePayload, allowedMentions: { repliedUser: false } });
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
       }
 
-      return await seekdeepAttachDownloadButton(sent, state.id);
+      try {
+        sent = await seekdeepAttachDownloadButton(sent, state.id);
+      } catch (err) {
+        console.warn('Could not attach Download button after image generation:', err?.message || err);
+      }
+
+      return sent;
     } finally {
       seekdeepStopWorkingLoop(workingLoop);
+      if (!isInteraction) stopSeekDeepTypingLoopForMessage(target);
     }
   });
 }
@@ -5663,7 +5561,7 @@ async function seekdeepHandleImageButton(interaction) {
       seekdeepLogRoute(routeName, basePrompt);
     }
 
-    return await seekdeepSendImageWithButtonsMessage(
+    return await seekdeepSendImageWithButtons(
       proxy,
       basePrompt,
       width,
@@ -6779,10 +6677,10 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     }
     seekdeepStopTypingSafelyForMessage(message);
-    if (typeof seekdeepSendImageWithButtonsMessage === 'function') {
+    if (typeof seekdeepSendImageWithButtons === 'function') {
       // Pass the recent context as the image subject. The image-prompt refinement
       // step (default_chat role, pinned earlier) will distill it into a visual prompt.
-      await seekdeepSendImageWithButtonsMessage(message, recentAssistant, 1024, 1024, null, {
+      await seekdeepSendImageWithButtons(message, recentAssistant, 1024, 1024, null, {
         refine: true,
         ground: true,
         cleanPrompt: recentAssistant,
@@ -6860,12 +6758,12 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
   });
   seekdeepStopTypingSafelyForMessage(message);
 
-  if (typeof seekdeepSendImageWithButtonsMessage !== 'function') {
-    throw new Error('seekdeepSendImageWithButtonsMessage is not available for pending image subject follow-up.');
+  if (typeof seekdeepSendImageWithButtons !== 'function') {
+    throw new Error('seekdeepSendImageWithButtons is not available for pending image subject follow-up.');
   }
 
   try {
-    await seekdeepSendImageWithButtonsMessage(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
+    await seekdeepSendImageWithButtons(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
       refine: false,
       ground: pending.ground !== false,
       cleanPrompt: pending.prompt,
@@ -6873,7 +6771,7 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
       silentAck: true,
     });
 
-    await seekdeepSendImageWithButtonsMessage(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
+    await seekdeepSendImageWithButtons(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
       refine: true,
       ground: pending.ground !== false,
       cleanPrompt: pending.prompt,
@@ -8274,7 +8172,7 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
     seekdeepStopTypingSafelyForMessage(message);
 
     try {
-      await seekdeepSendImageWithButtonsMessage(message, pending.prompt, width, height, seed, {
+      await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
         refine: false,
         ground,
         cleanPrompt: pending.prompt,
@@ -8282,7 +8180,7 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
         silentAck: true,
       });
 
-      await seekdeepSendImageWithButtonsMessage(message, pending.prompt, width, height, seed, {
+      await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
         refine: true,
         ground,
         cleanPrompt: pending.prompt,
@@ -8296,7 +8194,7 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
     return true;
   }
 
-  await seekdeepSendImageWithButtonsMessage(message, pending.prompt, width, height, seed, {
+  await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
     refine: !wantsOriginal,
     ground,
     cleanPrompt: pending.prompt,
@@ -11462,7 +11360,7 @@ async function seekdeepHandleReactionShortcut(reaction, user) {
           content: basePrompt,
           reply: async (payload) => msg.channel?.send ? msg.channel.send(payload) : null,
         };
-        await seekdeepSendImageWithButtonsMessage(proxy, basePrompt, state.width || 1024, state.height || 1024, state.seed ?? null, regenOptions);
+        await seekdeepSendImageWithButtons(proxy, basePrompt, state.width || 1024, state.height || 1024, state.seed ?? null, regenOptions);
       } catch (err) {
         console.warn('Reaction regen failed:', err?.message || err);
       }
@@ -12444,7 +12342,7 @@ client.on('messageCreate', async (message) => {
         await seekdeepSendImagePromptChoice(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
         remember(key, 'assistant', 'Queued image locally for: ' + imagePrompt);
-        await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
+        await seekdeepSendImageWithButtons(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       }
       return;
     }
@@ -12677,7 +12575,7 @@ client.on('messageCreate', async (message) => {
         await seekdeepSendImagePromptChoice(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
         remember(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
-        await seekdeepSendImageWithButtonsMessage(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
+        await seekdeepSendImageWithButtons(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       }
       return;
     }
@@ -13311,7 +13209,7 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
     content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 1500),
   });
 
-  // Build a proxy message so we can reuse seekdeepSendImageWithButtonsMessage exactly
+  // Build a proxy message so we can reuse seekdeepSendImageWithButtons exactly
   // like the regular natural-language path. The proxy replies into the original channel.
   const proxy = {
     author: { id: interaction.user?.id || 'unknown' },
@@ -13329,7 +13227,7 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
   };
 
   try {
-    await seekdeepSendImageWithButtonsMessage(proxy, prompt, 1024, 1024, null, {
+    await seekdeepSendImageWithButtons(proxy, prompt, 1024, 1024, null, {
       refine: false,
       ground: true,
       cleanPrompt: prompt,
@@ -14052,7 +13950,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const queueOne = async (regenMode) => {
         const regenOptions = seekdeepRegenerateModeOptions(regenMode, { ...state, originalPrompt: basePrompt });
-        return seekdeepSendImageWithButtonsMessage(proxy, basePrompt, state.width || 1024, state.height || 1024, state.seed ?? null, regenOptions);
+        return seekdeepSendImageWithButtons(proxy, basePrompt, state.width || 1024, state.height || 1024, state.seed ?? null, regenOptions);
       };
       if (mode === 'both') {
         void queueOne('original');
@@ -14225,7 +14123,7 @@ client.on('interactionCreate', async (interaction) => {
         await seekdeepSendImagePromptChoice(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
       } else {
         remember(key, 'assistant', `Generated image locally for: ${cleanImagePrompt}`);
-        await seekdeepSendImageWithButtonsInteraction(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
+        await seekdeepSendImageWithButtons(interaction, cleanImagePrompt, width, height, seed ?? null, seekdeepImageModeOptions);
       }
       return;
     }
@@ -14473,7 +14371,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
         seekdeepLogRoute(routeName, selectionPrompt);
       }
 
-      await seekdeepSendImageWithButtonsMessage(
+      await seekdeepSendImageWithButtons(
         messageProxy,
         selectionPrompt,
         width,
@@ -14868,7 +14766,7 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
           skipCooldown: true,
         };
 
-    return await seekdeepSendImageWithButtonsMessage(
+    return await seekdeepSendImageWithButtons(
       proxy,
       basePrompt,
       width,
