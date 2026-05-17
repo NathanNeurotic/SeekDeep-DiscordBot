@@ -89,19 +89,21 @@ See [COMMANDS.md](COMMANDS.md) for the full command map.
 
 ## Conversation Memory
 
-Chat now uses rolling channel memory by default, so a short sequence of requests can carry earlier goals, constraints, names, and decisions forward. Utility commands, archive commands, status/cache/queue checks, identity questions, and image prompts do not inject chat memory.
+Chat uses rolling channel memory by default, so a short sequence of requests can carry earlier goals, constraints, names, and decisions forward. Utility commands, archive commands, status/cache/queue checks, identity questions, and image prompts do not inject chat memory.
 
-Relevant knobs:
+Relevant knobs (defaults shown — `.env.default` may differ from the running `.env`):
 
 ```text
 SEEKDEEP_MEMORY_MODE=rolling
-MAX_CONTEXT_MESSAGES=28
-MAX_CONTEXT_CHARS=14000
-SEEKDEEP_MEMORY_RECENT_ENTRIES=18
-SEEKDEEP_MEMORY_CONTEXT_CHARS=12000
+MAX_CONTEXT_MESSAGES=40
+MAX_CONTEXT_CHARS=24000
+SEEKDEEP_MEMORY_RECENT_ENTRIES=30
+SEEKDEEP_MEMORY_CONTEXT_CHARS=20000
 ```
 
 Set `SEEKDEEP_MEMORY_MODE=followup` to return to conservative follow-up-only memory, or `off` to disable memory injection.
+
+Optional per-user **memory presets** layer on top: `@SeekDeep memory preset add brief` / `expert` / `no-emoji` / `formal` / `casual`, or a custom line. They're rendered as system-prompt hints whenever that user is the requester. `@SeekDeep memory preset list | remove <key> | clear`.
 
 ## Image Generation
 
@@ -170,7 +172,7 @@ Archive thread names track archived generation entries, not general messages. Ar
 
 ## Right-click Context Menu Commands
 
-Right-click any Discord message → **Apps** → SeekDeep submenu. Five message context menu commands:
+Right-click any Discord message → **Apps** → SeekDeep submenu. Five message context menu commands ship by default; a sixth is flag-gated off.
 
 | Command | Action |
 |---|---|
@@ -179,6 +181,9 @@ Right-click any Discord message → **Apps** → SeekDeep submenu. Five message 
 | **Inspect (SeekDeep)** | Ephemeral debug card: IDs, timestamps, attachments, buttons, and any cached SeekDeep image state. |
 | **Translate (SeekDeep)** | Translate / decode the message text to plain English. |
 | **Compare with previous** | Compare this message against the prior non-bot message in the channel. |
+| **Force React (SeekDeep)** *(disabled by default)* | Paginated emoji picker — pick up to 5 custom emoji from a 4-select-menu grid, applied as reactions to the target message. Enable with `SEEKDEEP_FEATURE_FORCE_REACT=on` in `.env`. Off by default so SeekDeep doesn't fight demonbot for the same slot in shared servers. |
+
+By default the **Refine / Translate / Compare** results post publicly so everyone in the channel sees them. Flip the corresponding `SEEKDEEP_CONTEXT_*_EPHEMERAL=on` env var to make any one of them ephemeral (only the clicker sees it).
 
 ## Chat Model Roles
 
@@ -338,6 +343,21 @@ SEEKDEEP_ADMIN_IDS=123456789012345678,234567890123456789
 
 Image generation jobs from listed admins get queue priority (jump ahead of non-admin pending jobs).
 
+## Feature Flags
+
+Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All default to `off`. Flip to `on` and restart to enable.
+
+| Flag | Default | What it gates |
+|---|---|---|
+| `SEEKDEEP_FEATURE_EMOJI_VAULT` | off | `@SeekDeep emoji backup/import/count/list` commands. Off so SeekDeep doesn't fight demonbot for the same vault thread in shared servers. |
+| `SEEKDEEP_FEATURE_FORCE_REACT` | off | Right-click "Force React (SeekDeep)" context menu + paginated emoji picker. Same demonbot-coexistence reason. |
+| `SEEKDEEP_FEATURE_IMG2IMG` | off | `/image style:img2img` and right-click "Vary this". Requires SDXL pipeline exposing img2img (works in `diffusers >= 0.27`). Scaffolded but not wired into a UI yet. |
+| `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. Requires Real-ESRGAN weights + a Python endpoint. Scaffolded. |
+| `SEEKDEEP_FEATURE_NSFW_GATE` | off | Scores generated images via a CLIP NSFW classifier and either spoiler-wraps or refuses based on threshold. Scaffolded. |
+| `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). Scaffolded. |
+| `LOCAL_VISION_KEEP_RESIDENT` | on (in your `.env`) / off (in `.env.default`) | Pins the vision model in VRAM across task switches. |
+| `LOCAL_IMAGE_KEEP_RESIDENT` | off | Same for the SDXL image pipeline. Image is bursty enough that pinning it usually isn't worth the VRAM. |
+
 ## Health Checks
 
 Local AI server:
@@ -346,16 +366,20 @@ Local AI server:
 curl http://127.0.0.1:7865/health
 ```
 
-Bot syntax:
+Full preflight (recommended after any source change):
+
+```powershell
+npm run preflight
+```
+
+Runs `node --check` on the JS files, `python -m py_compile` on the Python files, and `npm run smoke` in one go. ~1 second total. Exit code 0 only when every stage passes.
+
+Individual checks:
 
 ```powershell
 node --check index.js
-```
-
-Python syntax:
-
-```powershell
 .\.venv\Scripts\python.exe -m py_compile .\local_ai_server.py
+npm run smoke
 ```
 
 ## Troubleshooting
@@ -368,10 +392,66 @@ Python syntax:
 
 ## Release Notes
 
+### v10.10 — visual-attachment helper dedup
+
+Final audit cleanup. Replaced `seekdeepAttachmentLooksVisual` and `seekdeepFirstVisualAttachment` with the stricter, more thorough `seekdeepLooksLikeVisualAttachment` and `firstVisualAttachmentFrom` (handles forwarded-message snapshots + embed image URLs). Simplified `seekdeepGetReplyVisualAttachment` from 10 lines to 2 via `fetchRepliedMessage` + `firstVisualAttachmentFrom`. Documented `seekdeepLegacyArchiveUserThreadName` as intentional backward-compat for pre-v10 archive threads.
+
+### v10.9 — messageCreate handler split (632 → 112 lines)
+
+The anonymous `client.on('messageCreate', ...)` handler was the largest construct in `index.js`. Now extracted into two named helpers:
+
+- `seekdeepDispatchAddressedMessage(message, ctx)` — the ~370-line route dispatcher (reply-translate, chat-ask, image-direct-alias, pending-image-subject V1/V2, vision, raw-image, research-table, chat fallback, and all utility routes).
+- `seekdeepProcessPreAddressMessageRoutes(message)` — the ~140-line pre-mention archive routes (config, status, search, persona, memory presets, stats, digest, reactrule, emoji vault, natural-archive followups).
+
+The remaining 112 lines in `messageCreate` are gate checks + address-validation + dispatcher calls. Route order and error handling preserved bit-identically.
+
+### v10.8 — SendImageWithButtons consolidation
+
+The 4th and final Message/Interaction send-pair merged. `seekdeepSendImageWithButtons(target, ...)` replaces the 219-line Message variant + 126-line Interaction variant. 20 call sites rewritten. Two latent bugs fixed in passing (an undefined-`message` ref in the Interaction variant; a dead-code empty `seekdeepRefinedPromptLine` call in the Message variant).
+
+### v10.7 — Message/Interaction send-pair consolidation (3/4)
+
+New `seekdeepReplyToTarget(target, payload, options?)` helper sniffs whether the target is a `Message` or an `Interaction` and dispatches to the appropriate reply API. Three near-identical Message/Interaction pairs collapsed:
+
+- `seekdeepPostArchive(target)` ← `…FromMessage` + `…FromInteraction`
+- `seekdeepPostRecentImages(target, limit)` ← same pattern
+- `seekdeepSendImagePromptChoice(target, ...)` ← same pattern
+
+The `previousReply` option lets the Message path edit a prior reply handle, matching `Interaction.editReply` semantics for the "preparing → final" flow.
+
+### v10.6 — V13/V14/V15 wrapper consolidation
+
+Deleted six passthrough wrappers (`seekdeepRememberSafeV13`, `seekdeepMemoryKeyFromSafeV13`, `seekdeepGetRecentContextSafeV13`, `seekdeepShouldUseMemorySafeV13`, `seekdeepBuildPromptWithMemorySafeV14`, `seekdeepBuildSearchQuerySafeV15`) that were one-liner `return realFn(...)` forwarders. 87 call sites rewritten to invoke `remember`, `memoryKeyFrom`, etc. directly.
+
+### v10.5 — hygiene pass + Discord-mock test harness
+
+- 25 dead top-level functions deleted (~700 LOC).
+- New `SEEKDEEP_TEST_MODE=1` gate. When set, `index.js` skips `client.login()` and exposes whitelisted pure helpers on `globalThis.__seekdeepTest` so smoke tests can exercise the **real** functions instead of mirrored copies.
+- `smoke_test.mjs` refactored to import index.js with test mode and route checks through real helpers. 55 → 61 checks.
+- `scripts/preflight.mjs` + `npm run preflight` — runs `node --check` + `python -m py_compile` + smoke test in ~1 second.
+- New `seekdeepFetchWithLimits(url, { timeoutMs, maxBytes })` helper. Replaces 3 raw `fetch(attachment.url)` calls (vision, reactrule import, emoji vault import) with timeout + Content-Length precheck. Env knobs: `SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS`, `SEEKDEEP_FETCH_DEFAULT_MAX_BYTES`.
+- 9 hardcoded `.slice(0, 1900)` → `.slice(0, MAX_DISCORD_CHARS)`; 2 duplicate hardcoded 5-min TTLs → `SEEKDEEP_EMERGENCY_SEEN_TTL_MS`.
+
+### v10.4.4 — feature-flag Force React, default off
+
+`SEEKDEEP_FEATURE_FORCE_REACT=off` (default) hides the right-click "Force React (SeekDeep)" entry, refuses the dispatcher route, and tears down any stale picker UI. Set to `on` to re-enable. The reason: demonbot ships an identical feature in shared servers and we don't want to fight over the right-click slot.
+
+### v10.4.3 — feature-flag the emoji vault, default off
+
+`SEEKDEEP_FEATURE_EMOJI_VAULT=off` (default) suppresses the `@SeekDeep emoji backup/import/count/list` commands and hides their block from `@SeekDeep help`. Same demonbot-coexistence reason.
+
+### v10.4.2 — Emoji vault thread + ZIP backup
+
+`@SeekDeep emoji backup` (when the feature flag is on) finds or creates a dedicated `<Guild> — Emojis` thread, posts paginated emoji previews (Animated section then Standard section, 20 per page with previews + names + IDs), attaches a JSON manifest, and attaches a ZIP containing every emoji image for portable restore. `emoji import` accepts either the JSON or the ZIP. New dep: `jszip ^3.10.1`.
+
+### v10.4.1 — Force React paginated emoji picker
+
+Replaced the text-input modal with a paginated picker matching demonbot.win's UX: 4 collapsible select menus × 25 emoji per page, nav row with Prev/Next/Apply/Cancel buttons, per-user-per-target-message TTL state with 5-emoji cap.
+
 ### v10.4 — help topics, vision pin, chunker hardening
 
 - **`@SeekDeep help <topic>`** slices the help to a single section. Topics: `chat`, `image`, `vision`, `archive`, `model`, `recent`, `admin`, `reactrule`, `emoji`, `context`, `all`. Both `help chat` and `chat help` work. `/help` gained a `topic:` option with the same choices.
-- **Vision keep-resident**: set `LOCAL_VISION_KEEP_RESIDENT=on` in `.env` to pin the vision model in VRAM across task switches. Eliminates unload/reload cost when alternating chat ↔ vision (e.g. asking follow-up questions about an image). On a 24GB GPU, chat 8B at 4-bit + vision 3B at fp16 is a comfortable budget. `LOCAL_IMAGE_KEEP_RESIDENT=on` does the same for the SDXL pipe. Explicit `POST /unload` still clears everything regardless of pins.
+- **Vision keep-resident**: set `LOCAL_VISION_KEEP_RESIDENT=on` in `.env` to pin the vision model in VRAM across task switches. Eliminates unload/reload cost when alternating chat ↔ vision. On a 24GB GPU, chat 8B at 4-bit + vision 3B at fp16 is a comfortable budget. `LOCAL_IMAGE_KEEP_RESIDENT=on` does the same for the SDXL pipe. Explicit `POST /unload` still clears everything regardless of pins.
 - **Fence-aware Discord chunker** (v10.3.1): `splitDiscordText` now tracks open code fences. When a long reply needs to be split across multiple Discord messages, the chunker closes the open ` ``` ` on the cut chunk and reopens with the same language hint on the next. Fixes mangled `@SeekDeep help` output where `## Section` headers appeared between fences as raw markdown.
 
 ### v10.3 — demonbot-inspired features
@@ -379,9 +459,9 @@ Python syntax:
 Ports five features from [demonbot.win](https://www.demonbot.win/). Quote Cards and Game Lookup intentionally skipped.
 
 - **Auto Reactions**: per-guild rules in `data/auto-reactions.json`. Substring match by default, or `/regex/flag` form. Built-in stacking triggers (`long_message`, `forwarded`, `code_block`, `image_only`, `link_only`) can be toggled individually. Manage with `@SeekDeep reactrule add/list/remove/toggle/builtin/export/import`.
-- **Force React**: right-click any message → **Force React** opens a modal accepting up to 5 emoji tokens. Permission-gated to message owner, **Manage Messages**, or `SEEKDEEP_ADMIN_IDS`. Resolves custom-emoji names automatically.
+- **Force React** *(disabled by default since v10.4.4)* — paginated emoji picker.
 - **`/say`**: admin-only anonymous posting. `Manage Messages` required. Strips `@everyone`, `@here`, and role mentions.
-- **Emoji Vault**: `@SeekDeep emoji backup` returns a JSON of all guild custom emoji; `@SeekDeep emoji import` (with the JSON attached) recreates any missing ones. Needs **Manage Expressions**.
+- **Emoji Vault** *(disabled by default since v10.4.3)* — thread-based backup with ZIP.
 
 ### v10.2
 
@@ -399,8 +479,12 @@ The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/`
 git log --oneline
 git tag                 # v10.0-baseline tags the first commit
 git status              # see local changes
-npm run smoke           # run the regression smoke test (no Discord, no model load)
+npm run preflight       # node --check + py_compile + smoke test, ~1 second total
+npm run smoke           # smoke test only (no Discord, no model load)
 ```
+
+The smoke test imports `index.js` with `SEEKDEEP_TEST_MODE=1` so it can exercise real helpers (chunker, frustration filter, regex predicates, help text renderer, emoji-vault math, force-react picker math) instead of inline mirrors. See `globalThis.__seekdeepTest` in `index.js` for the whitelisted exports.
 
 For internal component notes, see [AGENTS.md](AGENTS.md).
 For system requirements, see [REQUIREMENTS.md](REQUIREMENTS.md).
+For planned work and deferred improvements, see [PLANNED.md](PLANNED.md).

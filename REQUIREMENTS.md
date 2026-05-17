@@ -35,10 +35,11 @@ npm install
 
 Current direct dependencies from `package.json`:
 
-- `discord.js`
-- `dotenv`
-- `node-fetch`
-- `form-data`
+- `discord.js` ^14.18.0
+- `dotenv` ^16.4.7
+- `node-fetch` ^3.3.2
+- `form-data` ^4.0.1
+- `jszip` ^3.10.1 — used by the emoji vault to build/parse the image ZIP backup (feature-flagged off by default since v10.4.3)
 
 ## Python Packages
 
@@ -68,45 +69,105 @@ http://127.0.0.1:7865
 
 Copy `.env.default` to `.env` for a fresh setup, then add the Discord token.
 
-Current local defaults:
+A complete list of supported env vars lives in `.env.default` (the template `.env` is copied from). The most-touched are:
 
 ```text
+# Required
 DISCORD_TOKEN=
 
+# Backend providers
 CHAT_PROVIDER=nvidia-local
 IMAGE_PROVIDER=nvidia-local
 VISION_PROVIDER=nvidia-local
 WEB_SEARCH_PROVIDER=searxng
 
+# Local endpoints
 LOCAL_AI_BASE_URL=http://127.0.0.1:7865
 SEARXNG_BASE_URL=http://127.0.0.1:8080
 
+# Models
 LOCAL_CHAT_MODEL_ID=Qwen/Qwen3-8B
 LOCAL_VISION_MODEL_ID=Qwen/Qwen2.5-VL-3B-Instruct
 LOCAL_IMAGE_MODEL_ID=Lykon/dreamshaper-xl-1-0
 
+# Role-aware chat models (v10.1)
+LOCAL_CHAT_FALLBACK_MODEL_ID=ibm-granite/granite-3.3-8b-instruct
+LOCAL_CHAT_QUALITY_MODEL_ID=mistralai/Mistral-Nemo-Instruct-2407
+LOCAL_CHAT_REASONING_MODEL_ID=microsoft/phi-4
+LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID=google/gemma-3n-E4B-it
+
+# Quantization
+LOCAL_CHAT_QUANT=4bit
+LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat
+
+# Model cache + offline
 LOCAL_MODEL_CACHE_DIR=./models/huggingface
 MODEL_KEEP_MODE=task-lru
+LOCAL_VISION_KEEP_RESIDENT=on              # v10.4 — pin vision in VRAM
+LOCAL_IMAGE_KEEP_RESIDENT=off              # v10.4 — pin SDXL in VRAM
+HF_LOCAL_FILES_ONLY=true                   # offline after warmup
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+HF_DATASETS_OFFLINE=1
 
-HF_LOCAL_FILES_ONLY=false
-HF_HUB_OFFLINE=0
-TRANSFORMERS_OFFLINE=0
-HF_DATASETS_OFFLINE=0
-
+# Web search
 WEB_AUTO_SEARCH=true
 WEB_SEARCH_STRICT_ROUTING=true
 WEB_SEARCH_FAIL_OPEN=true
 WEB_APPEND_SOURCES=true
 
+# Memory + chunking
 MAX_DISCORD_CHARS=1900
 SEEKDEEP_MEMORY_MODE=rolling
-MAX_CONTEXT_MESSAGES=28
-MAX_CONTEXT_CHARS=14000
-SEEKDEEP_MEMORY_RECENT_ENTRIES=18
-SEEKDEEP_MEMORY_CONTEXT_CHARS=12000
+MAX_CONTEXT_MESSAGES=40
+MAX_CONTEXT_CHARS=24000
+SEEKDEEP_MEMORY_RECENT_ENTRIES=30
+SEEKDEEP_MEMORY_CONTEXT_CHARS=20000
+
+# Image generation
 SEEKDEEP_IMAGE_PROMPT_MAX_CHARS=650
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT=true
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS=180000
+SEEKDEEP_IMAGE_COOLDOWN_MS=15000
+
+# TTLs
+SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS=900000
+SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS=900000
+SEEKDEEP_RECENT_VISION_TARGET_TTL_MS=600000
+SEEKDEEP_LAST_SUBJECT_TTL_MS=900000
+SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=600000
+SEEKDEEP_EMERGENCY_SEEN_TTL_MS=300000      # v10.5 — naming the 5-min Set TTLs
+
+# Feature flags (all default off — see README "Feature Flags")
+SEEKDEEP_FEATURE_EMOJI_VAULT=off           # demonbot coexistence
+SEEKDEEP_FEATURE_FORCE_REACT=off           # demonbot coexistence
+SEEKDEEP_FEATURE_IMG2IMG=off               # scaffold only
+SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off    # scaffold only
+SEEKDEEP_FEATURE_NSFW_GATE=off             # scaffold only
+SEEKDEEP_FEATURE_TTS_VOICE=off             # scaffold only
+
+# Channel gating + admin IDs
+SEEKDEEP_ALLOWED_CHANNELS=
+SEEKDEEP_BLOCKED_CHANNELS=
+SEEKDEEP_ADMIN_IDS=
+
+# Context-menu reply visibility (off = public, on = ephemeral)
+SEEKDEEP_CONTEXT_REFINE_EPHEMERAL=off
+SEEKDEEP_CONTEXT_TRANSLATE_EPHEMERAL=off
+SEEKDEEP_CONTEXT_COMPARE_EPHEMERAL=off
+
+# Daily digest
+SEEKDEEP_DAILY_DIGEST=off
+SEEKDEEP_DAILY_DIGEST_HOUR=9
+
+# Logging
+SEEKDEEP_FILE_LOGGING=on
+MODEL_ROUTER_LOG=true
+MODEL_LOG_VRAM=true                        # off in .env.default to keep startup quiet
+
+# Fetch safety (v10.5)
+SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS=30000
+SEEKDEEP_FETCH_DEFAULT_MAX_BYTES=52428800
 ```
 
 ## Current Local Models
@@ -140,12 +201,23 @@ The server uses task-LRU model loading, so switching from chat refinement to ima
 
 ## Verification
 
-Run these checks after code changes:
+Run the full preflight after code changes:
+
+```powershell
+npm run preflight
+```
+
+Runs `node --check` on the JS files, `python -m py_compile` on the Python files, and the smoke test in ~1 second. Exit code 0 only when every stage passes.
+
+Individual checks:
 
 ```powershell
 node --check .\index.js
 .\.venv\Scripts\python.exe -m py_compile .\local_ai_server.py
+npm run smoke
 ```
+
+The smoke test (`smoke_test.mjs`) sets `SEEKDEEP_TEST_MODE=1` before importing `index.js`, so it exercises real helpers (chunker, frustration filter, help text, emoji vault math, force-react picker math, etc.) without spinning up a Discord connection or loading any local models.
 
 Check local AI health:
 

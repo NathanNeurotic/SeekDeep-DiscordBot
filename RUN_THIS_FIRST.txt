@@ -1,4 +1,0 @@
-Extract to C:\Users\natha\SeekDeep-DiscordBot
-Run setup_local.ps1
-Edit .env with DISCORD_TOKEN if needed
-Run seekdeep_launcher.bat and choose option 8

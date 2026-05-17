@@ -1,12 +1,21 @@
 # SeekDeep Smoke Test
 
-Run after the v10.0-baseline commit + the recent batch of fixes to verify nothing regressed. Each step has an explicit pass criterion.
+Run after any source change to verify nothing regressed. Each step has an explicit pass criterion. The automated half runs in ~1 second via `npm run preflight`; the live-Discord half requires a running bot.
 
-## 0. Pre-flight
+## 0. Automated preflight
 
-- [ ] `node --check index.js` exits clean
-- [ ] `.\.venv\Scripts\python.exe -m py_compile local_ai_server.py warmup_local_cache.py` exits clean
-- [ ] `git status` shows the expected uncommitted state
+The fast path — runs the three regression layers in one command:
+
+- [ ] `npm run preflight` exits 0 with `3 ok · 0 fail`
+   - `js` stage: `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`
+   - `py` stage: `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`
+   - `smoke` stage: `node smoke_test.mjs` reports `pass=61 fail=0` (or higher as new checks are added)
+
+If preflight fails, do not proceed to live-Discord smoke. Fix the failure first.
+
+Additional one-time checks before a release:
+
+- [ ] `git status` shows only expected uncommitted state
 - [ ] `npm run audit:model-cache` — all four chat-role models + vision + image marked `cached`
 - [ ] `.env` has `HF_LOCAL_FILES_ONLY=true` (or you're knowingly in online mode)
 
@@ -28,10 +37,21 @@ Run after the v10.0-baseline commit + the recent batch of fixes to verify nothin
 ## 3. `/help`
 
 - [ ] `@SeekDeep help` returns the command map
+- [ ] Output is a single readable message with code-fenced sections — no `## Section` headers stranded between fences (the v10.3.1 fence-aware chunker fix)
 - [ ] Includes a "Chat Model Roles (automatic)" section
 - [ ] Includes "Natural-language archive of the most recent image"
-- [ ] Includes "Right-click message context menu" with all 5 commands
+- [ ] Includes "Right-click message context menu" listing Inspect, Generate Image, Refine, Translate, Compare
+- [ ] Force React is **absent** from the right-click section (flag-gated off in v10.4.4)
+- [ ] "Emoji vault" section is **absent** (flag-gated off in v10.4.3)
 - [ ] Includes `/recent kind:images|prompts|archive`
+
+Help topic slicing (v10.4):
+
+- [ ] `@SeekDeep help chat` returns only the chat section
+- [ ] `@SeekDeep help archive` returns only the archive section(s)
+- [ ] `@SeekDeep help reactrule` returns only the auto-reactions section
+- [ ] `@SeekDeep help nonsense` returns "Unknown help topic ..." with a list of valid topics
+- [ ] `/help topic:vision` returns only the vision section
 
 ## 4. Chat routing
 
@@ -104,6 +124,39 @@ Run after the v10.0-baseline commit + the recent batch of fixes to verify nothin
 
 - [ ] Stop the bot (Ctrl+C in launcher) → no unhandled rejection on exit.
 - [ ] Restart via option 8 again → clean startup, no stale state errors.
+
+## 14. Feature flags (when re-enabling)
+
+Only run these when a flag is intentionally flipped to `on`. Otherwise expect the feature to be silent (no command response, no UI entry).
+
+`SEEKDEEP_FEATURE_EMOJI_VAULT=on`:
+
+- [ ] `@SeekDeep emoji backup` finds-or-creates a `<Guild> — Emojis` thread.
+- [ ] Anchor message reads `<Guild> — Emojis — do not delete this message.`
+- [ ] Animated section then Standard section, 20 entries per page.
+- [ ] Each entry: `<emoji-preview> N.)  \`name\`  \`id\``.
+- [ ] Final message has a `.zip` attachment named `emojis_<GuildName>.zip` and a `.json` named `emojis_<guildId>.json`.
+- [ ] `@SeekDeep emoji import` with the same `.zip` attached → "Done. Added 0, skipped N, failed 0." on the same server (everything already exists).
+
+`SEEKDEEP_FEATURE_FORCE_REACT=on`:
+
+- [ ] Right-click any message → Apps → **Force React (SeekDeep)** opens an ephemeral picker.
+- [ ] 4 collapsible select menus, 25 emoji each (or fewer on the last menu).
+- [ ] Selecting an emoji updates the "Selected (n/5)" line with visible glyphs.
+- [ ] Selecting 6+ caps to 5 in insertion order.
+- [ ] Page nav buttons disabled at edges; `💥 Apply` disabled when n=0.
+- [ ] Apply → reactions appear on the target message; picker collapses to a summary.
+
+## 15. Live-Discord routing regression suite
+
+Quick smoke for the v10.5–v10.10 refactors — none of these have visible UX changes, but they all flow through code that moved:
+
+- [ ] `@SeekDeep ask what is rust?` → chat reply with web sources, no errors in console.
+- [ ] `@SeekDeep tell me about Mario` → routes to `quality_text` AND auto-searches web (proper-noun lookup detector).
+- [ ] `/image prompt:a serene mountain lake` → cooldown gate works, queue ack posts, image arrives with the action button row, Download button links to the full-res CDN URL.
+- [ ] Generate an image, then `@SeekDeep archive this` → posts to your archive thread with both Download + Delete from Archive buttons.
+- [ ] Click **Delete from Archive** on an entry → entry deletes, thread count updates correctly.
+- [ ] `@SeekDeep recent prompts` and `@SeekDeep recent errors` → both reply without console errors (post-v10.7 unified `seekdeepPostRecentImages`).
 
 ## What "pass" means
 
