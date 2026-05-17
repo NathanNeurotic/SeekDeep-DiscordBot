@@ -2,20 +2,25 @@
 
 This file tracks everything that's been discussed, scoped, or partially scaffolded but not yet shipped. Items here are not commitments — they're a parking lot for "next time we sit down with this codebase, here's what's on deck."
 
+## Recently Shipped
+
+### v10.12 — GPU / VRAM live monitoring ✅ shipped
+
+Built in response to an observed lag pattern: host began to severely lag after a couple of image generations, likely VRAM thrashing into Windows shared memory once chat + pinned vision + SDXL coexisted past the GPU's hardware VRAM budget.
+
+- ✅ `local_ai_server.py` exposes `gpu_stats()` via new `/gpu` endpoint and a `gpu` sub-object on `/health`. Returns `allocated_mb`, `reserved_mb`, `free_mb`, `total_mb`, `used_mb`, `used_pct`, `reserved_pct`, plus `loaded` + `keep_resident` state.
+- ✅ `@SeekDeep gpu` / `@SeekDeep vram` natural commands and `/gpu` slash command.
+- ✅ Live-tail mode: `@SeekDeep gpu watch [N]` or `/gpu watch:true interval:N`. Edits one message every N seconds (clamped 2–60). Auto-stops after 2 minutes. React ✋ to stop early. Per-channel single-active-watcher lock.
+- ✅ `@SeekDeep status` now shows a one-line GPU summary at the top + a thrashing warning when PyTorch's reserved pool ≥ 90% of total VRAM.
+- ✅ 17 new smoke checks in `smoke_test.mjs` covering the bar renderer, formatter, thrashing detector, and watch-interval parser.
+
+What was scoped but NOT shipped:
+- Optional background sampler that writes `logs/gpu-YYYY-MM-DD.log` every 30s when `SEEKDEEP_GPU_LOGGING=on`. Could add later if retrospective debugging needs it.
+- A "VRAM budget" table in README documenting which model combinations fit a 24 GB card. Worth adding after observing real-world numbers from the live watcher.
+
 ## Next Up
 
-### GPU / VRAM live monitoring *(triggered by an observed lag pattern)*
-
-**Symptom**: After a couple of image generations the host machine begins to severely lag. Likely cause: VRAM thrashing into Windows shared memory once chat + vision (pinned via `LOCAL_VISION_KEEP_RESIDENT=on`) + SDXL coexist past the GPU's hardware VRAM budget.
-
-**Plan**:
-
-1. Extend the Python server's `/health` endpoint to include `gpu.allocated_mb`, `gpu.reserved_mb`, `gpu.total_mb`, `gpu.free_mb`, and `gpu.utilization_pct` via `torch.cuda.mem_get_info()` + `nvidia-smi` shell-out (with a fallback when nvidia-smi isn't on PATH).
-2. Add a `@SeekDeep gpu` / `@SeekDeep vram` command + `/gpu` slash command that fetches `/health` and renders the GPU section as a clean text block: VRAM used/total bar, current task, loaded chat role, loaded model IDs.
-3. Add a "live tail" mode — `@SeekDeep gpu watch [seconds]` edits a single message every N seconds (default 5s, max 60s, capped at 2 minutes total) so you can watch VRAM rise/fall in real-time during a generation. Auto-stops when the run completes.
-4. Extend `@SeekDeep status` to surface a one-line GPU summary at the top so problems are visible by default.
-5. Bot-side: optional background sampler that writes `logs/gpu-YYYY-MM-DD.log` every 30s when `SEEKDEEP_GPU_LOGGING=on`. Useful for retrospective debugging after a lag spike.
-6. Document the VRAM math in README: which combinations fit a 24 GB card and which spill into shared memory (the proximate cause of system-wide lag on Windows).
+(open — propose what to tackle next.)
 
 ## Deferred From the v10.5 Audit
 

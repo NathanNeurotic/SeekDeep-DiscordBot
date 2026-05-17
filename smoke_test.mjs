@@ -204,6 +204,49 @@ check('help+chunker: real help text chunks have balanced fences', helpUnbalanced
 const helpOversize = helpRealChunks.filter((c) => c.length > T.chunkerConstants.maxDiscordChars).length;
 check('help+chunker: real help text chunks under limit', helpOversize === 0, helpOversize + ' oversize');
 
+// v10.12: GPU helpers
+console.log('15. GPU monitoring helpers.');
+check('gpu bar: 0% -> all empty', T.seekdeepFormatGpuBar(0) === '░'.repeat(20));
+check('gpu bar: 100% -> all filled', T.seekdeepFormatGpuBar(100) === '█'.repeat(20));
+check('gpu bar: 50% -> half filled', T.seekdeepFormatGpuBar(50) === '█'.repeat(10) + '░'.repeat(10));
+check('gpu bar: clamps over 100%', T.seekdeepFormatGpuBar(150) === '█'.repeat(20));
+check('gpu bar: clamps negative', T.seekdeepFormatGpuBar(-10) === '░'.repeat(20));
+
+const unavailable = T.seekdeepFormatGpuStats({ available: false });
+check('gpu format: unavailable surfaces as one-line summary', /unavailable/i.test(unavailable.summary));
+
+const sample = {
+  available: true,
+  device_name: 'NVIDIA GeForce RTX 5090 Laptop GPU',
+  total_mb: 24576,
+  free_mb: 10000,
+  used_mb: 14576,
+  allocated_mb: 5000,
+  reserved_mb: 8000,
+  used_pct: 59.3,
+  reserved_pct: 32.5,
+  loaded: { chat_model: true, vision_model: false, image_pipe: false },
+  loaded_chat_role: 'default_chat',
+  loaded_chat_model_id: 'Qwen/Qwen3-8B',
+  keep_resident: { vision: true, image: false },
+};
+const formatted = T.seekdeepFormatGpuStats(sample);
+check('gpu format: summary includes device name', /RTX 5090/.test(formatted.summary));
+check('gpu format: summary includes used/total GB', /14\.2[34] \/ 24\.00 GB/.test(formatted.summary));
+check('gpu format: detail shows loaded chat model', formatted.detail.some((l) => l.includes('Qwen/Qwen3-8B')));
+check('gpu format: detail shows pinned vision', formatted.detail.some((l) => /Pinned.*vision/.test(l)));
+check('gpu format: no thrashing warning at 32% reserved', formatted.thrashing !== true);
+
+const thrash = T.seekdeepFormatGpuStats({ ...sample, reserved_mb: 23000, reserved_pct: 93.5 });
+check('gpu format: thrashing flag at 93% reserved', thrash.thrashing === true);
+check('gpu format: thrashing warning in detail', thrash.detail.some((l) => /WARNING/.test(l)));
+
+// Watch interval parser
+check('gpu watch: "gpu watch" -> default 5', T.seekdeepParseGpuWatchInterval('gpu watch') === 5);
+check('gpu watch: "vram watch 10" -> 10', T.seekdeepParseGpuWatchInterval('vram watch 10') === 10);
+check('gpu watch: "gpu watch 1" clamps to 2', T.seekdeepParseGpuWatchInterval('gpu watch 1') === 2);
+check('gpu watch: "gpu watch 999" clamps to 60', T.seekdeepParseGpuWatchInterval('gpu watch 999') === 60);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

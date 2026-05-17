@@ -133,6 +133,9 @@ Each archive thread entry has:
 | `/cachestatus` | Slash-command cache status. |
 | `/changelog` | Slash-command git log (last 10 commits). |
 | `/status` | Slash-command local backend status. |
+| `@SeekDeep gpu` / `@SeekDeep vram` | One-shot GPU + VRAM snapshot with a visual bar, loaded-task summary, and a thrashing warning when PyTorch reserved pool ≥ 90% of total VRAM. |
+| `@SeekDeep gpu watch [N]` / `vram watch [N]` | Live-tail mode. Edits one message every N seconds (default 5, clamped to 2–60). Auto-stops after 2 minutes. React ✋ on the message to stop early. |
+| `/gpu` | Slash equivalent. `/gpu watch:true interval:5` for live-tail. |
 
 ## Admin / Customization
 

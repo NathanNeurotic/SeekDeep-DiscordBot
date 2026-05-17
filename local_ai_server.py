@@ -219,6 +219,59 @@ def first_model_device(model: Any):
             return "cpu"
 
 
+def gpu_stats() -> dict:
+    """Return current GPU state. Used by /health and /gpu.
+
+    Returns four memory numbers because together they diagnose VRAM thrashing:
+    - allocated_mb: tensors PyTorch is actively using
+    - reserved_mb: caching-allocator pool ceiling (memory PyTorch holds)
+    - free_mb / total_mb: from torch.cuda.mem_get_info(), the GPU's own view
+    - used_mb = total - free, includes Windows desktop compositor + other procs
+
+    When reserved_mb approaches total_mb on Windows, the driver starts
+    overflowing allocations into system shared memory. That's the proximate
+    cause of "the bot generated 2 images and now everything is laggy".
+    """
+    stats: dict = {
+        "available": False,
+        "device_name": device_name(),
+        "loaded_task": loaded_task,
+        "loaded_chat_role": loaded_chat_role,
+        "loaded_chat_model_id": loaded_chat_model_id,
+    }
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return stats
+        stats["available"] = True
+        stats["allocated_mb"] = round(torch.cuda.memory_allocated() / (1024 ** 2), 1)
+        stats["reserved_mb"] = round(torch.cuda.memory_reserved() / (1024 ** 2), 1)
+        try:
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            stats["free_mb"] = round(free_bytes / (1024 ** 2), 1)
+            stats["total_mb"] = round(total_bytes / (1024 ** 2), 1)
+            stats["used_mb"] = round((total_bytes - free_bytes) / (1024 ** 2), 1)
+            if total_bytes > 0:
+                stats["used_pct"] = round(100.0 * (total_bytes - free_bytes) / total_bytes, 1)
+                stats["reserved_pct"] = round(100.0 * torch.cuda.memory_reserved() / total_bytes, 1)
+        except Exception as exc:
+            stats["mem_get_info_error"] = str(exc)
+        # Surface what's currently loaded so the user can correlate VRAM
+        # spikes with which model role / task is in residence.
+        stats["loaded"] = {
+            "chat_model": chat_model is not None,
+            "vision_model": vision_model is not None,
+            "image_pipe": image_pipe is not None,
+        }
+        stats["keep_resident"] = {
+            "vision": KEEP_RESIDENT_VISION,
+            "image": KEEP_RESIDENT_IMAGE,
+        }
+    except Exception as exc:
+        stats["error"] = str(exc)
+    return stats
+
+
 def move_inputs(value: Any, device: Any) -> Any:
     try:
         if hasattr(value, "to"):
@@ -413,6 +466,7 @@ def health():
             "vision": KEEP_RESIDENT_VISION,
             "image": KEEP_RESIDENT_IMAGE,
         },
+        "gpu": gpu_stats(),
         "models": {
             "chat": CHAT_MODEL_ID,
             "vision": VISION_MODEL_ID,
@@ -428,6 +482,13 @@ def unload_endpoint():
     # Explicit user request ignores keep-resident pins.
     unload_all(force=True)
     return {"ok": True, "status": "unloaded"}
+
+
+@app.get("/gpu")
+def gpu_endpoint():
+    """Focused GPU stats endpoint. Lighter than /health; safe to poll
+    every few seconds for live-tail monitoring without spam."""
+    return gpu_stats()
 
 
 @app.exception_handler(Exception)

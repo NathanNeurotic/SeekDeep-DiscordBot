@@ -5645,6 +5645,204 @@ function seekdeepMapDiagnostics() {
   return Object.entries(stats).map(([k, v]) => `  ${k.padEnd(28, ' ')}: ${v}`);
 }
 
+// v10.12: GPU/VRAM monitoring. Renders a one-line summary plus an optional
+// multi-line detail block from the /gpu endpoint payload (or the gpu sub-
+// object inside /health). Used by @SeekDeep status, @SeekDeep gpu, and the
+// live-tail watcher.
+function seekdeepFormatGpuBar(usedPct, width = 20) {
+  const pct = Math.max(0, Math.min(100, Number(usedPct || 0)));
+  const filled = Math.round((pct / 100) * width);
+  return '█'.repeat(filled) + '░'.repeat(Math.max(0, width - filled));
+}
+
+function seekdeepFormatGpuStats(gpu) {
+  if (!gpu || !gpu.available) {
+    return {
+      summary: gpu?.error ? `GPU: unavailable (${gpu.error})` : 'GPU: unavailable (CUDA not available)',
+      detail: ['GPU stats unavailable — local AI server reports CUDA not available.'],
+    };
+  }
+
+  const totalMb = Number(gpu.total_mb || 0);
+  const freeMb = Number(gpu.free_mb || 0);
+  const usedMb = Number(gpu.used_mb || (totalMb - freeMb)) || 0;
+  const allocMb = Number(gpu.allocated_mb || 0);
+  const reservedMb = Number(gpu.reserved_mb || 0);
+  const usedPct = Number(gpu.used_pct || (totalMb > 0 ? (100 * usedMb / totalMb) : 0));
+  const reservedPct = Number(gpu.reserved_pct || (totalMb > 0 ? (100 * reservedMb / totalMb) : 0));
+  const gb = (mb) => (Number(mb) / 1024).toFixed(2);
+
+  const bar = seekdeepFormatGpuBar(usedPct);
+  const summary = `GPU: ${gpu.device_name || 'unknown'}  |  VRAM: ${bar} ${gb(usedMb)} / ${gb(totalMb)} GB (${usedPct.toFixed(1)}%)`;
+
+  const loaded = gpu.loaded || {};
+  const residents = [];
+  if (loaded.chat_model) residents.push(`chat (${gpu.loaded_chat_role || '?'} = ${gpu.loaded_chat_model_id || '?'})`);
+  if (loaded.vision_model) residents.push('vision');
+  if (loaded.image_pipe) residents.push('image (SDXL)');
+  const pinned = [];
+  if (gpu.keep_resident?.vision) pinned.push('vision');
+  if (gpu.keep_resident?.image) pinned.push('image');
+
+  // The thrashing warning: on Windows, once reserved approaches total,
+  // allocations spill into shared system memory which causes system-wide lag.
+  const thrashing = reservedPct >= 90;
+
+  const detail = [
+    `Device: ${gpu.device_name || 'unknown'}`,
+    `VRAM bar: ${bar} ${usedPct.toFixed(1)}%`,
+    `Used:      ${gb(usedMb)} / ${gb(totalMb)} GB  (system view, includes OS + other procs)`,
+    `Free:      ${gb(freeMb)} GB`,
+    `Allocated: ${gb(allocMb)} GB  (PyTorch tensors in active use)`,
+    `Reserved:  ${gb(reservedMb)} GB  (${reservedPct.toFixed(1)}% — PyTorch caching pool ceiling)`,
+    `Loaded task: ${gpu.loaded_task || 'none'}`,
+    `In residence: ${residents.length ? residents.join(', ') : 'none'}`,
+    `Pinned (keep-resident): ${pinned.length ? pinned.join(', ') : 'none'}`,
+  ];
+  if (thrashing) {
+    detail.push('');
+    detail.push('⚠ WARNING: PyTorch reserved pool is at >=90% of total VRAM.');
+    detail.push('  On Windows the driver may spill allocations into shared system memory,');
+    detail.push('  causing system-wide lag. Consider:');
+    detail.push('    1. POST /unload (or `@SeekDeep status` then restart bot) to clear pools');
+    detail.push('    2. Set LOCAL_VISION_KEEP_RESIDENT=off if you pinned it');
+    detail.push('    3. Lower LOCAL_CHAT_QUANT to 4bit if you raised it');
+  }
+
+  return { summary, detail, thrashing };
+}
+
+async function seekdeepFetchGpuStats() {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const data = await fetchJson(`${LOCAL_AI_BASE_URL}/gpu`, { signal: controller.signal });
+      return { ok: true, data };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function seekdeepBuildGpuStatusText({ live = false, tick = 0 } = {}) {
+  const result = await seekdeepFetchGpuStats();
+  if (!result.ok) {
+    return [
+      '**GPU**',
+      asTextBlock([
+        'Local AI server: OFFLINE or /gpu endpoint missing',
+        `Endpoint: ${LOCAL_AI_BASE_URL}/gpu`,
+        `Error: ${result.error}`,
+      ].join('\n')),
+    ].join('\n');
+  }
+  const { summary, detail } = seekdeepFormatGpuStats(result.data);
+  const header = live ? `**GPU watch** · tick ${tick} · ${new Date().toLocaleTimeString()}` : '**GPU**';
+  return [header, asTextBlock([summary, '', ...detail].join('\n'))].join('\n');
+}
+
+// Parse `gpu watch [interval]` to a numeric interval (seconds), clamped to
+// reasonable bounds so a typo can't grief the channel with rapid edits.
+function seekdeepParseGpuWatchInterval(prompt) {
+  const m = String(prompt || '').toLowerCase().match(/(?:gpu|vram)\s+watch(?:\s+(\d+))?/);
+  const raw = m && m[1] ? Number(m[1]) : 5;
+  // Discord rate-limit ~5 edits per 5s per channel for the same message;
+  // 2s is the safe floor.
+  return Math.max(2, Math.min(60, Number.isFinite(raw) ? raw : 5));
+}
+
+// Live-tail GPU watcher. Posts a single message, then edits it every
+// `intervalSec` seconds until either the total budget elapses or the user
+// reacts with ✋ to stop early. Heavyweight enough that we cap it at one
+// active watcher per channel.
+const SEEKDEEP_GPU_WATCH_TOTAL_BUDGET_MS = Number(process.env.SEEKDEEP_GPU_WATCH_TOTAL_BUDGET_MS || 120000); // 2 min
+const SEEKDEEP_GPU_WATCH_ACTIVE = new Map(); // channelId -> { stop: () => void }
+
+async function seekdeepStartGpuWatchFromMessage(message, prompt) {
+  const channelId = String(message?.channel?.id || '');
+  if (!channelId) {
+    await message.reply({ content: 'GPU watch requires a channel context.', allowedMentions: { repliedUser: false } });
+    return;
+  }
+  const existing = SEEKDEEP_GPU_WATCH_ACTIVE.get(channelId);
+  if (existing) {
+    try { existing.stop(); } catch {}
+  }
+
+  const intervalSec = seekdeepParseGpuWatchInterval(prompt);
+  const startedAt = Date.now();
+  const totalBudgetMs = SEEKDEEP_GPU_WATCH_TOTAL_BUDGET_MS;
+
+  // Post the initial tick.
+  let tick = 0;
+  let sent = null;
+  try {
+    const initial = await seekdeepBuildGpuStatusText({ live: true, tick });
+    sent = await message.reply({
+      content: initial + `\n_Live tail · every ${intervalSec}s · auto-stops after ${Math.round(totalBudgetMs / 1000)}s. React ✋ to stop early._`,
+      allowedMentions: { repliedUser: false },
+    });
+  } catch (err) {
+    console.warn('GPU watch initial post failed:', err?.message || err);
+    return;
+  }
+
+  // Try to add a stop reaction. If permissions block it, the user can still
+  // wait for auto-stop.
+  try { await sent.react('✋'); } catch {}
+
+  let cancelled = false;
+  const stop = () => { cancelled = true; };
+  SEEKDEEP_GPU_WATCH_ACTIVE.set(channelId, { stop });
+
+  // Watch for the ✋ reaction from the originator to stop early.
+  const reactionFilter = (reaction, user) => {
+    return reaction?.emoji?.name === '✋'
+      && user?.id === message.author?.id
+      && reaction?.message?.id === sent.id;
+  };
+  let reactionCollector = null;
+  try {
+    reactionCollector = sent.createReactionCollector({ filter: reactionFilter, time: totalBudgetMs });
+    reactionCollector.on('collect', () => { cancelled = true; });
+  } catch {}
+
+  // Edit loop.
+  const loop = async () => {
+    while (!cancelled && (Date.now() - startedAt) < totalBudgetMs) {
+      await new Promise((r) => setTimeout(r, intervalSec * 1000));
+      if (cancelled) break;
+      if ((Date.now() - startedAt) >= totalBudgetMs) break;
+      tick += 1;
+      try {
+        const next = await seekdeepBuildGpuStatusText({ live: true, tick });
+        await sent.edit({
+          content: next + `\n_Live tail · every ${intervalSec}s · auto-stops after ${Math.round(totalBudgetMs / 1000)}s. React ✋ to stop early._`,
+        });
+      } catch (err) {
+        console.warn('GPU watch edit failed; stopping:', err?.message || err);
+        break;
+      }
+    }
+    // Final edit removing the live-tail footer.
+    try {
+      const finalText = await seekdeepBuildGpuStatusText({ live: false, tick });
+      await sent.edit({
+        content: finalText + `\n_GPU watch ended after ${tick} ticks (~${Math.round((Date.now() - startedAt) / 1000)}s)._`,
+      });
+    } catch {}
+    if (reactionCollector) { try { reactionCollector.stop(); } catch {} }
+    if (SEEKDEEP_GPU_WATCH_ACTIVE.get(channelId)?.stop === stop) {
+      SEEKDEEP_GPU_WATCH_ACTIVE.delete(channelId);
+    }
+  };
+  // Fire-and-forget; do not await.
+  void loop();
+}
+
 async function statusText(verbose = false) {
   const botUptime = seekdeepFormatDuration(Date.now() - seekdeepBotMetrics.startedAt);
   const responsesByModel = seekdeepFormatResponsesByModel();
@@ -5711,10 +5909,20 @@ async function statusText(verbose = false) {
       })
     : ['  (none yet)'];
 
+  // v10.12: surface the one-line GPU summary at the top so VRAM pressure is
+  // visible by default. Full detail block lives in @SeekDeep gpu.
+  const gpuInfo = health.gpu ? seekdeepFormatGpuStats(health.gpu) : null;
+  const gpuSummaryLine = gpuInfo?.summary || 'GPU: unavailable';
+  const gpuWarning = gpuInfo?.thrashing
+    ? '⚠ VRAM pressure high — see `@SeekDeep gpu` for detail and remediation.'
+    : '';
+
   return seekdeepRedactStatusConnectionInfo([
     'Local AI server status',
     '',
     `Health: ${health.status}`,
+    gpuSummaryLine,
+    ...(gpuWarning ? [gpuWarning] : []),
     `Device: ${health.device}`,
     `CUDA: ${health.cuda_available ? 'YES' : 'NO'}`,
     `Loaded task: ${loadedTask}`,
@@ -6000,11 +6208,15 @@ function seekdeepHelpText(source = null) {
     prefix + ' changelog',
     prefix + ' stats              (server-wide totals + top contributors)',
     prefix + ' stats me           (your activity in this server)',
+    prefix + ' gpu                (one-shot VRAM + loaded-model snapshot)',
+    prefix + ' gpu watch [N]      (live-tail every N sec, default 5, capped at 2 min)',
+    prefix + ' vram               (alias for `gpu`)',
     '/recent kind:images|prompts|archive',
     prefix + ' cache status',
     prefix + ' queue status',
     '/regen mode:refined|original|both   (regenerate latest channel image)',
     '/changelog                          (last 10 git commits)',
+    '/gpu watch:true interval:5          (live VRAM tail, slash version)',
     '/status verbose:true                (chat-roles map + map-size diagnostics)',
     '```',
     '',
@@ -6822,6 +7034,13 @@ function seekdeepUtilityPromptKind(prompt = '') {
   if (typeof seekdeepIsTextRegenerateImagePrompt === 'function' && seekdeepIsTextRegenerateImagePrompt(p)) return 'regenerate-image';
   if (/^(admin status|am i admin)\b/.test(p)) return 'admin';
 
+  // v10.12: GPU / VRAM live monitoring.
+  // - "gpu" / "vram" / "gpu status" / "vram status" -> one-shot snapshot.
+  // - "gpu watch [N]" / "vram watch [N]" -> live-tail mode (edits one
+  //   message every N seconds, default 5, max 60; capped at 2 minutes total).
+  if (/^(?:gpu|vram)(?:\s+(?:status|info|usage|use|memory|mem|stats))?\s*$/.test(p)) return 'gpu';
+  if (/^(?:gpu|vram)\s+watch\b/.test(p)) return 'gpu-watch';
+
   return '';
 }
 
@@ -7002,6 +7221,19 @@ const commands = [
   new SlashCommandBuilder()
     .setName('changelog')
     .setDescription('Show the latest SeekDeep commits.'),
+  new SlashCommandBuilder()
+    .setName('gpu')
+    .setDescription('Show local AI server GPU / VRAM stats. Add watch:true for a live-tail.')
+    .addBooleanOption((o) =>
+      o.setName('watch')
+        .setDescription('Live-tail mode (edits one message every interval until 2-minute budget elapses).')
+        .setRequired(false))
+    .addIntegerOption((o) =>
+      o.setName('interval')
+        .setDescription('Seconds between edits in watch mode (2-60, default 5).')
+        .setMinValue(2)
+        .setMaxValue(60)
+        .setRequired(false)),
   new SlashCommandBuilder()
     .setName('say')
     .setDescription('Admin: have the bot say something with no attribution.')
@@ -12402,6 +12634,25 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       return;
     }
 
+    if (utilityKind === 'gpu') {
+      seekdeepLogRoute('gpu', prompt);
+      remember(key, 'user', prompt);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      const content = await seekdeepBuildGpuStatusText();
+      remember(key, 'assistant', content);
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (utilityKind === 'gpu-watch') {
+      seekdeepLogRoute('gpu-watch', prompt);
+      remember(key, 'user', prompt);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await seekdeepStartGpuWatchFromMessage(message, prompt);
+      remember(key, 'assistant', 'Started live GPU watch.');
+      return;
+    }
+
     if (utilityKind) {
       seekdeepLogRoute(utilityKind, prompt);
       remember(key, 'user', prompt);
@@ -13975,6 +14226,31 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (commandName === 'gpu') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const watch = Boolean(interaction.options.getBoolean('watch'));
+      const interval = Number(interaction.options.getInteger('interval') || 5);
+      if (!watch) {
+        const content = await seekdeepBuildGpuStatusText();
+        await sendLongInteractionReply(interaction, content);
+        return;
+      }
+      // Live-tail mode via slash. Synthesize a fake "gpu watch N" prompt so
+      // the existing seekdeepStartGpuWatchFromMessage can drive the loop.
+      // It expects a Message; build a minimal compatible shape from the
+      // interaction (channel + author + reply).
+      const proxyMessage = {
+        channel: interaction.channel,
+        author: interaction.user,
+        client: interaction.client,
+        id: interaction.id,
+        reply: (payload) => safeEditOrReply(interaction, payload),
+      };
+      await seekdeepStartGpuWatchFromMessage(proxyMessage, `gpu watch ${interval}`);
+      return;
+    }
+
     if (commandName === 'say') {
       // Admin-only via Discord's setDefaultMemberPermissions(ManageMessages),
       // but double-check at runtime (defense in depth).
@@ -14196,6 +14472,10 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepEmojiVaultFormatPage,
     // Force-react picker math
     seekdeepForceReactBucketRange,
+    // v10.12: GPU monitoring helpers
+    seekdeepFormatGpuBar,
+    seekdeepFormatGpuStats,
+    seekdeepParseGpuWatchInterval,
     // Force-react picker constants (so tests can read them without re-declaring)
     forceReactConstants: {
       bucketSize: SEEKDEEP_FORCE_REACT_BUCKET_SIZE,
