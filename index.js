@@ -6216,16 +6216,22 @@ function seekdeepHelpText(source = null) {
     '```',
     'Built-in stacking reactions auto-apply when their trigger matches (off by default; enable individually).',
     '',
-    '## Emoji vault (admin / Manage Messages)',
-    '```text',
-    prefix + ' emoji backup   (opens/refreshes a "<Server> — Emojis" thread)',
-    prefix + ' emoji import   (attach the JSON manifest OR the ZIP file)',
-    prefix + ' emoji count / list',
-    '```',
-    'Backup creates a dedicated thread with paginated emoji previews, attaches',
-    'a JSON manifest, AND a ZIP containing every emoji image for portable restore.',
-    'Imports skip names that already exist. Bot needs Manage Expressions permission.',
-    '',
+    // Emoji vault block is gated by SEEKDEEP_FEATURE_EMOJI_VAULT. When the
+    // flag is off (default since v10.4.3) we omit it from help entirely so
+    // users don't see commands that won't fire — keeping the floor clear
+    // for demonbot's identical feature.
+    ...(SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? [
+      '## Emoji vault (admin / Manage Messages)',
+      '```text',
+      prefix + ' emoji backup   (opens/refreshes a "<Server> — Emojis" thread)',
+      prefix + ' emoji import   (attach the JSON manifest OR the ZIP file)',
+      prefix + ' emoji count / list',
+      '```',
+      'Backup creates a dedicated thread with paginated emoji previews, attaches',
+      'a JSON manifest, AND a ZIP containing every emoji image for portable restore.',
+      'Imports skip names that already exist. Bot needs Manage Expressions permission.',
+      '',
+    ] : []),
     '## ' + art + ' Image options on /image',
     '```text',
     '/image prompt:<text> quality:low|standard|high  style:anime|photoreal|pixel|...',
@@ -10785,13 +10791,19 @@ const SEEKDEEP_FEATURE_NSFW_GATE_ENABLED = String(process.env.SEEKDEEP_FEATURE_N
 // SEEKDEEP_FEATURE_TTS_VOICE: enables a voice-channel TTS reader. Requires
 //   Piper / XTTS dependencies. Big lift; flag only for now.
 const SEEKDEEP_FEATURE_TTS_VOICE_ENABLED = String(process.env.SEEKDEEP_FEATURE_TTS_VOICE || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_EMOJI_VAULT: gates the "@SeekDeep emoji backup/import/..."
+//   commands. Defaulted off in v10.4.3 because demonbot ships an identical
+//   feature in the same servers and we don't want two bots fighting over
+//   one thread. Flip to "on" if you want SeekDeep to own the vault flow.
+const SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED = String(process.env.SEEKDEEP_FEATURE_EMOJI_VAULT || 'off').toLowerCase() === 'on';
 
-if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED) {
+if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED) {
   console.log('[SeekDeep] Optional features flagged on:',
     SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'img2img' : '',
     SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'upscale-real-esrgan' : '',
     SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'nsfw-gate' : '',
     SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'tts-voice' : '',
+    SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'emoji-vault' : '',
   );
   console.log('[SeekDeep] These features require additional model downloads / Python endpoints — see README "Optional features".');
 }
@@ -11255,6 +11267,12 @@ async function seekdeepEmojiVaultBuildZip(emojis, { guildName = 'server', maxByt
 async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
   const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
   if (!/^emoji\s+(backup|export|import|restore|count|list)\b/i.test(stripped)) return false;
+
+  // v10.4.3: feature-flagged off by default so we don't step on demonbot's
+  // identical command set when both bots live in the same server. Returning
+  // false (not true) keeps us out of the dispatch chain entirely — no reply
+  // sent, no thread created, no race with the other bot.
+  if (!SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED) return false;
 
   if (!message?.guild?.id) {
     await message.reply({ content: 'Emoji vault is server-only.', allowedMentions: { repliedUser: false } });
