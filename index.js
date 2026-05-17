@@ -2626,7 +2626,22 @@ function seekdeepDynamicImagePromptPreservesSubject(originalPrompt = '', candida
   const candidate = ' ' + seekdeepImagePromptKeywords(candidatePrompt).join(' ') + ' ';
   const lowerCandidate = String(candidatePrompt || '').toLowerCase();
   const matched = originalKeywords.filter((word) => candidate.includes(' ' + word + ' ') || lowerCandidate.includes(word));
-  const required = originalKeywords.length <= 2 ? originalKeywords.length : Math.max(2, Math.ceil(originalKeywords.length * 0.45));
+
+  // v10.14: looser threshold. The previous 45%-of-keywords-required rule
+  // rejected good refinements that intelligently translated franchise
+  // references into visual style cues, because every dropped franchise
+  // reference word counted equally against subject preservation. Example:
+  //   "a vanilla colored ant from the movie antz similar to a bugs life"
+  //   -> 8 keywords -> 45% = 4 required.
+  // A great refinement that preserved (vanilla, colored, ant) but dropped
+  // (movie, antz, similar, bugs, life) only matched 3/8 and was rejected.
+  //
+  // New rule: at least 2 head nouns must survive, capped at 3 max — even
+  // long prompts. Anything obviously off-topic still fails (the bad-refine
+  // case is "a red car" -> "a banana in a forest" which preserves 0).
+  const required = originalKeywords.length <= 2
+    ? originalKeywords.length
+    : Math.max(2, Math.min(3, Math.ceil(originalKeywords.length * 0.25)));
   return matched.length >= required;
 }
 
@@ -14526,6 +14541,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepParseGpuWatchInterval,
     // v10.13: image-prompt refine cleaner (with detailed rejection reasons)
     seekdeepCleanDynamicImagePromptDetailed,
+    // v10.14: subject-preservation predicate (looser threshold)
+    seekdeepDynamicImagePromptPreservesSubject,
+    seekdeepImagePromptKeywords,
     // Force-react picker constants (so tests can read them without re-declaring)
     forceReactConstants: {
       bucketSize: SEEKDEEP_FORCE_REACT_BUCKET_SIZE,

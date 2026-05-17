@@ -308,6 +308,50 @@ check('cleaner: reason field is always a non-empty string',
   typeof refusal.reason === 'string' && refusal.reason.length > 0,
 );
 
+// v10.14: subject-preservation threshold loosened.
+console.log('17. Subject preservation (real seekdeepDynamicImagePromptPreservesSubject).');
+const preserves = T.seekdeepDynamicImagePromptPreservesSubject;
+
+// The exact case from the v10.13 user bug report. Previously rejected with
+// `subject-not-preserved` because franchise words ("movie antz similar bugs
+// life") counted against the 45% threshold. Now should pass.
+check(
+  'subject: ant-from-antz case preserves vanilla+colored+ant (was rejected pre-v10.14)',
+  preserves(
+    'a vanilla colored ant from the movie antz simmiliar to a bugs life',
+    'a vanilla colored ant with a smooth, glossy exoskeleton, standing on a vibrant green leaf in a sunlit meadow, backlit by golden hour light, framed with shallow depth of field, surrounded by dewdrops reflecting the sky, soft pastel tones, in',
+  ) === true,
+);
+
+// Short prompt: 2 keywords -> both must survive.
+check('subject: "a red apple" -> "a banana" fails', preserves('a red apple', 'a banana in a basket') === false);
+check('subject: "a red apple" -> "a red apple on a table" passes', preserves('a red apple', 'a red apple on a wooden table') === true);
+
+// Medium prompt: at least 2 head nouns must survive.
+check(
+  'subject: 4-keyword prompt preserves 2 head nouns (passes)',
+  preserves('a brass lantern in a foggy forest', 'a brass lantern glowing softly amidst rolling mist, cinematic lighting') === true,
+);
+
+// Off-topic refinement (true subject loss) still fails.
+check(
+  'subject: completely off-topic refine still fails',
+  preserves('a red sports car', 'a banana in a sunny meadow') === false,
+);
+
+// Long prompt with many keywords: only 3 required, not 7+.
+check(
+  'subject: 12-keyword prompt only needs 3 preserved (passes)',
+  preserves(
+    'a tall cyberpunk warrior with neon armor and glowing katana in a rainy tokyo alley',
+    'a tall cyberpunk warrior with iridescent neon armor wielding a glowing katana, atmospheric, vivid',
+  ) === true,
+);
+
+// Edge case: keyword extractor returns nothing -> always pass.
+check('subject: empty original always passes', preserves('', 'anything') === true);
+check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
