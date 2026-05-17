@@ -32,7 +32,8 @@
       "Bash(git commit -m ' *)",
       "Bash(python -m py_compile local_ai_server.py)",
       "Bash(npm install *)",
-      "Bash(SEEKDEEP_TEST_MODE=1 node -e ' *)"
+      "Bash(SEEKDEEP_TEST_MODE=1 node -e ' *)",
+      "Bash(node _check_balance.mjs)"
     ]
   }
 }

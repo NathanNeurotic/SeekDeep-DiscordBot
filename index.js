@@ -12001,162 +12001,7 @@ client.on('messageCreate', async (message) => {
   // Fire-and-forget. Don't await.
   try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
 
-  try {
-    const removedArchiveRawContent = String(message?.content || '');
-    if (await seekdeepHandleRemovedArchiveCommandMessage(message, removedArchiveRawContent)) {
-      return;
-    }
-  } catch (err) {
-    console.error('Removed archive command handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: 'That archive command has been removed, but the notice failed to send. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return;
-  }
-  
-  try {
-    const seekdeepArchiveConfigRawContent = String(message?.content || '');
-    if (await seekdeepHandleArchiveConfigMessage(message, seekdeepArchiveConfigRawContent)) {
-      return;
-    }
-  } catch (err) {
-    console.error('Archive config message handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: 'Archive channel setup failed. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return;
-  }
-
-  // SEEKDEEP_ARCHIVE_STATUS_BEFORE_OPEN_V2_START
-  try {
-    const seekdeepArchiveStatusRawContentEarly = String(message?.content || '');
-    if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContentEarly)) {
-      return;
-    }
-  } catch (err) {
-    console.error('Archive status message handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: 'Archive status failed. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return;
-  }
-  // SEEKDEEP_ARCHIVE_STATUS_BEFORE_OPEN_V2_END
-
-
-  try {
-    const seekdeepArchiveOpenRawContent = String(message?.content || '');
-    // SEEKDEEP_ARCHIVE_STRIPPED_RETRY_V1_START
-    const seekdeepArchiveOpenStrippedContent = typeof seekdeepStripBotMentions === 'function'
-      ? seekdeepStripBotMentions(seekdeepArchiveOpenRawContent)
-      : seekdeepArchiveOpenRawContent;
-
-    // Archive search: "@SeekDeep archive search red apple"
-    const archiveSearchQuery = typeof seekdeepArchiveSearchQueryFromMessage === 'function'
-      ? seekdeepArchiveSearchQueryFromMessage(seekdeepArchiveOpenRawContent)
-      : '';
-    if (archiveSearchQuery) {
-      const report = await seekdeepSearchArchiveByPrompt(message, archiveSearchQuery, 10);
-      await message.reply({ content: report, allowedMentions: { repliedUser: false } });
-      return;
-    }
-
-    // Persona admin command: "@SeekDeep persona channel chaotic" etc.
-    if (typeof seekdeepHandlePersonaCommand === 'function' && await seekdeepHandlePersonaCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    // Memory presets per-user: "@SeekDeep memory preset add brief"
-    if (typeof seekdeepHandleMemoryPresetCommand === 'function' && await seekdeepHandleMemoryPresetCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    // Server stats: "@SeekDeep stats" / "stats me"
-    if (typeof seekdeepHandleStatsCommand === 'function' && await seekdeepHandleStatsCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    // Digest channel admin: "@SeekDeep digest channel here|off"
-    if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    // Reaction-rule admin command: "@SeekDeep reactrule add :eyes: when sus" etc.
-    if (typeof seekdeepHandleReactRuleCommand === 'function' && await seekdeepHandleReactRuleCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    // Emoji vault admin command: "@SeekDeep emoji backup" / "@SeekDeep emoji import"
-    if (typeof seekdeepHandleEmojiVaultCommand === 'function' && await seekdeepHandleEmojiVaultCommand(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    if (await seekdeepHandleArchiveOpenMessage(message, seekdeepArchiveOpenRawContent)) {
-      return;
-    }
-
-    if (
-      seekdeepArchiveOpenStrippedContent &&
-      seekdeepArchiveOpenStrippedContent !== seekdeepArchiveOpenRawContent &&
-      await seekdeepHandleArchiveOpenMessage(message, seekdeepArchiveOpenStrippedContent)
-    ) {
-      return;
-    }
-    // SEEKDEEP_ARCHIVE_STRIPPED_RETRY_V1_END
-
-    // Natural-language archive followups ("archive this", "save it", "make it archive too",
-    // "shared archive this", etc.). Looks up the most recent SeekDeep image in this channel
-    // and archives it via the same flow the Archive button uses.
-    if (
-      typeof seekdeepHandleNaturalArchiveImageFollowup === 'function' &&
-      await seekdeepHandleNaturalArchiveImageFollowup(message, seekdeepArchiveOpenRawContent)
-    ) {
-      return;
-    }
-    if (
-      typeof seekdeepHandleNaturalArchiveImageFollowup === 'function' &&
-      seekdeepArchiveOpenStrippedContent &&
-      seekdeepArchiveOpenStrippedContent !== seekdeepArchiveOpenRawContent &&
-      await seekdeepHandleNaturalArchiveImageFollowup(message, seekdeepArchiveOpenStrippedContent)
-    ) {
-      return;
-    }
-  } catch (err) {
-    console.error('Archive open message handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: typeof seekdeepBuildArchiveFailureText === 'function'
-          ? seekdeepBuildArchiveFailureText(err, '')
-          : 'Archive lookup failed. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return;
-  }
-
-  try {
-    const seekdeepArchiveStatusRawContent = String(message?.content || '');
-    if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContent)) {
-      return;
-    }
-  } catch (err) {
-    console.error('Archive status message handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: 'Archive status failed. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return;
-  }
+  if (await seekdeepProcessPreAddressMessageRoutes(message)) return;
 
   const seekdeepMessageAddressesBot = typeof seekdeepMessageMentionsBot === 'function'
     ? seekdeepMessageMentionsBot(message)
@@ -12244,6 +12089,186 @@ client.on('messageCreate', async (message) => {
     message.__seekdeepTypingLoop = typingLoop;
   } catch {}
 
+  await seekdeepDispatchAddressedMessage(message, {
+    prompt,
+    seekdeepReplyPromptInfo,
+    seekdeepForceImageFromReplyContext,
+  });
+});
+
+// v10.9: extracted from the anonymous messageCreate handler. Pre-mention
+// routes — archive config/status/search/admin commands that fire regardless
+// of whether @SeekDeep is mentioned. Returns true if a route handled the
+// message (caller should bail), false to continue to the address-gate phase.
+// Logic and error handling are byte-identical to the prior inline implementation.
+async function seekdeepProcessPreAddressMessageRoutes(message) {
+  try {
+    const removedArchiveRawContent = String(message?.content || '');
+    if (await seekdeepHandleRemovedArchiveCommandMessage(message, removedArchiveRawContent)) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Removed archive command handler failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: 'That archive command has been removed, but the notice failed to send. Check the bot console for details.',
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+
+  try {
+    const seekdeepArchiveConfigRawContent = String(message?.content || '');
+    if (await seekdeepHandleArchiveConfigMessage(message, seekdeepArchiveConfigRawContent)) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Archive config message handler failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: 'Archive channel setup failed. Check the bot console for details.',
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+
+  // SEEKDEEP_ARCHIVE_STATUS_BEFORE_OPEN_V2_START
+  try {
+    const seekdeepArchiveStatusRawContentEarly = String(message?.content || '');
+    if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContentEarly)) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Archive status message handler failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: 'Archive status failed. Check the bot console for details.',
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+  // SEEKDEEP_ARCHIVE_STATUS_BEFORE_OPEN_V2_END
+
+  try {
+    const seekdeepArchiveOpenRawContent = String(message?.content || '');
+    // SEEKDEEP_ARCHIVE_STRIPPED_RETRY_V1_START
+    const seekdeepArchiveOpenStrippedContent = typeof seekdeepStripBotMentions === 'function'
+      ? seekdeepStripBotMentions(seekdeepArchiveOpenRawContent)
+      : seekdeepArchiveOpenRawContent;
+
+    // Archive search: "@SeekDeep archive search red apple"
+    const archiveSearchQuery = typeof seekdeepArchiveSearchQueryFromMessage === 'function'
+      ? seekdeepArchiveSearchQueryFromMessage(seekdeepArchiveOpenRawContent)
+      : '';
+    if (archiveSearchQuery) {
+      const report = await seekdeepSearchArchiveByPrompt(message, archiveSearchQuery, 10);
+      await message.reply({ content: report, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    // Persona admin command: "@SeekDeep persona channel chaotic" etc.
+    if (typeof seekdeepHandlePersonaCommand === 'function' && await seekdeepHandlePersonaCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Memory presets per-user: "@SeekDeep memory preset add brief"
+    if (typeof seekdeepHandleMemoryPresetCommand === 'function' && await seekdeepHandleMemoryPresetCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Server stats: "@SeekDeep stats" / "stats me"
+    if (typeof seekdeepHandleStatsCommand === 'function' && await seekdeepHandleStatsCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Digest channel admin: "@SeekDeep digest channel here|off"
+    if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Reaction-rule admin command: "@SeekDeep reactrule add :eyes: when sus" etc.
+    if (typeof seekdeepHandleReactRuleCommand === 'function' && await seekdeepHandleReactRuleCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Emoji vault admin command: "@SeekDeep emoji backup" / "@SeekDeep emoji import"
+    if (typeof seekdeepHandleEmojiVaultCommand === 'function' && await seekdeepHandleEmojiVaultCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    if (await seekdeepHandleArchiveOpenMessage(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    if (
+      seekdeepArchiveOpenStrippedContent &&
+      seekdeepArchiveOpenStrippedContent !== seekdeepArchiveOpenRawContent &&
+      await seekdeepHandleArchiveOpenMessage(message, seekdeepArchiveOpenStrippedContent)
+    ) {
+      return true;
+    }
+    // SEEKDEEP_ARCHIVE_STRIPPED_RETRY_V1_END
+
+    // Natural-language archive followups ("archive this", "save it", "make it archive too",
+    // "shared archive this", etc.). Looks up the most recent SeekDeep image in this channel
+    // and archives it via the same flow the Archive button uses.
+    if (
+      typeof seekdeepHandleNaturalArchiveImageFollowup === 'function' &&
+      await seekdeepHandleNaturalArchiveImageFollowup(message, seekdeepArchiveOpenRawContent)
+    ) {
+      return true;
+    }
+    if (
+      typeof seekdeepHandleNaturalArchiveImageFollowup === 'function' &&
+      seekdeepArchiveOpenStrippedContent &&
+      seekdeepArchiveOpenStrippedContent !== seekdeepArchiveOpenRawContent &&
+      await seekdeepHandleNaturalArchiveImageFollowup(message, seekdeepArchiveOpenStrippedContent)
+    ) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Archive open message handler failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: typeof seekdeepBuildArchiveFailureText === 'function'
+          ? seekdeepBuildArchiveFailureText(err, '')
+          : 'Archive lookup failed. Check the bot console for details.',
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+
+  try {
+    const seekdeepArchiveStatusRawContent = String(message?.content || '');
+    if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContent)) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Archive status message handler failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: 'Archive status failed. Check the bot console for details.',
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+
+  return false;
+}
+
+// v10.9: extracted from the anonymous messageCreate handler. This is the
+// addressed-message dispatcher — runs after the bot mention is detected and
+// the prompt has been normalized + deduped. Order of route checks is
+// preserved bit-identically from the prior inline implementation; the outer
+// try/catch matches the prior outer catch (logs the error, stops the typing
+// loop, and surfaces a "SeekDeep request failed" reply to the user).
+async function seekdeepDispatchAddressedMessage(message, ctx) {
+  const { prompt, seekdeepReplyPromptInfo, seekdeepForceImageFromReplyContext } = ctx;
   try {
     const key = memoryKeyFrom(message);
 
@@ -12614,7 +12639,7 @@ client.on('messageCreate', async (message) => {
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
   }
-});
+}
 
 // SEEKDEEP_SLASH_ROUTER_RESTORE_V1_START
 
