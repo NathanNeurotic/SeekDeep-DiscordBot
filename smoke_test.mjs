@@ -535,6 +535,19 @@ shuffleOrder();
 const secondOrder = getOrder();
 check('status: two shuffles differ (randomness)', JSON.stringify(firstOrder) !== JSON.stringify(secondOrder));
 
+// ---------- Suite 26: Auto-translate non-Latin detector ----------
+console.log('26. Auto-translate non-Latin detector.');
+const looksNL = T.seekdeepLooksLikeNonLatin;
+check('non-latin: Cyrillic "Привет" detects', looksNL('Привет мир') === true);
+check('non-latin: CJK "こんにちは" detects', looksNL('こんにちは') === true);
+check('non-latin: Arabic "مرحبا" detects', looksNL('مرحبا') === true);
+check('non-latin: Korean "안녕하세요" detects', looksNL('안녕하세요') === true);
+check('non-latin: plain English is false', looksNL('hello world') === false);
+check('non-latin: empty is false', looksNL('') === false);
+check('non-latin: short (<3 chars) is false', looksNL('ab') === false);
+check('non-latin: mentions stripped before check', looksNL('<@123456789> hello') === false);
+check('non-latin: mixed mention + CJK still detects', looksNL('<@123> 你好世界') === true);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

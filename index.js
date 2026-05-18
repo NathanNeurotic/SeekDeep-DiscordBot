@@ -6514,6 +6514,7 @@ function seekdeepHelpText(source = null) {
     '```text',
     prefix + ' persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]',
     prefix + ' digest channel here   (or "off"; enable SEEKDEEP_DAILY_DIGEST=on in .env)',
+    prefix + ' translate channel here  (or "off"; auto-translate non-Latin messages in this channel)',
     prefix + ' archive search <query>   (find prompts in your archive thread)',
     prefix + ' memory preset add brief | expert | no-emoji | formal | casual | ...',
     prefix + ' memory preset list / remove <key> / clear',
@@ -11559,6 +11560,97 @@ async function seekdeepHandleDigestChannelCommand(message, raw = '') {
 }
 // SEEKDEEP_DAILY_DIGEST_END
 
+// SEEKDEEP_AUTO_TRANSLATE_CHANNEL_START
+// Per-guild auto-translate channel. Every non-bot message that appears to
+// contain non-Latin script (CJK, Cyrillic, Arabic, Devanagari, Thai, etc.)
+// gets a reply with an English translation. Admin sets via
+// "@SeekDeep translate channel here" / "translate channel off".
+// Config stored in persona-overrides.json under guild.autoTranslateChannelId.
+
+function seekdeepGetAutoTranslateChannelId(guildId) {
+  const overrides = seekdeepReadPersonaOverrides();
+  return overrides.guilds[String(guildId)]?.autoTranslateChannelId || '';
+}
+
+// Fast regex check for scripts that are almost never English. This is
+// intentionally conservative — we don't attempt Latin-script language
+// detection (French, Spanish, etc.) because the false-positive cost is
+// high (translating English to English looks silly).
+const SEEKDEEP_NON_LATIN_REGEX = /[Ѐ-ӿԀ-ԯ؀-ۿݐ-ݿऀ-ॿঀ-৿਀-੿଀-୿ఀ-౿ഀ-ൿ฀-๿຀-໿က-႟ᄀ-ᇿ　-〿぀-ゟ゠-ヿ㐀-䶿一-鿿가-힯豈-﫿]/;
+
+function seekdeepLooksLikeNonLatin(text) {
+  const clean = String(text || '').replace(/<@!?\d+>/g, '').replace(/<#\d+>/g, '').replace(/<a?:\w+:\d+>/g, '').trim();
+  if (clean.length < 3) return false;
+  return SEEKDEEP_NON_LATIN_REGEX.test(clean);
+}
+
+// Cooldown per channel to avoid spamming translations on rapid-fire messages.
+const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN = new Map();
+const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS = 3000;
+
+async function seekdeepAutoTranslateMessage(message) {
+  const guildId = message.guild?.id || '';
+  if (!guildId) return false;
+  const autoChannelId = seekdeepGetAutoTranslateChannelId(guildId);
+  if (!autoChannelId || message.channel?.id !== autoChannelId) return false;
+  const text = String(message.content || '').trim();
+  if (!text || !seekdeepLooksLikeNonLatin(text)) return false;
+
+  // Per-channel cooldown to avoid spamming on rapid messages.
+  const now = Date.now();
+  const lastAt = SEEKDEEP_AUTO_TRANSLATE_COOLDOWN.get(autoChannelId) || 0;
+  if (now - lastAt < SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS) return false;
+  SEEKDEEP_AUTO_TRANSLATE_COOLDOWN.set(autoChannelId, now);
+
+  try {
+    seekdeepSetActivityStatus('Translating...');
+    const answer = await askChat(
+      'Translate the following message to English.\nReturn only the translation. Preserve slang/profanity plainly. Do not add commentary.\n\n' + text,
+      {
+        web: 'off',
+        system: 'You are a direct translation engine. Translate to English only. No extra commentary.',
+        maxNewTokens: 600,
+        temperature: 0.1,
+      },
+    );
+    if (answer && answer.trim()) {
+      await message.reply({
+        content: `**Translation:** ${answer.trim()}`,
+        allowedMentions: { repliedUser: false },
+      });
+    }
+  } catch (err) {
+    console.warn('[SeekDeep] auto-translate failed:', err?.message || err);
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+  return true;
+}
+
+async function seekdeepHandleAutoTranslateChannelCommand(message, raw = '') {
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = /^translate\s+channel\s+(here|off)\s*$/i.exec(stripped);
+  if (!m) return false;
+  if (!seekdeepUserCanChangePersona(message)) {
+    await message.reply({ content: 'Only admins / Manage Server can change the auto-translate channel.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const overrides = seekdeepReadPersonaOverrides();
+  const guildId = String(message.guild?.id || '');
+  if (!overrides.guilds[guildId]) overrides.guilds[guildId] = {};
+  if (/off/i.test(m[1])) {
+    delete overrides.guilds[guildId].autoTranslateChannelId;
+    seekdeepWritePersonaOverrides(overrides);
+    await message.reply({ content: 'Auto-translate channel disabled for this server.', allowedMentions: { repliedUser: false } });
+  } else {
+    overrides.guilds[guildId].autoTranslateChannelId = String(message.channel?.id || '');
+    seekdeepWritePersonaOverrides(overrides);
+    await message.reply({ content: 'Auto-translate enabled for this channel. Non-Latin messages will be auto-translated to English.', allowedMentions: { repliedUser: false } });
+  }
+  return true;
+}
+// SEEKDEEP_AUTO_TRANSLATE_CHANNEL_END
+
 // SEEKDEEP_BIG_FEATURE_SCAFFOLDS_START
 // Feature flags for big features that need additional model downloads.
 // Each flag defaults to off; when on, the path is wired but will return a
@@ -13170,6 +13262,10 @@ client.on('messageCreate', async (message) => {
   // Fire-and-forget. Don't await.
   try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
 
+  // Auto-translate: fire-and-forget for non-Latin messages in the designated channel.
+  // Runs before address-check so unaddressed foreign-language messages still get translated.
+  try { void seekdeepAutoTranslateMessage(message); } catch {}
+
   if (await seekdeepProcessPreAddressMessageRoutes(message)) return;
 
   const seekdeepMessageAddressesBot = typeof seekdeepMessageMentionsBot === 'function'
@@ -13498,6 +13594,11 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
 
     // Digest channel admin: "@SeekDeep digest channel here|off"
     if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Auto-translate channel admin: "@SeekDeep translate channel here|off"
+    if (typeof seekdeepHandleAutoTranslateChannelCommand === 'function' && await seekdeepHandleAutoTranslateChannelCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
     }
 
@@ -15806,6 +15907,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     // v10.25: img2img + upscale
     seekdeepImg2ImgQueryFromMessage,
     seekdeepUpscaleQueryFromMessage,
+    // v10.29: auto-translate
+    seekdeepLooksLikeNonLatin,
+    SEEKDEEP_NON_LATIN_REGEX,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
