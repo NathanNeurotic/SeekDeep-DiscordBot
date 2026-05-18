@@ -353,9 +353,9 @@ check('subject: empty original always passes', preserves('', 'anything') === tru
 check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
 
 // ---------------------------------------------------------------------------
-// Suite 17: Archive clean duration parser
+// Suite 18: Archive clean duration parser
 // ---------------------------------------------------------------------------
-console.log('17. Archive clean duration parser (real seekdeepParseCleanDuration).');
+console.log('18. Archive clean duration parser (real seekdeepParseCleanDuration).');
 const parseDuration = T.seekdeepParseCleanDuration;
 
 check('clean-duration: "7d" = 7 days', parseDuration('7d') === 7 * 86400000);
@@ -370,9 +370,9 @@ check('clean-duration: garbage = 0', parseDuration('foobar') === 0);
 check('clean-duration: "0d" = 0', parseDuration('0d') === 0);
 
 // ---------------------------------------------------------------------------
-// Suite 18: OCR mode detection
+// Suite 19: OCR mode detection
 // ---------------------------------------------------------------------------
-console.log('18. OCR mode detection (real seekdeepLooksLikeOcrPrompt).');
+console.log('19. OCR mode detection (real seekdeepLooksLikeOcrPrompt).');
 const ocrDetect = T.seekdeepLooksLikeOcrPrompt;
 
 check('ocr: "read this" triggers', ocrDetect('read this') === true);
@@ -387,9 +387,9 @@ check('ocr: "what is this" does NOT trigger', ocrDetect('what is this') === fals
 check('ocr: empty does NOT trigger', ocrDetect('') === false);
 
 // ---------------------------------------------------------------------------
-// Suite 19: Help search
+// Suite 20: Help search
 // ---------------------------------------------------------------------------
-console.log('19. Help search (real seekdeepHelpSearch).');
+console.log('20. Help search (real seekdeepHelpSearch).');
 const helpSearch = T.seekdeepHelpSearch;
 
 check('help-search: "archive" returns sections', helpSearch('archive').includes('Archive'));
@@ -401,9 +401,57 @@ check('help-search: empty query returns usage hint', helpSearch('').includes('Pr
 check('help-search: result includes section count', /\d+ section/.test(helpSearch('image')));
 
 // ---------------------------------------------------------------------------
-// Suite 20: Rotating status bank
+// Suite 21: Archive counting reliability
 // ---------------------------------------------------------------------------
-console.log('20. Rotating status bank.');
+console.log('21. Archive counting reliability (trustedCount, buildName, entryDetector).');
+const {
+  seekdeepArchiveThreadTrustedCount: trustedCount,
+  seekdeepArchiveThreadBuildName: buildName,
+  seekdeepArchiveThreadDisplayName: displayName,
+  seekdeepArchiveMessageLooksLikeEntry: looksLikeEntry,
+  SEEKDEEP_ARCHIVE_COUNT_SOURCE: countSource,
+} = T;
+
+// trustedCount only returns > 0 when countSource matches
+check('count: trusted with correct source', trustedCount({ count: 5, countSource }) === 5);
+check('count: trusted with wrong source = 0', trustedCount({ count: 99, countSource: 'legacy' }) === 0);
+check('count: trusted with missing source = 0', trustedCount({ count: 10 }) === 0);
+check('count: trusted with null profile = 0', trustedCount(null) === 0);
+check('count: trusted with empty = 0', trustedCount({}) === 0);
+check('count: trusted ignores negative', trustedCount({ count: -3, countSource }) === 0);
+
+// buildName produces expected format: 🪙 • Archive • name • count
+check('name: includes count', buildName({ displayName: 'Nathan' }, 7).includes('7'));
+check('name: includes display name', buildName({ displayName: 'Nathan' }, 3).includes('Nathan'));
+check('name: includes Archive', buildName({ displayName: 'Test' }, 0).includes('Archive'));
+check('name: zero count shows 0', buildName({ displayName: 'Test' }, 0).includes('0'));
+
+// displayName sanitizes
+check('display: basic name', displayName({ displayName: 'Nathan' }) === 'Nathan');
+check('display: falls back to username', displayName({ username: 'nate' }) === 'nate');
+check('display: strips @everyone', !displayName({ displayName: '@everyone' }).includes('@everyone'));
+check('display: empty = unknown', displayName({}) === 'unknown');
+
+// Entry detector needs the right content shape
+const fakeBot = { user: { id: '123' } };
+const fakeThread = { client: fakeBot };
+const goodEntry = { content: '**SeekDeep Image Archive Entry**\nRequester: Nathan\nPrompt: a cool dragon', author: { id: '123' } };
+const noRequester = { content: '**SeekDeep Image Archive Entry**\nPrompt: a cool dragon', author: { id: '123' } };
+const noPrompt = { content: '**SeekDeep Image Archive Entry**\nRequester: Nathan', author: { id: '123' } };
+const wrongAuthor = { content: '**SeekDeep Image Archive Entry**\nRequester: Nathan\nPrompt: a cool dragon', author: { id: '999' } };
+const randomMsg = { content: 'Just a regular message', author: { id: '123' } };
+
+check('entry: valid entry detected', looksLikeEntry(goodEntry, fakeThread) === true);
+check('entry: missing Requester rejected', looksLikeEntry(noRequester, fakeThread) === false);
+check('entry: missing Prompt rejected', looksLikeEntry(noPrompt, fakeThread) === false);
+check('entry: wrong author rejected', looksLikeEntry(wrongAuthor, fakeThread) === false);
+check('entry: random message rejected', looksLikeEntry(randomMsg, fakeThread) === false);
+check('entry: null message rejected', looksLikeEntry(null, fakeThread) === false);
+
+// ---------------------------------------------------------------------------
+// Suite 22: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('22. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);

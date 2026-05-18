@@ -4964,12 +4964,13 @@ async function seekdeepArchiveThreadRecordPost(archiveInfo, target) {
   if (!guildId || !userId) return archiveInfo.threadName || thread?.name || '';
   const member = await seekdeepArchiveThreadResolveMember(target, user);
   const subject = member || user;
+  // Read the profile that seekdeepGetOrCreateUserArchiveThread just saved
+  // (scan-validated count written to disk moments before the entry was posted).
+  // Do NOT rescan the thread here — the just-posted entry is already in the
+  // thread, so a scan would return N (including the new entry) and +1 would
+  // give N+1, inflating the count by one on every post.
   const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
-  let currentCount = seekdeepArchiveThreadTrustedCount(profile);
-  if (thread && typeof seekdeepArchiveThreadResolveCountFromThread === 'function') {
-    const resolved = await seekdeepArchiveThreadResolveCountFromThread(thread, profile);
-    currentCount = resolved.count;
-  }
+  const currentCount = seekdeepArchiveThreadTrustedCount(profile);
   const nextCount = currentCount + 1;
   const nextName = seekdeepArchiveThreadBuildName(subject, nextCount);
   const savePayload = {
@@ -5333,14 +5334,15 @@ async function seekdeepGetOrCreateUserArchiveThread(target, userOverride) {
     ].join('\n')).catch(() => null);
   }
 
+  // Single authoritative scan — seekdeepArchiveThreadResolveCountFromThread uses
+  // the strict entry detector (bot-authored, has Requester:/Prompt: headers).
+  // Do NOT also call seekdeepArchiveTrustedOrBackfilledCount here — its
+  // Math.max(trusted, scanned) ratchet prevents counts from ever correcting
+  // downward, locking in any prior inflation.
   let countInfo = { count: currentCount, trusted: currentCount, scannedCount: 0, scannedMessages: 0, scanOk: false };
   if (thread && typeof seekdeepArchiveThreadResolveCountFromThread === 'function') {
     countInfo = await seekdeepArchiveThreadResolveCountFromThread(thread, profile);
     currentCount = countInfo.count;
-  }
-
-  if (thread && typeof seekdeepArchiveTrustedOrBackfilledCount === 'function') {
-    currentCount = await seekdeepArchiveTrustedOrBackfilledCount(thread, profile);
   }
 
   const finalThreadName = typeof seekdeepArchiveThreadBuildName === 'function'
@@ -12756,15 +12758,18 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
             else failed++;
           } catch { failed++; }
         }
-        const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
-        if (profile && typeof profile.count === 'number') {
-          profile.count = Math.max(0, profile.count - deleted);
-          seekdeepArchiveThreadSaveUserProfile(guildId, userId, profile);
-          const member = await seekdeepArchiveThreadResolveMember(message, message.author);
-          const subject = member?.displayName || message.author?.globalName || message.author?.username || userId;
-          const newName = seekdeepArchiveThreadBuildName(subject, profile.count);
-          try { await seekdeepMaybeRenameArchiveThread(pending.thread, newName); } catch {}
-        }
+        // Rescan the thread to get the true count after deletion, instead of
+        // subtracting from profile.count (which may already be inflated).
+        const scan = await seekdeepArchiveThreadCountExistingEntries(pending.thread);
+        const newCount = scan.ok ? scan.count : Math.max(0, (seekdeepArchiveThreadTrustedCount(seekdeepArchiveThreadGetUserProfile(guildId, userId)) || 0) - deleted);
+        seekdeepArchiveThreadSaveUserProfile(guildId, userId, {
+          count: newCount,
+          countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+        });
+        const member = await seekdeepArchiveThreadResolveMember(message, message.author);
+        const subject = member?.displayName || message.author?.globalName || message.author?.username || userId;
+        const newName = seekdeepArchiveThreadBuildName(subject, newCount);
+        try { await seekdeepMaybeRenameArchiveThread(pending.thread, newName); } catch {}
         await message.reply({ content: `Archive clean complete: **${deleted}** entries deleted` + (failed ? `, ${failed} failed.` : '.'), allowedMentions: { repliedUser: false } });
         return true;
       }
@@ -14968,6 +14973,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_STATUS_BANK,
     seekdeepShuffleStatusOrder,
     seekdeepStatusOrder: () => seekdeepStatusOrder,
+    // v10.22: archive counting helpers (for numbering-reliability tests)
+    seekdeepArchiveThreadTrustedCount,
+    seekdeepArchiveThreadBuildName,
+    seekdeepArchiveThreadDisplayName,
+    seekdeepArchiveMessageLooksLikeEntry,
+    SEEKDEEP_ARCHIVE_COUNT_SOURCE,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
