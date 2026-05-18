@@ -134,6 +134,8 @@ Each archive thread entry has:
 | `@SeekDeep queue status` | Show current image queue status. | Everyone |
 | `@SeekDeep stats` | Server-wide totals + top contributors. | Everyone |
 | `@SeekDeep stats me` | Your activity in this server. | Everyone |
+| `@SeekDeep stats chart` | 30-day activity chart image (images, chats, vision). | Everyone |
+| `/stats scope:server\|me\|chart` | Slash-command stats with optional chart. | Everyone |
 | `/recent kind:images\|prompts\|archive` | Slash-command recent history. | Everyone |
 | `/cachestatus` | Slash-command cache status. | Everyone |
 | `/changelog` | Slash-command git log (last 10 commits). | Everyone |
@@ -154,6 +156,8 @@ Each archive thread entry has:
 | `@SeekDeep memory preset clear` | Clear all your presets. | Everyone |
 | `@SeekDeep digest channel here` | Set this channel as the daily-digest destination. | Admin |
 | `@SeekDeep digest channel off` | Disable the daily digest for this server. | Admin |
+| `@SeekDeep translate channel here` | Enable auto-translate for non-Latin messages in this channel. | Admin |
+| `@SeekDeep translate channel off` | Disable auto-translate for this server. | Admin |
 | `/say text:<text> channel:<#channel> image_url:<url>` | Admin anonymous post. | Manage Msgs |
 
 ## Auto-reactions

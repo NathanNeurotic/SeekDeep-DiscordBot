@@ -4,6 +4,30 @@ This file tracks everything that's been discussed, scoped, or partially scaffold
 
 ## Recently Shipped
 
+### v10.29 — Auto-translate channel ✅ shipped
+`@SeekDeep translate channel here` designates one channel per server where every non-bot message containing non-Latin script gets an automatic English translation reply. Fast regex detector for CJK, Cyrillic, Arabic, Devanagari, Thai, Korean. 3-second cooldown per channel. 9 smoke checks.
+
+### v10.28 — Refinement retry + analytics chart ✅ shipped
+Dynamic refinement retries once at a higher temperature on validator rejection before falling back to static rules. Token budget bumped 360 → 512. `@SeekDeep stats chart` / `/stats scope:chart` renders a matplotlib 30-day activity chart via the Python server's new `/chart` endpoint.
+
+### v10.27 — COMMANDS.md permission column ✅ shipped
+Added Permission column to every command table. Documented all v10.16–v10.26 additions.
+
+### v10.22–v10.26 — Phase 2 features ✅ shipped
+- v10.22: Archive numbering reliability fix (off-by-one, ratchet, clean arithmetic)
+- v10.23: Conversation search (`@SeekDeep search <query>` / `/search`)
+- v10.24: Saved prompt templates (`@SeekDeep template save/list/use/delete` / `/template`)
+- v10.25: img2img + upscale (zero extra model download for img2img; Lanczos upscale)
+- v10.26: Persona editor modal (`/persona` opens a Discord popup form)
+
+### v10.16–v10.21 — QoL + maintenance ✅ shipped
+- v10.16: Rotating Discord status (52 statuses, 10-min shuffle)
+- v10.17: `/help search` fuzzy-match across all commands
+- v10.18: OCR mode for vision
+- v10.19: Archive clean (prune old entries with preview + confirm)
+- v10.20: Context-aware Discord status during inference
+- v10.21: Repo cleanup (473 → 27 tracked files)
+
 ### v10.12 — GPU / VRAM live monitoring ✅ shipped
 
 Built in response to an observed lag pattern: host began to severely lag after a couple of image generations, likely VRAM thrashing into Windows shared memory once chat + pinned vision + SDXL coexisted past the GPU's hardware VRAM budget.
@@ -20,7 +44,10 @@ What was scoped but NOT shipped:
 
 ## Next Up
 
-(open — propose what to tackle next.)
+- **TTS voice channel** — Piper or XTTS. Biggest remaining lift. Requires model download (user approval needed, limited SSD space).
+- **Architecture diagram** — one-page visual for README.
+- **data/*.json schema docs** — document all persistence files in AGENTS.md.
+- **Real-ESRGAN model download** — scaffolded in v10.25 but needs user approval.
 
 ## Deferred From the v10.5 Audit
 
@@ -32,24 +59,6 @@ These were flagged in the audit but deliberately not pursued during v10.5–v10.
 ## Optional Features (Scaffolded, Off By Default)
 
 Each is gated behind a `SEEKDEEP_FEATURE_*` flag. Code paths exist but the underlying model/endpoint isn't wired up.
-
-### `SEEKDEEP_FEATURE_IMG2IMG`
-
-Right-click an existing image → "Vary this" → tweak prompt → regenerate using the original as init image. Diffusers ≥ 0.27 exposes img2img on SDXL natively. Work needed:
-
-- New `/image` route flag or `/image-edit` slash command.
-- Plumbing through the Python server's `/image` endpoint to accept `init_image_b64` + `strength`.
-- UI: a "Vary" button on existing image attachments and a right-click context menu entry.
-- Tests in `smoke_test.mjs` for the new prompt/strength options.
-
-### `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN`
-
-Right-click any generated image → "Upscale 2x" via Real-ESRGAN. Work needed:
-
-- Download Real-ESRGAN weights (~80 MB), add to warmup.
-- New `/upscale` endpoint in `local_ai_server.py`.
-- Right-click context menu entry that grabs the most-recent generated PNG from the temp image cache.
-- Cooldown + queue handling so upscale jobs don't starve image gen.
 
 ### `SEEKDEEP_FEATURE_NSFW_GATE`
 
@@ -73,20 +82,15 @@ Voice-channel TTS reader (Piper or XTTS). Biggest lift of the four:
 
 Lower-priority polish ideas. Pull when there's an itch.
 
-- **Conversation search** — full-text search across `CHANNEL_MEMORY`. "What did we talk about Mario for?"
-- **Saved prompt templates per user** — `@SeekDeep template save cyberpunk_portrait <text>`, then `@SeekDeep draw using cyberpunk_portrait subject=alien queen`.
-- **`/help search query:<text>`** — fuzzy-match across all commands instead of a topic-name lookup.
-- **Persona editor modal** — `@SeekDeep persona edit` opens a Discord modal where you type custom persona instructions, stored per-server.
-- **Analytics dashboard** — render the existing server-stats data as a chart image (matplotlib via local AI server) instead of just text.
-- **Auto-translate channel** — set a channel to auto-translate every non-English message to English.
-- **OCR mode for vision** — explicit "extract text from this image" path that prompts the vision model differently.
-- **Archive housekeeping** — `@SeekDeep archive clean older than 7 days` or similar.
+- **GPU logging** — optional background sampler that writes `logs/gpu-YYYY-MM-DD.log` every 30s. Env: `SEEKDEEP_GPU_LOGGING=on`.
+- **VRAM budget table** — document which model combinations fit a 24 GB card.
+- **Latin-script language detection** — extend auto-translate to detect French, Spanish, etc. Harder because the regex approach doesn't work for Latin-based scripts.
 
 ## Documentation Backlog
 
 - [ ] One-page architecture diagram showing Node bot ↔ Python AI server ↔ SearXNG ↔ Discord. Goes in the README between "Architecture" and "Quick Start".
 - [ ] AGENTS.md needs a section on `data/*.json` persistence files (auto-reactions, archive guild config, persona overrides, memory presets, server stats) and their schema.
-- [ ] COMMANDS.md could grow a "Permission requirements" column on each table — right now permissions are mentioned in prose.
+- [x] ~~COMMANDS.md could grow a "Permission requirements" column on each table~~ — shipped in v10.27.
 
 ## Won't Do (Decided Against)
 
