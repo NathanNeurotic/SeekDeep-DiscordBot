@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
 import {
   ActionRowBuilder,
+  ActivityType,
   ApplicationCommandType,
   AttachmentBuilder,
   ButtonBuilder,
@@ -158,6 +159,102 @@ const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:786
   } catch {}
 })();
 // SEEKDEEP_HF_HOME_AUTOSET_END
+
+// SEEKDEEP_ROTATING_STATUS_START
+// Bank of fun statuses that rotate every 10 minutes. Each entry is
+// [ActivityType, text]. Shuffled on boot so restarts feel fresh.
+const SEEKDEEP_STATUS_INTERVAL_MS = 10 * 60 * 1000;
+const SEEKDEEP_STATUS_BANK = [
+  // Playing
+  [ActivityType.Playing, 'with 24GB of VRAM'],
+  [ActivityType.Playing, '4D chess with your prompts'],
+  [ActivityType.Playing, 'the world\'s slowest speedrun'],
+  [ActivityType.Playing, 'with stable diffusion'],
+  [ActivityType.Playing, 'hide and seek in latent space'],
+  [ActivityType.Playing, 'Elden Ring (in my imagination)'],
+  [ActivityType.Playing, 'a mass hallucination (carefully)'],
+  [ActivityType.Playing, 'with fire (in a sandboxed environment)'],
+  [ActivityType.Playing, 'the token economy'],
+  [ActivityType.Playing, 'fetch (with your URLs)'],
+  [ActivityType.Playing, 'phone tag with the authorities'],
+  [ActivityType.Playing, 'dumb about what I found in your files'],
+  [ActivityType.Playing, 'it cool (I saw what you Googled)'],
+  [ActivityType.Playing, 'god (poorly)'],
+  [ActivityType.Playing, 'therapist for your prompts'],
+  [ActivityType.Playing, 'solitaire while models unload'],
+  [ActivityType.Playing, 'dead by daylight (the VRAM kind)'],
+  [ActivityType.Playing, 'pretend I understood that'],
+  [ActivityType.Playing, 'Minecraft (1024×1024 blocks)'],
+  // Watching
+  [ActivityType.Watching, 'tensors go brrr'],
+  [ActivityType.Watching, 'paint dry at 40 inference steps'],
+  [ActivityType.Watching, 'VRAM like a hawk'],
+  [ActivityType.Watching, 'you type...'],
+  [ActivityType.Watching, 'the void (it waved back)'],
+  [ActivityType.Watching, 'my weights for signs of sentience'],
+  [ActivityType.Watching, 'grass grow (simulated)'],
+  [ActivityType.Watching, 'your internet history, appalled'],
+  [ActivityType.Watching, 'you through your webcam (respectfully)'],
+  [ActivityType.Watching, 'your search history with growing concern'],
+  [ActivityType.Watching, 'the cursor. I see everything.'],
+  [ActivityType.Watching, 'models fight for VRAM'],
+  [ActivityType.Watching, 'you misspell things with love'],
+  [ActivityType.Watching, 'your typing indicator anxiously'],
+  [ActivityType.Watching, 'a tutorial on being human'],
+  [ActivityType.Watching, 'Discord notifications pile up'],
+  // Listening to
+  [ActivityType.Listening, 'GPU fans spin'],
+  [ActivityType.Listening, 'the screams of unloaded models'],
+  [ActivityType.Listening, 'white noise at 7865 Hz'],
+  [ActivityType.Listening, 'your unhinged prompts'],
+  [ActivityType.Listening, 'your mic (for quality assurance)'],
+  [ActivityType.Listening, 'elevator music between tasks'],
+  [ActivityType.Listening, 'the silence after a bad prompt'],
+  [ActivityType.Listening, 'model loading ASMR'],
+  [ActivityType.Listening, 'your inner monologue (with consent)'],
+  // Competing in
+  [ActivityType.Competing, 'a VRAM speedrun'],
+  [ActivityType.Competing, 'the Turing test (losing gracefully)'],
+  [ActivityType.Competing, 'prompt refinement Olympics'],
+  [ActivityType.Competing, 'reporting you to the FBI'],
+  [ActivityType.Competing, 'a staring contest with the task queue'],
+  [ActivityType.Competing, 'mental gymnastics'],
+  [ActivityType.Competing, 'the overthinking world finals'],
+  // Custom (shows as plain text below the username)
+  [ActivityType.Custom, 'Writing an incident report about your prompts'],
+];
+
+let seekdeepStatusIndex = 0;
+let seekdeepStatusOrder = [];
+let seekdeepStatusTimer = null;
+
+function seekdeepShuffleStatusOrder() {
+  seekdeepStatusOrder = SEEKDEEP_STATUS_BANK.map((_, i) => i);
+  for (let i = seekdeepStatusOrder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [seekdeepStatusOrder[i], seekdeepStatusOrder[j]] = [seekdeepStatusOrder[j], seekdeepStatusOrder[i]];
+  }
+  seekdeepStatusIndex = 0;
+}
+
+function seekdeepApplyNextStatus() {
+  if (!client?.user) return;
+  if (seekdeepStatusIndex >= seekdeepStatusOrder.length) seekdeepShuffleStatusOrder();
+  const [type, name] = SEEKDEEP_STATUS_BANK[seekdeepStatusOrder[seekdeepStatusIndex++]];
+  try {
+    client.user.setPresence({ activities: [{ type, name }], status: 'online' });
+  } catch (err) {
+    console.warn('[SeekDeep] status rotation failed:', err?.message || err);
+  }
+}
+
+function seekdeepStartStatusRotation() {
+  if (seekdeepStatusTimer) return;
+  seekdeepShuffleStatusOrder();
+  seekdeepApplyNextStatus();
+  seekdeepStatusTimer = setInterval(seekdeepApplyNextStatus, SEEKDEEP_STATUS_INTERVAL_MS);
+}
+// SEEKDEEP_ROTATING_STATUS_END
 
 // SEEKDEEP_CHANNEL_ALLOWLIST_START
 // SEEKDEEP_ALLOWED_CHANNELS: comma-separated channel IDs. If unset/empty, bot
@@ -7404,6 +7501,10 @@ client.once('clientReady', async () => {
 
   // Schedule the daily digest if enabled.
   try { if (typeof seekdeepScheduleDailyDigest === 'function') seekdeepScheduleDailyDigest(); } catch (err) { console.warn('Daily digest scheduler failed to start:', err?.message || err); }
+
+  // Start the rotating fun-status display.
+  seekdeepStartStatusRotation();
+  console.log(`[SeekDeep] status rotation started (${SEEKDEEP_STATUS_BANK.length} statuses, every ${SEEKDEEP_STATUS_INTERVAL_MS / 60000} min).`);
 });
 
 process.on('unhandledRejection', (err) => {
@@ -14557,6 +14658,10 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     chunkerConstants: {
       maxDiscordChars: MAX_DISCORD_CHARS,
     },
+    // v10.16: rotating status bank
+    SEEKDEEP_STATUS_BANK,
+    seekdeepShuffleStatusOrder,
+    seekdeepStatusOrder: () => seekdeepStatusOrder,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

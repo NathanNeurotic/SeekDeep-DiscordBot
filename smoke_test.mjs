@@ -352,6 +352,29 @@ check(
 check('subject: empty original always passes', preserves('', 'anything') === true);
 check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
 
+// ---------------------------------------------------------------------------
+// Suite 17: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('17. Rotating status bank.');
+const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
+
+check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);
+check('status: bank has 50+ entries', statusBank.length >= 50);
+check('status: every entry is [number, string]', statusBank.every(([t, n]) => typeof t === 'number' && typeof n === 'string' && n.length > 0));
+
+// Shuffle produces a permutation of the correct length with no duplicates.
+shuffleOrder();
+const order = getOrder();
+check('status: shuffle produces array of correct length', order.length === statusBank.length);
+check('status: shuffle has no duplicate indices', new Set(order).size === order.length);
+check('status: all indices are in range', order.every((i) => i >= 0 && i < statusBank.length));
+
+// Two shuffles are very unlikely to be identical (probability ~1/52!).
+const firstOrder = [...order];
+shuffleOrder();
+const secondOrder = getOrder();
+check('status: two shuffles differ (randomness)', JSON.stringify(firstOrder) !== JSON.stringify(secondOrder));
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
