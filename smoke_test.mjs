@@ -353,9 +353,23 @@ check('subject: empty original always passes', preserves('', 'anything') === tru
 check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
 
 // ---------------------------------------------------------------------------
-// Suite 17: Rotating status bank
+// Suite 17: Help search
 // ---------------------------------------------------------------------------
-console.log('17. Rotating status bank.');
+console.log('17. Help search (real seekdeepHelpSearch).');
+const helpSearch = T.seekdeepHelpSearch;
+
+check('help-search: "archive" returns sections', helpSearch('archive').includes('Archive'));
+check('help-search: "regenerate" finds recent/cache section', helpSearch('regenerate').includes('regen'));
+check('help-search: "persona" finds admin section', helpSearch('persona').includes('Admin'));
+check('help-search: multi-word "archive search" matches', helpSearch('archive search').includes('archive search'));
+check('help-search: nonsense returns no-results message', helpSearch('xyzzyplugh').includes('No help results'));
+check('help-search: empty query returns usage hint', helpSearch('').includes('Provide a search term'));
+check('help-search: result includes section count', /\d+ section/.test(helpSearch('image')));
+
+// ---------------------------------------------------------------------------
+// Suite 18: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('18. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);

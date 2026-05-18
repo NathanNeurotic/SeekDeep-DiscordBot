@@ -6540,12 +6540,61 @@ function seekdeepHelpTopicSlice(topic, source = null) {
   return [titleLines.join('\n').trimEnd(), '', body].join('\n').trimEnd();
 }
 
+// SEEKDEEP_HELP_SEARCH_START
+// Fuzzy-search the help text for lines matching a query. Splits the rendered
+// help into blocks (heading + code fence + prose) and returns blocks where any
+// line substring-matches one or more query words. Designed for both
+// `@SeekDeep help search <query>` and `/help search:<query>`.
+function seekdeepHelpSearch(query, source = null) {
+  const raw = String(query || '').toLowerCase().trim();
+  if (!raw) return 'Provide a search term: `@SeekDeep help search <query>` or `/help search:<query>`';
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  const full = seekdeepHelpText(source);
+  const lines = full.split('\n');
+
+  // Parse into sections: each starts at a `## ` heading and runs until the
+  // next `## ` heading (or EOF). The title block (before the first `## `) is
+  // excluded from search results since it has no actionable commands.
+  const sections = [];
+  let cur = null;
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) {
+      if (cur) sections.push(cur);
+      cur = { heading: line, lines: [line] };
+    } else if (cur) {
+      cur.lines.push(line);
+    }
+  }
+  if (cur) sections.push(cur);
+
+  // A section matches if ANY of its lines contains ALL query words.
+  const hits = sections.filter((s) =>
+    s.lines.some((line) => {
+      const low = line.toLowerCase();
+      return words.every((w) => low.includes(w));
+    })
+  );
+
+  if (!hits.length) {
+    return 'No help results for `' + raw + '`. Try a shorter keyword or `@SeekDeep help` for the full map.';
+  }
+
+  const body = hits.map((s) => s.lines.join('\n').trimEnd()).join('\n\n');
+  const label = hits.length === 1 ? '1 section' : hits.length + ' sections';
+  return '**Help search: `' + raw + '`** (' + label + ')\n\n' + body;
+}
+// SEEKDEEP_HELP_SEARCH_END
+
 // Parse `help <topic>` from a prompt that has already had the mention stripped.
 // Returns the topic string, or '' for plain `help`.
 function seekdeepParseHelpTopic(prompt) {
   const p = String(prompt || '').toLowerCase().trim();
+  // Forms: "help search <query>" — returns { search: '<query>' }
+  let m = p.match(/^(?:help|commands)\s+search\s+(.+)/i);
+  if (m) return { search: m[1].trim() };
   // Forms: "help", "help chat", "chat help", "archive help", "help archive"
-  let m = p.match(/^(?:help|commands)\s+([a-z\-]+)/i);
+  m = p.match(/^(?:help|commands)\s+([a-z\-]+)/i);
   if (m) return m[1];
   m = p.match(/^([a-z\-]+)\s+(?:help|commands)\b/i);
   if (m && !/^(?:archive|image|vision|cache|queue|recent|status|model)$/.test(m[1])) return m[1];
@@ -7345,7 +7394,11 @@ const commands = [
           { name: 'emoji vault', value: 'emoji' },
           { name: 'context menu', value: 'context' },
           { name: 'all', value: 'all' },
-        )),
+        ))
+    .addStringOption((o) =>
+      o.setName('search')
+        .setDescription('Fuzzy-search all commands for a keyword (e.g. "archive", "regenerate").')
+        .setRequired(false)),
   new SlashCommandBuilder()
     .setName('cachestatus')
     .setDescription('Show temp image cache status.'),
@@ -12831,7 +12884,11 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       let content;
       if (utilityKind === 'help') {
         const topic = seekdeepParseHelpTopic(prompt);
-        content = topic ? seekdeepHelpTopicSlice(topic, message) : seekdeepHelpText(message);
+        if (topic && typeof topic === 'object' && topic.search) {
+          content = seekdeepHelpSearch(topic.search, message);
+        } else {
+          content = topic ? seekdeepHelpTopicSlice(topic, message) : seekdeepHelpText(message);
+        }
       } else {
         content = seekdeepUtilityText(utilityKind, message, key);
       }
@@ -14303,6 +14360,12 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (kind === 'help') {
+        const searchQuery = String(interaction.options.getString('search') || '').trim();
+        if (searchQuery) {
+          const content = seekdeepHelpSearch(searchQuery, interaction);
+          await sendLongInteractionReply(interaction, content);
+          return;
+        }
         const topic = String(interaction.options.getString('topic') || '').trim();
         const content = topic ? seekdeepHelpTopicSlice(topic, interaction) : seekdeepHelpText(interaction);
         await sendLongInteractionReply(interaction, content);
@@ -14658,6 +14721,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     chunkerConstants: {
       maxDiscordChars: MAX_DISCORD_CHARS,
     },
+    // v10.17: help search
+    seekdeepHelpSearch,
     // v10.16: rotating status bank
     SEEKDEEP_STATUS_BANK,
     seekdeepShuffleStatusOrder,
