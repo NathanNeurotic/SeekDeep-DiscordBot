@@ -6478,6 +6478,8 @@ function seekdeepHelpText(source = null) {
     '/changelog                          (last 10 git commits)',
     '/gpu watch:true interval:5          (live VRAM tail, slash version)',
     '/status verbose:true                (chat-roles map + map-size diagnostics)',
+    prefix + ' search <query>      (search recent conversations in this channel)',
+    '/search query:<keywords>       (slash version)',
     '```',
     '',
     '## Admin / Customization',
@@ -7566,6 +7568,10 @@ const commands = [
     .setName('status')
     .setDescription('Show local backend status.')
     .addBooleanOption((o) => o.setName('verbose').setDescription('Include map diagnostics + full chat-roles map').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('search')
+    .setDescription('Search recent conversations in this channel.')
+    .addStringOption((o) => o.setName('query').setDescription('Keywords to search for').setRequired(true)),
 
   // Right-click message context menu commands. Show up under Apps when the user
   // right-clicks any Discord message.
@@ -10503,6 +10509,107 @@ function seekdeepArchiveSearchQueryFromMessage(value = '') {
 }
 // SEEKDEEP_ARCHIVE_SEARCH_END
 
+// SEEKDEEP_CONVERSATION_SEARCH_START
+// Searches recent channel messages for past SeekDeep conversations matching a query.
+// Pages through Discord API history and matches user→bot exchange pairs.
+async function seekdeepSearchConversationHistory(channel, botId, query, maxPages = 5) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length || !channel?.messages?.fetch || !botId) {
+    return { matches: [], scanned: 0, error: !words.length ? 'empty query' : 'missing channel or bot' };
+  }
+
+  const matches = [];
+  let before = null;
+  let scanned = 0;
+  const pageLimit = 100;
+
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const request = before ? { limit: pageLimit, before } : { limit: pageLimit };
+      const batch = await channel.messages.fetch(request).catch(() => null);
+      const values = Array.from(batch?.values?.() || []);
+      if (!values.length) break;
+
+      for (const msg of values) {
+        scanned++;
+        const content = String(msg?.content || '').toLowerCase();
+        const authorId = msg?.author?.id || '';
+
+        // Match bot responses that contain all query words
+        if (authorId === botId && words.every((w) => content.includes(w))) {
+          matches.push({
+            type: 'bot',
+            content: String(msg.content || '').slice(0, 300),
+            messageId: msg.id,
+            channelId: channel.id,
+            guildId: channel.guild?.id || '',
+            timestamp: msg.createdTimestamp,
+            at: new Date(msg.createdTimestamp).toISOString().slice(0, 16).replace('T', ' '),
+          });
+        }
+
+        // Match user messages addressed to the bot that contain all query words
+        if (authorId !== botId && content.includes(botId.slice(-4)) || (authorId !== botId && words.every((w) => content.includes(w)))) {
+          const mentionsBot = msg.mentions?.users?.has?.(botId) || /seekdeep|seekotics/i.test(content);
+          if (mentionsBot && words.every((w) => content.includes(w))) {
+            matches.push({
+              type: 'user',
+              content: String(msg.content || '').slice(0, 300),
+              messageId: msg.id,
+              channelId: channel.id,
+              guildId: channel.guild?.id || '',
+              timestamp: msg.createdTimestamp,
+              at: new Date(msg.createdTimestamp).toISOString().slice(0, 16).replace('T', ' '),
+              authorTag: msg.author?.globalName || msg.author?.username || 'unknown',
+            });
+          }
+        }
+      }
+
+      const oldest = values[values.length - 1];
+      const nextBefore = String(oldest?.id || '').trim();
+      if (!nextBefore || nextBefore === before || values.length < pageLimit) break;
+      before = nextBefore;
+      if (matches.length >= 20) break;
+    }
+
+    return { matches: matches.slice(0, 20), scanned };
+  } catch (err) {
+    return { matches: [], scanned, error: err?.message || String(err) };
+  }
+}
+
+function seekdeepFormatConversationSearchResults(results, query) {
+  if (results.error) return 'Conversation search failed: ' + results.error;
+  if (!results.matches.length) {
+    return `No conversations matching "${query}" found in the last ${results.scanned} messages.`;
+  }
+
+  const lines = [
+    `Conversation search "${query}" — ${results.matches.length} match(es) (scanned ${results.scanned} messages)`,
+    '',
+  ];
+
+  for (let i = 0; i < results.matches.length; i++) {
+    const m = results.matches[i];
+    const tag = m.type === 'bot' ? '🤖' : '👤 ' + (m.authorTag || '');
+    const snippet = m.content.replace(/\n/g, ' ').slice(0, 150);
+    const url = m.guildId
+      ? `https://discord.com/channels/${m.guildId}/${m.channelId}/${m.messageId}`
+      : '';
+    lines.push(`${i + 1}. ${tag} [${m.at}] ${snippet}${snippet.length >= 150 ? '...' : ''}`);
+    if (url) lines.push(`   jump: ${url}`);
+  }
+
+  return lines.join('\n');
+}
+
+function seekdeepConversationSearchQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+search\s+(.+)$/i);
+  return m ? String(m[1] || '').trim() : '';
+}
+// SEEKDEEP_CONVERSATION_SEARCH_END
+
 // SEEKDEEP_PERSONA_PER_CHANNEL_START
 // Admin-only override of the bot persona/censorship mode for a specific channel
 // or guild. Persisted to data/persona-overrides.json. Admins are detected via
@@ -12849,6 +12956,16 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // Conversation search: "@SeekDeep search <query>"
+    const conversationSearchQuery = seekdeepConversationSearchQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (conversationSearchQuery) {
+      const botId = message.client?.user?.id || '';
+      const results = await seekdeepSearchConversationHistory(message.channel, botId, conversationSearchQuery);
+      const report = seekdeepFormatConversationSearchResults(results, conversationSearchQuery);
+      await message.reply({ content: report, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
     // Digest channel admin: "@SeekDeep digest channel here|off"
     if (typeof seekdeepHandleDigestChannelCommand === 'function' && await seekdeepHandleDigestChannelCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
@@ -14631,6 +14748,20 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (commandName === 'search') {
+      if (!(await safeDefer(interaction))) return;
+      const query = String(interaction.options.getString('query') || '').trim();
+      if (!query) {
+        await sendLongInteractionReply(interaction, 'Provide a search query, e.g. `/search query:dragon`.');
+        return;
+      }
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const botId = interaction.client?.user?.id || '';
+      const results = await seekdeepSearchConversationHistory(interaction.channel, botId, query);
+      await sendLongInteractionReply(interaction, seekdeepFormatConversationSearchResults(results, query));
+      return;
+    }
+
     if (commandName === 'regen') {
       if (!(await safeDefer(interaction))) return;
       const mode = String(interaction.options.getString('mode') || 'refined').toLowerCase();
@@ -14979,6 +15110,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepArchiveThreadDisplayName,
     seekdeepArchiveMessageLooksLikeEntry,
     SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+    // v10.23: conversation search
+    seekdeepConversationSearchQueryFromMessage,
+    seekdeepFormatConversationSearchResults,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

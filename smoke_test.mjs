@@ -449,9 +449,34 @@ check('entry: random message rejected', looksLikeEntry(randomMsg, fakeThread) ==
 check('entry: null message rejected', looksLikeEntry(null, fakeThread) === false);
 
 // ---------------------------------------------------------------------------
-// Suite 22: Rotating status bank
+// Suite 22: Conversation search
 // ---------------------------------------------------------------------------
-console.log('22. Rotating status bank.');
+console.log('22. Conversation search (query extraction + result formatting).');
+const {
+  seekdeepConversationSearchQueryFromMessage: convSearchQuery,
+  seekdeepFormatConversationSearchResults: convSearchFormat,
+} = T;
+
+// Query extraction from message
+check('conv-search: "@SeekDeep search dragon" extracts query', convSearchQuery('@SeekDeep search dragon') === 'dragon');
+check('conv-search: "<@123> search cool art" extracts query', convSearchQuery('<@123> search cool art') === 'cool art');
+check('conv-search: "seekdeep search multi word" works', convSearchQuery('seekdeep search multi word query') === 'multi word query');
+check('conv-search: no "search" keyword = empty', convSearchQuery('@SeekDeep hello') === '');
+check('conv-search: empty = empty', convSearchQuery('') === '');
+check('conv-search: "archive search" does NOT match', convSearchQuery('@SeekDeep archive search test') === '');
+
+// Result formatting
+check('conv-search: empty error shows message', convSearchFormat({ matches: [], scanned: 0, error: 'empty query' }, 'test').includes('failed'));
+check('conv-search: no matches shows scanned count', convSearchFormat({ matches: [], scanned: 200 }, 'xyz').includes('200'));
+check('conv-search: matches show count', convSearchFormat({
+  matches: [{ type: 'bot', content: 'Hello world', messageId: '1', channelId: '2', guildId: '3', timestamp: Date.now(), at: '2026-05-18 12:00' }],
+  scanned: 100,
+}, 'hello').includes('1 match'));
+
+// ---------------------------------------------------------------------------
+// Suite 23: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('23. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);
