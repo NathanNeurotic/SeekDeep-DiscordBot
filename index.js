@@ -1919,7 +1919,7 @@ function seekdeepTrimVisionBoilerplate(text = '') {
   return out.trim();
 }
 
-async function askVision(attachment, prompt) {
+async function askVision(attachment, prompt, { systemHint } = {}) {
   // Vision attachments are typically <10 MB images/short videos. Use the
   // shared helper so a hostile or stuck attachment URL can't hang the
   // worker indefinitely.
@@ -1929,12 +1929,18 @@ async function askVision(attachment, prompt) {
   const contentType = attachment.contentType || '';
   const mediaKind = contentType.startsWith('video/') ? 'video' : 'auto';
 
+  // When a systemHint is provided (e.g. OCR mode), prepend it so the vision
+  // model sees the instruction before the user's question.
+  const effectivePrompt = systemHint
+    ? systemHint + '\n\n' + (prompt || '')
+    : (prompt || 'Describe this media clearly.');
+
   const response = await postLocal('/vision', {
-    prompt: prompt || 'Describe this media clearly.',
+    prompt: effectivePrompt,
     media_b64: b64,
     filename: attachment.name || 'upload',
     media_kind: mediaKind,
-    max_new_tokens: 700,
+    max_new_tokens: systemHint ? 1500 : 700,
     temperature: 0.0,
   });
 
@@ -7373,7 +7379,15 @@ const commands = [
     .setName('vision')
     .setDescription('Analyze an attached image/video locally.')
     .addAttachmentOption((o) => o.setName('file').setDescription('Image or video').setRequired(true))
-    .addStringOption((o) => o.setName('prompt').setDescription('Question about the media').setRequired(false)),
+    .addStringOption((o) => o.setName('prompt').setDescription('Question about the media').setRequired(false))
+    .addStringOption((o) =>
+      o.setName('mode')
+        .setDescription('Vision mode.')
+        .setRequired(false)
+        .addChoices(
+          { name: 'describe (default)', value: 'describe' },
+          { name: 'ocr — extract text', value: 'ocr' },
+        )),
   new SlashCommandBuilder()
     .setName('help')
     .setDescription('Show SeekDeep command help.')
@@ -8014,6 +8028,29 @@ function seekdeepLooksLikeVisionPrompt(text = '') {
     /\bvision\b/.test(t)
   );
 }
+
+// SEEKDEEP_OCR_MODE_START
+// Dedicated OCR prompt for the vision model. Qwen2.5-VL handles text
+// extraction well, but a focused system prompt dramatically improves
+// accuracy vs. a generic "describe this" pass.
+const SEEKDEEP_OCR_SYSTEM_PROMPT =
+  'You are an OCR assistant. Extract ALL visible text from the image exactly as it appears. ' +
+  'Preserve the original layout, line breaks, and formatting as closely as possible. ' +
+  'Use markdown code blocks for structured text like code, tables, or terminal output. ' +
+  'If the image contains no readable text, say "No readable text found in this image." ' +
+  'Do not describe the image — only extract the text.';
+
+function seekdeepLooksLikeOcrPrompt(text = '') {
+  const t = String(text || '').toLowerCase().trim();
+  return (
+    /\b(?:ocr|extract\s+text|read\s+(?:this|that|the\s+text|the\s+words|it))\b/.test(t) ||
+    /\bwhat\s+(?:does|do)\s+(?:this|that|it)\s+say\b/.test(t) ||
+    /\bwhat(?:'s|\s+is)\s+(?:written|typed|printed)\b/.test(t) ||
+    /\btranscribe\s+(?:this|that|the\s+(?:text|image|picture))\b/.test(t) ||
+    /\b(?:copy|grab|pull|get)\s+(?:the\s+)?text\b/.test(t)
+  );
+}
+// SEEKDEEP_OCR_MODE_END
 
 // SEEKDEEP_ROUTING_TEXT_GUARD_HELPERS_START
 function seekdeepHasExplicitImageRequest(p = '') {
@@ -12949,10 +12986,12 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     if (!shouldUseVision && !visionTarget.attachment && prompt && typeof seekdeepLooksLikeRecentImageFollowup === 'function' && seekdeepLooksLikeRecentImageFollowup(prompt)) {
       const recent = seekdeepConsumeRecentVisionTarget(message);
       if (recent?.url) {
-        seekdeepLogRoute('vision-followup-cached', prompt);
+        const isOcr = seekdeepLooksLikeOcrPrompt(prompt);
+        seekdeepLogRoute(isOcr ? 'vision-followup-ocr' : 'vision-followup-cached', prompt);
         const rawPrompt = prompt;
         const cachedAttachment = { url: recent.url, contentType: recent.contentType || '', name: recent.name || 'upload' };
-        const answer = await askVision(cachedAttachment, buildPromptWithMemory(rawPrompt, key));
+        const visionOpts = isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {};
+        const answer = await askVision(cachedAttachment, buildPromptWithMemory(rawPrompt, key), visionOpts);
         remember(key, 'user', `[vision-question] ${rawPrompt}`);
         remember(key, 'assistant', `[vision-description] ${answer}`);
         seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
@@ -12964,10 +13003,12 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (shouldUseVision) {
-      seekdeepLogRoute('vision', prompt);
+      const isOcr = seekdeepLooksLikeOcrPrompt(prompt);
+      seekdeepLogRoute(isOcr ? 'vision-ocr' : 'vision', prompt);
       try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'vision' }); } catch {}
       const rawPrompt = prompt || 'Describe this media clearly.';
-      const answer = await askVision(visionTarget.attachment, buildPromptWithMemory(rawPrompt, key));
+      const visionOpts = isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {};
+      const answer = await askVision(visionTarget.attachment, buildPromptWithMemory(rawPrompt, key), visionOpts);
       // Tag both user and assistant entries with a [vision] marker so a follow-up
       // chat ("tell me about him") sees that the prior turn came from looking at
       // an actual image — the chat model can ground "him/her/it" against that.
@@ -14641,10 +14682,13 @@ client.on('interactionCreate', async (interaction) => {
       if (!(await safeDefer(interaction))) return;
       const attachment = interaction.options.getAttachment('file', true);
       const prompt = normalizeUserText(interaction.options.getString('prompt') || 'Describe this media clearly.');
+      const mode = String(interaction.options.getString('mode') || '').toLowerCase();
+      const isOcr = mode === 'ocr' || seekdeepLooksLikeOcrPrompt(prompt);
+      const visionOpts = isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {};
       const key = memoryKeyFrom(interaction);
-      const answer = await askVision(attachment, buildPromptWithMemory(prompt, key));
+      const answer = await askVision(attachment, buildPromptWithMemory(prompt, key), visionOpts);
       seekdeepSetResponseModel(interaction, seekdeepVisionModelLabel());
-      remember(key, 'user', `/vision ${prompt}`);
+      remember(key, 'user', `/vision${isOcr ? ' [ocr]' : ''} ${prompt}`);
       remember(key, 'assistant', answer);
       await sendLongInteractionReply(interaction, answer);
       return;
@@ -14721,6 +14765,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     chunkerConstants: {
       maxDiscordChars: MAX_DISCORD_CHARS,
     },
+    // v10.18: OCR mode
+    seekdeepLooksLikeOcrPrompt,
     // v10.17: help search
     seekdeepHelpSearch,
     // v10.16: rotating status bank

@@ -353,9 +353,26 @@ check('subject: empty original always passes', preserves('', 'anything') === tru
 check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
 
 // ---------------------------------------------------------------------------
-// Suite 17: Help search
+// Suite 17: OCR mode detection
 // ---------------------------------------------------------------------------
-console.log('17. Help search (real seekdeepHelpSearch).');
+console.log('17. OCR mode detection (real seekdeepLooksLikeOcrPrompt).');
+const ocrDetect = T.seekdeepLooksLikeOcrPrompt;
+
+check('ocr: "read this" triggers', ocrDetect('read this') === true);
+check('ocr: "ocr" triggers', ocrDetect('ocr') === true);
+check('ocr: "extract text" triggers', ocrDetect('extract text from this') === true);
+check('ocr: "what does this say" triggers', ocrDetect('what does this say') === true);
+check('ocr: "what is written" triggers', ocrDetect('what is written here') === true);
+check('ocr: "transcribe this" triggers', ocrDetect('transcribe this') === true);
+check('ocr: "copy the text" triggers', ocrDetect('copy the text') === true);
+check('ocr: "describe this" does NOT trigger', ocrDetect('describe this') === false);
+check('ocr: "what is this" does NOT trigger', ocrDetect('what is this') === false);
+check('ocr: empty does NOT trigger', ocrDetect('') === false);
+
+// ---------------------------------------------------------------------------
+// Suite 18: Help search
+// ---------------------------------------------------------------------------
+console.log('18. Help search (real seekdeepHelpSearch).');
 const helpSearch = T.seekdeepHelpSearch;
 
 check('help-search: "archive" returns sections', helpSearch('archive').includes('Archive'));
@@ -367,9 +384,9 @@ check('help-search: empty query returns usage hint', helpSearch('').includes('Pr
 check('help-search: result includes section count', /\d+ section/.test(helpSearch('image')));
 
 // ---------------------------------------------------------------------------
-// Suite 18: Rotating status bank
+// Suite 19: Rotating status bank
 // ---------------------------------------------------------------------------
-console.log('18. Rotating status bank.');
+console.log('19. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);
