@@ -4862,6 +4862,63 @@ async function seekdeepFindUserArchiveThreadWithoutCreate(channel, target, user,
 }
 // SEEKDEEP_ARCHIVE_COUNT_BACKFILL_V1_END
 
+// SEEKDEEP_ARCHIVE_CLEAN_START
+// Parse duration strings like "7d", "30 days", "2w", "1 month", "24h".
+function seekdeepParseCleanDuration(input = '') {
+  const t = String(input || '').toLowerCase().trim();
+  const m = t.match(/^(\d+)\s*(h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?|m(?:onths?)?)$/);
+  if (!m) return 0;
+  const n = parseInt(m[1], 10);
+  if (!n || n <= 0) return 0;
+  const unit = m[2][0];
+  if (unit === 'h') return n * 3600000;
+  if (unit === 'd') return n * 86400000;
+  if (unit === 'w') return n * 7 * 86400000;
+  if (unit === 'm') return n * 30 * 86400000;
+  return 0;
+}
+
+// Scan a user's archive thread and return entries older than `cutoffMs`.
+// Returns { entries: [{id, createdAt, snippet}], scanned, error? }.
+async function seekdeepArchiveCleanScan(thread, cutoffMs) {
+  const cutoffDate = Date.now() - cutoffMs;
+  const entries = [];
+  let before = null;
+  let scanned = 0;
+  const maxPages = 10;
+
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const request = before ? { limit: 100, before } : { limit: 100 };
+      const batch = await thread.messages.fetch(request).catch(() => null);
+      const values = Array.from(batch?.values?.() || []);
+      if (!values.length) break;
+
+      for (const msg of values) {
+        scanned++;
+        if (!seekdeepArchiveMessageLooksLikeEntry(msg, thread)) continue;
+        if (msg.createdTimestamp < cutoffDate) {
+          const snippet = String(msg.content || '').split('\n').find((l) => /Prompt/i.test(l)) || '';
+          entries.push({ id: msg.id, createdAt: msg.createdTimestamp, snippet: snippet.slice(0, 80) });
+        }
+      }
+
+      const oldest = values[values.length - 1];
+      const nextBefore = String(oldest?.id || '').trim();
+      if (!nextBefore || nextBefore === before || values.length < 100) break;
+      before = nextBefore;
+    }
+    return { entries, scanned };
+  } catch (err) {
+    return { entries: [], scanned, error: err?.message || String(err) };
+  }
+}
+
+// Pending clean confirmations per channel. Auto-expires after 2 minutes.
+const SEEKDEEP_ARCHIVE_CLEAN_PENDING = new Map();
+const SEEKDEEP_ARCHIVE_CLEAN_TTL_MS = 120000;
+// SEEKDEEP_ARCHIVE_CLEAN_END
+
 async function seekdeepArchiveThreadRecordPost(archiveInfo, target) {
   archiveInfo = archiveInfo || {};
   const thread = archiveInfo.thread || null;
@@ -12636,6 +12693,107 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // Archive clean: "@SeekDeep archive clean older than 7d"
+    // Also handles the confirm step: "@SeekDeep archive clean confirm"
+    const cleanContent = seekdeepArchiveOpenStrippedContent.toLowerCase().trim();
+    const cleanMatch = cleanContent.match(/archive\s+clean\s+(?:older\s+than\s+)?(\d+\s*(?:h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?|m(?:onths?)?))/);
+    const cleanConfirm = /archive\s+clean\s+confirm\b/.test(cleanContent);
+
+    if (cleanMatch || cleanConfirm) {
+      const guildId = message.guild?.id || '';
+      const userId = message.author?.id || '';
+      const channelKey = `${guildId}:${userId}`;
+
+      if (cleanConfirm) {
+        const pending = SEEKDEEP_ARCHIVE_CLEAN_PENDING.get(channelKey);
+        if (!pending || Date.now() > pending.expiresAt) {
+          SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(channelKey);
+          await message.reply({ content: 'No pending archive clean to confirm. Run `@SeekDeep archive clean older than <duration>` first.', allowedMentions: { repliedUser: false } });
+          return true;
+        }
+        SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(channelKey);
+        let deleted = 0;
+        let failed = 0;
+        for (const entry of pending.entries) {
+          try {
+            const msg = await pending.thread.messages.fetch(entry.id).catch(() => null);
+            if (msg) { await msg.delete(); deleted++; }
+            else failed++;
+          } catch { failed++; }
+        }
+        const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
+        if (profile && typeof profile.count === 'number') {
+          profile.count = Math.max(0, profile.count - deleted);
+          seekdeepArchiveThreadSaveUserProfile(guildId, userId, profile);
+          const member = await seekdeepArchiveThreadResolveMember(message, message.author);
+          const subject = member?.displayName || message.author?.globalName || message.author?.username || userId;
+          const newName = seekdeepArchiveThreadBuildName(subject, profile.count);
+          try { await seekdeepMaybeRenameArchiveThread(pending.thread, newName); } catch {}
+        }
+        await message.reply({ content: `Archive clean complete: **${deleted}** entries deleted` + (failed ? `, ${failed} failed.` : '.'), allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      // Preview step
+      const durationMs = seekdeepParseCleanDuration(cleanMatch[1]);
+      if (!durationMs) {
+        await message.reply({ content: 'Could not parse duration. Use e.g. `7d`, `2w`, `1m`, `24h`.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const scope = seekdeepGuildArchiveScopeFromTarget(message);
+      const config = seekdeepArchiveThreadReadConfig();
+      const guildConfig = seekdeepArchiveThreadEnsureGuildConfig(config, guildId);
+      const archiveChannelId = guildConfig?.archiveChannelId;
+      if (!archiveChannelId) {
+        await message.reply({ content: 'No archive channel configured. Run `@SeekDeep archive setup here` first.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const channel = await client.channels.fetch(archiveChannelId).catch(() => null);
+      if (!channel) {
+        await message.reply({ content: 'Could not access the archive channel.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
+      const member = await seekdeepArchiveThreadResolveMember(message, message.author);
+      const subject = member?.displayName || message.author?.globalName || message.author?.username || userId;
+      const thread = await seekdeepFindUserArchiveThreadWithoutCreate(channel, message, message.author, subject, profile);
+      if (!thread) {
+        await message.reply({ content: 'Could not find your archive thread.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const scan = await seekdeepArchiveCleanScan(thread, durationMs);
+      if (scan.error) {
+        await message.reply({ content: 'Archive scan failed: ' + scan.error, allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      if (!scan.entries.length) {
+        const daysLabel = Math.round(durationMs / 86400000);
+        await message.reply({ content: `No archive entries older than ${daysLabel} day(s) found (scanned ${scan.scanned} messages).`, allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      // Store pending confirmation
+      SEEKDEEP_ARCHIVE_CLEAN_PENDING.set(channelKey, {
+        entries: scan.entries,
+        thread,
+        expiresAt: Date.now() + SEEKDEEP_ARCHIVE_CLEAN_TTL_MS,
+      });
+
+      const daysLabel = Math.round(durationMs / 86400000);
+      const preview = [
+        `Found **${scan.entries.length}** archive entries older than ${daysLabel} day(s).`,
+        '',
+        'To delete them, reply: `@SeekDeep archive clean confirm`',
+        `This confirmation expires in ${SEEKDEEP_ARCHIVE_CLEAN_TTL_MS / 60000} minutes.`,
+      ].join('\n');
+      await message.reply({ content: preview, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
     // Persona admin command: "@SeekDeep persona channel chaotic" etc.
     if (typeof seekdeepHandlePersonaCommand === 'function' && await seekdeepHandlePersonaCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
@@ -14765,6 +14923,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     chunkerConstants: {
       maxDiscordChars: MAX_DISCORD_CHARS,
     },
+    // v10.19: archive clean
+    seekdeepParseCleanDuration,
     // v10.18: OCR mode
     seekdeepLooksLikeOcrPrompt,
     // v10.17: help search

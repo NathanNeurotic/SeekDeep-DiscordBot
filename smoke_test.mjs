@@ -353,9 +353,26 @@ check('subject: empty original always passes', preserves('', 'anything') === tru
 check('subject: only-stopwords original always passes', preserves('a the of with', 'a banana') === true);
 
 // ---------------------------------------------------------------------------
-// Suite 17: OCR mode detection
+// Suite 17: Archive clean duration parser
 // ---------------------------------------------------------------------------
-console.log('17. OCR mode detection (real seekdeepLooksLikeOcrPrompt).');
+console.log('17. Archive clean duration parser (real seekdeepParseCleanDuration).');
+const parseDuration = T.seekdeepParseCleanDuration;
+
+check('clean-duration: "7d" = 7 days', parseDuration('7d') === 7 * 86400000);
+check('clean-duration: "7 days" = 7 days', parseDuration('7 days') === 7 * 86400000);
+check('clean-duration: "2w" = 14 days', parseDuration('2w') === 14 * 86400000);
+check('clean-duration: "2 weeks" = 14 days', parseDuration('2 weeks') === 14 * 86400000);
+check('clean-duration: "1m" = 30 days', parseDuration('1m') === 30 * 86400000);
+check('clean-duration: "1 month" = 30 days', parseDuration('1 month') === 30 * 86400000);
+check('clean-duration: "24h" = 24 hours', parseDuration('24h') === 24 * 3600000);
+check('clean-duration: empty = 0', parseDuration('') === 0);
+check('clean-duration: garbage = 0', parseDuration('foobar') === 0);
+check('clean-duration: "0d" = 0', parseDuration('0d') === 0);
+
+// ---------------------------------------------------------------------------
+// Suite 18: OCR mode detection
+// ---------------------------------------------------------------------------
+console.log('18. OCR mode detection (real seekdeepLooksLikeOcrPrompt).');
 const ocrDetect = T.seekdeepLooksLikeOcrPrompt;
 
 check('ocr: "read this" triggers', ocrDetect('read this') === true);
@@ -370,9 +387,9 @@ check('ocr: "what is this" does NOT trigger', ocrDetect('what is this') === fals
 check('ocr: empty does NOT trigger', ocrDetect('') === false);
 
 // ---------------------------------------------------------------------------
-// Suite 18: Help search
+// Suite 19: Help search
 // ---------------------------------------------------------------------------
-console.log('18. Help search (real seekdeepHelpSearch).');
+console.log('19. Help search (real seekdeepHelpSearch).');
 const helpSearch = T.seekdeepHelpSearch;
 
 check('help-search: "archive" returns sections', helpSearch('archive').includes('Archive'));
@@ -384,9 +401,9 @@ check('help-search: empty query returns usage hint', helpSearch('').includes('Pr
 check('help-search: result includes section count', /\d+ section/.test(helpSearch('image')));
 
 // ---------------------------------------------------------------------------
-// Suite 19: Rotating status bank
+// Suite 20: Rotating status bank
 // ---------------------------------------------------------------------------
-console.log('19. Rotating status bank.');
+console.log('20. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);
