@@ -938,6 +938,23 @@ def load_image_pipe() -> None:
 
         image_pipe = DiffusionPipeline.from_pretrained(IMAGE_MODEL_ID, **kwargs)
 
+    # v10.30: force DPM++ 2M Karras scheduler for SDXL. This is the scheduler
+    # Dreamshaper-XL was fine-tuned with and produces the fewest artifacts.
+    # Other schedulers (PNDM, Euler, etc.) can introduce subtle malformations,
+    # especially at lower step counts. Env override: IMAGE_SCHEDULER=default.
+    scheduler_choice = os.getenv("IMAGE_SCHEDULER", "dpmsolver++").strip().lower()
+    if scheduler_choice != "default" and not is_zimage:
+        try:
+            from diffusers import DPMSolverMultistepScheduler
+            image_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+                image_pipe.scheduler.config,
+                algorithm_type="dpmsolver++",
+                use_karras_sigmas=True,
+            )
+            print("[SeekDeep] scheduler set to DPM++ 2M Karras", flush=True)
+        except Exception as e:
+            print(f"[SeekDeep] scheduler override failed, using default: {e}", flush=True)
+
     if cuda_available():
         image_pipe = image_pipe.to("cuda")
 

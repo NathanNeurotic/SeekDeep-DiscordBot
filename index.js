@@ -2641,7 +2641,18 @@ function seekdeepApplyImageStylePreset(prompt = '', style = '') {
 // SEEKDEEP_IMAGE_STYLE_PRESETS_END
 
 function seekdeepImageBaseNegativePrompt(prompt = '') {
-  const fallback = 'watermark, random text, misspelled text, logo text, blurry, low detail, cluttered background, plastic 3d render, generic stock photo, malformed anatomy, extra fingers, distorted eyes, duplicate face';
+  // v10.30: expanded negative prompt targeting common SDXL artifact categories.
+  // Dreamshaper-XL responds well to explicit anti-artifact terms. Grouped:
+  //   anatomy: malformed anatomy, extra fingers, fused fingers, mutated hands, bad hands, distorted eyes, duplicate face, extra limbs
+  //   quality: blurry, low detail, worst quality, low quality, jpeg artifacts, compression artifacts, noisy, grainy
+  //   unwanted: watermark, random text, misspelled text, logo text, signature, username, artist name
+  //   style: plastic 3d render, generic stock photo, cluttered background, cropped, out of frame
+  const fallback = [
+    'malformed anatomy, extra fingers, fused fingers, mutated hands, bad hands, distorted eyes, duplicate face, extra limbs, deformed',
+    'blurry, low detail, worst quality, low quality, jpeg artifacts, compression artifacts, noisy, grainy',
+    'watermark, random text, misspelled text, logo text, signature, username, artist name',
+    'plastic 3d render, generic stock photo, cluttered background, cropped, out of frame',
+  ].join(', ');
   const base = String(process.env.SEEKDEEP_IMAGE_NEGATIVE_PROMPT || process.env.IMAGE_NEGATIVE_PROMPT || fallback).replace(/\s+/g, ' ').trim();
   const asksText = /\b(text|words|lettering|title|caption|says|saying|sign|label|typography|font)\b/i.test(prompt);
   if (!asksText) return base;
@@ -3094,7 +3105,7 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
       width,
       height,
       steps: stepsOverride > 0 ? Math.max(1, Math.min(50, stepsOverride)) : Number(process.env.IMAGE_STEPS || 28),
-      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 6.5),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
       seed,
       negative_prompt: finalNegative,
     });
@@ -11308,7 +11319,7 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
       width: 1024,
       height: 1024,
       steps: Number(process.env.IMAGE_STEPS || 28),
-      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 6.5),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
