@@ -392,6 +392,32 @@ npm run smoke
 
 ## Release Notes
 
+### v10.15 — .env.default quantization fix
+
+`.env.default` shipped `LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat` since v10.1, forcing Qwen3-8B to load at fp16 (~15.6 GB VRAM). On a 24 GB laptop GPU that leaves zero headroom for the task-LRU swap to SDXL during image generation — the transient peak exceeds 24 GB, NVIDIA's Windows driver spills into shared system memory, and the entire desktop locks up. Fix: ship the list empty so `default_chat` gets 4-bit-quantized (~5 GB VRAM), leaving ~10 GB of headroom. Quality cost is ~1–2% on benchmarks (NF4 + double-quant + bf16 compute). Desktop users with 32 GB+ VRAM can re-add `default_chat,fallback_chat` to the list if they want fp16 nuance back.
+
+### v10.14 — subject-preservation threshold loosened
+
+v10.13's rejection logging exposed the real cause of a user-reported "static rules after AI refinement was unavailable" message: the subject-preservation validator was rejecting good refinements like "a vanilla colored ant from the movie antz" because unfilmable franchise words ("antz", "bugs", "life") inflated the keyword count. The old threshold `max(2, ceil(N * 0.45))` required 4 of 8 keywords; the refinement correctly kept 3 (vanilla, colored, ant) and intelligently translated the franchise references into visual style cues. New threshold: `max(2, min(ceil(N * 0.25), 3))` — caps required matches at 3 for medium/long prompts so subject-relevant keywords aren't drowned out by non-visual filler. 8 new smoke checks test the boundary cases.
+
+### v10.13 — dynamic image refine: preamble stripping + rejection logging
+
+Two fixes to the dynamic image-prompt refiner. (1) `seekdeepCleanDynamicImagePrompt` now strips benign chat-model openers ("Sure, here's the refined prompt:", "Okay!", "Here you go:") before the refusal check. Small chat models often answer correctly but lead with conversational preamble, and the old refusal-detector regex matched the first word of these replies and discarded the entire refined prompt. Real refusals ("I can't help with that", "As an AI…") survive because they don't fit the opener + separator + payload shape. (2) Every rejection now logs its reason (`[SeekDeep] dynamic refine rejected (reason) for "original" -> "candidate"`) so silent fallbacks to static rules are diagnosable instead of invisible. 12 new smoke checks cover preamble stripping, refusal detection, and the logging path.
+
+### v10.12 — live GPU / VRAM monitoring
+
+Built in response to an observed lag pattern: the host would severely lag after a couple of image generations, likely VRAM thrashing into Windows shared memory once chat + pinned vision + SDXL coexisted past the GPU's hardware VRAM budget.
+
+- `local_ai_server.py` exposes `gpu_stats()` via new `/gpu` endpoint and a `gpu` sub-object on `/health`. Returns `allocated_mb`, `reserved_mb`, `free_mb`, `total_mb`, `used_mb`, `used_pct`, `reserved_pct`, plus `loaded` and `keep_resident` state.
+- `@SeekDeep gpu` / `@SeekDeep vram` natural commands and `/gpu` slash command.
+- Live-tail mode: `@SeekDeep gpu watch [N]` or `/gpu watch:true interval:N`. Edits one message every N seconds (clamped 2–60). Auto-stops after 2 minutes. React ✋ to stop early. Per-channel single-active-watcher lock.
+- `@SeekDeep status` now shows a one-line GPU summary at the top plus a thrashing warning when PyTorch's reserved pool ≥ 90% of total VRAM.
+- 17 new smoke checks covering the bar renderer, formatter, thrashing detector, and watch-interval parser.
+
+### v10.11 — documentation pass
+
+Audit and rewrite of all project documentation. Created `PLANNED.md` to track deferred work, scaffolded features, QoL wishlist, and won't-do decisions. Pruned 4 legacy text files (42.5k lines of stale inventory and readme fragments). Updated `AGENTS.md`, `COMMANDS.md`, `CONTRIBUTING.md`, `REQUIREMENTS.md`, `SECURITY.md`, and `SMOKE_TEST.md` to reflect v10.0–v10.10 changes.
+
 ### v10.10 — visual-attachment helper dedup
 
 Final audit cleanup. Replaced `seekdeepAttachmentLooksVisual` and `seekdeepFirstVisualAttachment` with the stricter, more thorough `seekdeepLooksLikeVisualAttachment` and `firstVisualAttachmentFrom` (handles forwarded-message snapshots + embed image URLs). Simplified `seekdeepGetReplyVisualAttachment` from 10 lines to 2 via `fetchRepliedMessage` + `firstVisualAttachmentFrom`. Documented `seekdeepLegacyArchiveUserThreadName` as intentional backward-compat for pre-v10 archive threads.
