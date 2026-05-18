@@ -6,9 +6,9 @@
 .env.backup*
 .env.bak*
 .env.broken*
-*.env.swp
+keys.txt
 
-# Python venv
+# Python venv / bytecode
 .venv/
 venv/
 __pycache__/
@@ -19,7 +19,7 @@ __pycache__/
 # Node
 node_modules/
 
-# Local data / runtime
+# Local data / runtime state
 models/
 outputs/
 outputs_old/
@@ -29,10 +29,30 @@ logs/
 backups/
 checkpoints/
 diagnostics/
+.previous_chat_model.txt
+data/server-stats.json
 data/archive-guild-config.json.bak*
 
 # Old broken git directory (renamed during init)
 .git.broken_*
+
+# Legacy patch / backup artifacts (pre-git development)
+patches/
+handoff/
+agents/
+patch_*.py
+apply_*.ps1
+repair_*.py
+fix_*.py
+force_fix_*.py
+*.bak
+*.bak.*
+*.bak-*
+*.backup*
+d2utmp*
+
+# Claude Code workspace (local-only settings + worktrees)
+.claude/
 
 # Editor / OS noise
 .vscode/
@@ -40,6 +60,8 @@ data/archive-guild-config.json.bak*
 .DS_Store
 Thumbs.db
 desktop.ini
+*.swp
+*.swo
 
 # Python build / packaging
 *.egg-info/
