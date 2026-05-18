@@ -7567,6 +7567,10 @@ const commands = [
         .setMaxValue(60)
         .setRequired(false)),
   new SlashCommandBuilder()
+    .setName('persona')
+    .setDescription('Admin: open the persona editor (modal popup).')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder()
     .setName('say')
     .setDescription('Admin: have the bot say something with no attribution.')
     .addStringOption((o) => o.setName('text').setDescription('What the bot should say').setRequired(true))
@@ -10754,6 +10758,89 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
   await message.reply({ content: `Persona for this ${scope} set to: ${action}`, allowedMentions: { repliedUser: false } });
   return true;
 }
+// SEEKDEEP_PERSONA_MODAL_START
+// Interactive modal for persona configuration. Opens from /persona slash
+// command. Text inputs for persona + scope, validated on submit.
+const SEEKDEEP_PERSONA_MODAL_ID = 'seekdeep:persona-editor';
+
+function seekdeepBuildPersonaModal(currentPersona, channelOverride, guildOverride) {
+  return new ModalBuilder()
+    .setCustomId(SEEKDEEP_PERSONA_MODAL_ID)
+    .setTitle('SeekDeep Persona Editor')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('persona')
+          .setLabel('Persona (neurotic / unsettling / clinical / chaotic)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('neurotic')
+          .setValue(currentPersona || 'neurotic')
+          .setRequired(true)
+          .setMaxLength(20)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('scope')
+          .setLabel('Scope (channel / server)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('channel')
+          .setValue('channel')
+          .setRequired(true)
+          .setMaxLength(10)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('info')
+          .setLabel('Current: ch=' + (channelOverride || 'none') + ' guild=' + (guildOverride || 'none'))
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('(read-only context — leave unchanged)')
+          .setValue('no change needed')
+          .setRequired(false)
+          .setMaxLength(50)
+      ),
+    );
+}
+
+async function seekdeepHandlePersonaModalSubmit(interaction) {
+  if (interaction.customId !== SEEKDEEP_PERSONA_MODAL_ID) return false;
+
+  const persona = String(interaction.fields.getTextInputValue('persona') || '').toLowerCase().trim();
+  const scope = String(interaction.fields.getTextInputValue('scope') || 'channel').toLowerCase().trim();
+
+  if (persona === 'reset') {
+    const data = seekdeepReadPersonaOverrides();
+    if (scope === 'server' || scope === 'guild') {
+      delete data.guilds[String(interaction.guild?.id || '')];
+    } else {
+      delete data.channels[String(interaction.channel?.id || '')];
+    }
+    seekdeepWritePersonaOverrides(data);
+    await interaction.reply({ content: `Persona override removed (scope: ${scope}).`, ephemeral: true });
+    return true;
+  }
+
+  if (!SEEKDEEP_VALID_PERSONAS.has(persona)) {
+    await interaction.reply({ content: `Invalid persona "${persona}". Valid: neurotic, unsettling, clinical, chaotic, reset.`, ephemeral: true });
+    return true;
+  }
+
+  if (!seekdeepUserCanChangePersona(interaction)) {
+    await interaction.reply({ content: 'Only server admins can change persona.', ephemeral: true });
+    return true;
+  }
+
+  const data = seekdeepReadPersonaOverrides();
+  const entry = { persona, setBy: interaction.user?.id || '', setAt: new Date().toISOString() };
+  if (scope === 'server' || scope === 'guild') {
+    data.guilds[String(interaction.guild?.id || '')] = entry;
+  } else {
+    data.channels[String(interaction.channel?.id || '')] = entry;
+  }
+  seekdeepWritePersonaOverrides(data);
+  await interaction.reply({ content: `Persona for this ${scope} set to: **${persona}**`, ephemeral: true });
+  return true;
+}
+// SEEKDEEP_PERSONA_MODAL_END
 // SEEKDEEP_PERSONA_PER_CHANNEL_END
 
 // SEEKDEEP_LAST_SUBJECT_MEMORY_START
@@ -15015,6 +15102,16 @@ client.on('interactionCreate', async (interaction) => {
         } catch {}
         return;
       }
+      // Persona editor modal submit
+      if (customId === SEEKDEEP_PERSONA_MODAL_ID) {
+        try {
+          if (await seekdeepHandlePersonaModalSubmit(interaction)) return;
+        } catch (err) {
+          console.error('Persona modal handler failed:', err?.stack || err?.message || err);
+          try { await interaction.reply({ content: 'Persona update failed.', ephemeral: true }); } catch {}
+        }
+        return;
+      }
     }
   } catch (err) {
     console.error('Legacy modal handler failed:', err?.stack || err?.message || err);
@@ -15337,6 +15434,16 @@ client.on('interactionCreate', async (interaction) => {
         reply: (payload) => safeEditOrReply(interaction, payload),
       };
       await seekdeepStartGpuWatchFromMessage(proxyMessage, `gpu watch ${interval}`);
+      return;
+    }
+
+    if (commandName === 'persona') {
+      const currentPersona = seekdeepGetEffectivePersona(interaction.channel?.id, interaction.guild?.id);
+      const data = seekdeepReadPersonaOverrides();
+      const chOverride = data.channels[String(interaction.channel?.id || '')]?.persona || '';
+      const gOverride = data.guilds[String(interaction.guild?.id || '')]?.persona || '';
+      const modal = seekdeepBuildPersonaModal(currentPersona, chOverride, gOverride);
+      await interaction.showModal(modal);
       return;
     }
 
