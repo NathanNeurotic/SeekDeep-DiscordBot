@@ -392,6 +392,56 @@ npm run smoke
 
 ## Release Notes
 
+### v10.27 — COMMANDS.md permission column + new command docs
+
+Complete rewrite of `COMMANDS.md` to add a Permission column to every command table so users can tell at a glance what each command requires (Everyone, Admin, Manage Msgs, Manage Guild, or Requester/Admin). Also documents all commands added in v10.16–v10.26: conversation search, prompt templates, img2img, upscale, `/persona` modal, GPU/VRAM monitoring, right-click context menu actions, and reaction shortcuts.
+
+### v10.26 — persona editor modal
+
+`/persona` now opens a Discord modal (popup form) instead of requiring you to memorize the command syntax. Admin-only via `ManageGuild`. The modal has three fields: Persona (neurotic / unsettling / clinical / chaotic / reset), Scope (channel / server), and a read-only Info field showing the current state. Submit validates the persona name, persists to `persona-overrides.json`, and replies with an ephemeral confirmation.
+
+### v10.25 — img2img + upscale
+
+**img2img** transforms an existing image with a text prompt using the same Dreamshaper-XL model already loaded in VRAM — zero additional download. Uses diffusers' `AutoPipelineForImage2Image.from_pipe()` to share model weights. Source image resolved via a 3-step waterfall: direct attachment → replied message → most recent bot image in the channel. `@SeekDeep img2img <prompt>` or `/img2img image:<file> prompt:<text> strength:0.6`.
+
+**Upscale** enlarges an image using Lanczos resampling (PIL, no model needed). Real-ESRGAN endpoint is scaffolded for future opt-in. `@SeekDeep upscale [2x|3x|4x]` or `/upscale image:<file> scale:2|3|4`. Both new endpoints are singleflight-locked on the Python server. 9 new smoke checks.
+
+### v10.24 — saved prompt templates
+
+Per-user prompt templates persisted to `data/prompt-templates.json`. Save frequently-used image prompts and regenerate with one command. `@SeekDeep template save <name>: <prompt>`, `template list`, `template use <name>`, `template delete <name>`, plus a `/template` slash command. Max 25 templates per user, names auto-sanitized to lowercase alphanumeric + hyphens (max 30 chars). Each template tracks a use count and last-used timestamp. `template use` dispatches directly to `seekdeepSendImageWithButtons`. 7 new smoke checks.
+
+### v10.23 — conversation search
+
+`@SeekDeep search <query>` and `/search query:<keywords>` page through recent channel messages (up to 500) and match user→bot exchange pairs where all query words appear. Results show a timestamp, snippet, and jump-to-message link. The query extractor is careful to avoid false-matching `archive search` which is a separate feature. 9 new smoke checks.
+
+### v10.22 — archive numbering reliability
+
+Three bugs worked in concert to cause archive thread counts to drift from the actual entry count. (1) `seekdeepArchiveThreadRecordPost` rescanned the thread after posting, finding the just-posted entry, then added +1 — inflating by 1 per post. Fix: use the trusted count from profile + 1. (2) `seekdeepGetOrCreateUserArchiveThread` called a `Math.max(trusted, scanned)` ratchet that prevented counts from ever correcting downward. Fix: single authoritative scan only. (3) `archive clean confirm` subtracted deleted from `profile.count` instead of rescanning, preserving any prior inflation. Fix: rescan thread after deletion. Also fixed duplicate suite 17 numbering in smoke tests. 20 new smoke checks for archive counting.
+
+### v10.21 — repo cleanup
+
+Tracked files: 473 → 27. Removed all pre-git patch scripts, backup snapshots, temp artifacts, and the secrets file from git tracking. Updated `.gitignore` to prevent recurrence, covering secrets, models, venv, `node_modules`, runtime state, Claude workspace, and all legacy backup/patch naming patterns.
+
+### v10.20 — context-aware Discord status
+
+While the bot is doing real work (generating an image, running chat inference, analyzing a photo, extracting text), the Discord presence now shows what it's actually doing ("Thinking…", "Generating your image…", "Analyzing image…", "Extracting text…") instead of the fun rotating status. Uses a reference-counted override so concurrent tasks don't clobber each other. Reverts to the fun bank automatically when the last active task finishes.
+
+### v10.19 — archive clean
+
+Prune old entries from your archive thread with a two-step preview + confirm flow. `@SeekDeep archive clean older than 7d` scans the thread and shows a preview of matching entries. `@SeekDeep archive clean confirm` executes the deletion (2-minute TTL on the pending confirmation). Supports duration units `h`, `d`, `w`, `m`. After deletion, rescans the thread and updates the count and thread name. 6 new smoke checks for duration parsing.
+
+### v10.18 — OCR mode for vision
+
+`/vision mode:ocr` and natural-language triggers like "extract text", "read this", "what does it say", and "transcribe this" switch the vision model to a focused OCR system prompt that extracts text exactly as it appears instead of describing the image. Max output tokens raised to 1500 in OCR mode (vs. 700 for describe) to handle text-heavy images. 6 new smoke checks for the OCR prompt detector.
+
+### v10.17 — help search
+
+`@SeekDeep help search <query>` and `/help search:<query>` fuzzy-match across all help sections. Splits the rendered help text into `## ` sections and returns every section where any line substring-matches all query words. Returns a "No results" hint with a suggestion to try a shorter keyword when nothing matches. 5 new smoke checks.
+
+### v10.16 — rotating Discord status
+
+52 fun statuses across four Discord activity types (Playing, Watching, Listening, Competing, plus one Custom) that shuffle on boot and rotate every 10 minutes. Statuses range from "Playing with 24GB of VRAM" to "Competing in the overthinking world finals." Fisher-Yates shuffle ensures no repeats within a cycle. 4 new smoke checks for the status bank and shuffle logic.
+
 ### v10.15 — .env.default quantization fix
 
 `.env.default` shipped `LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat` since v10.1, forcing Qwen3-8B to load at fp16 (~15.6 GB VRAM). On a 24 GB laptop GPU that leaves zero headroom for the task-LRU swap to SDXL during image generation — the transient peak exceeds 24 GB, NVIDIA's Windows driver spills into shared system memory, and the entire desktop locks up. Fix: ship the list empty so `default_chat` gets 4-bit-quantized (~5 GB VRAM), leaving ~10 GB of headroom. Quality cost is ~1–2% on benchmarks (NF4 + double-quant + bf16 compute). Desktop users with 32 GB+ VRAM can re-add `default_chat,fallback_chat` to the list if they want fp16 nuance back.
