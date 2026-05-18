@@ -474,9 +474,26 @@ check('conv-search: matches show count', convSearchFormat({
 }, 'hello').includes('1 match'));
 
 // ---------------------------------------------------------------------------
-// Suite 23: Rotating status bank
+// Suite 23: Prompt templates
 // ---------------------------------------------------------------------------
-console.log('23. Rotating status bank.');
+console.log('23. Prompt template name sanitization + limits.');
+const {
+  seekdeepTemplateNameSanitize: templateName,
+  SEEKDEEP_MAX_TEMPLATES_PER_USER: maxTemplates,
+} = T;
+
+check('template-name: lowercase', templateName('MyTemplate') === 'mytemplate');
+check('template-name: strips special chars', templateName('cool dragon!') === 'cool-dragon-');
+check('template-name: preserves hyphens', templateName('cyber-punk') === 'cyber-punk');
+check('template-name: preserves underscores', templateName('cool_art') === 'cool_art');
+check('template-name: truncates to 30', templateName('a'.repeat(50)).length <= 30);
+check('template-name: empty = empty', templateName('') === '');
+check('template-max: default limit is reasonable', maxTemplates >= 10 && maxTemplates <= 100);
+
+// ---------------------------------------------------------------------------
+// Suite 24: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('24. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);

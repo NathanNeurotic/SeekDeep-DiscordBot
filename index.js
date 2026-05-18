@@ -6480,6 +6480,11 @@ function seekdeepHelpText(source = null) {
     '/status verbose:true                (chat-roles map + map-size diagnostics)',
     prefix + ' search <query>      (search recent conversations in this channel)',
     '/search query:<keywords>       (slash version)',
+    prefix + ' template save <name>: <prompt>   (save a reusable image prompt)',
+    prefix + ' template list                    (show your saved templates)',
+    prefix + ' template use <name>              (generate from a saved template)',
+    prefix + ' template delete <name>           (remove a template)',
+    '/template action:save|list|use|delete name:<n> prompt:<p>',
     '```',
     '',
     '## Admin / Customization',
@@ -7572,6 +7577,21 @@ const commands = [
     .setName('search')
     .setDescription('Search recent conversations in this channel.')
     .addStringOption((o) => o.setName('query').setDescription('Keywords to search for').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('template')
+    .setDescription('Save, list, use, or delete prompt templates.')
+    .addStringOption((o) =>
+      o.setName('action')
+        .setDescription('What to do')
+        .setRequired(true)
+        .addChoices(
+          { name: 'list', value: 'list' },
+          { name: 'save', value: 'save' },
+          { name: 'use', value: 'use' },
+          { name: 'delete', value: 'delete' },
+        ))
+    .addStringOption((o) => o.setName('name').setDescription('Template name (letters, numbers, hyphens)').setRequired(false))
+    .addStringOption((o) => o.setName('prompt').setDescription('Prompt text (for save action)').setRequired(false)),
 
   // Right-click message context menu commands. Show up under Apps when the user
   // right-clicks any Discord message.
@@ -10883,6 +10903,188 @@ async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
 }
 // SEEKDEEP_USER_MEMORY_PRESETS_END
 
+// SEEKDEEP_PROMPT_TEMPLATES_START
+// Per-user saved prompt templates for quick image generation.
+// Persisted to data/prompt-templates.json. Commands:
+//   @SeekDeep template save <name>: <prompt>
+//   @SeekDeep template list
+//   @SeekDeep template use <name>
+//   @SeekDeep template delete <name>
+//   /template action:save|list|use|delete name:<name> prompt:<prompt>
+const SEEKDEEP_PROMPT_TEMPLATES_PATH = path.join(__dirname, 'data', 'prompt-templates.json');
+const SEEKDEEP_MAX_TEMPLATES_PER_USER = Number(process.env.SEEKDEEP_MAX_PROMPT_TEMPLATES || 25);
+const SEEKDEEP_TEMPLATE_NAME_MAX = 30;
+const SEEKDEEP_TEMPLATE_PROMPT_MAX = 2000;
+
+function seekdeepReadPromptTemplates() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_PROMPT_TEMPLATES_PATH)) return { guilds: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PROMPT_TEMPLATES_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { guilds: {} };
+    if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    return parsed;
+  } catch { return { guilds: {} }; }
+}
+
+function seekdeepWritePromptTemplates(data) {
+  try {
+    fs.mkdirSync(path.dirname(SEEKDEEP_PROMPT_TEMPLATES_PATH), { recursive: true });
+    fs.writeFileSync(SEEKDEEP_PROMPT_TEMPLATES_PATH, JSON.stringify(data, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Failed to write prompt templates:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepGetUserTemplates(guildId, userId) {
+  const data = seekdeepReadPromptTemplates();
+  return Object.assign({}, data?.guilds?.[guildId]?.[userId] || {});
+}
+
+function seekdeepSaveUserTemplate(guildId, userId, name, prompt) {
+  const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, SEEKDEEP_TEMPLATE_NAME_MAX);
+  const safePrompt = String(prompt || '').trim().slice(0, SEEKDEEP_TEMPLATE_PROMPT_MAX);
+  if (!safeName || !safePrompt || !guildId || !userId) return null;
+
+  const data = seekdeepReadPromptTemplates();
+  if (!data.guilds[guildId]) data.guilds[guildId] = {};
+  if (!data.guilds[guildId][userId]) data.guilds[guildId][userId] = {};
+  const userTemplates = data.guilds[guildId][userId];
+
+  if (Object.keys(userTemplates).length >= SEEKDEEP_MAX_TEMPLATES_PER_USER && !userTemplates[safeName]) {
+    return { error: `You already have ${SEEKDEEP_MAX_TEMPLATES_PER_USER} templates. Delete one first.` };
+  }
+
+  userTemplates[safeName] = {
+    prompt: safePrompt,
+    createdAt: userTemplates[safeName]?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    usedCount: userTemplates[safeName]?.usedCount || 0,
+  };
+  seekdeepWritePromptTemplates(data);
+  return { name: safeName, prompt: safePrompt };
+}
+
+function seekdeepDeleteUserTemplate(guildId, userId, name) {
+  const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  if (!safeName || !guildId || !userId) return false;
+  const data = seekdeepReadPromptTemplates();
+  if (!data?.guilds?.[guildId]?.[userId]?.[safeName]) return false;
+  delete data.guilds[guildId][userId][safeName];
+  seekdeepWritePromptTemplates(data);
+  return true;
+}
+
+function seekdeepIncrementTemplateUse(guildId, userId, name) {
+  const safeName = String(name || '').trim().toLowerCase();
+  const data = seekdeepReadPromptTemplates();
+  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
+  if (!tmpl) return;
+  tmpl.usedCount = (tmpl.usedCount || 0) + 1;
+  tmpl.lastUsedAt = new Date().toISOString();
+  seekdeepWritePromptTemplates(data);
+}
+
+function seekdeepTemplateNameSanitize(raw = '') {
+  return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, SEEKDEEP_TEMPLATE_NAME_MAX);
+}
+
+async function seekdeepHandleTemplateCommand(message, raw = '') {
+  const p = String(raw || message?.content || '').trim();
+  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+
+  // Must start with "template" or "templates"
+  if (!/^templates?\b/i.test(stripped)) return false;
+
+  const guildId = String(message?.guild?.id || '');
+  const userId = String(message?.author?.id || '');
+  if (!guildId) {
+    await message.reply({ content: 'Templates only work inside a server.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const body = stripped.replace(/^templates?\s*/i, '').trim();
+
+  // template list / templates
+  if (!body || /^(?:list|show|all)$/i.test(body)) {
+    const templates = seekdeepGetUserTemplates(guildId, userId);
+    const names = Object.keys(templates).sort();
+    if (!names.length) {
+      await message.reply({ content: 'No saved templates. Use `@SeekDeep template save <name>: <prompt>` to create one.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const lines = ['**Your saved templates:**', ''];
+    for (const name of names) {
+      const tmpl = templates[name];
+      const snippet = tmpl.prompt.length > 60 ? tmpl.prompt.slice(0, 57) + '...' : tmpl.prompt;
+      lines.push(`\`${name}\` — ${snippet} (used ${tmpl.usedCount || 0}x)`);
+    }
+    lines.push('', 'Use: `@SeekDeep template use <name>` or `@SeekDeep template delete <name>`');
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // template save <name>: <prompt>  or  template save <name> <prompt>
+  const saveMatch = body.match(/^save\s+([a-zA-Z0-9_-]+)\s*[:\s]\s*(.+)$/is);
+  if (saveMatch) {
+    const result = seekdeepSaveUserTemplate(guildId, userId, saveMatch[1], saveMatch[2]);
+    if (!result) {
+      await message.reply({ content: 'Could not save template — name or prompt was empty.', allowedMentions: { repliedUser: false } });
+    } else if (result.error) {
+      await message.reply({ content: result.error, allowedMentions: { repliedUser: false } });
+    } else {
+      await message.reply({ content: `Template \`${result.name}\` saved. Use with \`@SeekDeep template use ${result.name}\`.`, allowedMentions: { repliedUser: false } });
+    }
+    return true;
+  }
+
+  // template delete <name>
+  const deleteMatch = body.match(/^(?:delete|remove|rm)\s+(.+)$/i);
+  if (deleteMatch) {
+    const name = seekdeepTemplateNameSanitize(deleteMatch[1]);
+    if (seekdeepDeleteUserTemplate(guildId, userId, name)) {
+      await message.reply({ content: `Template \`${name}\` deleted.`, allowedMentions: { repliedUser: false } });
+    } else {
+      await message.reply({ content: `No template named \`${name}\` found.`, allowedMentions: { repliedUser: false } });
+    }
+    return true;
+  }
+
+  // template use <name>  — triggers image generation with the saved prompt
+  const useMatch = body.match(/^(?:use|run|gen|generate)\s+(.+)$/i);
+  if (useMatch) {
+    const name = seekdeepTemplateNameSanitize(useMatch[1]);
+    const templates = seekdeepGetUserTemplates(guildId, userId);
+    if (!templates[name]) {
+      await message.reply({ content: `No template named \`${name}\`. Use \`@SeekDeep template list\` to see yours.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    seekdeepIncrementTemplateUse(guildId, userId, name);
+    const savedPrompt = templates[name].prompt;
+    await message.reply({ content: `Using template \`${name}\`: ${savedPrompt.slice(0, 200)}${savedPrompt.length > 200 ? '...' : ''}`, allowedMentions: { repliedUser: false } });
+    // Dispatch image generation with the saved prompt
+    if (typeof seekdeepSendImageWithButtons === 'function') {
+      void seekdeepSendImageWithButtons(message, savedPrompt, 1024, 1024, null, {});
+    }
+    return true;
+  }
+
+  // Fallback: show usage
+  await message.reply({
+    content: [
+      '**Template commands:**',
+      '`@SeekDeep template save <name>: <prompt>` — save a prompt',
+      '`@SeekDeep template list` — show your saved templates',
+      '`@SeekDeep template use <name>` — generate an image from a saved prompt',
+      '`@SeekDeep template delete <name>` — remove a template',
+    ].join('\n'),
+    allowedMentions: { repliedUser: false },
+  });
+  return true;
+}
+// SEEKDEEP_PROMPT_TEMPLATES_END
+
 // SEEKDEEP_SERVER_STATS_START
 // Lightweight per-server / per-user activity stats. Persisted to
 // data/server-stats.json on each increment. Used by @SeekDeep stats / stats me
@@ -12956,6 +13158,11 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // Prompt templates: "@SeekDeep template save|list|use|delete"
+    if (typeof seekdeepHandleTemplateCommand === 'function' && await seekdeepHandleTemplateCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
     // Conversation search: "@SeekDeep search <query>"
     const conversationSearchQuery = seekdeepConversationSearchQueryFromMessage(seekdeepArchiveOpenRawContent);
     if (conversationSearchQuery) {
@@ -14762,6 +14969,90 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (commandName === 'template') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const action = String(interaction.options.getString('action') || 'list').toLowerCase();
+      const name = String(interaction.options.getString('name') || '').trim();
+      const prompt = String(interaction.options.getString('prompt') || '').trim();
+      const guildId = interaction.guild?.id || '';
+      const userId = interaction.user?.id || '';
+
+      if (!guildId) {
+        await sendLongInteractionReply(interaction, 'Templates only work inside a server.');
+        return;
+      }
+
+      if (action === 'list') {
+        const templates = seekdeepGetUserTemplates(guildId, userId);
+        const names = Object.keys(templates).sort();
+        if (!names.length) {
+          await sendLongInteractionReply(interaction, 'No saved templates. Use `/template action:save name:<name> prompt:<prompt>` to create one.');
+          return;
+        }
+        const lines = ['**Your saved templates:**', ''];
+        for (const n of names) {
+          const tmpl = templates[n];
+          const snippet = tmpl.prompt.length > 60 ? tmpl.prompt.slice(0, 57) + '...' : tmpl.prompt;
+          lines.push(`\`${n}\` — ${snippet} (used ${tmpl.usedCount || 0}x)`);
+        }
+        await sendLongInteractionReply(interaction, lines.join('\n'));
+        return;
+      }
+
+      if (action === 'save') {
+        if (!name || !prompt) {
+          await sendLongInteractionReply(interaction, 'Save requires both `name` and `prompt` options.');
+          return;
+        }
+        const result = seekdeepSaveUserTemplate(guildId, userId, name, prompt);
+        if (result?.error) await sendLongInteractionReply(interaction, result.error);
+        else if (result) await sendLongInteractionReply(interaction, `Template \`${result.name}\` saved.`);
+        else await sendLongInteractionReply(interaction, 'Could not save template.');
+        return;
+      }
+
+      if (action === 'use') {
+        if (!name) { await sendLongInteractionReply(interaction, 'Provide the template `name` to use.'); return; }
+        const safeName = seekdeepTemplateNameSanitize(name);
+        const templates = seekdeepGetUserTemplates(guildId, userId);
+        if (!templates[safeName]) {
+          await sendLongInteractionReply(interaction, `No template named \`${safeName}\`. Use \`/template action:list\` to see yours.`);
+          return;
+        }
+        seekdeepIncrementTemplateUse(guildId, userId, safeName);
+        const savedPrompt = templates[safeName].prompt;
+        await sendLongInteractionReply(interaction, `Using template \`${safeName}\`: ${savedPrompt.slice(0, 200)}${savedPrompt.length > 200 ? '...' : ''}`);
+        if (typeof seekdeepSendImageWithButtons === 'function') {
+          const proxy = {
+            author: { id: userId },
+            channel: interaction.channel,
+            guild: interaction.guild || null,
+            client: interaction.client || client,
+            id: `templateslash:${interaction.id}`,
+            content: savedPrompt,
+            reply: async (payload) => interaction.channel?.send ? interaction.channel.send(payload) : null,
+          };
+          void seekdeepSendImageWithButtons(proxy, savedPrompt, 1024, 1024, null, {});
+        }
+        return;
+      }
+
+      if (action === 'delete') {
+        if (!name) { await sendLongInteractionReply(interaction, 'Provide the template `name` to delete.'); return; }
+        const safeName = seekdeepTemplateNameSanitize(name);
+        if (seekdeepDeleteUserTemplate(guildId, userId, safeName)) {
+          await sendLongInteractionReply(interaction, `Template \`${safeName}\` deleted.`);
+        } else {
+          await sendLongInteractionReply(interaction, `No template named \`${safeName}\` found.`);
+        }
+        return;
+      }
+
+      await sendLongInteractionReply(interaction, 'Unknown template action. Use: save, list, use, or delete.');
+      return;
+    }
+
     if (commandName === 'regen') {
       if (!(await safeDefer(interaction))) return;
       const mode = String(interaction.options.getString('mode') || 'refined').toLowerCase();
@@ -15113,6 +15404,10 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     // v10.23: conversation search
     seekdeepConversationSearchQueryFromMessage,
     seekdeepFormatConversationSearchResults,
+    // v10.24: prompt templates
+    seekdeepTemplateNameSanitize,
+    seekdeepGetUserTemplates,
+    SEEKDEEP_MAX_TEMPLATES_PER_USER,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
