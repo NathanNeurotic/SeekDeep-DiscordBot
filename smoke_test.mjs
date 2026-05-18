@@ -491,9 +491,31 @@ check('template-name: empty = empty', templateName('') === '');
 check('template-max: default limit is reasonable', maxTemplates >= 10 && maxTemplates <= 100);
 
 // ---------------------------------------------------------------------------
-// Suite 24: Rotating status bank
+// Suite 24: img2img + upscale query extraction
 // ---------------------------------------------------------------------------
-console.log('24. Rotating status bank.');
+console.log('24. img2img + upscale query extraction.');
+const {
+  seekdeepImg2ImgQueryFromMessage: img2imgQuery,
+  seekdeepUpscaleQueryFromMessage: upscaleQuery,
+} = T;
+
+// img2img query extraction
+check('img2img: "@SeekDeep img2img make it cyberpunk" extracts', img2imgQuery('@SeekDeep img2img make it cyberpunk') === 'make it cyberpunk');
+check('img2img: "<@123> img2img oil painting" extracts', img2imgQuery('<@123> img2img oil painting') === 'oil painting');
+check('img2img: empty = empty', img2imgQuery('') === '');
+check('img2img: no img2img keyword = empty', img2imgQuery('@SeekDeep draw a cat') === '');
+
+// upscale query extraction
+check('upscale: "@SeekDeep upscale" extracts default 2x', upscaleQuery('@SeekDeep upscale')?.scale === 2);
+check('upscale: "@SeekDeep upscale 4x" extracts 4x', upscaleQuery('@SeekDeep upscale 4x')?.scale === 4);
+check('upscale: "@SeekDeep upscale 3x" extracts 3x', upscaleQuery('<@123> upscale 3x')?.scale === 3);
+check('upscale: no keyword = null', upscaleQuery('@SeekDeep draw a cat') === null);
+check('upscale: empty = null', upscaleQuery('') === null);
+
+// ---------------------------------------------------------------------------
+// Suite 25: Rotating status bank
+// ---------------------------------------------------------------------------
+console.log('25. Rotating status bank.');
 const { SEEKDEEP_STATUS_BANK: statusBank, seekdeepShuffleStatusOrder: shuffleOrder, seekdeepStatusOrder: getOrder } = T;
 
 check('status: bank is a non-empty array', Array.isArray(statusBank) && statusBank.length > 0);

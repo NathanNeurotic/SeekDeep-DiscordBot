@@ -426,6 +426,24 @@ class VisionRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
 
+class Img2ImgRequest(BaseModel):
+    prompt: str
+    image_b64: str
+    strength: float = Field(default=0.6, ge=0.05, le=1.0)
+    width: int = Field(default=1024, ge=256, le=1536)
+    height: int = Field(default=1024, ge=256, le=1536)
+    steps: int = Field(default=28, ge=1, le=50)
+    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int] = None
+    negative_prompt: str = ""
+
+
+class UpscaleRequest(BaseModel):
+    image_b64: str
+    scale: int = Field(default=2, ge=2, le=4)
+    method: Literal["lanczos", "realesrgan"] = "lanczos"
+
+
 # ---------------------------------------------------------------------------
 # Health and utility endpoints
 # ---------------------------------------------------------------------------
@@ -438,7 +456,7 @@ class VisionRequest(BaseModel):
 import asyncio as _seekdeep_asyncio
 
 _SEEKDEEP_MODEL_REQUEST_LOCK = _seekdeep_asyncio.Lock()
-_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/unload"}
+_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/unload"}
 
 @app.middleware("http")
 async def seekdeep_singleflight_middleware(request, call_next):
@@ -996,6 +1014,123 @@ def image(req: ImageRequest):
         "path": str(out_path),
         "forced_steps": int(args.get("num_inference_steps", requested_steps)),
         "seed": seed,
+    }
+
+
+@app.post("/img2img")
+def img2img(req: Img2ImgRequest):
+    load_image_pipe()
+
+    import torch
+    from diffusers import AutoPipelineForImage2Image
+
+    # Create an img2img pipeline sharing the same model components — no extra
+    # VRAM.  AutoPipelineForImage2Image.from_pipe() is the modern diffusers way
+    # to reuse loaded weights for a different pipeline type.
+    i2i_pipe = AutoPipelineForImage2Image.from_pipe(image_pipe)
+
+    # Decode the source image
+    source_bytes = b64_to_bytes(req.image_b64)
+    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+
+    width = int(req.width)
+    height = int(req.height)
+    if width % 8:
+        width = width - (width % 8)
+    if height % 8:
+        height = height - (height % 8)
+
+    source_img = source_img.resize((width, height), Image.LANCZOS)
+
+    seed = req.seed
+    generator = None
+    if seed is not None:
+        device = "cuda" if cuda_available() else "cpu"
+        generator = torch.Generator(device=device).manual_seed(int(seed))
+
+    args = {
+        "prompt": req.prompt.strip(),
+        "image": source_img,
+        "strength": float(req.strength),
+        "num_inference_steps": max(1, min(50, int(req.steps))),
+        "guidance_scale": float(req.guidance_scale),
+    }
+
+    if req.negative_prompt.strip():
+        args["negative_prompt"] = req.negative_prompt.strip()
+    if generator is not None:
+        args["generator"] = generator
+
+    result = i2i_pipe(**args)
+    img = result.images[0]
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_img2img_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(img),
+        "original_prompt": req.prompt.strip(),
+        "filename": safe_name,
+        "path": str(out_path),
+        "strength": float(req.strength),
+        "seed": seed,
+    }
+
+
+@app.post("/upscale")
+def upscale(req: UpscaleRequest):
+    """Upscale an image. 'lanczos' is a zero-model PIL fallback that works
+    immediately. 'realesrgan' requires the model to be downloaded separately."""
+    source_bytes = b64_to_bytes(req.image_b64)
+    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    scale = int(req.scale)
+
+    if req.method == "realesrgan":
+        # Placeholder — Real-ESRGAN requires a separate model download.
+        # Check if it's available; if not, fall back to Lanczos with a note.
+        realesrgan_path = MODEL_CACHE_DIR / "realesrgan"
+        if not realesrgan_path.exists():
+            # Fall back to Lanczos with a note
+            new_w = source_img.width * scale
+            new_h = source_img.height * scale
+            img = source_img.resize((new_w, new_h), Image.LANCZOS)
+            ts = int(time.time())
+            safe_name = f"seekdeep_upscale_{ts}.png"
+            out_path = OUTPUT_DIR / safe_name
+            img.save(out_path)
+            return {
+                "image_b64": image_to_b64_png(img),
+                "filename": safe_name,
+                "path": str(out_path),
+                "method": "lanczos",
+                "note": "Real-ESRGAN model not installed; used Lanczos fallback.",
+                "scale": scale,
+                "width": new_w,
+                "height": new_h,
+            }
+        # Future: load Real-ESRGAN and run inference here
+        return JSONResponse(status_code=501, content={"error": "Real-ESRGAN is scaffolded but not yet implemented."})
+
+    # Lanczos upscale — high-quality bicubic, no model needed
+    new_w = source_img.width * scale
+    new_h = source_img.height * scale
+    img = source_img.resize((new_w, new_h), Image.LANCZOS)
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_upscale_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(img),
+        "filename": safe_name,
+        "path": str(out_path),
+        "method": "lanczos",
+        "scale": scale,
+        "width": new_w,
+        "height": new_h,
     }
 
 

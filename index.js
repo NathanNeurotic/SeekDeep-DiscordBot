@@ -6480,6 +6480,10 @@ function seekdeepHelpText(source = null) {
     '/status verbose:true                (chat-roles map + map-size diagnostics)',
     prefix + ' search <query>      (search recent conversations in this channel)',
     '/search query:<keywords>       (slash version)',
+    prefix + ' img2img <prompt>             (transform attached/replied/recent image)',
+    '/img2img image:<file> prompt:<text>   (slash version)',
+    prefix + ' upscale [2x|3x|4x]         (upscale attached/replied/recent image)',
+    '/upscale image:<file> scale:2|3|4     (slash version)',
     prefix + ' template save <name>: <prompt>   (save a reusable image prompt)',
     prefix + ' template list                    (show your saved templates)',
     prefix + ' template use <name>              (generate from a saved template)',
@@ -7577,6 +7581,25 @@ const commands = [
     .setName('search')
     .setDescription('Search recent conversations in this channel.')
     .addStringOption((o) => o.setName('query').setDescription('Keywords to search for').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('img2img')
+    .setDescription('Transform an image using a text prompt.')
+    .addAttachmentOption((o) => o.setName('image').setDescription('Source image to transform').setRequired(true))
+    .addStringOption((o) => o.setName('prompt').setDescription('How to transform the image').setRequired(true))
+    .addNumberOption((o) => o.setName('strength').setDescription('Transformation strength 0.05-1.0 (default 0.6)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('upscale')
+    .setDescription('Upscale an image to a larger resolution.')
+    .addAttachmentOption((o) => o.setName('image').setDescription('Image to upscale').setRequired(true))
+    .addIntegerOption((o) =>
+      o.setName('scale')
+        .setDescription('Scale factor')
+        .setRequired(false)
+        .addChoices(
+          { name: '2x', value: 2 },
+          { name: '3x', value: 3 },
+          { name: '4x', value: 4 },
+        )),
   new SlashCommandBuilder()
     .setName('template')
     .setDescription('Save, list, use, or delete prompt templates.')
@@ -11085,6 +11108,126 @@ async function seekdeepHandleTemplateCommand(message, raw = '') {
 }
 // SEEKDEEP_PROMPT_TEMPLATES_END
 
+// SEEKDEEP_IMG2IMG_UPSCALE_START
+// img2img: transform an existing image with a text prompt.
+// upscale: enlarge an image (Lanczos fallback; Real-ESRGAN when available).
+// Both call the Python server endpoints added in the same version.
+
+async function seekdeepFetchImageAsBase64(url) {
+  const resp = await seekdeepFetchWithLimits(url, { maxBytes: 20 * 1024 * 1024 });
+  if (!resp.ok) throw new Error('Failed to fetch image: ' + resp.statusText);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  return buffer.toString('base64');
+}
+
+async function seekdeepResolveSourceImage(target) {
+  // 1. Check for an attachment on the message itself
+  const attachment = target?.attachments?.first?.() || null;
+  if (attachment?.url && /\.(png|jpe?g|gif|webp)/i.test(attachment.url)) {
+    return { url: attachment.url, source: 'attachment' };
+  }
+
+  // 2. Check if replying to a message with an attachment or embed image
+  const ref = target?.reference;
+  if (ref?.messageId) {
+    try {
+      const replied = await target.channel.messages.fetch(ref.messageId);
+      const replyAttachment = replied?.attachments?.first?.();
+      if (replyAttachment?.url && /\.(png|jpe?g|gif|webp)/i.test(replyAttachment.url)) {
+        return { url: replyAttachment.url, source: 'reply-attachment' };
+      }
+      const embed = replied?.embeds?.find?.((e) => e.image?.url || e.thumbnail?.url);
+      if (embed?.image?.url) return { url: embed.image.url, source: 'reply-embed' };
+      if (embed?.thumbnail?.url) return { url: embed.thumbnail.url, source: 'reply-thumbnail' };
+    } catch {}
+  }
+
+  // 3. Search recent channel messages for the last bot image
+  const botId = target?.client?.user?.id || (typeof client !== 'undefined' && client?.user?.id) || '';
+  if (target?.channel?.messages?.fetch && botId) {
+    const fetched = await target.channel.messages.fetch({ limit: 15, before: target.id }).catch(() => null);
+    if (fetched) {
+      const sorted = Array.from(fetched.values()).sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+      for (const msg of sorted) {
+        if (msg.author?.id !== botId) continue;
+        const att = msg.attachments?.first?.();
+        if (att?.url && /\.(png|jpe?g|gif|webp)/i.test(att.url)) {
+          return { url: att.url, source: 'recent-bot-image' };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function seekdeepImg2ImgQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+img2img\s+(.+)$/is);
+  return m ? String(m[1] || '').trim() : '';
+}
+
+function seekdeepUpscaleQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+upscale\b\s*(.*)?$/is);
+  if (!m) return null;
+  const body = String(m[1] || '').trim();
+  const scaleMatch = body.match(/(\d)x/i);
+  return { scale: scaleMatch ? Math.min(4, Math.max(2, parseInt(scaleMatch[1], 10))) : 2 };
+}
+
+async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
+  seekdeepSetActivityStatus('Transforming image...');
+  try {
+    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const strengthMatch = prompt.match(/\bstrength[:\s]*([0-9.]+)/i);
+    const strength = strengthMatch ? Math.max(0.05, Math.min(1.0, parseFloat(strengthMatch[1]))) : 0.6;
+    const cleanPrompt = prompt.replace(/\bstrength[:\s]*[0-9.]+/i, '').trim();
+
+    const response = await postLocal('/img2img', {
+      prompt: cleanPrompt || 'enhance this image',
+      image_b64: imageB64,
+      strength,
+      width: 1024,
+      height: 1024,
+      steps: Number(process.env.IMAGE_STEPS || 28),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 6.5),
+    });
+
+    const buffer = Buffer.from(response.image_b64, 'base64');
+    const filename = response.filename || 'seekdeep_img2img.png';
+
+    await seekdeepReplyToTarget(target, {
+      content: `img2img complete (strength ${strength}): ${cleanPrompt.slice(0, 200)}`,
+      files: [new AttachmentBuilder(buffer, { name: filename })],
+    });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+}
+
+async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
+  seekdeepSetActivityStatus('Upscaling image...');
+  try {
+    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const response = await postLocal('/upscale', {
+      image_b64: imageB64,
+      scale,
+      method: 'lanczos',
+    });
+
+    const buffer = Buffer.from(response.image_b64, 'base64');
+    const filename = response.filename || 'seekdeep_upscale.png';
+    const note = response.note ? `\n${response.note}` : '';
+
+    await seekdeepReplyToTarget(target, {
+      content: `Upscaled ${scale}x (${response.method}) → ${response.width}×${response.height}${note}`,
+      files: [new AttachmentBuilder(buffer, { name: filename })],
+    });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+}
+// SEEKDEEP_IMG2IMG_UPSCALE_END
+
 // SEEKDEEP_SERVER_STATS_START
 // Lightweight per-server / per-user activity stats. Persisted to
 // data/server-stats.json on each increment. Used by @SeekDeep stats / stats me
@@ -13158,6 +13301,30 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // img2img: "@SeekDeep img2img <prompt>" (attach image or reply to one)
+    const img2imgPrompt = seekdeepImg2ImgQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (img2imgPrompt) {
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to use img2img.', allowedMentions: { repliedUser: false } });
+      } else {
+        await seekdeepHandleImg2Img(message, img2imgPrompt, sourceImage.url);
+      }
+      return true;
+    }
+
+    // upscale: "@SeekDeep upscale [2x|3x|4x]" (attach image or reply to one)
+    const upscaleInfo = seekdeepUpscaleQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (upscaleInfo) {
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to upscale.', allowedMentions: { repliedUser: false } });
+      } else {
+        await seekdeepHandleUpscale(message, sourceImage.url, upscaleInfo.scale);
+      }
+      return true;
+    }
+
     // Prompt templates: "@SeekDeep template save|list|use|delete"
     if (typeof seekdeepHandleTemplateCommand === 'function' && await seekdeepHandleTemplateCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
@@ -14969,6 +15136,40 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (commandName === 'img2img') {
+      if (!(await safeDefer(interaction))) return;
+      const attachment = interaction.options.getAttachment('image');
+      const prompt = String(interaction.options.getString('prompt') || '').trim();
+      const strength = interaction.options.getNumber('strength');
+      if (!attachment?.url) {
+        await sendLongInteractionReply(interaction, 'Provide an image attachment.');
+        return;
+      }
+      const fullPrompt = strength != null ? `${prompt} strength:${strength}` : prompt;
+      try {
+        await seekdeepHandleImg2Img(interaction, fullPrompt || 'enhance this image', attachment.url);
+      } catch (err) {
+        await sendLongInteractionReply(interaction, 'img2img failed: ' + (err?.message || String(err)));
+      }
+      return;
+    }
+
+    if (commandName === 'upscale') {
+      if (!(await safeDefer(interaction))) return;
+      const attachment = interaction.options.getAttachment('image');
+      const scale = interaction.options.getInteger('scale') || 2;
+      if (!attachment?.url) {
+        await sendLongInteractionReply(interaction, 'Provide an image attachment.');
+        return;
+      }
+      try {
+        await seekdeepHandleUpscale(interaction, attachment.url, scale);
+      } catch (err) {
+        await sendLongInteractionReply(interaction, 'Upscale failed: ' + (err?.message || String(err)));
+      }
+      return;
+    }
+
     if (commandName === 'template') {
       if (!(await safeDefer(interaction))) return;
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
@@ -15408,6 +15609,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepTemplateNameSanitize,
     seekdeepGetUserTemplates,
     SEEKDEEP_MAX_TEMPLATES_PER_USER,
+    // v10.25: img2img + upscale
+    seekdeepImg2ImgQueryFromMessage,
+    seekdeepUpscaleQueryFromMessage,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
