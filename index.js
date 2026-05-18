@@ -254,6 +254,25 @@ function seekdeepStartStatusRotation() {
   seekdeepApplyNextStatus();
   seekdeepStatusTimer = setInterval(seekdeepApplyNextStatus, SEEKDEEP_STATUS_INTERVAL_MS);
 }
+
+// Context-aware activity override. While the bot is doing real work
+// (generating an image, running inference, analysing a photo), show that
+// instead of the fun bank. Reverts automatically when the task finishes.
+let seekdeepActivityOverrideCount = 0;
+
+function seekdeepSetActivityStatus(text) {
+  if (!client?.user) return;
+  seekdeepActivityOverrideCount++;
+  try {
+    client.user.setPresence({ activities: [{ type: ActivityType.Custom, name: text }], status: 'online' });
+  } catch {}
+}
+
+function seekdeepClearActivityStatus() {
+  if (seekdeepActivityOverrideCount > 0) seekdeepActivityOverrideCount--;
+  // Only revert to fun statuses if no other task is still in-flight.
+  if (seekdeepActivityOverrideCount === 0) seekdeepApplyNextStatus();
+}
 // SEEKDEEP_ROTATING_STATUS_END
 
 // SEEKDEEP_CHANNEL_ALLOWLIST_START
@@ -1869,39 +1888,44 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
     }
   }
 
-  let answer = await runLocalChat(
-    promptForModel,
-    buildSystem(system, useWeb, personaOverride),
-    context,
-    maxNewTokens,
-    temperature,
-    { modelRole }
-  );
-
-  if (hasLoopingOrBrokenReply(answer)) {
-    const retryPrompt = [
+  seekdeepSetActivityStatus(useWeb ? 'Researching your question...' : 'Thinking...');
+  try {
+    let answer = await runLocalChat(
       promptForModel,
-      '',
-      'Important: provide only the final answer. No hidden reasoning. No repetition. Every sentence must add new information.'
-    ].join('\n');
-
-    answer = await runLocalChat(
-      retryPrompt,
-      buildAntiLoopSystem(system, useWeb),
+      buildSystem(system, useWeb, personaOverride),
       context,
-      Math.min(maxNewTokens, 900),
-      Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2),
+      maxNewTokens,
+      temperature,
       { modelRole }
     );
+
+    if (hasLoopingOrBrokenReply(answer)) {
+      const retryPrompt = [
+        promptForModel,
+        '',
+        'Important: provide only the final answer. No hidden reasoning. No repetition. Every sentence must add new information.'
+      ].join('\n');
+
+      answer = await runLocalChat(
+        retryPrompt,
+        buildAntiLoopSystem(system, useWeb),
+        context,
+        Math.min(maxNewTokens, 900),
+        Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2),
+        { modelRole }
+      );
+    }
+
+    answer = cleanLoopingReply(answer);
+
+    if (hasLoopingOrBrokenReply(answer)) {
+      answer = 'I hit a generation loop and discarded it. Ask again with tighter wording and I should behave.';
+    }
+
+    return `${answer}${formatSources(sources)}`.trim();
+  } finally {
+    seekdeepClearActivityStatus();
   }
-
-  answer = cleanLoopingReply(answer);
-
-  if (hasLoopingOrBrokenReply(answer)) {
-    answer = 'I hit a generation loop and discarded it. Ask again with tighter wording and I should behave.';
-  }
-
-  return `${answer}${formatSources(sources)}`.trim();
 }
 
 function seekdeepTrimVisionBoilerplate(text = '') {
@@ -1935,17 +1959,22 @@ async function askVision(attachment, prompt, { systemHint } = {}) {
     ? systemHint + '\n\n' + (prompt || '')
     : (prompt || 'Describe this media clearly.');
 
-  const response = await postLocal('/vision', {
-    prompt: effectivePrompt,
-    media_b64: b64,
-    filename: attachment.name || 'upload',
-    media_kind: mediaKind,
-    max_new_tokens: systemHint ? 1500 : 700,
-    temperature: 0.0,
-  });
+  seekdeepSetActivityStatus(systemHint ? 'Extracting text...' : 'Analyzing image...');
+  try {
+    const response = await postLocal('/vision', {
+      prompt: effectivePrompt,
+      media_b64: b64,
+      filename: attachment.name || 'upload',
+      media_kind: mediaKind,
+      max_new_tokens: systemHint ? 1500 : 700,
+      temperature: 0.0,
+    });
 
-  const text = response.text || '(empty vision response)';
-  return seekdeepTrimVisionBoilerplate(text);
+    const text = response.text || '(empty vision response)';
+    return seekdeepTrimVisionBoilerplate(text);
+  } finally {
+    seekdeepClearActivityStatus();
+  }
 }
 
 
@@ -3040,15 +3069,21 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
     ? (baseNegative ? `${baseNegative}, ${negativeAdds}` : negativeAdds)
     : baseNegative;
 
-  const response = await postLocal('/image', {
-    prompt: promptInfo.generationPrompt,
-    width,
-    height,
-    steps: stepsOverride > 0 ? Math.max(1, Math.min(50, stepsOverride)) : Number(process.env.IMAGE_STEPS || 28),
-    guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 6.5),
-    seed,
-    negative_prompt: finalNegative,
-  });
+  seekdeepSetActivityStatus('Generating an image...');
+  let response;
+  try {
+    response = await postLocal('/image', {
+      prompt: promptInfo.generationPrompt,
+      width,
+      height,
+      steps: stepsOverride > 0 ? Math.max(1, Math.min(50, stepsOverride)) : Number(process.env.IMAGE_STEPS || 28),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 6.5),
+      seed,
+      negative_prompt: finalNegative,
+    });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
 
   const buffer = Buffer.from(response.image_b64, 'base64');
   const filename = response.filename || 'seekdeep_image.png';
