@@ -15,18 +15,77 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 
 ## Architecture
 
+```text
+                        Discord Gateway
+                             |
+                    +--------+--------+
+                    |  index.js (Node) |
+                    |  Discord bot     |
+                    |  ~16k lines ESM  |
+                    +--------+--------+
+                             |
+              +--------------+--------------+
+              |              |              |
+   messageCreate    interactionCreate   reactionAdd
+              |              |              |
+       +------+------+ +----+----+ +-------+-------+
+       | Pre-address  | | Slash   | | Archive/      |
+       | routes       | | router  | | Delete/Regen  |
+       | (archive,    | | (/ask,  | | shortcuts     |
+       |  stats,      | |  /image,| | (inbox,trash, |
+       |  persona,    | |  /stats | |  counterclkw) |
+       |  reactrule)  | |  etc.)  | +---------------+
+       +------+-------+ +----+---+
+              |               |
+              +-------+-------+
+                      |
+           +----------+----------+
+           | Address dispatcher   |
+           | seekdeepDispatch*    |
+           +----------+----------+
+                      |
+         +------------+------------+
+         |            |            |
+    Chat agent   Image agent  Vision agent
+         |            |            |
+         v            v            v
+    +----+---------------------------+
+    |  local_ai_server.py (FastAPI)  |
+    |  http://127.0.0.1:7865         |
+    |  Task-LRU: one model at a time |
+    +----+---+---+---+---+---+------+
+         |   |   |   |   |   |
+       /chat /image /vision  |
+             /img2img /upscale
+                  /gpu  /chart
+                      |
+    +-----------------+--+
+    |   SearXNG (Docker)  |
+    |  http://127.0.0.1:8080
+    +---------------------+
+
+    Persistence (data/*.json):
+    archive-guild-config.json   persona-overrides.json
+    server-stats.json           memory-presets.json
+    prompt-templates.json       auto-reactions.json
+```
+
 SeekDeep has two main runtime pieces:
 
-1. The Node.js Discord bot routes messages, slash commands, buttons, memory, archive actions, and response formatting.
-2. The Python FastAPI local AI server loads one local task at a time using `MODEL_KEEP_MODE=task-lru`.
+1. The **Node.js Discord bot** (`index.js`) routes messages, slash commands, buttons, modals, memory, archive actions, auto-reactions, auto-translate, and response formatting.
+2. The **Python FastAPI local AI server** (`local_ai_server.py`) loads one model at a time using `MODEL_KEEP_MODE=task-lru` with singleflight request serialization.
 
 The local AI server exposes:
 
-- `GET /health`
-- `POST /chat`
-- `POST /vision`
-- `POST /image`
-- `POST /unload`
+- `GET /health` — model status, VRAM stats, loaded/keep-resident state
+- `GET /gpu` — one-shot VRAM snapshot
+- `POST /chat` — role-routed text generation (Qwen3-8B)
+- `POST /vision` — image/video analysis (Qwen2.5-VL-3B)
+- `POST /image` — SDXL image generation (Dreamshaper-XL)
+- `POST /img2img` — image-to-image transformation (shared SDXL weights)
+- `POST /upscale` — Lanczos upscale (Real-ESRGAN scaffolded)
+- `POST /chart` — matplotlib stats chart rendering
+- `POST /unload` — force-unload current model
 
 ## Quick Start
 
@@ -391,6 +450,14 @@ npm run smoke
 - If `Fallback used: role=fallback_chat ...` appears in a chat reply footer, the originally-routed role failed to load (typically CUDA OOM) and the server fell back to `fallback_chat`. Check `LOCAL_CHAT_QUANT` and consider pinning more roles in `LOCAL_CHAT_QUANT_FULL_ROLES`.
 
 ## Release Notes
+
+### v10.29 — auto-translate channel
+
+`@SeekDeep translate channel here` (admin) designates one channel per server where every non-bot message containing non-Latin script (Cyrillic, CJK, Arabic, Devanagari, Thai, Korean) gets an automatic English translation reply. Uses a fast regex detector for non-Latin Unicode ranges — intentionally conservative, so Latin-script languages like French or Spanish aren't false-positively translated. 3-second per-channel cooldown prevents spam on rapid messages. Fire-and-forget: the message doesn't need to mention the bot. 9 new smoke checks.
+
+### v10.28 — refinement retry + analytics chart + token budget bump
+
+Two fixes to the dynamic image-prompt refiner, plus a new analytics feature. (1) When the validator rejects the chat model's first output (subject drift, generic phrasing, empty-after-cleanup), the refiner now retries once at +0.15 temperature before falling back to static rules. On Qwen3-8B this recovers most rejections that were previously invisible fallbacks. (2) Max refinement tokens bumped 360 → 512 as insurance against Qwen3's thinking tokens eating the budget despite `enable_thinking=False`. (3) `@SeekDeep stats chart` / `/stats scope:chart` renders the 30-day `dayBuckets` data as a matplotlib line chart — Discord dark theme, area fills, three color-coded series (images, chats, vision). New `POST /chart` endpoint on the Python server; falls back to text-only stats if matplotlib isn't installed.
 
 ### v10.27 — COMMANDS.md permission column + new command docs
 

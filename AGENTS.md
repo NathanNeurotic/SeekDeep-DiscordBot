@@ -1,6 +1,6 @@
 # Agents & Internal Components
 
-SeekDeep is a single-file Node bot (`index.js`, ~14k lines after the v10.5–v10.10 cleanup) plus a Python FastAPI local AI server (`local_ai_server.py`). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
+SeekDeep is a single-file Node bot (`index.js`, ~16k+ lines after v10.0–v10.29) plus a Python FastAPI local AI server (`local_ai_server.py`). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
 
 Function names are stable enough to grep for. If you find a stale reference here while reading the code, please update this file in the same change.
 
@@ -8,7 +8,7 @@ Function names are stable enough to grep for. If you find a stale reference here
 
 The bot listens for three Discord events: `messageCreate`, `interactionCreate`, and `messageReactionAdd`. After v10.9 the messageCreate handler is a thin 112-line orchestrator that delegates to:
 
-- `seekdeepProcessPreAddressMessageRoutes(message)` — pre-mention routes (archive config, status, search, persona, memory presets, stats, digest, reactrule, emoji vault, natural-archive followups). Returns `true` if a route handled the message.
+- `seekdeepProcessPreAddressMessageRoutes(message)` — pre-mention routes (archive config, status, search, persona, memory presets, stats, digest, translate channel, reactrule, emoji vault, natural-archive followups, img2img, upscale, templates). Returns `true` if a route handled the message.
 - `seekdeepDispatchAddressedMessage(message, ctx)` — the addressed-message dispatcher. Runs after the bot mention is detected and the prompt has been normalized + deduped. Houses the ~370-line route cascade (reply-translate, chat-ask, image alias, pending image subject, vision, raw-image, research-table, chat fallback).
 
 The handler also wires:
@@ -16,6 +16,7 @@ The handler also wires:
 - `seekdeepClaimEventOnce(key)` — message-level dedupe.
 - `seekdeepIsChannelAllowed(channelId)` — `SEEKDEEP_ALLOWED_CHANNELS` allowlist gate.
 - `seekdeepApplyAutoReactions(message)` — fire-and-forget auto-reaction pass.
+- `seekdeepAutoTranslateMessage(message)` — fire-and-forget auto-translate for non-Latin messages in the designated channel.
 
 ## Chat Agent
 
@@ -34,7 +35,7 @@ The handler also wires:
 **Purpose**: Analyze images/videos via the local vision model.
 
 **Key Functions**:
-- `askVision(attachment, prompt)` — downloads the attachment via `seekdeepFetchWithLimits`, base64-encodes, POSTs `/vision`.
+- `askVision(attachment, prompt, { systemHint })` — downloads the attachment via `seekdeepFetchWithLimits`, base64-encodes, POSTs `/vision`. OCR mode passes `SEEKDEEP_OCR_SYSTEM_PROMPT` as `systemHint`.
 - `seekdeepLooksLikeVisionPrompt(prompt)` — detects vision-style prompts ("what is this", "describe this image", etc.).
 - `seekdeepLooksLikeVisualAttachment(attachment)` — checks contentType + filename/URL extension against image/video patterns (handles `avif/tiff/m4v` and `proxyURL`).
 - `firstVisualAttachmentFrom(sourceMessage)` — walks direct attachments + `messageSnapshots` (forwarded messages) + embed image URLs (link previews) to find the first visual.
@@ -97,6 +98,48 @@ The handler also wires:
 - `seekdeepShouldKeepPromptAsChatBeforeImage(prompt)` — guard against "what is" / "explain" routing to image.
 - `seekdeepResolveImagePromptFromContext(message, prompt)` — looks back at recent messages when the prompt is referential ("him", "the same but in winter").
 
+## img2img + Upscale (v10.25)
+
+**Purpose**: Transform existing images with a text prompt, or enlarge them.
+
+**Key Functions**:
+- `seekdeepHandleImg2Img(target, prompt, sourceUrl)` — fetches source image, calls `/img2img`, posts result with buttons.
+- `seekdeepHandleUpscale(target, sourceUrl, scale)` — fetches source image, calls `/upscale`, posts result.
+- `seekdeepResolveSourceImage(target)` — 3-step waterfall: direct attachment → replied message → most recent bot image in channel.
+- `seekdeepFetchImageAsBase64(url)` — download + base64-encode an image URL.
+- `seekdeepImg2ImgQueryFromMessage(raw)` / `seekdeepUpscaleQueryFromMessage(raw)` — extract prompt/scale from message text.
+
+img2img uses `AutoPipelineForImage2Image.from_pipe()` on the Python server to share existing SDXL weights — zero extra model download. Upscale uses Lanczos (PIL); Real-ESRGAN is scaffolded for future opt-in.
+
+## Conversation Search (v10.23)
+
+**Purpose**: Full-text keyword search across recent channel messages.
+
+**Key Functions**:
+- `seekdeepSearchConversationHistory(channel, botId, query, maxPages)` — pages through `channel.messages.fetch` (up to 500 messages), matches bot responses and user messages mentioning the bot.
+- `seekdeepFormatConversationSearchResults(results, query)` — renders a compact report with timestamps, snippets, and jump-to-message links.
+- `seekdeepConversationSearchQueryFromMessage(raw)` — extracts the query from `@SeekDeep search <query>` (avoids false-matching `archive search`).
+
+## Prompt Templates (v10.24)
+
+**Purpose**: Per-user saved image prompts for one-command regeneration.
+
+**Key Functions**:
+- `seekdeepHandleTemplateCommand(message, raw)` — save/list/use/delete dispatcher.
+- `seekdeepSaveUserTemplate(guildId, userId, name, prompt)` — validates name/prompt, enforces max 25 per user.
+- `seekdeepGetUserTemplates(guildId, userId)` — returns the user's template map.
+- `seekdeepTemplateNameSanitize(name)` — lowercase, strip special chars, max 30 chars.
+
+## Auto-Translate Channel (v10.29)
+
+**Purpose**: Automatically translate non-Latin messages in a designated channel.
+
+**Key Functions**:
+- `seekdeepAutoTranslateMessage(message)` — checks if message is in the auto-translate channel, detects non-Latin script, translates via chat model.
+- `seekdeepLooksLikeNonLatin(text)` — fast regex check for CJK, Cyrillic, Arabic, Devanagari, Thai, Korean, etc.
+- `seekdeepHandleAutoTranslateChannelCommand(message, raw)` — admin `translate channel here|off`.
+- `seekdeepGetAutoTranslateChannelId(guildId)` — reads from persona-overrides.json.
+
 ## Prompt Refinement
 
 **Purpose**: Take a user image prompt and rewrite it into a denser, more model-friendly version.
@@ -144,11 +187,11 @@ Gated by `SEEKDEEP_FEATURE_EMOJI_VAULT=on` in `.env`. Returns `false` (not `true
 
 ## Persona / Memory / Stats / Digest
 
-**Per-channel/per-server persona overrides** — `@SeekDeep persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]`. Persistence in `data/persona-overrides.json`. Resolved at chat time by `seekdeepGetEffectivePersona(channelId, guildId)`.
+**Per-channel/per-server persona overrides** — `@SeekDeep persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]` or `/persona` modal (v10.26). Persistence in `data/persona-overrides.json`. Resolved at chat time by `seekdeepGetEffectivePersona(channelId, guildId)`.
 
 **Per-user memory presets** — `@SeekDeep memory preset add brief | expert | no-emoji | formal | casual | <custom>`. Persistence in `data/memory-presets.json`. Rendered into the system prompt by `seekdeepGetUserMemoryPresetsLines(userId)`.
 
-**Server stats** — `@SeekDeep stats` / `stats me`. Counts per-guild per-user per-kind (chat / image / vision) interactions. Persistence in `data/server-stats.json`. Updated by `seekdeepTrackStatEvent({...})`.
+**Server stats** — `@SeekDeep stats` / `stats me` / `stats chart` (v10.28). Counts per-guild per-user per-kind (chat / image / vision) interactions with 30-day rolling daily buckets. Chart mode renders a matplotlib line chart via the Python server's `/chart` endpoint. Persistence in `data/server-stats.json`. Updated by `seekdeepTrackStatEvent({...})`.
 
 **Daily digest** — opt-in via `SEEKDEEP_DAILY_DIGEST=on`. Admin sets channel with `@SeekDeep digest channel here`. Posts a stats summary at `SEEKDEEP_DAILY_DIGEST_HOUR` (default 9) per guild.
 
@@ -173,12 +216,168 @@ When `SEEKDEEP_TEST_MODE=1` is set in the environment, the bot:
 - Skips `client.login()` so the module can be imported without spinning up a Discord gateway connection.
 - Exposes whitelisted helpers on `globalThis.__seekdeepTest`:
   - `splitDiscordText`, `seekdeepIsFrustrationPrompt`, `seekdeepCompileReactionPattern`
-  - `seekdeepHelpText`, `seekdeepHelpTopicSlice`, `seekdeepParseHelpTopic`
+  - `seekdeepHelpText`, `seekdeepHelpTopicSlice`, `seekdeepParseHelpTopic`, `seekdeepHelpSearch`
   - `seekdeepEmojiVaultThreadName`, `seekdeepEmojiVaultFormatPage`
   - `seekdeepForceReactBucketRange`
+  - `seekdeepCleanDynamicImagePromptDetailed`, `seekdeepDynamicImagePromptPreservesSubject`
+  - `seekdeepArchiveThreadTrustedCount`, `seekdeepArchiveThreadBuildName`, `seekdeepArchiveThreadDisplayName`, `seekdeepArchiveMessageLooksLikeEntry`, `SEEKDEEP_ARCHIVE_COUNT_SOURCE`
+  - `seekdeepConversationSearchQueryFromMessage`, `seekdeepFormatConversationSearchResults`
+  - `seekdeepTemplateNameSanitize`, `seekdeepGetUserTemplates`, `SEEKDEEP_MAX_TEMPLATES_PER_USER`
+  - `seekdeepImg2ImgQueryFromMessage`, `seekdeepUpscaleQueryFromMessage`
+  - `seekdeepLooksLikeNonLatin`, `SEEKDEEP_NON_LATIN_REGEX`
   - `forceReactConstants`, `emojiVaultConstants`, `chunkerConstants`
 
 `smoke_test.mjs` sets the env var before its dynamic `import('./index.js')` so every assertion runs against the real function bodies. New pure helpers worth testing should be added to the whitelist near the bottom of `index.js`.
+
+## Data Persistence (`data/*.json`)
+
+All runtime state is stored as flat JSON files in the `data/` directory. Each file is read on demand and written back atomically. The `data/` directory is auto-created on first write. All files are gitignored except `archive-guild-config.json` (tracked so archive channel bindings survive fresh clones).
+
+### `archive-guild-config.json`
+
+Per-guild archive configuration and per-user archive thread profiles.
+
+```jsonc
+{
+  "guilds": {
+    "<guildId>": {
+      "archiveChannelId": "123456789",       // channel where archive threads live
+      "sharedArchiveThreadId": "987654321",   // shared archive thread ID
+      "sharedArchiveCount": 34,               // entry count in shared thread
+      "userArchives": {
+        "<userId>": {
+          "threadId": "111222333",            // user's personal archive thread ID
+          "count": 12,                        // trusted entry count
+          "countSource": "seekdeep-archive-posts-v3"  // source-gate for trusted counts
+        }
+      }
+    }
+  }
+}
+```
+
+Read: `seekdeepArchiveThreadReadConfig()` / Write: `seekdeepArchiveThreadWriteConfig(config)`
+
+### `persona-overrides.json`
+
+Per-channel persona overrides, per-guild digest/auto-translate channel config.
+
+```jsonc
+{
+  "channels": {
+    "<channelId>": {
+      "persona": "neurotic"                   // channel-level persona override
+    }
+  },
+  "guilds": {
+    "<guildId>": {
+      "persona": "clinical",                  // server-wide persona override
+      "digestChannelId": "123456789",         // daily digest target channel
+      "autoTranslateChannelId": "987654321"   // auto-translate target channel
+    }
+  }
+}
+```
+
+Read: `seekdeepReadPersonaOverrides()` / Write: `seekdeepWritePersonaOverrides(data)`
+
+### `server-stats.json`
+
+Per-guild activity counters with 30-day rolling daily buckets.
+
+```jsonc
+{
+  "guilds": {
+    "<guildId>": {
+      "totalImages": 142,
+      "totalChats": 580,
+      "totalVision": 23,
+      "users": {
+        "<userId>": { "images": 42, "chats": 120, "vision": 5 }
+      },
+      "dayBuckets": {
+        "2026-05-18": { "images": 3, "chats": 12, "vision": 1 }
+        // ... last 30 days, older entries auto-trimmed
+      }
+    }
+  }
+}
+```
+
+Read: `seekdeepReadServerStats()` / Write: `seekdeepWriteServerStats(data)` / Increment: `seekdeepTrackStatEvent({ guildId, userId, kind })`
+
+### `memory-presets.json`
+
+Per-user behavior presets injected into the chat system prompt.
+
+```jsonc
+{
+  "users": {
+    "<userId>": {
+      "brief": "The user prefers brief, terse answers. Skip long preambles.",
+      "no-emoji": "Do not use emoji in replies for this user."
+      // keys: brief, expert, no-emoji, no-followup-questions, formal, casual
+    }
+  }
+}
+```
+
+Read: `seekdeepReadMemoryPresets()` / Write: `seekdeepWriteMemoryPresets(data)`
+
+### `prompt-templates.json`
+
+Per-guild per-user saved image prompt templates.
+
+```jsonc
+{
+  "guilds": {
+    "<guildId>": {
+      "<userId>": {
+        "<template-name>": {
+          "prompt": "cyberpunk cityscape at night, neon reflections...",
+          "createdAt": 1716048000000,
+          "usedCount": 3,
+          "lastUsedAt": 1716134400000
+        }
+      }
+    }
+  }
+}
+```
+
+Max 25 templates per user. Names: lowercase alphanumeric + hyphens, max 30 chars. Prompt text: max 2000 chars.
+
+Read: `seekdeepReadPromptTemplates()` / Write: `seekdeepWritePromptTemplates(data)`
+
+### `auto-reactions.json`
+
+Per-guild custom auto-reaction rules and built-in toggle overrides.
+
+```jsonc
+{
+  "guilds": {
+    "<guildId>": {
+      "rules": [
+        {
+          "id": "r_1716048000000_abc",
+          "emoji": "👀",            // the reaction emoji
+          "pattern": "sus",                    // substring match
+          "regex": false,                      // true if /regex/flags syntax
+          "channelId": "",                     // "" = all channels
+          "userId": "",                        // "" = all users
+          "enabled": true
+        }
+      ],
+      "builtins": {
+        "long_message": true,                  // override for built-in stacking rules
+        "forwarded": false
+      }
+    }
+  }
+}
+```
+
+Read: `seekdeepReadAutoReactions()` / Write: `seekdeepWriteAutoReactions(data)`
 
 ## Integration Points
 
@@ -187,7 +386,8 @@ When `SEEKDEEP_TEST_MODE=1` is set in the environment, the bot:
 | Discord `messageCreate` | `seekdeepProcessPreAddressMessageRoutes` → `seekdeepDispatchAddressedMessage` → appropriate agent |
 | Discord slash command | `client.on('interactionCreate')` slash router → agent |
 | Discord button | Image action, prompt-choice, archive button, shared archive button, force-react component, archive-delete button — each has a dedicated `seekdeepHandle*Button` |
-| Discord modal | (Force React's modal was removed in v10.4.1; legacy `seekdeep:force-react:` modal returns a "use the new picker" notice) |
-| Discord reaction add | `messageReactionAdd` → archive shortcut / delete shortcut / regenerate shortcut |
-| Local AI server | `askChat`, `askVision`, `makeImageResult` → `http://127.0.0.1:7865/{chat,vision,image}` |
+| Discord modal | `seekdeepHandlePersonaModalSubmit` (persona editor, v10.26). Legacy Force React modal returns a "use the new picker" notice |
+| Discord reaction add | `messageReactionAdd` → archive shortcut (📥) / delete shortcut (🗑) / regenerate shortcut (🔁) |
+| Discord context menu | Right-click → Apps → Generate Image / Refine / Inspect / Translate / Compare / Force React |
+| Local AI server | `askChat` → `/chat`, `askVision` → `/vision`, `makeImageResult` → `/image`, img2img → `/img2img`, upscale → `/upscale`, chart → `/chart`, GPU → `/gpu` |
 | SearXNG | `searchWeb` → `http://127.0.0.1:8080/search` |

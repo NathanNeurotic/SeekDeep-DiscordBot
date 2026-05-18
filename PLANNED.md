@@ -45,8 +45,8 @@ What was scoped but NOT shipped:
 ## Next Up
 
 - **TTS voice channel** — Piper or XTTS. Biggest remaining lift. Requires model download (user approval needed, limited SSD space).
-- **Architecture diagram** — one-page visual for README.
-- **data/*.json schema docs** — document all persistence files in AGENTS.md.
+- ~~**Architecture diagram**~~ — shipped in docs commit, ASCII diagram in README.
+- ~~**data/*.json schema docs**~~ — shipped in docs commit, full schemas in AGENTS.md.
 - **Real-ESRGAN model download** — scaffolded in v10.25 but needs user approval.
 
 ## Deferred From the v10.5 Audit
@@ -88,8 +88,8 @@ Lower-priority polish ideas. Pull when there's an itch.
 
 ## Documentation Backlog
 
-- [ ] One-page architecture diagram showing Node bot ↔ Python AI server ↔ SearXNG ↔ Discord. Goes in the README between "Architecture" and "Quick Start".
-- [ ] AGENTS.md needs a section on `data/*.json` persistence files (auto-reactions, archive guild config, persona overrides, memory presets, server stats) and their schema.
+- [x] ~~One-page architecture diagram~~ — shipped in docs commit. ASCII diagram in README between "Architecture" and "Quick Start".
+- [x] ~~data/*.json schema docs~~ — shipped in docs commit. Full schemas for all 6 persistence files in AGENTS.md.
 - [x] ~~COMMANDS.md could grow a "Permission requirements" column on each table~~ — shipped in v10.27.
 
 ## Won't Do (Decided Against)
