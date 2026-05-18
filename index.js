@@ -2557,7 +2557,7 @@ const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED = !/^(0|false|off|no)$/i.
 const SEEKDEEP_IMAGE_PROMPT_REFINEMENT_LOG = /^(1|true|on|yes)$/i.test(String(process.env.SEEKDEEP_IMAGE_PROMPT_REFINEMENT_LOG || 'true'));
 const SEEKDEEP_IMAGE_PROMPT_MAX_CHARS = Math.max(180, Number(process.env.SEEKDEEP_IMAGE_PROMPT_MAX_CHARS || 650));
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS = Math.max(5000, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS || 180000));
-const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS = Math.max(80, Math.min(768, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS || 360)));
+const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS = Math.max(80, Math.min(768, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS || 512)));
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE = Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE || 0.5);
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_SYSTEM_PROMPT = [
   'You are SeekDeep image-prompt refinement mode.',
@@ -2919,44 +2919,61 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
     };
   }
 
-  try {
-    const answer = await runLocalChat(
-      seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt),
-      buildSystem(SEEKDEEP_IMAGE_PROMPT_DYNAMIC_SYSTEM_PROMPT, false),
-      '',
-      SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS,
-      SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE,
-      { timeoutMs: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS, modelRole: 'default_chat' }
-    );
+  // v10.28: retry once on validator rejection. Small models like Qwen3-8B
+  // can produce a bad first generation (thinking tokens eating the budget,
+  // subject drift, generic phrasing) that gets rejected, but a second attempt
+  // with slightly higher temperature often succeeds. We only retry on
+  // VALIDATOR rejections — infrastructure errors (model won't load, timeout)
+  // are genuine failures and shouldn't be retried.
+  const REFINE_ATTEMPTS = 2;
+  const RETRY_TEMP_BUMP = 0.15;
+  let lastRejectReason = '';
+  let lastRawExcerpt = '';
 
-    const cleaned = seekdeepCleanDynamicImagePromptDetailed(answer, originalPrompt);
-    const refinedPrompt = cleaned.value;
-    if (!refinedPrompt) {
-      // v10.13: emit the exact rejection reason + a model-output excerpt so
-      // future "Refinement Source: static rules after AI refinement was
-      // unavailable" messages have a debug trail in the bot console / log.
-      const rawExcerpt = String(answer || '').replace(/\s+/g, ' ').trim().slice(0, 240);
-      console.warn(
-        `[SeekDeep] dynamic refine rejected (${cleaned.reason}) for ${JSON.stringify(originalPrompt.slice(0, 80))} -> ${JSON.stringify(rawExcerpt)}`,
+  try {
+    for (let attempt = 0; attempt < REFINE_ATTEMPTS; attempt++) {
+      const temp = SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE + (attempt > 0 ? RETRY_TEMP_BUMP : 0);
+      const answer = await runLocalChat(
+        seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt),
+        buildSystem(SEEKDEEP_IMAGE_PROMPT_DYNAMIC_SYSTEM_PROMPT, false),
+        '',
+        SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS,
+        temp,
+        { timeoutMs: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS, modelRole: 'default_chat' }
       );
-      return {
-        ...fallback,
-        dynamicRefinementAttempted: true,
-        dynamicRefinementError: cleaned.reason || 'empty-or-rejected-output',
-      };
+
+      const cleaned = seekdeepCleanDynamicImagePromptDetailed(answer, originalPrompt);
+      const refinedPrompt = cleaned.value;
+      if (refinedPrompt) {
+        if (attempt > 0) {
+          console.log(`[SeekDeep] dynamic refine succeeded on retry (attempt ${attempt + 1}, temp=${temp.toFixed(2)})`);
+        }
+        // Cache for ~10 min so subsequent regenerates / Refined-button clicks reuse it.
+        seekdeepDynamicRefineCacheSet(originalPrompt, { refinedPrompt });
+        return {
+          ...fallback,
+          originalPrompt: fallback.originalPrompt || originalPrompt,
+          refinedPrompt,
+          generationPrompt: refinedPrompt,
+          changed: refinedPrompt !== originalPrompt,
+          dynamicRefinement: true,
+          dynamicRefinementAttempted: true,
+        };
+      }
+
+      // Rejected by validators — log and maybe retry.
+      lastRejectReason = cleaned.reason || 'empty-or-rejected-output';
+      lastRawExcerpt = String(answer || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      console.warn(
+        `[SeekDeep] dynamic refine rejected (${lastRejectReason}, attempt ${attempt + 1}/${REFINE_ATTEMPTS}) for ${JSON.stringify(originalPrompt.slice(0, 80))} -> ${JSON.stringify(lastRawExcerpt)}`,
+      );
     }
 
-    // Cache for ~10 min so subsequent regenerates / Refined-button clicks reuse it.
-    seekdeepDynamicRefineCacheSet(originalPrompt, { refinedPrompt });
-
+    // All attempts exhausted — fall back to static rules.
     return {
       ...fallback,
-      originalPrompt: fallback.originalPrompt || originalPrompt,
-      refinedPrompt,
-      generationPrompt: refinedPrompt,
-      changed: refinedPrompt !== originalPrompt,
-      dynamicRefinement: true,
       dynamicRefinementAttempted: true,
+      dynamicRefinementError: lastRejectReason,
     };
   } catch (err) {
     console.warn('Dynamic image prompt refinement failed; using static fallback:', err?.message || err);
@@ -6468,6 +6485,8 @@ function seekdeepHelpText(source = null) {
     prefix + ' changelog',
     prefix + ' stats              (server-wide totals + top contributors)',
     prefix + ' stats me           (your activity in this server)',
+    prefix + ' stats chart        (30-day activity chart image)',
+    '/stats scope:server|me|chart  (slash version)',
     prefix + ' gpu                (one-shot VRAM + loaded-model snapshot)',
     prefix + ' gpu watch [N]      (live-tail every N sec, default 5, capped at 2 min)',
     prefix + ' vram               (alias for `gpu`)',
@@ -7619,6 +7638,18 @@ const commands = [
         ))
     .addStringOption((o) => o.setName('name').setDescription('Template name (letters, numbers, hyphens)').setRequired(false))
     .addStringOption((o) => o.setName('prompt').setDescription('Prompt text (for save action)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('stats')
+    .setDescription('Server activity stats, optionally as a 30-day chart.')
+    .addStringOption((o) =>
+      o.setName('scope')
+        .setDescription('What to show')
+        .setRequired(false)
+        .addChoices(
+          { name: 'server (default)', value: 'server' },
+          { name: 'me — your personal stats', value: 'me' },
+          { name: 'chart — 30-day activity chart', value: 'chart' },
+        )),
 
   // Right-click message context menu commands. Show up under Apps when the user
   // right-clicks any Discord message.
@@ -11400,8 +11431,46 @@ function seekdeepServerStatsText({ guildId, userId, scope = 'server' }) {
   return lines.join('\n');
 }
 
+async function seekdeepHandleStatsChart(target, guildId, guildName = '') {
+  const data = seekdeepReadServerStats();
+  const bucket = data.guilds[String(guildId)] || null;
+  const dayBuckets = bucket?.dayBuckets || {};
+  if (!Object.keys(dayBuckets).length) {
+    await seekdeepReplyToTarget(target, { content: 'No daily stats recorded yet — generate a few images or ask a few questions first.' });
+    return true;
+  }
+  try {
+    seekdeepSetActivityStatus('Rendering stats chart...');
+    const result = await postLocal('/chart', {
+      day_buckets: dayBuckets,
+      title: 'SeekDeep — 30-Day Activity',
+      guild_name: guildName,
+    }, { timeoutMs: 30000 });
+    if (!result?.image_b64) throw new Error('No image returned from /chart');
+    const buf = Buffer.from(result.image_b64, 'base64');
+    const attachment = new AttachmentBuilder(buf, { name: result.filename || 'seekdeep_stats_chart.png' });
+    const text = seekdeepServerStatsText({ guildId, scope: 'server' });
+    await seekdeepReplyToTarget(target, { content: text, files: [attachment], allowedMentions: { parse: [] } });
+  } catch (err) {
+    console.warn('[SeekDeep] stats chart generation failed:', err?.message || err);
+    // Fall back to text-only stats.
+    const text = seekdeepServerStatsText({ guildId, scope: 'server' });
+    await seekdeepReplyToTarget(target, {
+      content: text + '\n\n*(Chart unavailable — local AI server may be offline or matplotlib not installed.)*',
+      allowedMentions: { parse: [] },
+    });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+  return true;
+}
+
 async function seekdeepHandleStatsCommand(message, raw = '') {
   const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  // "stats chart" — render a 30-day activity chart.
+  if (/^stats\s+chart\s*$/i.test(stripped)) {
+    return seekdeepHandleStatsChart(message, message.guild?.id, message.guild?.name || '');
+  }
   const m = /^stats(?:\s+(me|server|here))?\s*$/i.exec(stripped);
   if (!m) return false;
   const scope = (m[1] || 'server').toLowerCase() === 'me' ? 'me' : 'server';
@@ -15348,6 +15417,24 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       await sendLongInteractionReply(interaction, 'Unknown template action. Use: save, list, use, or delete.');
+      return;
+    }
+
+    if (commandName === 'stats') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const scope = String(interaction.options.getString('scope') || 'server').toLowerCase();
+      const guildId = interaction.guild?.id || '';
+      if (!guildId) {
+        await sendLongInteractionReply(interaction, 'Stats only work inside a server.');
+        return;
+      }
+      if (scope === 'chart') {
+        await seekdeepHandleStatsChart(interaction, guildId, interaction.guild?.name || '');
+      } else {
+        const text = seekdeepServerStatsText({ guildId, userId: interaction.user?.id, scope });
+        await sendLongInteractionReply(interaction, text);
+      }
       return;
     }
 

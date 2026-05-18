@@ -1134,6 +1134,83 @@ def upscale(req: UpscaleRequest):
     }
 
 
+# ---------- chart: render server-stats dayBuckets as a PNG ----------
+
+class ChartRequest(BaseModel):
+    """Accepts dayBuckets from the Node bot's server-stats.json and renders
+    a 30-day activity chart.  No AI model needed — pure matplotlib."""
+    day_buckets: dict = Field(..., description="{ 'YYYY-MM-DD': { images, chats, vision } }")
+    title: str = Field("SeekDeep — 30-Day Activity", description="Chart title")
+    guild_name: str = Field("", description="Optional server name for subtitle")
+
+
+@app.post("/chart")
+def chart(req: ChartRequest):
+    """Render a line chart of daily images / chats / vision counts."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # headless backend
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from datetime import datetime
+    except ImportError:
+        return JSONResponse(
+            status_code=501,
+            content={"error": "matplotlib is not installed.  pip install matplotlib"},
+        )
+
+    buckets = req.day_buckets or {}
+    if not buckets:
+        return JSONResponse(status_code=400, content={"error": "No day_buckets data."})
+
+    # Sort dates and fill gaps with zeros so the chart is contiguous.
+    sorted_dates = sorted(buckets.keys())
+    date_objs = [datetime.strptime(d, "%Y-%m-%d") for d in sorted_dates]
+    images = [buckets[d].get("images", 0) for d in sorted_dates]
+    chats  = [buckets[d].get("chats", 0) for d in sorted_dates]
+    vision = [buckets[d].get("vision", 0) for d in sorted_dates]
+
+    fig, ax = plt.subplots(figsize=(10, 4), dpi=120)
+    fig.patch.set_facecolor("#2b2d31")  # Discord dark theme background
+    ax.set_facecolor("#2b2d31")
+
+    ax.fill_between(date_objs, images, alpha=0.25, color="#5865F2")
+    ax.fill_between(date_objs, chats,  alpha=0.25, color="#57F287")
+    ax.fill_between(date_objs, vision, alpha=0.25, color="#FEE75C")
+
+    ax.plot(date_objs, images, color="#5865F2", linewidth=2, label=f"Images ({sum(images)})")
+    ax.plot(date_objs, chats,  color="#57F287", linewidth=2, label=f"Chats ({sum(chats)})")
+    ax.plot(date_objs, vision, color="#FEE75C", linewidth=2, label=f"Vision ({sum(vision)})")
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+    fig.autofmt_xdate(rotation=30, ha="right")
+
+    ax.tick_params(colors="#dcddde")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#40444b")
+    ax.spines["bottom"].set_color("#40444b")
+    ax.yaxis.label.set_color("#dcddde")
+    ax.xaxis.label.set_color("#dcddde")
+
+    title = req.title
+    if req.guild_name:
+        title += f"  •  {req.guild_name}"
+    ax.set_title(title, color="#ffffff", fontsize=13, pad=10)
+    ax.legend(loc="upper left", facecolor="#36393f", edgecolor="#40444b",
+              labelcolor="#dcddde", fontsize=9)
+    ax.grid(axis="y", color="#40444b", linewidth=0.5, alpha=0.5)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    img_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+    return {"image_b64": img_b64, "filename": "seekdeep_stats_chart.png"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=7865)
