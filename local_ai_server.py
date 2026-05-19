@@ -1222,7 +1222,6 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     source_bytes = b64_to_bytes(req.image_b64)
     source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
-    original_size = source_img.size
     source_img = source_img.resize((512, 512), Image.LANCZOS)
 
     seed = req.seed
@@ -1247,13 +1246,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
     result = instruct_pix2pix_pipe(**args)
     img = result.images[0]
 
-    target_w = max(original_size[0], 1024)
-    target_h = max(original_size[1], 1024)
-    if target_w % 8:
-        target_w = target_w - (target_w % 8)
-    if target_h % 8:
-        target_h = target_h - (target_h % 8)
-    img = img.resize((target_w, target_h), Image.LANCZOS)
+    img = img.resize((1024, 1024), Image.LANCZOS)
 
     ts = int(time.time())
     safe_name = f"seekdeep_pix2pix_{ts}.png"

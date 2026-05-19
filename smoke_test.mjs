@@ -642,6 +642,10 @@ check('strength: style "make it cyberpunk" → 0.65', T.seekdeepAdaptiveImg2ImgS
 check('strength: enhance → 0.45', T.seekdeepAdaptiveImg2ImgStrength('enhance this image') === 0.45);
 check('strength: removal "remove the background" → 0.75', T.seekdeepAdaptiveImg2ImgStrength('remove the background') === 0.75);
 check('strength: default "oil painting of cats" → 0.60', T.seekdeepAdaptiveImg2ImgStrength('oil painting of cats') === 0.60);
+check('strength: empty string → default 0.60', T.seekdeepAdaptiveImg2ImgStrength('') === 0.60);
+check('strength: null → default 0.60', T.seekdeepAdaptiveImg2ImgStrength(null) === 0.60);
+check('strength: undefined → default 0.60', T.seekdeepAdaptiveImg2ImgStrength(undefined) === 0.60);
+check('strength: mixed "add color to the figure" → additive 0.80 wins', T.seekdeepAdaptiveImg2ImgStrength('add color to the figure') === 0.80);
 
 // ── Suite 37: research-followup tightening ─
 console.log('37. Research-followup pattern tightening.');
@@ -651,6 +655,12 @@ check('research: "specs for each" matches (tightened for-each)', T.seekdeepIsRes
 check('research: "details for each" matches', T.seekdeepIsResearchFollowupPrompt('details for each'));
 check('research: bare "for each separate" does NOT match', !T.seekdeepIsResearchFollowupPrompt('data for each separate'));
 check('research: Kamo SSD message does NOT match', !T.seekdeepIsResearchFollowupPrompt('Nah too complex and can lead to flaws just make reasonable split including the data for each separate but be aware that win 11 pro is the main OS'));
+
+// ── Suite 38: context menu image extraction (embed fallback) ─
+console.log('38. Context menu image extraction (embed fallback).');
+check('ctxImage: attachment hit', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [{ url: 'https://cdn.discord.com/foo.png', name: 'test.png' }] } })?.url === 'https://cdn.discord.com/foo.png');
+check('ctxImage: embed image fallback', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ image: { url: 'https://example.com/bar.jpg' } }] })?.url === 'https://example.com/bar.jpg');
+check('ctxImage: no image returns null', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ title: 'no image' }] }) === null);
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);

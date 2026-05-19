@@ -11114,7 +11114,7 @@ async function seekdeepHandleContextMenuEditModalSubmit(interaction) {
     return true;
   }
 
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const proxy = {
     author: { id: userId || 'unknown' },
@@ -15113,6 +15113,10 @@ function seekdeepContextMenuGetImageAttachment(targetMessage) {
   for (const att of targetMessage?.attachments?.values?.() || []) {
     if (/\.(png|jpe?g|gif|webp)/i.test(att?.url || '')) return att;
   }
+  for (const embed of targetMessage?.embeds || []) {
+    const url = embed?.image?.url || embed?.thumbnail?.url || '';
+    if (/\.(png|jpe?g|gif|webp)/i.test(url)) return { url, name: 'embed-image' };
+  }
   return null;
 }
 
@@ -16755,6 +16759,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_LOADING_GIF_BUFFER,
     // v10.32: adaptive img2img strength
     seekdeepAdaptiveImg2ImgStrength,
+    // v10.33: context menu image extraction (embed fallback)
+    seekdeepContextMenuGetImageAttachment,
     // research-followup predicate + context-menu footer stripper
     seekdeepIsResearchFollowupPrompt,
     seekdeepStripResponseFooter,
