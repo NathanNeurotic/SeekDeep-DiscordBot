@@ -157,10 +157,10 @@ Relevant knobs (defaults shown — `.env.default` may differ from the running `.
 
 ```text
 SEEKDEEP_MEMORY_MODE=rolling
-MAX_CONTEXT_MESSAGES=40
-MAX_CONTEXT_CHARS=24000
-SEEKDEEP_MEMORY_RECENT_ENTRIES=30
-SEEKDEEP_MEMORY_CONTEXT_CHARS=20000
+MAX_CONTEXT_MESSAGES=80
+MAX_CONTEXT_CHARS=48000
+SEEKDEEP_MEMORY_RECENT_ENTRIES=60
+SEEKDEEP_MEMORY_CONTEXT_CHARS=36000
 ```
 
 Set `SEEKDEEP_MEMORY_MODE=followup` to return to conservative follow-up-only memory, or `off` to disable memory injection.
@@ -378,11 +378,11 @@ LOCAL_CHAT_QUANT=4bit                     # options: 4bit | 8bit | none
 LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat   # roles that skip quant (8B models)
 
 # Context / output
-MAX_CONTEXT_MESSAGES=40                   # rolling memory turns kept
-MAX_CONTEXT_CHARS=24000                   # rolling memory chars kept
-SEEKDEEP_MEMORY_RECENT_ENTRIES=30         # injected context turns
-SEEKDEEP_MEMORY_CONTEXT_CHARS=20000       # injected context chars
-CHAT_MAX_NEW_TOKENS=2400                  # default max output tokens for askChat
+MAX_CONTEXT_MESSAGES=80                   # rolling memory turns kept
+MAX_CONTEXT_CHARS=48000                   # rolling memory chars kept
+SEEKDEEP_MEMORY_RECENT_ENTRIES=60         # injected context turns
+SEEKDEEP_MEMORY_CONTEXT_CHARS=36000       # injected context chars
+CHAT_MAX_NEW_TOKENS=1024                  # default max output tokens for askChat
 CHAT_TEMPERATURE=0.7                      # default chat creativity
 
 # Web search
@@ -420,10 +420,12 @@ Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All 
 | `SEEKDEEP_FEATURE_EMOJI_VAULT` | off | `@SeekDeep emoji backup/import/count/list` commands. Off so SeekDeep doesn't fight demonbot for the same vault thread in shared servers. |
 | `SEEKDEEP_FEATURE_FORCE_REACT` | off | Right-click "Force React (SeekDeep)" context menu + paginated emoji picker. Same demonbot-coexistence reason. |
 | `SEEKDEEP_FEATURE_IMG2IMG` | on | `@SeekDeep img2img <prompt>` and `/img2img`. Transform an attached/replied image with a text prompt. Reuses the Dreamshaper-XL pipeline — no extra model download. |
+| `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` | on | `@SeekDeep pix2pix <instruction>` and `/pix2pix`. Natural-language image editing ("make it darker", "add snow"). Uses `timbrooks/instruct-pix2pix`. |
+| `SEEKDEEP_FEATURE_INPAINT` | on | `@SeekDeep inpaint <target>` and `/inpaint`. Object removal via CLIPSeg auto-mask + SDXL inpainting. |
 | `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. Requires Real-ESRGAN weights + a Python endpoint. Scaffolded. |
 | `SEEKDEEP_FEATURE_NSFW_GATE` | off | Scores generated images via a CLIP NSFW classifier and either spoiler-wraps or refuses based on threshold. Scaffolded. |
 | `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). Scaffolded. |
-| `LOCAL_VISION_KEEP_RESIDENT` | on (in your `.env`) / off (in `.env.default`) | Pins the vision model in VRAM across task switches. |
+| `LOCAL_VISION_KEEP_RESIDENT` | off | Pins the vision model in VRAM across task switches. Off saves ~6 GB VRAM; pay a one-time reload on rare vision follow-ups. |
 | `LOCAL_IMAGE_KEEP_RESIDENT` | off | Same for the SDXL image pipeline. Image is bursty enough that pinning it usually isn't worth the VRAM. |
 
 ## Health Checks
@@ -459,6 +461,18 @@ npm run smoke
 - If `Fallback used: role=fallback_chat ...` appears in a chat reply footer, the originally-routed role failed to load (typically CUDA OOM) and the server fell back to `fallback_chat`. Check `LOCAL_CHAT_QUANT` and consider pinning more roles in `LOCAL_CHAT_QUANT_FULL_ROLES`.
 
 ## Release Notes
+
+### v10.34 — archive perf, persona crash, ephemeral migration, image pipeline tuning, lightweight routing
+
+13 fixes from a full live-testing audit. Archive buttons no longer scan 1000+ messages on every click (was 77–637s, now instant via trusted JSON profile counts). Archive delete no longer hits `50027 Invalid Webhook Token` from expired interaction tokens. Persona modal crash fixed (label was 52 chars, Discord max 45). All 11 `ephemeral: true` migrated to `flags: MessageFlags.Ephemeral`. Inpaint prompt extraction now captures the removal target instead of generic fill text. Pix2Pix adaptive `image_guidance_scale` (heavy edits 1.2, light edits 2.0, default 1.5). img2img gets its own `IMAGE_IMG2IMG_GUIDANCE_SCALE` (default 5.0, was inheriting txt2img 7.0). img2img modal auto-routes instruction-like prompts to pix2pix/inpaint. Adaptive strength adds 0.80 tier for scene/environment transforms. `lightweight_chat` now actively routes translations, greetings, and trivial queries to gemma-3n when configured. Thread rename debounce (30s cooldown). Inpaint now sends negative prompt. 14 new smoke tests (274 total).
+
+### v10.33 — loading gif + bug fixes
+
+Loading gif added to 8 context menu handlers + 3 slash commands for visible wait feedback. Ephemeral modal ack fixed (context menu modal submits no longer produce two messages). Pix2Pix output fixed (non-square input no longer stretches to wrong aspect ratio — always 512→1024 square). Context menu embed image fallback (images in embeds now found by vision/upscale/img2img). Stats chart orphan loading gif fix. Context menu upscale + img2img changed to ephemeral defer. 7 new smoke tests (256 total).
+
+### v10.32 — context menu modals + adaptive img2img + pix2pix tuning
+
+Context menu Edit Image and Remove Object commands now open Discord modals for prompt/target input instead of using the message text. Adaptive img2img strength: style keywords (0.65), scene transforms (0.70), color/lighting (0.45), default (0.55). Pix2Pix adaptive `image_guidance_scale` initial pass. img2img modal auto-routing scaffolded.
 
 ### v10.31 — InstructPix2Pix + Inpainting + routing overhaul
 
