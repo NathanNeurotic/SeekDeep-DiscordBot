@@ -150,13 +150,22 @@ async function seekdeepReadGitChangelog(limit = 10) {
 // "recent errors" admin command.
 const SEEKDEEP_RECENT_ERRORS = [];
 const SEEKDEEP_RECENT_ERRORS_MAX = 50;
+function seekdeepRedactErrorMsg(msg) {
+  return String(msg || '')
+    .replace(/(?:token|key|secret|password|authorization)[=: ]+\S+/gi, '$&'.replace(/\S+$/, '***'))
+    .replace(/(?:token|key|secret|password|authorization)[=:"' ]+[^\s"']+/gi, (m) => m.replace(/[^\s=:"']+$/, '***'))
+    .replace(/(?:C:|\/home\/|\/root\/|\/mnt\/)[^\s"']+/gi, '<path>')
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '<email>');
+}
+
 function seekdeepCaptureRecentError(level, args) {
   try {
     const ts = new Date().toISOString();
-    const msg = (args || []).map((a) => {
+    const raw = (args || []).map((a) => {
       if (typeof a === 'string') return a;
       try { return JSON.stringify(a); } catch { return String(a); }
     }).join(' ').slice(0, 600);
+    const msg = seekdeepRedactErrorMsg(raw);
     SEEKDEEP_RECENT_ERRORS.unshift({ ts, level, msg });
     while (SEEKDEEP_RECENT_ERRORS.length > SEEKDEEP_RECENT_ERRORS_MAX) SEEKDEEP_RECENT_ERRORS.pop();
   } catch {}
@@ -972,6 +981,27 @@ async function seekdeepFetchWithLimits(url, options = {}) {
     if (Number.isFinite(cl) && cl > 0 && cl > maxBytes) {
       controller.abort();
       throw new Error(`Attachment too large: ${cl} bytes > ${maxBytes} byte cap`);
+    }
+    // Wrap the response body with a streaming byte cap so responses without
+    // Content-Length can't exhaust memory.
+    if (res.body) {
+      const reader = res.body.getReader();
+      let consumed = 0;
+      const capped = new ReadableStream({
+        async pull(ctrl) {
+          const { done, value } = await reader.read();
+          if (done) { ctrl.close(); return; }
+          consumed += value.byteLength;
+          if (consumed > maxBytes) {
+            ctrl.error(new Error(`Streamed body exceeded ${maxBytes} byte cap at ${consumed} bytes`));
+            reader.cancel().catch(() => {});
+            return;
+          }
+          ctrl.enqueue(value);
+        },
+        cancel() { reader.cancel().catch(() => {}); },
+      });
+      return new Response(capped, { status: res.status, statusText: res.statusText, headers: res.headers });
     }
     return res;
   } finally {
@@ -2036,24 +2066,6 @@ async function askVision(attachment, prompt, { systemHint } = {}) {
 
 
 // SEEKDEEP_IMAGE_BUTTONS_START
-const SEEKDEEP_IMAGE_ACTIONS = new Map();
-const SEEKDEEP_IMAGE_ACTION_TTL_MS = Number(process.env.SEEKDEEP_IMAGE_ACTION_TTL_MS || 86400000);
-const SEEKDEEP_SAVED_IMAGE_DIR = process.env.SEEKDEEP_SAVED_IMAGE_DIR || path.join(__dirname, 'saved_generations');
-
-function seekdeepSweepImageActions() {
-  const now = Date.now();
-
-  for (const [id, state] of SEEKDEEP_IMAGE_ACTIONS.entries()) {
-    if (!state || state.expiresAt <= now) {
-      SEEKDEEP_IMAGE_ACTIONS.delete(id);
-    }
-  }
-}
-
-function seekdeepNewImageActionId() {
-  seekdeepSweepImageActions();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 // SEEKDEEP_ARCHIVE_GUILD_SCOPE_START
 
@@ -2388,206 +2400,9 @@ async function seekdeepSendImagePromptChoice(target, prompt, width = 1024, heigh
   }
 }
 
-async function seekdeepHandlePromptChoiceButton(interaction) {
-  const customId = String(interaction?.customId || '');
-  const match = customId.match(/^seekdeep:prompt:(original|refined|both):(.+)$/);
-  if (!match) return false;
-
-  if (!interaction.deferred && !interaction.replied) {
-    try {
-      await interaction.deferUpdate();
-    } catch (err) {
-      console.warn('Prompt choice deferUpdate failed:', err?.message || err);
-    }
-  }
-
-  const action = match[1];
-  const id = match[2];
-
-  if (typeof seekdeepLogRoute === 'function') {
-    seekdeepLogRoute(`image-choice-${action}`, id);
-  }
-
-  seekdeepSweepPendingImagePrompts();
-  const state = SEEKDEEP_PENDING_IMAGE_PROMPTS.get(id) || null;
-  const startedAt = seekdeepNowMs();
-
-  const editChoiceMessage = async (payload) => {
-    // Prefer editReply (interaction webhook endpoint) — it reliably handles
-    // file attachments on interaction-originated messages whereas
-    // interaction.message.edit() can silently drop new files.
-    try {
-      if (interaction?.deferred || interaction?.replied) {
-        await interaction.editReply(payload);
-        return true;
-      }
-    } catch (err) {
-      console.warn('Prompt choice editReply failed:', err?.message || err);
-    }
-
-    try {
-      if (interaction?.message && typeof interaction.message.edit === 'function') {
-        await interaction.message.edit(payload);
-        return true;
-      }
-    } catch (err) {
-      console.warn('Prompt choice message.edit fallback failed:', err?.message || err);
-    }
-
-    return false;
-  };
-
-  const privateNotice = async (content) => {
-    try {
-      await interaction.followUp(seekdeepEphemeralPayload({
-        content,
-      }));
-    } catch (err) {
-      console.warn('Prompt choice followUp failed:', err?.message || err);
-    }
-  };
-
-  if (!state) {
-    const expiredText = [
-      'Prompt choice expired before a version was selected.',
-      'Run the image request again to reopen Original / Refined / Both.',
-    ].join('\n');
-
-    await editChoiceMessage({
-      content: seekdeepAppendResponseFooter(expiredText, {
-        startedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-      components: [],
-    });
-
-    return true;
-  }
-
-  if (state.requesterId && interaction?.user?.id !== state.requesterId) {
-    await privateNotice('Only the requester can use these image prompt buttons.');
-    return true;
-  }
-
-  const basePrompt = state.originalPrompt || state.rawPrompt || 'image';
-  const width = state.width || 1024;
-  const height = state.height || 1024;
-  const seed = state.seed ?? null;
-  const groundingOn = state.ground !== false;
-  const groundingLine = groundingOn ? 'Grounding: on' : 'Grounding: off';
-
-  const needsOriginal = (action === 'original' || action === 'both') && !state.originalQueued;
-  const needsRefined = (action === 'refined' || action === 'both') && !state.refinedQueued;
-
-  if (!needsOriginal && !needsRefined) {
-    await privateNotice('That version has already been queued for this prompt.');
-    return true;
-  }
-
-  state.originalQueued = Boolean(state.originalQueued || needsOriginal);
-  state.refinedQueued = Boolean(state.refinedQueued || needsRefined);
-  state.lastSelectedAt = Date.now();
-  SEEKDEEP_PENDING_IMAGE_PROMPTS.set(id, state);
-
-  const queuedLines = [];
-  if (needsOriginal) queuedLines.push('Original prompt');
-  if (needsRefined) queuedLines.push('Refined prompt');
-
-  const allQueued = Boolean(state.originalQueued && state.refinedQueued);
-  const selectionSummary = [
-    needsOriginal && needsRefined ? 'Queued both:' : needsOriginal ? 'Queued original.' : 'Queued refined.',
-    needsOriginal && needsRefined ? '- Original' : '',
-    needsOriginal && needsRefined ? '- Refined' : '',
-    '',
-    groundingLine,
-    needsOriginal && !needsRefined ? 'Refinement: off' : '',
-    needsRefined && !needsOriginal ? 'Refinement: on' : '',
-    `Queued Jobs: ${queuedLines.length}`,
-    '',
-    allQueued ? 'Both versions have now been queued.' : 'You can still choose the remaining version from this prompt.',
-  ].filter(Boolean).join('\n');
-
-  if (allQueued) {
-    SEEKDEEP_PENDING_IMAGE_PROMPTS.delete(id);
-  }
-
-  // Don't specify files — the loading GIF attachment from the preparing phase
-  // persists automatically through edits when files is omitted.
-  await editChoiceMessage({
-    content: seekdeepAppendResponseFooter(selectionSummary, {
-      startedAt,
-      modelUsed: seekdeepNoModelLabel(),
-    }),
-    components: allQueued ? [] : [seekdeepPendingPromptChoiceRow(id, state)],
-  });
-
-  const runQueuedSelection = async (messageProxy, selectionPrompt, selectionOptions, routeName) => {
-    try {
-      if (typeof seekdeepLogRoute === 'function') {
-        seekdeepLogRoute(routeName, selectionPrompt);
-      }
-
-      await seekdeepSendImageWithButtons(
-        messageProxy,
-        selectionPrompt,
-        width,
-        height,
-        seed,
-        selectionOptions,
-      );
-    } catch (err) {
-      console.warn(`Prompt choice generation failed (${routeName}):`, err?.stack || err?.message || err);
-    }
-  };
-
-  const generationPromises = [];
-
-  if (needsOriginal) {
-    const originalProxy = seekdeepPromptChoiceProxyMessage(interaction, state.requesterId, 'original');
-    generationPromises.push(runQueuedSelection(
-      originalProxy,
-      basePrompt,
-      {
-        refine: false,
-        ground: groundingOn,
-        cleanPrompt: basePrompt,
-        skipCooldown: true,
-        silentAck: true,
-      },
-      'image-choice-original'
-    ));
-  }
-
-  if (needsRefined) {
-    const refinedProxy = seekdeepPromptChoiceProxyMessage(interaction, state.requesterId, 'refined');
-    const refinedPrompt = normalizeUserText(state.refinedPrompt || basePrompt).trim() || basePrompt;
-    generationPromises.push(runQueuedSelection(
-      refinedProxy,
-      basePrompt,
-      {
-        refine: true,
-        ground: groundingOn,
-        cleanPrompt: basePrompt,
-        preRefinedPrompt: refinedPrompt,
-        dynamicRefinement: Boolean(state.dynamicRefinement),
-        dynamicRefinementAttempted: Boolean(state.dynamicRefinementAttempted || state.dynamicRefinement),
-        skipCooldown: true,
-        silentAck: true,
-      },
-      'image-choice-refined'
-    ));
-  }
-
-  // Clear the loading GIF from the "Queued" message once all generations finish.
-  if (generationPromises.length && SEEKDEEP_LOADING_GIF_BUFFER) {
-    void Promise.allSettled(generationPromises).then(() => {
-      editChoiceMessage({ files: [] }).catch(() => {});
-    });
-  }
-
-  return true;
-}
-// SEEKDEEP_PREGEN_PROMPT_CHOICE_END
+// seekdeepHandlePromptChoiceButton removed — the emergency handler
+// (seekdeepEmergencyHandlePromptChoiceButton) is the authoritative code
+// path, registered on its own interactionCreate listener near EOF.
 
 
 function seekdeepAttachmentDownloadUrl(sentMessage) {
@@ -4546,6 +4361,7 @@ function seekdeepSetArchiveChannelIdForGuild(guildId = '', channelId = '', confi
   const config = seekdeepReadArchiveGuildConfig();
   if (!config.guilds || typeof config.guilds !== 'object') config.guilds = {};
   config.guilds[gid] = {
+    ...(config.guilds[gid] || {}),
     archiveChannelId: cid,
     configuredBy: String(configuredBy || ''),
     configuredAt: new Date().toISOString(),
@@ -4573,6 +4389,8 @@ function seekdeepArchiveChannelPermissionReport(channel, guild) {
 
 function seekdeepHasArchiveConfigPermissionFromContext(context) {
   try {
+    const userId = String(context?.user?.id || context?.author?.id || context?.message?.author?.id || '');
+    if (userId && seekdeepAdminIds().has(userId)) return true;
     const perms = context?.member?.permissions || context?.message?.member?.permissions;
     if (!perms) return false;
     return perms.has('Administrator') || perms.has('ManageGuild') || perms.has('ManageChannels');
@@ -5708,326 +5526,12 @@ async function seekdeepArchiveImageStateToDiscordThread(state, target) {
   };
 }
 
-async function seekdeepHandleImageButton(interaction) {
-  const customId = String(interaction?.customId || '').trim();
-  const match =
-    customId.match(/^seekdeep:(?:image-choice|regen):(original|refined|both):(.+)$/) ||
-    customId.match(/^seekdeep:(original|refined|both):(.+)$/) ||
-    customId.match(/^seekdeep:(regenerate|download|archive|sharedarchive|shared-archive|shared_archive):(.+)$/) ||
-    null;
-
-  if (interaction && !interaction.deferred && !interaction.replied) {
-    try {
-      await interaction.deferUpdate();
-    } catch {}
-  }
-
-  if (interaction && !interaction.deferred && !interaction.replied) {
-    try {
-} catch {}
-  }
-
-  const startedAt = seekdeepNowMs();
-
-  if (!customId.startsWith('seekdeep:')) {
-    return false;
-  }
-
-  if (/^seekdeep:prompt:(original|refined|both):/.test(customId)) {
-    if (typeof seekdeepHandlePromptChoiceButton === 'function') {
-      return await seekdeepHandlePromptChoiceButton(interaction);
-    }
-    return false;
-  }
-
-  try {
-    if (/^seekdeep:(?:image:)?(?:regen|regenerate)(?::|$)/i.test(customId)) {
-      const regenUserId = typeof seekdeepRegenerateCooldownUserId === 'function'
-        ? seekdeepRegenerateCooldownUserId(interaction)
-        : (interaction?.user?.id || 'unknown');
-      const remaining = typeof seekdeepImageCooldownRemaining === 'function'
-        ? seekdeepImageCooldownRemaining(regenUserId)
-        : 0;
-
-      if (remaining > 0) {
-        if (typeof seekdeepLogRoute === 'function') {
-          seekdeepLogRoute('regenerate-cooldown', 'button-regenerate');
-        }
-
-        if (typeof seekdeepSendRegenerateCooldownNotice === 'function') {
-          await seekdeepSendRegenerateCooldownNotice(interaction, remaining);
-        } else {
-          const payload = {
-            content: seekdeepAppendResponseFooter(seekdeepImageCooldownText(remaining), {
-              startedAt,
-              modelUsed: seekdeepNoModelLabel(),
-            }),
-          };
-          if (interaction?.replied || interaction?.deferred) {
-            await interaction.editReply(payload);
-          } else {
-            await interaction.reply(seekdeepEphemeralPayload(payload));
-          }
-        }
-        return true;
-      }
-    }
-  } catch (err) {
-    console.warn('Regenerate button cooldown check failed:', err?.message || err);
-  }
-
-  const parsed =
-    customId.match(/^seekdeep:regen:(original|refined|both):(.+)$/) ||
-    customId.match(/^seekdeep:(regenerate|download|archive|sharedarchive|shared-archive|shared_archive|save):(.+)$/) ||
-    customId.match(/^seekdeep:image:(regen|archive|sharedarchive|shared-archive|shared_archive|save):(.+)$/);
-
-  if (!parsed) {
-    return false;
-  }
-
-  let action = '';
-  let mode = 'submitted';
-  let actionId = '';
-
-  if (customId.startsWith('seekdeep:regen:')) {
-    action = 'regenerate';
-    mode = parsed[1] || 'submitted';
-    actionId = parsed[2] || '';
-  } else if (customId.startsWith('seekdeep:image:')) {
-    action = parsed[1] === 'regen' ? 'regenerate' : (parsed[1] === 'save' ? 'archive' : parsed[1]);
-    actionId = parsed[2] || '';
-  } else {
-    action = parsed[1] === 'save' ? 'archive' : parsed[1];
-    actionId = parsed[2] || '';
-  }
-
-  // SEEKDEEP_SHARED_ARCHIVE_ACTION_NORMALIZE
-  action = String(action || '').toLowerCase();
-  if (action === 'save') action = 'archive';
-  if (/^shared[-_]?archive$/i.test(action)) action = 'sharedarchive';
-
-  if (!interaction?.deferred && !interaction?.replied) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  }
-
-  let state = seekdeepTempImageStateIndex?.get?.(actionId) || null;
-  if (!state && typeof seekdeepLoadTempImageState === 'function') {
-    state = seekdeepLoadTempImageState(actionId);
-  }
-
-  if (!state) {
-    await interaction.editReply({
-      content: seekdeepAppendResponseFooter('That image action expired from the temporary cache. Generate it again if you still want to use its buttons.', {
-        startedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-    });
-    return true;
-  }
-  // SEEKDEEP_SHARED_ARCHIVE_BUTTON_HANDLER_START
-  // SEEKDEEP_SHARED_ARCHIVE_DUPLICATE_GUARD_V6
-  if (action === 'sharedarchive' && typeof seekdeepWasSharedArchiveInteractionReservedV6 === 'function' && seekdeepWasSharedArchiveInteractionReservedV6(interaction)) {
-    return true;
-  }
-
-  if (action === 'sharedarchive') {
-    try {
-      const archiveResult = typeof seekdeepArchiveImageStateToSharedDiscordThread === 'function'
-        ? await seekdeepArchiveImageStateToSharedDiscordThread(state, interaction)
-        : null;
-      await interaction.editReply({
-        content: typeof seekdeepAppendResponseFooter === 'function'
-          ? seekdeepAppendResponseFooter(
-              [
-                'Archived to shared archive.',
-                archiveResult?.threadId ? 'Thread: <#' + archiveResult.threadId + '>' : (archiveResult?.threadName ? 'Thread: ' + archiveResult.threadName : ''),
-              ].filter(Boolean).join('\n'),
-              {
-                startedAt,
-                modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
-              }
-            )
-          : 'Archived to shared archive.',
-      });
-      return true;
-    } catch (err) {
-      const reason = String(err?.message || err || 'unknown error').slice(0, 1000);
-      await interaction.editReply({
-        content: typeof seekdeepAppendResponseFooter === 'function'
-          ? seekdeepAppendResponseFooter(
-              ['Shared archive failed.', reason ? 'Reason: ' + reason : ''].filter(Boolean).join('\n'),
-              {
-                startedAt,
-                modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
-              }
-            )
-          : 'Shared archive failed.',
-      });
-      return true;
-    }
-  }
-  // SEEKDEEP_SHARED_ARCHIVE_BUTTON_HANDLER_END
-
-  if (action === 'archive') {
-    try {
-      const archiveResult = await seekdeepArchiveImageStateToDiscordThread(state, interaction);
-      await interaction.editReply({
-        content: seekdeepAppendResponseFooter([
-          'Archived to this server.',
-          archiveResult?.threadName ? `Thread: ${archiveResult.threadName}` : '',
-        ].filter(Boolean).join('\n'), {
-          startedAt,
-          modelUsed: seekdeepNoModelLabel(),
-        }),
-      });
-      return true;
-    } catch (err) {
-      if (err?.code === 'SEEKDEEP_ARCHIVE_NOT_CONFIGURED' || err?.code === 'SEEKDEEP_ARCHIVE_PERMISSIONS_MISSING') {
-        const setupText = String(err?.message || 'Archive channel is not ready for this server.').slice(0, 1800);
-        await interaction.editReply({
-          content: typeof seekdeepAppendResponseFooter === 'function'
-            ? seekdeepAppendResponseFooter(setupText, {
-                startedAt,
-                modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
-              })
-            : setupText,
-        });
-        return true;
-      }
-      console.warn('Discord thread archive failed:', err?.message || err);
-
-      await interaction.editReply({
-        content: seekdeepAppendResponseFooter([
-          'Discord thread archive failed.',
-          err?.message ? `Reason: ${String(err.message).slice(0, 500)}` : '',
-        ].filter(Boolean).join('\n'), {
-          startedAt,
-          modelUsed: seekdeepNoModelLabel(),
-        }),
-      });
-      return true;
-    }
-  }
-
-  if (action === 'download') {
-    const downloadText = state?.downloadUrl || state?.url || state?.proxyURL || state?.attachmentUrl
-      ? `Download URL:\n${state.downloadUrl || state.url || state.proxyURL || state.attachmentUrl}`
-      : 'Use the image attachment in the channel to download this image.';
-
-    await interaction.editReply({
-      content: seekdeepAppendResponseFooter(downloadText, {
-        startedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-    });
-    return true;
-  }
-
-  if (action !== 'regenerate') {
-    await interaction.editReply({
-      content: seekdeepAppendResponseFooter('Unknown image action.', {
-        startedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-    });
-    return true;
-  }
-
-  const basePrompt = state.originalPrompt || state.rawPrompt || state.prompt || 'image';
-  const width = state.width || 1024;
-  const height = state.height || 1024;
-  const seed = state.seed ?? null;
-  const grounded = state.ground !== false && state.imageModeOptions?.ground !== false;
-
-  const queueOne = async (regenMode, routeName, suffix) => {
-    const proxy = typeof seekdeepPromptChoiceProxyMessage === 'function'
-      ? seekdeepPromptChoiceProxyMessage(interaction, interaction?.user?.id || '', suffix)
-      : {
-          author: { id: interaction?.user?.id || 'unknown' },
-          channel: interaction?.channel || null,
-          id: `${interaction?.id || 'regen'}:${suffix}:${Date.now().toString(36)}`,
-          reply: async (payload) => {
-            if (interaction?.channel && typeof interaction.channel.send === 'function') {
-              return await interaction.channel.send(payload);
-            }
-            return null;
-          },
-        };
-
-    if (typeof seekdeepLogRoute === 'function') {
-      seekdeepLogRoute(routeName, basePrompt);
-    }
-
-    return await seekdeepSendImageWithButtons(
-      proxy,
-      basePrompt,
-      width,
-      height,
-      seed,
-      seekdeepRegenerateModeOptions(regenMode, {
-        ...state,
-        originalPrompt: basePrompt,
-        ground: grounded,
-      }),
-    );
-  };
-
-  const regenGif = seekdeepLoadingGifAttachment();
-
-  if (mode === 'both') {
-    await interaction.editReply({
-      content: seekdeepAppendResponseFooter([
-        'Queued both:',
-        '',
-        grounded ? 'Grounding: on' : 'Grounding: off',
-        'Jobs queued:',
-        '1. Original prompt',
-        '2. Refined prompt',
-      ].join('\n'), {
-        startedAt,
-        modelUsed: seekdeepNoModelLabel(),
-      }),
-      ...(regenGif ? { files: [regenGif] } : {}),
-    });
-
-    const p1 = queueOne('original', 'image-choice-original', 'regen-original');
-    const p2 = queueOne('refined', 'image-choice-refined', 'regen-refined');
-    // Delete the ephemeral "Queued" notice once images are posted to the channel.
-    void Promise.allSettled([p1, p2]).then(() => {
-      interaction.deleteReply().catch(() => {});
-    });
-    return true;
-  }
-
-  const responseMode = String(mode || 'submitted').toLowerCase();
-  const resolvedMode = responseMode === 'original' || responseMode === 'raw'
-    ? 'original'
-    : responseMode === 'refined'
-      ? 'refined'
-      : ((state.refine === false || state.imageModeOptions?.refine === false) ? 'original' : 'refined');
-
-  await interaction.editReply({
-    content: seekdeepAppendResponseFooter([
-      resolvedMode === 'original' ? 'Queued original regenerate.' : 'Queued refined regenerate.',
-      '',
-      grounded ? 'Grounding: on' : 'Grounding: off',
-      resolvedMode === 'original' ? 'Refinement: off' : 'Refinement: on',
-      'Queued Jobs: 1',
-    ].join('\n'), {
-      startedAt,
-      modelUsed: seekdeepNoModelLabel(),
-    }),
-    ...(regenGif ? { files: [regenGif] } : {}),
-  });
-
-  const regenPromise = queueOne(resolvedMode, resolvedMode === 'original' ? 'image-choice-original' : 'image-choice-refined', `regen-${resolvedMode}`);
-  // Delete the ephemeral "Queued" notice once the image is posted to the channel.
-  void regenPromise.then(() => {
-    interaction.deleteReply().catch(() => {});
-  }).catch(() => {});
-  return true;
-}
-
+// seekdeepHandleImageButton removed — the emergency handlers are the
+// authoritative code paths: seekdeepEmergencyHandlePromptChoiceButton
+// (SEEKDEEP_PROMPT_CHOICE_EMERGENCY_START) and
+// seekdeepEmergencyHandleGeneratedImageButton
+// (SEEKDEEP_IMAGE_ACTION_EMERGENCY_START), each on its own
+// interactionCreate listener near EOF.
 // SEEKDEEP_IMAGE_BUTTONS_END
 
 function seekdeepMapDiagnostics() {
@@ -6084,6 +5588,7 @@ function seekdeepFormatGpuStats(gpu) {
   if (loaded.vision_model) residents.push('vision');
   if (loaded.image_pipe) residents.push('image (SDXL)');
   const pinned = [];
+  if (gpu.keep_resident?.chat) pinned.push('chat');
   if (gpu.keep_resident?.vision) pinned.push('vision');
   if (gpu.keep_resident?.image) pinned.push('image');
 
@@ -6102,13 +5607,20 @@ function seekdeepFormatGpuStats(gpu) {
     `In residence: ${residents.length ? residents.join(', ') : 'none'}`,
     `Pinned (keep-resident): ${pinned.length ? pinned.join(', ') : 'none'}`,
   ];
+  const budget = gpu.vram_budget;
+  if (budget) {
+    const budgetAvail = gb(budget.available_for_models_mb || 0);
+    const reserve = gb(budget.system_reserve_mb || 0);
+    const safety = gb(budget.safety_margin_mb || 0);
+    detail.push(`VRAM budget: ${budgetAvail} GB available for models  (${reserve} GB system reserve + ${safety} GB safety margin)`);
+  }
   if (thrashing) {
     detail.push('');
     detail.push('⚠ WARNING: PyTorch reserved pool is at >=90% of total VRAM.');
     detail.push('  On Windows the driver may spill allocations into shared system memory,');
     detail.push('  causing system-wide lag. Consider:');
     detail.push('    1. POST /unload (or `@SeekDeep status` then restart bot) to clear pools');
-    detail.push('    2. Set LOCAL_VISION_KEEP_RESIDENT=off if you pinned it');
+    detail.push('    2. Set LOCAL_CHAT_KEEP_RESIDENT=off / LOCAL_VISION_KEEP_RESIDENT=off if pinned');
     detail.push('    3. Lower LOCAL_CHAT_QUANT to 4bit if you raised it');
   }
 
@@ -6618,7 +6130,7 @@ function seekdeepHelpText(source = null) {
     'quality_text    compare / pros and cons / planning / detailed / explain',
     'reasoning_code  code / stack trace / debug / repo / CUDA / VRAM / etc.',
     'fallback_chat   used automatically if the chosen role fails',
-    'lightweight_chat translations, greetings, trivial Q&A (if configured)',
+    'lightweight_chat translations, greetings, trivial Q&A (skipped when chat is pinned)',
     '```',
     'See `' + prefix + ' status` -> "Chat roles" for the role -> model mapping,',
     'and "Loaded chat role / Loaded chat model" for what is currently in VRAM.',
@@ -7505,7 +7017,6 @@ function seekdeepUtilityPromptKind(prompt = '') {
   if (typeof seekdeepIsModelStatusQuestion === 'function' && seekdeepIsModelStatusQuestion(p)) return 'model-status';
 
   // Local archive dump/import commands are intentionally not exposed.
-  if (typeof isPostArchivePrompt === 'function' && isPostArchivePrompt(p)) return '';
   if (/^(post|dump|upload|send)\s+(the\s+)?archive\b/.test(p)) return '';
 
   // Queue status, including common typo observed during testing.
@@ -7543,7 +7054,7 @@ function seekdeepUtilityText(kind, source, key) {
     case 'archive': return seekdeepArchiveStatusText();
     case 'recent-images': return seekdeepRecentImagesText(10);
     case 'recent-prompts': return seekdeepRecentPromptsText(key, 12);
-    case 'recent-errors': return seekdeepRecentErrorsText(20);
+    case 'recent-errors': return seekdeepIsAdminSource(source) ? seekdeepRecentErrorsText(20) : 'Recent errors are admin-only. Ask a server admin or bot owner.';
     case 'changelog': return '(use /changelog for a fresh git log — chat fallback)';
     case 'admin': return ['SeekDeep admin status', '', seekdeepAdminLine(source)].join('\n');
     case 'image-queue': return seekdeepImageQueueStatusText();
@@ -9522,10 +9033,6 @@ const SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS = new Set([
   '.bmp',
   '.avif',
 ]);
-
-function isPostArchivePrompt(prompt = '') {
-  return false;
-}
 
 async function seekdeepPostArchiveToChannel(channel) {
   const startedAt = seekdeepNowMs();
@@ -13625,11 +13132,16 @@ function remember(key, role, value) {
   SEEKDEEP_MEMORY_COMPAT_STORE_V13.set(key, trimmed);
 }
 
+const SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE = /^(?:Queued image locally for:|Prepared image prompt choices for:|Generated image locally for:|Regenerating latest cached image|Posted recent images|What should I generate an image of|Queued pending image subject|Using recent context as image subject|Bare confirmation with no pending image subject)/i;
+
 function getRecentContext(key) {
   const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 80);
   const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 60000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_RENDER_ENTRY_MAX_CHARS', 1400, 500, 3000);
   let entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []).slice(-maxEntries);
+  // Filter out image workflow status messages — they serve image-subject
+  // tracking but pollute chat context with non-conversational noise.
+  entries = entries.filter(e => !(e.role === 'assistant' && SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE.test(e.text)));
   if (!entries.length) return '';
 
   const render = (items) => items
@@ -14251,6 +13763,13 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
 // preserved bit-identically from the prior inline implementation; the outer
 // try/catch matches the prior outer catch (logs the error, stops the typing
 // loop, and surfaces a "SeekDeep request failed" reply to the user).
+function seekdeepConsumeLoadingGif(message) {
+  const reply = message?.__seekdeepLoadingReply;
+  if (!reply) return;
+  try { delete message.__seekdeepLoadingReply; } catch {}
+  if (typeof reply.delete === 'function') reply.delete().catch(() => {});
+}
+
 async function seekdeepDispatchAddressedMessage(message, ctx) {
   const { prompt, seekdeepReplyPromptInfo, seekdeepForceImageFromReplyContext } = ctx;
   try {
@@ -14402,6 +13921,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
         : ((typeof seekdeepExtractImagePrompt === 'function' ? seekdeepExtractImagePrompt(prompt) : prompt) || seekdeepMessageImageModeOptions.cleanPrompt || prompt);
       if (!seekdeepConversationalEditReplyImageContext && typeof seekdeepStripDirectImageVerb === 'function') imagePrompt = seekdeepStripDirectImageVerb(imagePrompt) || seekdeepStripDirectImageVerb(prompt) || imagePrompt;
       seekdeepLogRoute('image-direct-alias', imagePrompt);
+      seekdeepConsumeLoadingGif(message);
       remember(key, 'user', '[direct-image] ' + prompt);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
         remember(key, 'assistant', 'Prepared image prompt choices for: ' + imagePrompt);
@@ -14661,6 +14181,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
         }
       } catch {}
       seekdeepLogRoute('image', imagePrompt);
+      seekdeepConsumeLoadingGif(message);
       try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'image' }); } catch {}
       remember(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
@@ -15584,7 +15105,7 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   await interaction.editReply({ content: body, files: [] });
 }
 async function seekdeepHandleContextMenuDescribeImage(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
   if (!att) {
@@ -15606,7 +15127,7 @@ async function seekdeepHandleContextMenuDescribeImage(interaction, targetMessage
 }
 
 async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
   if (!att) {

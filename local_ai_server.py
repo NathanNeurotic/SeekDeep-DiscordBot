@@ -39,17 +39,134 @@ HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
-# v10.4: opt-in pins to keep specific models resident in VRAM across task
-# switches. Useful when you want chat+vision to coexist (e.g. asking
-# follow-up questions about an image without paying the unload/reload
-# cost). The explicit POST /unload endpoint still clears everything.
+# Opt-in pins to keep specific models resident in VRAM across task switches.
+# The explicit POST /unload endpoint (force=True) still clears everything.
 #
-# VRAM budget on a 24GB GPU:
-#   chat 8B fp16 (~16GB) + vision 3B fp16 (~6GB) = ~22GB tight but works.
-#   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) = comfortable.
-#   chat 14B 4bit (~9GB) + vision 3B fp16 (~6GB) = comfortable.
+# VRAM budget on a 24GB GPU (4bit chat):
+#   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) = ~11GB, comfortable.
+#   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) + Phi-4 14B 4bit swap (~9GB) = ~20GB, fits.
+#   chat 8B 4bit (~5GB)  + SDXL (~6.5GB) = ~11.5GB, comfortable.
+KEEP_RESIDENT_CHAT = os.getenv("LOCAL_CHAT_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
 KEEP_RESIDENT_VISION = os.getenv("LOCAL_VISION_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
 KEEP_RESIDENT_IMAGE = os.getenv("LOCAL_IMAGE_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
+
+# ---------------------------------------------------------------------------
+# VRAM budget management
+# ---------------------------------------------------------------------------
+# Reserve this much VRAM (MB) for Windows, desktop compositor, Discord,
+# Malwarebytes, MSI Center, and other background processes.  The default
+# 4 GB is generous — typical Win11 desktop overhead is 1.5-2.5 GB, but
+# spikes from antivirus scans or app updates can push higher.
+VRAM_SYSTEM_RESERVE_MB = int(os.getenv("VRAM_SYSTEM_RESERVE_MB", "4096"))
+
+# Extra headroom (MB) on top of the system reserve to absorb KV cache
+# growth, PyTorch allocator fragmentation, and inference-time temporaries.
+VRAM_SAFETY_MARGIN_MB = int(os.getenv("VRAM_SAFETY_MARGIN_MB", "1024"))
+
+# Estimated VRAM per model (MB).  Used for pre-load budget checks.
+# These are conservative (slightly over real) so the gate errs on the side
+# of unloading rather than OOMing.  Override any entry via env.
+_VRAM_ESTIMATE_DEFAULTS: dict[str, int] = {
+    # Chat models at 4-bit quantization
+    "chat:default_chat": 5500,
+    "chat:fallback_chat": 5500,
+    "chat:quality_text": 8000,
+    "chat:reasoning_code": 9500,
+    "chat:lightweight_chat": 3000,
+    # Vision / image pipelines (fp16)
+    "vision": 6500,
+    "image": 7000,
+    "instruct_pix2pix": 5000,
+}
+
+def _load_vram_estimates() -> dict[str, int]:
+    """Merge env overrides (VRAM_EST_CHAT_DEFAULT_CHAT=5500) into defaults."""
+    estimates = dict(_VRAM_ESTIMATE_DEFAULTS)
+    prefix = "VRAM_EST_"
+    for key, val in os.environ.items():
+        if key.startswith(prefix):
+            mapped = key[len(prefix):].lower().replace("__", ":").replace("_", "_")
+            # VRAM_EST_CHAT__DEFAULT_CHAT -> chat:default_chat
+            mapped = key[len(prefix):].lower()
+            parts = mapped.split("__", 1)
+            if len(parts) == 2:
+                mapped = f"{parts[0]}:{parts[1]}"
+            try:
+                estimates[mapped] = int(val)
+            except ValueError:
+                pass
+    return estimates
+
+VRAM_ESTIMATES: dict[str, int] = _load_vram_estimates()
+
+
+def vram_total_mb() -> float:
+    """Total GPU VRAM in MB (0 if CUDA unavailable)."""
+    if not cuda_available():
+        return 0
+    try:
+        import torch
+        _, total = torch.cuda.mem_get_info()
+        return total / (1024 ** 2)
+    except Exception:
+        return 0
+
+
+def vram_used_mb() -> float:
+    """VRAM currently used (system-wide view including other processes)."""
+    if not cuda_available():
+        return 0
+    try:
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        return (total - free) / (1024 ** 2)
+    except Exception:
+        return 0
+
+
+def vram_budget_available_mb() -> float:
+    """VRAM available for models after subtracting system reserve + safety margin.
+
+    This is the headroom the model loader should work within.  It accounts for
+    Windows desktop overhead, background apps, and inference temporaries.
+    """
+    if not cuda_available():
+        return 0
+    try:
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        total_mb = total / (1024 ** 2)
+        used_mb = (total - free) / (1024 ** 2)
+        # What PyTorch has reserved (includes loaded models + caching pool)
+        reserved_mb = torch.cuda.memory_reserved() / (1024 ** 2)
+        # Non-PyTorch VRAM usage (Windows, Discord, etc.)
+        system_used_mb = used_mb - reserved_mb
+        # Budget = total - system_reserve - safety - what PyTorch already holds
+        budget = total_mb - VRAM_SYSTEM_RESERVE_MB - VRAM_SAFETY_MARGIN_MB - reserved_mb
+        return max(0.0, budget)
+    except Exception:
+        return 0
+
+
+def estimate_model_vram(task: str, role: str = "") -> int:
+    """Return estimated VRAM (MB) for a model about to load."""
+    if task == "chat" and role:
+        key = f"chat:{role}"
+        if key in VRAM_ESTIMATES:
+            return VRAM_ESTIMATES[key]
+        return VRAM_ESTIMATES.get("chat:default_chat", 5500)
+    return VRAM_ESTIMATES.get(task, 5000)
+
+
+def vram_can_fit(task: str, role: str = "") -> tuple[bool, float, int]:
+    """Check whether the requested model fits in the current VRAM budget.
+
+    Returns (fits, available_mb, estimated_mb).
+    """
+    available = vram_budget_available_mb()
+    estimated = estimate_model_vram(task, role)
+    return available >= estimated, available, estimated
+
 
 # ---------------------------------------------------------------------------
 # Chat model role routing
@@ -264,6 +381,7 @@ def gpu_stats() -> dict:
             "image_pipe": image_pipe is not None,
         }
         stats["keep_resident"] = {
+            "chat": KEEP_RESIDENT_CHAT,
             "vision": KEEP_RESIDENT_VISION,
             "image": KEEP_RESIDENT_IMAGE,
         }
@@ -343,16 +461,21 @@ def unload_chat_model() -> None:
 
 
 def unload_all(force: bool = False) -> None:
-    """Drop loaded models. With `force=False`, respects KEEP_RESIDENT_VISION /
-    KEEP_RESIDENT_IMAGE pins so the pinned task survives task-LRU switches.
-    The explicit POST /unload endpoint passes force=True and ignores pins."""
+    """Drop loaded models. With `force=False`, respects KEEP_RESIDENT_CHAT /
+    KEEP_RESIDENT_VISION / KEEP_RESIDENT_IMAGE pins so pinned models survive
+    task-LRU switches. The explicit POST /unload endpoint passes force=True
+    and ignores pins."""
     global chat_model, chat_tokenizer, vision_model, vision_processor, vision_tokenizer, image_pipe, loaded_task
     global loaded_chat_role, loaded_chat_model_id
     global instruct_pix2pix_pipe, clipseg_model, clipseg_processor
-    chat_model = None
-    chat_tokenizer = None
+    keep_chat = (not force) and KEEP_RESIDENT_CHAT
     keep_vision = (not force) and KEEP_RESIDENT_VISION
     keep_image = (not force) and KEEP_RESIDENT_IMAGE
+    if not keep_chat:
+        chat_model = None
+        chat_tokenizer = None
+        loaded_chat_role = None
+        loaded_chat_model_id = None
     if not keep_vision:
         vision_model = None
         vision_processor = None
@@ -363,17 +486,63 @@ def unload_all(force: bool = False) -> None:
     clipseg_model = None
     clipseg_processor = None
     loaded_task = None
-    loaded_chat_role = None
-    loaded_chat_model_id = None
     cleanup_cuda()
     pin_note = ""
-    if keep_vision or keep_image:
-        pinned = [name for name, on in (("vision", keep_vision), ("image", keep_image)) if on]
+    pinned = [name for name, on in (("chat", keep_chat), ("vision", keep_vision), ("image", keep_image)) if on]
+    if pinned:
         pin_note = f" (kept resident: {', '.join(pinned)})"
     print(f"[SeekDeep] unloaded models{pin_note}", flush=True)
 
 
-def prepare_task(task: str) -> None:
+def _evict_for_budget(task: str, role: str = "") -> None:
+    """If the incoming model won't fit in the VRAM budget, evict non-pinned
+    models (heaviest first) until it does.  Pinned models are never evicted.
+    Falls through silently if CUDA is unavailable or budget check is N/A."""
+    global image_pipe, vision_model, vision_processor, vision_tokenizer
+
+    fits, available, estimated = vram_can_fit(task, role)
+    if fits:
+        return
+    print(
+        f"[SeekDeep VRAM] budget check: {task}({role}) needs ~{estimated}MB, "
+        f"only {available:.0f}MB free — evicting non-pinned models",
+        flush=True,
+    )
+    evictable: list[tuple[str, int]] = []
+    if not KEEP_RESIDENT_IMAGE and image_pipe is not None:
+        evictable.append(("image", estimate_model_vram("image")))
+    if not KEEP_RESIDENT_VISION and vision_model is not None:
+        evictable.append(("vision", estimate_model_vram("vision")))
+    if not KEEP_RESIDENT_CHAT and chat_model is not None:
+        evictable.append(("chat", estimate_model_vram("chat", loaded_chat_role or "default_chat")))
+    evictable.sort(key=lambda x: x[1], reverse=True)
+
+    for name, est_mb in evictable:
+        if name == "image":
+            image_pipe = None
+        elif name == "vision":
+            vision_model = None
+            vision_processor = None
+            vision_tokenizer = None
+        elif name == "chat":
+            unload_chat_model()
+        print(f"[SeekDeep VRAM] evicted {name} (~{est_mb}MB)", flush=True)
+        cleanup_cuda()
+        fits, available, estimated = vram_can_fit(task, role)
+        if fits:
+            print(f"[SeekDeep VRAM] budget OK after eviction: {available:.0f}MB free for ~{estimated}MB model", flush=True)
+            return
+    # If we get here, even after evicting everything we might be tight.
+    # Log a warning but let the load attempt proceed — PyTorch may still
+    # manage via its caching pool.
+    print(
+        f"[SeekDeep VRAM] WARNING: after all evictions only {available:.0f}MB free "
+        f"for ~{estimated}MB model — load may spill into shared memory",
+        flush=True,
+    )
+
+
+def prepare_task(task: str, role: str = "") -> None:
     global loaded_task
     if MODEL_KEEP_MODE in {"none", "off", "unload"}:
         unload_all()
@@ -381,19 +550,28 @@ def prepare_task(task: str) -> None:
         return
 
     if MODEL_KEEP_MODE in {"task-lru", "lru", "single"} and loaded_task and loaded_task != task:
-        # When the next task is the pinned one and it's already loaded, skip
-        # the unload entirely. (Saves an unload/reload cycle for vision when
-        # alternating chat<->vision and KEEP_RESIDENT_VISION is on.)
-        if task == "vision" and KEEP_RESIDENT_VISION and vision_model is not None:
-            print(f"[SeekDeep] keep-resident: vision already loaded; staying", flush=True)
-            loaded_task = task
-            return
-        if task == "image" and KEEP_RESIDENT_IMAGE and image_pipe is not None:
-            print(f"[SeekDeep] keep-resident: image already loaded; staying", flush=True)
-            loaded_task = task
-            return
-        print(f"[SeekDeep] unloading models; switching from {loaded_task} to {task}", flush=True)
-        unload_all()
+        staying = False
+        if task == "chat" and KEEP_RESIDENT_CHAT and chat_model is not None:
+            staying = True
+        elif task == "vision" and KEEP_RESIDENT_VISION and vision_model is not None:
+            staying = True
+        elif task == "image" and KEEP_RESIDENT_IMAGE and image_pipe is not None:
+            staying = True
+
+        if staying:
+            # The pinned model stays, but still clean up non-pinned models
+            # from the previous task (e.g. SDXL sitting idle after image gen).
+            print(f"[SeekDeep] keep-resident: {task} already loaded; cleaning up non-pinned from {loaded_task}", flush=True)
+            unload_all()
+        else:
+            print(f"[SeekDeep] task switch from {loaded_task} to {task}", flush=True)
+            _evict_for_budget(task, role)
+            unload_all()
+
+    # Even when loaded_task == task (no switch), check budget in case a
+    # different chat role within the same task needs more VRAM.
+    if role:
+        _evict_for_budget(task, role)
 
     loaded_task = task
 
@@ -483,7 +661,7 @@ class UpscaleRequest(BaseModel):
 import asyncio as _seekdeep_asyncio
 
 _SEEKDEEP_MODEL_REQUEST_LOCK = _seekdeep_asyncio.Lock()
-_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/unload"}
+_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-pix2pix", "/inpaint", "/upscale", "/unload"}
 
 @app.middleware("http")
 async def seekdeep_singleflight_middleware(request, call_next):
@@ -508,6 +686,7 @@ def health():
         "chat_quant_full_roles": sorted(LOCAL_CHAT_QUANT_FULL_ROLES),
         "keep_mode": MODEL_KEEP_MODE,
         "keep_resident": {
+            "chat": KEEP_RESIDENT_CHAT,
             "vision": KEEP_RESIDENT_VISION,
             "image": KEEP_RESIDENT_IMAGE,
         },
@@ -517,8 +696,51 @@ def health():
             "vision": VISION_MODEL_ID,
             "image": IMAGE_MODEL_ID,
         },
+        "vram_budget": {
+            "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
+            "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
+            "available_for_models_mb": round(vram_budget_available_mb(), 0),
+        },
         "cache_dir": str(MODEL_CACHE_DIR),
         "offline_model_loading": HF_LOCAL_FILES_ONLY,
+    }
+
+
+@app.get("/vram")
+def vram_budget_endpoint():
+    """Detailed VRAM budget breakdown for diagnostics."""
+    total = vram_total_mb()
+    used = vram_used_mb()
+    available = vram_budget_available_mb()
+    loaded_models = {}
+    if chat_model is not None:
+        role = loaded_chat_role or "default_chat"
+        loaded_models["chat"] = {
+            "role": role,
+            "model_id": loaded_chat_model_id,
+            "estimated_mb": estimate_model_vram("chat", role),
+            "pinned": KEEP_RESIDENT_CHAT,
+        }
+    if vision_model is not None:
+        loaded_models["vision"] = {
+            "model_id": VISION_MODEL_ID,
+            "estimated_mb": estimate_model_vram("vision"),
+            "pinned": KEEP_RESIDENT_VISION,
+        }
+    if image_pipe is not None:
+        loaded_models["image"] = {
+            "model_id": IMAGE_MODEL_ID,
+            "estimated_mb": estimate_model_vram("image"),
+            "pinned": KEEP_RESIDENT_IMAGE,
+        }
+    return {
+        "total_mb": round(total, 0),
+        "used_mb": round(used, 0),
+        "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
+        "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
+        "available_for_models_mb": round(available, 0),
+        "loaded_models": loaded_models,
+        "estimates": VRAM_ESTIMATES,
     }
 
 
@@ -533,7 +755,13 @@ def unload_endpoint():
 def gpu_endpoint():
     """Focused GPU stats endpoint. Lighter than /health; safe to poll
     every few seconds for live-tail monitoring without spam."""
-    return gpu_stats()
+    stats = gpu_stats()
+    stats["vram_budget"] = {
+        "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
+        "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
+        "available_for_models_mb": round(vram_budget_available_mb(), 0),
+    }
+    return stats
 
 
 @app.exception_handler(Exception)
@@ -557,6 +785,26 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
 
     resolved_role, model_id = resolve_chat_role(role)
 
+    # When the default chat model is pinned and already loaded, skip
+    # lightweight routing — the model-swap cost (~7-14s) dwarfs any
+    # generation savings on a short reply. Quality/reasoning swaps are
+    # still honored because they serve a different purpose (better output).
+    if (
+        KEEP_RESIDENT_CHAT
+        and chat_model is not None
+        and resolved_role == "lightweight_chat"
+        and loaded_chat_role is not None
+        and loaded_chat_role != "lightweight_chat"
+    ):
+        if MODEL_ROUTER_LOG:
+            print(
+                f"[SeekDeep Model Router] skipping lightweight swap — "
+                f"using pinned {loaded_chat_role} (swap cost > generation savings)",
+                flush=True,
+            )
+        prepare_task("chat", loaded_chat_role)
+        return loaded_chat_role, loaded_chat_model_id
+
     if MODEL_ROUTER_LOG:
         print(
             f"[SeekDeep Model Router] requested role={role} resolved role={resolved_role} model={model_id}",
@@ -570,14 +818,14 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         and loaded_chat_role == resolved_role
         and loaded_chat_model_id == model_id
     ):
-        prepare_task("chat")
+        prepare_task("chat", resolved_role)
         return resolved_role, model_id
 
     # A different chat model is loaded; unload it before bringing in the new one.
     if chat_model is not None or chat_tokenizer is not None:
         unload_chat_model()
 
-    prepare_task("chat")
+    prepare_task("chat", resolved_role)
     role_is_full_precision = resolved_role in LOCAL_CHAT_QUANT_FULL_ROLES
     quant_mode = _normalized_chat_quant_mode()
     quant_config = None if role_is_full_precision else _build_chat_quant_config()

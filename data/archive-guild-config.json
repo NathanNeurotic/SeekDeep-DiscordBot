@@ -39,18 +39,18 @@
       },
       "sharedArchive": {
         "threadId": "1504467609196957808",
-        "threadName": "🪙 • Shared Archive • 42",
-        "count": 42,
+        "threadName": "🪙 • Shared Archive • 47",
+        "count": 47,
         "countSource": "seekdeep-shared-archive-posts-v1",
         "bootstrapSource": "shared-archive-get-or-create",
-        "bootstrapAt": "2026-05-19T06:35:43.840Z",
-        "updatedAt": "2026-05-19T06:35:46.486Z",
-        "lastArchivedAt": "2026-05-19T06:35:46.486Z",
+        "bootstrapAt": "2026-05-19T15:29:40.829Z",
+        "updatedAt": "2026-05-19T15:29:43.126Z",
+        "lastArchivedAt": "2026-05-19T15:29:43.126Z",
         "lastArchivedBy": "640897985382973440",
         "lastArchiveSource": "shared-archive-button-count-finalize-v6",
-        "lastCountScanAt": "2026-05-19T06:35:46.486Z",
-        "lastCountScanMessages": 101,
-        "lastCountScanEntries": 42
+        "lastCountScanAt": "2026-05-19T15:29:43.126Z",
+        "lastCountScanMessages": 115,
+        "lastCountScanEntries": 47
       }
     },
     "741414359967989854": {
