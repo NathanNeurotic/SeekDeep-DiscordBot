@@ -785,25 +785,35 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
 
     resolved_role, model_id = resolve_chat_role(role)
 
-    # When the default chat model is pinned and already loaded, skip
-    # lightweight routing — the model-swap cost (~7-14s) dwarfs any
-    # generation savings on a short reply. Quality/reasoning swaps are
-    # still honored because they serve a different purpose (better output).
-    if (
-        KEEP_RESIDENT_CHAT
-        and chat_model is not None
-        and resolved_role == "lightweight_chat"
-        and loaded_chat_role is not None
-        and loaded_chat_role != "lightweight_chat"
-    ):
-        if MODEL_ROUTER_LOG:
-            print(
-                f"[SeekDeep Model Router] skipping lightweight swap — "
-                f"using pinned {loaded_chat_role} (swap cost > generation savings)",
-                flush=True,
-            )
-        prepare_task("chat", loaded_chat_role)
-        return loaded_chat_role, loaded_chat_model_id
+    # When the default chat model is pinned, skip lightweight routing.
+    # Case 1 (warm): pinned model already loaded — swap cost (~7-14s) dwarfs
+    #   generation savings on a short reply.
+    # Case 2 (cold start): nothing loaded yet — loading lightweight first is
+    #   pure waste because the very next non-trivial request will swap it out.
+    #   Load default_chat directly so it's resident from the first request.
+    # Quality/reasoning swaps are still honored (different purpose: better output).
+    if KEEP_RESIDENT_CHAT and resolved_role == "lightweight_chat":
+        if chat_model is not None and loaded_chat_role and loaded_chat_role != "lightweight_chat":
+            # Warm case: reuse the pinned model.
+            if MODEL_ROUTER_LOG:
+                print(
+                    f"[SeekDeep Model Router] skipping lightweight swap — "
+                    f"using pinned {loaded_chat_role} (swap cost > generation savings)",
+                    flush=True,
+                )
+            prepare_task("chat", loaded_chat_role)
+            return loaded_chat_role, loaded_chat_model_id
+        if chat_model is None:
+            # Cold-start case: redirect to default_chat so the pin is
+            # established from the first request.
+            resolved_role = "default_chat"
+            model_id = CHAT_MODEL_ID
+            if MODEL_ROUTER_LOG:
+                print(
+                    f"[SeekDeep Model Router] cold-start redirect — "
+                    f"loading default_chat instead of lightweight_chat (chat pin on)",
+                    flush=True,
+                )
 
     if MODEL_ROUTER_LOG:
         print(

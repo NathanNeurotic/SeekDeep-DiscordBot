@@ -689,7 +689,10 @@ function seekdeepRedactStatusConnectionInfo(value = '') {
 function seekdeepCurrentLoadedModelFromHealth(health = {}) {
   const task = String(health.loaded_task || 'none').toLowerCase();
 
-  if (task === 'chat') return health.models?.chat || seekdeepChatModelLabel();
+  // Use the actually-loaded model ID when available (chat tracks this per-role).
+  // If loaded_chat_model_id is null during a swap, show '(loading...)' instead
+  // of falling back to the env-var default which is misleading.
+  if (task === 'chat') return health.loaded_chat_model_id || '(loading...)';
   if (task === 'vision') return health.models?.vision || seekdeepVisionModelLabel();
   if (task === 'image') return health.models?.image || seekdeepImageModelLabel();
 
@@ -5846,6 +5849,8 @@ async function statusText(verbose = false) {
     `Loaded chat model: ${loadedChatModelId}`,
     `Chat quantization: ${chatQuantMode}`,
     `Keep mode: ${health.keep_mode}`,
+    ...(health.keep_resident ? [`Pinned (keep-resident): ${[health.keep_resident.chat && 'chat', health.keep_resident.vision && 'vision', health.keep_resident.image && 'image'].filter(Boolean).join(', ') || 'none'}`] : []),
+    ...(health.vram_budget ? [`VRAM budget: ${(health.vram_budget.available_for_models_mb / 1024).toFixed(1)} GB available  (${(health.vram_budget.system_reserve_mb / 1024).toFixed(1)} GB reserve + ${(health.vram_budget.safety_margin_mb / 1024).toFixed(1)} GB safety)`] : []),
     '',
     'Bot runtime:',
     `Bot Uptime: ${botUptime}`,
