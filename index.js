@@ -9704,7 +9704,8 @@ function seekdeepIsResearchFollowupPrompt(prompt = '') {
 
   return (
     /\b(pros?\s*\/\s*cons?|pros and cons|advantages?|disadvantages?|downsides?|upsides?|strengths?|weaknesses?)\b/.test(p) ||
-    /\b(of each|each one|each model|each laptop|for each|both of them|that comparison|the comparison)\b/.test(p) ||
+    /\b(of each|each one|each model|each laptop|both of them|that comparison|the comparison)\b/.test(p) ||
+    /\b(?:comparison|details?|specs?|pros?|cons?|advantages?|disadvantages?|breakdown|summary|info)\s+for each\b/.test(p) ||
     /\b(compare|rank|review|summarize|break down)\s+(those|these)\b/.test(p) ||
     /\b(can you|could you|would you|please)?\s*(give|make|create|show|list|break down)\s+(me\s+)?(a\s+)?(pros?\s*\/\s*cons?|pros and cons|summary|recommendation|winner|ranking|table|chart)\b/.test(p) ||
     /^(audit|fact\s*check|fact-check|check that|check the answer|verify that|verify the answer|review that|review the answer|was that right|is that right|source audit|sources audit)\b/.test(p)
@@ -9951,13 +9952,16 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
   const pending = seekdeepGetPendingResearchTask(key);
 
   if (!pending?.topic && seekdeepIsResearchFollowupPrompt(p) && !seekdeepLooksLikeComparisonItemsFollowup(p)) {
-    seekdeepLogRoute('research-followup-missing-context', prompt);
-    const answer = 'Pros/cons of what exactly? Send the models/items again, and I will compare them instead of guessing.';
-    remember(key, 'user', prompt);
-    remember(key, 'assistant', answer);
-    seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-    await sendLongMessageReply(message, answer);
-    return true;
+    const isConversational = p.length > 80 && /^(?:nah|no|nope|but|yeah|ok|sure|well|so|actually|i\s)/i.test(p);
+    if (!isConversational) {
+      seekdeepLogRoute('research-followup-missing-context', prompt);
+      const answer = 'Pros/cons of what exactly? Send the models/items again, and I will compare them instead of guessing.';
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, answer);
+      return true;
+    }
   }
 
   if (pending?.topic && seekdeepIsResearchFollowupPrompt(p)) {
@@ -11027,6 +11031,120 @@ function seekdeepBuildPersonaModal(currentPersona, channelOverride, guildOverrid
     );
 }
 
+const SEEKDEEP_CTX_EDIT_MODAL_ID = 'seekdeep:ctx-edit-image';
+const SEEKDEEP_CTX_REMOVE_MODAL_ID = 'seekdeep:ctx-remove-object';
+const SEEKDEEP_CTX_IMG2IMG_MODAL_ID = 'seekdeep:ctx-img2img';
+const SEEKDEEP_CTX_EDIT_MODAL_IDS = [SEEKDEEP_CTX_EDIT_MODAL_ID, SEEKDEEP_CTX_REMOVE_MODAL_ID, SEEKDEEP_CTX_IMG2IMG_MODAL_ID];
+const seekdeepPendingContextMenuEdits = new Map();
+const SEEKDEEP_CTX_EDIT_TTL_MS = 300000;
+
+function seekdeepCleanupPendingContextMenuEdits() {
+  const now = Date.now();
+  for (const [key, val] of seekdeepPendingContextMenuEdits) {
+    if (now - val.timestamp > SEEKDEEP_CTX_EDIT_TTL_MS) seekdeepPendingContextMenuEdits.delete(key);
+  }
+}
+
+function seekdeepBuildEditImageModal() {
+  return new ModalBuilder()
+    .setCustomId(SEEKDEEP_CTX_EDIT_MODAL_ID)
+    .setTitle('Edit Image (InstructPix2Pix)')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('instruction')
+          .setLabel('What should I change?')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('make it darker / add snow / turn it blue')
+          .setRequired(true)
+          .setMaxLength(300)
+      ),
+    );
+}
+
+function seekdeepBuildRemoveObjectModal() {
+  return new ModalBuilder()
+    .setCustomId(SEEKDEEP_CTX_REMOVE_MODAL_ID)
+    .setTitle('Remove Object (Inpaint)')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('target')
+          .setLabel('What should I remove?')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('the background / the person / the text')
+          .setRequired(true)
+          .setMaxLength(300)
+      ),
+    );
+}
+
+function seekdeepBuildImg2ImgModal() {
+  return new ModalBuilder()
+    .setCustomId(SEEKDEEP_CTX_IMG2IMG_MODAL_ID)
+    .setTitle('Transform Image (img2img)')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('prompt')
+          .setLabel('Describe the transformation')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('oil painting style / cyberpunk city / make it winter')
+          .setRequired(true)
+          .setMaxLength(500)
+      ),
+    );
+}
+
+async function seekdeepHandleContextMenuEditModalSubmit(interaction) {
+  const customId = interaction.customId;
+  const userId = interaction.user?.id;
+
+  let cacheKey;
+  if (customId === SEEKDEEP_CTX_EDIT_MODAL_ID) cacheKey = `edit:${userId}`;
+  else if (customId === SEEKDEEP_CTX_REMOVE_MODAL_ID) cacheKey = `remove:${userId}`;
+  else if (customId === SEEKDEEP_CTX_IMG2IMG_MODAL_ID) cacheKey = `img2img:${userId}`;
+  else return false;
+
+  const pending = seekdeepPendingContextMenuEdits.get(cacheKey);
+  seekdeepPendingContextMenuEdits.delete(cacheKey);
+
+  if (!pending || (Date.now() - pending.timestamp > SEEKDEEP_CTX_EDIT_TTL_MS)) {
+    await interaction.reply({ content: 'Edit session expired. Right-click the image again.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  await interaction.deferReply();
+
+  const proxy = {
+    author: { id: userId || 'unknown' },
+    channel: interaction.channel || null,
+    guild: interaction.guild || null,
+    client: interaction.client || client,
+    id: `ctx:${interaction.id}`,
+    reply: async (payload) => interaction.channel?.send?.(payload) || null,
+  };
+
+  if (customId === SEEKDEEP_CTX_EDIT_MODAL_ID) {
+    const instruction = String(interaction.fields.getTextInputValue('instruction') || '').trim() || 'enhance this image';
+    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-edit-image', instruction.slice(0, 80));
+    await seekdeepHandleInstructPix2Pix(proxy, instruction, pending.imageUrl);
+    await interaction.editReply({ content: 'InstructPix2Pix edit complete.' });
+  } else if (customId === SEEKDEEP_CTX_REMOVE_MODAL_ID) {
+    const removeTarget = String(interaction.fields.getTextInputValue('target') || '').trim() || 'the main subject';
+    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-remove-object', removeTarget.slice(0, 80));
+    await seekdeepHandleInpaint(proxy, 'background scene', removeTarget, pending.imageUrl);
+    await interaction.editReply({ content: 'Inpaint complete.' });
+  } else if (customId === SEEKDEEP_CTX_IMG2IMG_MODAL_ID) {
+    const prompt = String(interaction.fields.getTextInputValue('prompt') || '').trim() || 'enhance this image';
+    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', prompt.slice(0, 80));
+    await seekdeepHandleImg2Img(proxy, prompt, pending.imageUrl);
+    await interaction.editReply({ content: 'img2img complete.' });
+  }
+
+  return true;
+}
+
 async function seekdeepHandlePersonaModalSubmit(interaction) {
   if (interaction.customId !== SEEKDEEP_PERSONA_MODAL_ID) return false;
 
@@ -11500,6 +11618,15 @@ function seekdeepUpscaleQueryFromMessage(raw = '') {
   return { scale: scaleMatch ? Math.min(4, Math.max(2, parseInt(scaleMatch[1], 10))) : 2 };
 }
 
+function seekdeepAdaptiveImg2ImgStrength(prompt) {
+  const p = String(prompt || '').toLowerCase();
+  if (/\b(?:add|include|put|place|insert|give|attach|stick|warrior|figure|character|person|people)\b/.test(p)) return 0.80;
+  if (/\b(?:remove|without|delete|take\s+away|get\s+rid|erase)\b/.test(p)) return 0.75;
+  if (/\b(?:make\s+it|turn\s+(?:it\s+)?into|as\s+a|style\s+of|in\s+the\s+style|themed|recolor|color|colour)\b/.test(p)) return 0.65;
+  if (/\b(?:enhance|improve|sharpen|better|cleaner|refine|polish|upscale)\b/.test(p)) return 0.45;
+  return 0.60;
+}
+
 async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
   seekdeepSetActivityStatus('Transforming image...');
   const img2imgGif = seekdeepLoadingGifAttachment();
@@ -11516,8 +11643,11 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
 
     const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
     const strengthMatch = prompt.match(/\bstrength[:\s]*([0-9.]+)/i);
-    const strength = strengthMatch ? Math.max(0.05, Math.min(1.0, parseFloat(strengthMatch[1]))) : 0.6;
+    const explicitStrength = strengthMatch ? Math.max(0.05, Math.min(1.0, parseFloat(strengthMatch[1]))) : null;
     const cleanPrompt = prompt.replace(/\bstrength[:\s]*[0-9.]+/i, '').trim();
+    const strength = explicitStrength !== null ? explicitStrength : seekdeepAdaptiveImg2ImgStrength(cleanPrompt);
+
+    const negativePrompt = String(process.env.IMAGE_NEGATIVE_PROMPT || '').trim();
 
     const response = await postLocal('/img2img', {
       prompt: cleanPrompt || 'enhance this image',
@@ -11527,13 +11657,14 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
       height: 1024,
       steps: Number(process.env.IMAGE_STEPS || 28),
       guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
+      ...(negativePrompt ? { negative_prompt: negativePrompt } : {}),
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_img2img.png';
 
     const resultPayload = {
-      content: `img2img complete (strength ${strength}): ${cleanPrompt.slice(0, 200)}`,
+      content: `img2img complete (strength ${strength}${explicitStrength === null ? ', auto' : ''}): ${cleanPrompt.slice(0, 200)}`,
       files: [new AttachmentBuilder(buffer, { name: filename })],
     };
 
@@ -11558,9 +11689,9 @@ async function seekdeepHandleInstructPix2Pix(target, instruction, imageUrl) {
     const response = await postLocal('/instruct-pix2pix', {
       instruction: instruction || 'enhance this image',
       image_b64: imageB64,
-      steps: 20,
-      guidance_scale: 7.5,
-      image_guidance_scale: 1.5,
+      steps: 30,
+      guidance_scale: 9.0,
+      image_guidance_scale: 1.0,
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
@@ -15430,17 +15561,27 @@ async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage)
 }
 
 async function seekdeepHandleContextMenuImg2Img(interaction, targetMessage) {
-  await interaction.deferReply();
-
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
-  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
 
-  if (!att && !promptText) {
-    await interaction.editReply({ content: 'That message has no image or text to work with.' });
+  if (att) {
+    seekdeepCleanupPendingContextMenuEdits();
+    seekdeepPendingContextMenuEdits.set(`img2img:${interaction.user.id}`, {
+      imageUrl: att.url,
+      channelId: interaction.channelId,
+      timestamp: Date.now(),
+    });
+    await interaction.showModal(seekdeepBuildImg2ImgModal());
     return;
   }
 
-  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', promptText?.slice(0, 80) || '(image-only)');
+  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
+  if (!promptText) {
+    await interaction.reply({ content: 'That message has no image or text to work with.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply();
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', promptText.slice(0, 80));
 
   try {
     const proxy = {
@@ -15451,19 +15592,13 @@ async function seekdeepHandleContextMenuImg2Img(interaction, targetMessage) {
       id: `ctx:${interaction.id}`,
       reply: async (payload) => interaction.channel?.send?.(payload) || null,
     };
-
-    if (att) {
-      await seekdeepHandleImg2Img(proxy, promptText || 'enhance this image', att.url);
-      await interaction.editReply({ content: 'img2img complete.' });
-    } else {
-      const sourceImage = await seekdeepResolveSourceImage(proxy);
-      if (!sourceImage) {
-        await interaction.editReply({ content: 'No image found. Right-click a message with an image, or post after a recent SeekDeep image.' });
-        return;
-      }
-      await seekdeepHandleImg2Img(proxy, promptText, sourceImage.url);
-      await interaction.editReply({ content: 'img2img complete.' });
+    const sourceImage = await seekdeepResolveSourceImage(proxy);
+    if (!sourceImage) {
+      await interaction.editReply({ content: 'No image found. Right-click a message with an image, or post after a recent SeekDeep image.' });
+      return;
     }
+    await seekdeepHandleImg2Img(proxy, promptText, sourceImage.url);
+    await interaction.editReply({ content: 'img2img complete.' });
   } catch (err) {
     console.error('Context menu img2img failed:', err?.stack || err?.message || err);
     await interaction.editReply({ content: 'img2img failed: ' + (err?.message || 'unknown error').slice(0, 400) });
@@ -15471,65 +15606,35 @@ async function seekdeepHandleContextMenuImg2Img(interaction, targetMessage) {
 }
 
 async function seekdeepHandleContextMenuEditImage(interaction, targetMessage) {
-  await interaction.deferReply();
-
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
   if (!att) {
-    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    await interaction.reply({ content: 'That message has no image attachment. Right-click a message with an image.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
-  const instruction = promptText || 'enhance this image';
-
-  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-edit-image', instruction.slice(0, 80));
-
-  try {
-    const proxy = {
-      author: { id: interaction.user?.id || 'unknown' },
-      channel: interaction.channel || null,
-      guild: interaction.guild || null,
-      client: interaction.client || client,
-      id: `ctx:${interaction.id}`,
-      reply: async (payload) => interaction.channel?.send?.(payload) || null,
-    };
-    await seekdeepHandleInstructPix2Pix(proxy, instruction, att.url);
-    await interaction.editReply({ content: 'InstructPix2Pix edit complete.' });
-  } catch (err) {
-    console.error('Context menu Edit Image failed:', err?.stack || err?.message || err);
-    await interaction.editReply({ content: 'Edit failed: ' + (err?.message || 'unknown error').slice(0, 400) });
-  }
+  seekdeepCleanupPendingContextMenuEdits();
+  seekdeepPendingContextMenuEdits.set(`edit:${interaction.user.id}`, {
+    imageUrl: att.url,
+    channelId: interaction.channelId,
+    timestamp: Date.now(),
+  });
+  await interaction.showModal(seekdeepBuildEditImageModal());
 }
 
 async function seekdeepHandleContextMenuRemoveObject(interaction, targetMessage) {
-  await interaction.deferReply();
-
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
   if (!att) {
-    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    await interaction.reply({ content: 'That message has no image attachment. Right-click a message with an image.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
-  const removeTarget = promptText || 'the main subject';
-
-  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-remove-object', removeTarget.slice(0, 80));
-
-  try {
-    const proxy = {
-      author: { id: interaction.user?.id || 'unknown' },
-      channel: interaction.channel || null,
-      guild: interaction.guild || null,
-      client: interaction.client || client,
-      id: `ctx:${interaction.id}`,
-      reply: async (payload) => interaction.channel?.send?.(payload) || null,
-    };
-    await seekdeepHandleInpaint(proxy, 'background scene', removeTarget, att.url);
-    await interaction.editReply({ content: 'Inpaint complete.' });
-  } catch (err) {
-    console.error('Context menu Remove Object failed:', err?.stack || err?.message || err);
-    await interaction.editReply({ content: 'Inpaint failed: ' + (err?.message || 'unknown error').slice(0, 400) });
-  }
+  seekdeepCleanupPendingContextMenuEdits();
+  seekdeepPendingContextMenuEdits.set(`remove:${interaction.user.id}`, {
+    imageUrl: att.url,
+    channelId: interaction.channelId,
+    timestamp: Date.now(),
+  });
+  await interaction.showModal(seekdeepBuildRemoveObjectModal());
 }
 
 // SEEKDEEP_FORCE_REACT_PICKER_START
@@ -15936,6 +16041,20 @@ client.on('interactionCreate', async (interaction) => {
         } catch (err) {
           console.error('Persona modal handler failed:', err?.stack || err?.message || err);
           try { await interaction.reply({ content: 'Persona update failed.', ephemeral: true }); } catch {}
+        }
+        return;
+      }
+      // Context-menu image-edit modals (img2img, pix2pix, inpaint)
+      if (SEEKDEEP_CTX_EDIT_MODAL_IDS.includes(customId)) {
+        try {
+          await seekdeepHandleContextMenuEditModalSubmit(interaction);
+        } catch (err) {
+          console.error('Context menu edit modal failed:', err?.stack || err?.message || err);
+          try {
+            const payload = { content: 'Edit failed: ' + (err?.message || 'unknown error').slice(0, 400) };
+            if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
+            else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+          } catch {}
         }
         return;
       }
@@ -16634,6 +16753,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepLoadingGifAttachment,
     SEEKDEEP_LOADING_GIF_PATH,
     SEEKDEEP_LOADING_GIF_BUFFER,
+    // v10.32: adaptive img2img strength
+    seekdeepAdaptiveImg2ImgStrength,
     // research-followup predicate + context-menu footer stripper
     seekdeepIsResearchFollowupPrompt,
     seekdeepStripResponseFooter,

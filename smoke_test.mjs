@@ -635,6 +635,23 @@ check('inpaint: bare → empty string', T.seekdeepInpaintQueryFromMessage('<@123
 check('inpaint: non-match → null', T.seekdeepInpaintQueryFromMessage('<@123> draw me a cat') === null);
 check('inpaint: @seekdeep alias', T.seekdeepInpaintQueryFromMessage('@seekdeep inpaint background trees') === 'background trees');
 
+// ── Suite 36: adaptive img2img strength ─
+console.log('36. Adaptive img2img strength.');
+check('strength: additive "add warrior stick figures" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('add warrior stick figures wielding weapons') === 0.80);
+check('strength: style "make it cyberpunk" → 0.65', T.seekdeepAdaptiveImg2ImgStrength('make it cyberpunk themed') === 0.65);
+check('strength: enhance → 0.45', T.seekdeepAdaptiveImg2ImgStrength('enhance this image') === 0.45);
+check('strength: removal "remove the background" → 0.75', T.seekdeepAdaptiveImg2ImgStrength('remove the background') === 0.75);
+check('strength: default "oil painting of cats" → 0.60', T.seekdeepAdaptiveImg2ImgStrength('oil painting of cats') === 0.60);
+
+// ── Suite 37: research-followup tightening ─
+console.log('37. Research-followup pattern tightening.');
+check('research: "pros and cons of each" still matches', T.seekdeepIsResearchFollowupPrompt('pros and cons of each'));
+check('research: "compare those" still matches', T.seekdeepIsResearchFollowupPrompt('compare those'));
+check('research: "specs for each" matches (tightened for-each)', T.seekdeepIsResearchFollowupPrompt('specs for each'));
+check('research: "details for each" matches', T.seekdeepIsResearchFollowupPrompt('details for each'));
+check('research: bare "for each separate" does NOT match', !T.seekdeepIsResearchFollowupPrompt('data for each separate'));
+check('research: Kamo SSD message does NOT match', !T.seekdeepIsResearchFollowupPrompt('Nah too complex and can lead to flaws just make reasonable split including the data for each separate but be aware that win 11 pro is the main OS'));
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

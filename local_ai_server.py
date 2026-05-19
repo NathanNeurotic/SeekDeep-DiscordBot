@@ -458,10 +458,11 @@ class InpaintRequest(BaseModel):
 class InstructPix2PixRequest(BaseModel):
     instruction: str
     image_b64: str
-    steps: int = Field(default=20, ge=1, le=50)
-    guidance_scale: float = Field(default=7.5, ge=0.0, le=20.0)
-    image_guidance_scale: float = Field(default=1.5, ge=0.5, le=5.0)
+    steps: int = Field(default=30, ge=1, le=50)
+    guidance_scale: float = Field(default=9.0, ge=0.0, le=20.0)
+    image_guidance_scale: float = Field(default=1.0, ge=0.1, le=5.0)
     seed: Optional[int] = None
+    negative_prompt: str = ""
 
 
 class UpscaleRequest(BaseModel):
@@ -1221,6 +1222,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     source_bytes = b64_to_bytes(req.image_b64)
     source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    original_size = source_img.size
     source_img = source_img.resize((512, 512), Image.LANCZOS)
 
     seed = req.seed
@@ -1236,11 +1238,22 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
         "guidance_scale": float(req.guidance_scale),
         "image_guidance_scale": float(req.image_guidance_scale),
     }
+    neg = req.negative_prompt.strip() or os.getenv("IMAGE_NEGATIVE_PROMPT", "").strip()
+    if neg:
+        args["negative_prompt"] = neg
     if generator is not None:
         args["generator"] = generator
 
     result = instruct_pix2pix_pipe(**args)
     img = result.images[0]
+
+    target_w = max(original_size[0], 1024)
+    target_h = max(original_size[1], 1024)
+    if target_w % 8:
+        target_w = target_w - (target_w % 8)
+    if target_h % 8:
+        target_h = target_h - (target_h % 8)
+    img = img.resize((target_w, target_h), Image.LANCZOS)
 
     ts = int(time.time())
     safe_name = f"seekdeep_pix2pix_{ts}.png"
