@@ -111,6 +111,12 @@ function seekdeepLoadingGifAttachment() {
   if (!SEEKDEEP_LOADING_GIF_BUFFER) return null;
   return new AttachmentBuilder(SEEKDEEP_LOADING_GIF_BUFFER, { name: 'loading.gif' });
 }
+
+async function seekdeepShowInteractionLoadingGif(interaction, statusText) {
+  const gif = seekdeepLoadingGifAttachment();
+  if (!gif) return;
+  try { await interaction.editReply({ content: statusText || 'Processing...', files: [gif] }); } catch {}
+}
 // SEEKDEEP_LOADING_GIF_END
 
 // SEEKDEEP_CHANGELOG_START
@@ -1027,7 +1033,7 @@ async function sendLongInteractionReply(interaction, content, meta = {}) {
     };
 
     if (i === 0) {
-      previous = await safeEditOrReply(interaction, payload);
+      previous = await safeEditOrReply(interaction, { ...payload, files: [] });
 
       if (!previous && typeof interaction.fetchReply === 'function') {
         previous = await interaction.fetchReply().catch(() => null);
@@ -11869,6 +11875,16 @@ async function seekdeepHandleStatsChart(target, guildId, guildName = '') {
     await seekdeepReplyToTarget(target, { content: 'No daily stats recorded yet — generate a few images or ask a few questions first.' });
     return true;
   }
+
+  // For interactions (slash commands), show loading gif on the deferred reply.
+  if (typeof target.editReply === 'function') {
+    await seekdeepShowInteractionLoadingGif(target, 'Rendering stats chart...');
+  }
+
+  // Consume mention-path loading gif so it doesn't orphan.
+  const loadingReply = target?.__seekdeepLoadingReply || null;
+  if (loadingReply) { try { delete target.__seekdeepLoadingReply; } catch {} }
+
   try {
     seekdeepSetActivityStatus('Rendering stats chart...');
     const result = await postLocal('/chart', {
@@ -11880,15 +11896,24 @@ async function seekdeepHandleStatsChart(target, guildId, guildName = '') {
     const buf = Buffer.from(result.image_b64, 'base64');
     const attachment = new AttachmentBuilder(buf, { name: result.filename || 'seekdeep_stats_chart.png' });
     const text = seekdeepServerStatsText({ guildId, scope: 'server' });
-    await seekdeepReplyToTarget(target, { content: text, files: [attachment], allowedMentions: { parse: [] } });
+    const chartPayload = { content: text, files: [attachment], allowedMentions: { parse: [] } };
+    if (loadingReply && typeof loadingReply.edit === 'function') {
+      try { await loadingReply.edit(chartPayload); } catch { await seekdeepReplyToTarget(target, chartPayload); }
+    } else {
+      await seekdeepReplyToTarget(target, chartPayload);
+    }
   } catch (err) {
     console.warn('[SeekDeep] stats chart generation failed:', err?.message || err);
-    // Fall back to text-only stats.
     const text = seekdeepServerStatsText({ guildId, scope: 'server' });
-    await seekdeepReplyToTarget(target, {
+    const fallbackPayload = {
       content: text + '\n\n*(Chart unavailable — local AI server may be offline or matplotlib not installed.)*',
       allowedMentions: { parse: [] },
-    });
+    };
+    if (loadingReply && typeof loadingReply.edit === 'function') {
+      try { await loadingReply.edit({ ...fallbackPayload, files: [] }); } catch { await seekdeepReplyToTarget(target, fallbackPayload); }
+    } else {
+      await seekdeepReplyToTarget(target, fallbackPayload);
+    }
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -15379,6 +15404,7 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
   if (typeof seekdeepLogRoute === 'function') {
     seekdeepLogRoute('context-menu-refine', prompt);
   }
+  await seekdeepShowInteractionLoadingGif(interaction, 'Refining prompt...');
 
   const key = typeof memoryKeyFrom === 'function' ? memoryKeyFrom(interaction) : null;
   const refineInput = buildRefineUserPrompt(prompt, key);
@@ -15406,7 +15432,7 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
   }
 
   const body = ('Refined prompt:\n' + answer).slice(0, MAX_DISCORD_CHARS);
-  await interaction.editReply({ content: body });
+  await interaction.editReply({ content: body, files: [] });
 }
 async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
   // Public by default — translations are useful to the whole channel. Override
@@ -15425,6 +15451,7 @@ async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
   if (typeof seekdeepLogRoute === 'function') {
     seekdeepLogRoute('context-menu-translate', prompt.slice(0, 80));
   }
+  await seekdeepShowInteractionLoadingGif(interaction, 'Translating...');
 
   const translatePrompt = [
     'Translate the following text to English. If it is already English, translate it to plain modern English (decode slang/jargon/leetspeak/emoji-laden text into normal prose).',
@@ -15444,7 +15471,7 @@ async function seekdeepHandleContextMenuTranslate(interaction, targetMessage) {
   answer = String(answer || '').replace(/^\s*(translation|english|in english)\s*[:\-]\s*/i, '').trim();
 
   const body = ('Translation:\n' + (answer || '(no output)')).slice(0, MAX_DISCORD_CHARS);
-  await interaction.editReply({ content: body });
+  await interaction.editReply({ content: body, files: [] });
 }
 
 async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage) {
@@ -15492,6 +15519,7 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   if (typeof seekdeepLogRoute === 'function') {
     seekdeepLogRoute('context-menu-compare', `${prevMessage.id}<->${targetMessage.id}`);
   }
+  await seekdeepShowInteractionLoadingGif(interaction, 'Comparing messages...');
 
   const comparePrompt = [
     'Compare these two messages from a Discord conversation. Identify how they relate, what each is asking or saying, any contradictions, and the deltas worth calling out.',
@@ -15513,7 +15541,7 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   });
 
   const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, MAX_DISCORD_CHARS);
-  await interaction.editReply({ content: body });
+  await interaction.editReply({ content: body, files: [] });
 }
 async function seekdeepHandleContextMenuDescribeImage(interaction, targetMessage) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -15525,19 +15553,20 @@ async function seekdeepHandleContextMenuDescribeImage(interaction, targetMessage
   }
 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-describe-image', att.name || 'image');
+  await seekdeepShowInteractionLoadingGif(interaction, 'Analyzing image...');
 
   try {
     const answer = await askVision(att, 'Describe this image clearly and in detail.');
     seekdeepSetResponseModel(interaction, seekdeepVisionModelLabel());
-    await interaction.editReply({ content: (answer || '(no output)').slice(0, MAX_DISCORD_CHARS) });
+    await interaction.editReply({ content: (answer || '(no output)').slice(0, MAX_DISCORD_CHARS), files: [] });
   } catch (err) {
     console.error('Context menu Describe Image failed:', err?.stack || err?.message || err);
-    await interaction.editReply({ content: 'Vision analysis failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+    await interaction.editReply({ content: 'Vision analysis failed: ' + (err?.message || 'unknown error').slice(0, 400), files: [] });
   }
 }
 
 async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage) {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const att = seekdeepContextMenuGetImageAttachment(targetMessage);
   if (!att) {
@@ -15546,6 +15575,7 @@ async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage)
   }
 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-upscale', att.name || 'image');
+  await seekdeepShowInteractionLoadingGif(interaction, 'Upscaling image...');
 
   try {
     const proxy = {
@@ -15584,8 +15614,9 @@ async function seekdeepHandleContextMenuImg2Img(interaction, targetMessage) {
     return;
   }
 
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', promptText.slice(0, 80));
+  await seekdeepShowInteractionLoadingGif(interaction, 'Transforming image...');
 
   try {
     const proxy = {
@@ -16516,6 +16547,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'ask') {
       if (!(await safeDefer(interaction))) return;
+      await seekdeepShowInteractionLoadingGif(interaction, 'Thinking...');
       const prompt = normalizeUserText(interaction.options.getString('prompt', true));
       const web = interaction.options.getString('web') || 'auto';
       const key = memoryKeyFrom(interaction);
@@ -16529,6 +16561,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'refine') {
       if (!(await safeDefer(interaction))) return;
+      await seekdeepShowInteractionLoadingGif(interaction, 'Refining prompt...');
 
       const prompt = normalizeUserText(interaction.options.getString('prompt', true));
       const key = memoryKeyFrom(interaction);
@@ -16637,6 +16670,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'vision') {
       if (!(await safeDefer(interaction))) return;
+      await seekdeepShowInteractionLoadingGif(interaction, 'Analyzing image...');
       const attachment = interaction.options.getAttachment('file', true);
       const prompt = normalizeUserText(interaction.options.getString('prompt') || 'Describe this media clearly.');
       const mode = String(interaction.options.getString('mode') || '').toLowerCase();
