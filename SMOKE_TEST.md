@@ -55,7 +55,7 @@ Help topic slicing (v10.4):
 
 ## 4. Chat routing
 
-- [ ] `@SeekDeep hi` → reply via `default_chat` (Qwen3-8B). Footer shows `Model Used: Qwen/Qwen3-8B`.
+- [ ] `@SeekDeep hi` → reply via `default_chat` (Llama-3.1-8B). Footer shows `Model Used: meta-llama/Llama-3.1-8B-Instruct`.
 - [ ] `@SeekDeep compare iOS vs Android with pros and cons` → routes to `quality_text` (Mistral-Nemo). Footer shows the Mistral model. Web sources cited.
 - [ ] `@SeekDeep debug this stack trace: NameError: name 'foo' is not defined` → routes to `reasoning_code` (Phi-4). Footer shows phi-4.
 - [ ] `@SeekDeep tell me about KK Slider` → routes to `quality_text` (proper-noun lookup detector) AND auto-searches web.

@@ -6,7 +6,7 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 
 - Discord bot: `index.js`
 - Local AI server: `local_ai_server.py` at `http://127.0.0.1:7865`
-- Chat model: `Qwen/Qwen3-8B`
+- Chat model: `meta-llama/Llama-3.1-8B-Instruct`
 - Vision model: `Qwen/Qwen2.5-VL-3B-Instruct`
 - Image model: `Lykon/dreamshaper-xl-1-0`
 - Web search: local SearXNG at `http://127.0.0.1:8080`
@@ -79,7 +79,7 @@ The local AI server exposes:
 
 - `GET /health` — model status, VRAM stats, loaded/keep-resident state
 - `GET /gpu` — one-shot VRAM snapshot
-- `POST /chat` — role-routed text generation (Qwen3-8B)
+- `POST /chat` — role-routed text generation (Llama-3.1-8B)
 - `POST /vision` — image/video analysis (Qwen2.5-VL-3B)
 - `POST /image` — SDXL image generation (Dreamshaper-XL)
 - `POST /img2img` — image-to-image transformation (shared SDXL weights)
@@ -98,7 +98,7 @@ The local AI server exposes:
 2. Configure `.env`:
    ```text
    DISCORD_TOKEN=your_discord_bot_token
-   LOCAL_CHAT_MODEL_ID=Qwen/Qwen3-8B
+   LOCAL_CHAT_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct
    LOCAL_VISION_MODEL_ID=Qwen/Qwen2.5-VL-3B-Instruct
    LOCAL_IMAGE_MODEL_ID=Lykon/dreamshaper-xl-1-0
    ```
@@ -259,7 +259,7 @@ Roles:
 Configure role models in `.env`:
 
 ```text
-LOCAL_CHAT_MODEL_ID=Qwen/Qwen3-8B
+LOCAL_CHAT_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct
 LOCAL_CHAT_FALLBACK_MODEL_ID=ibm-granite/granite-3.3-8b-instruct
 LOCAL_CHAT_QUALITY_MODEL_ID=mistralai/Mistral-Nemo-Instruct-2407
 LOCAL_CHAT_REASONING_MODEL_ID=microsoft/phi-4
@@ -410,7 +410,7 @@ Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All 
 |---|---|---|
 | `SEEKDEEP_FEATURE_EMOJI_VAULT` | off | `@SeekDeep emoji backup/import/count/list` commands. Off so SeekDeep doesn't fight demonbot for the same vault thread in shared servers. |
 | `SEEKDEEP_FEATURE_FORCE_REACT` | off | Right-click "Force React (SeekDeep)" context menu + paginated emoji picker. Same demonbot-coexistence reason. |
-| `SEEKDEEP_FEATURE_IMG2IMG` | off | `/image style:img2img` and right-click "Vary this". Requires SDXL pipeline exposing img2img (works in `diffusers >= 0.27`). Scaffolded but not wired into a UI yet. |
+| `SEEKDEEP_FEATURE_IMG2IMG` | on | `@SeekDeep img2img <prompt>` and `/img2img`. Transform an attached/replied image with a text prompt. Reuses the Dreamshaper-XL pipeline — no extra model download. |
 | `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. Requires Real-ESRGAN weights + a Python endpoint. Scaffolded. |
 | `SEEKDEEP_FEATURE_NSFW_GATE` | off | Scores generated images via a CLIP NSFW classifier and either spoiler-wraps or refuses based on threshold. Scaffolded. |
 | `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). Scaffolded. |
@@ -451,13 +451,21 @@ npm run smoke
 
 ## Release Notes
 
+### v10.31 — InstructPix2Pix + Inpainting + routing overhaul
+
+Two new image-editing pipelines with auto-routing from conversational replies. `/pix2pix instruction:<text> image:<file>` edits images with natural-language instructions via `timbrooks/instruct-pix2pix`. `/inpaint remove:<text> prompt:<text> image:<file>` removes objects using CLIPSeg auto-mask (`CIDAS/clipseg-rd64-refined`) + SDXL inpainting. Both are gated behind `SEEKDEEP_FEATURE_*` flags. Conversational image edit detection: reply to a generated image with "make it darker" or "remove the wizard" and SeekDeep auto-routes to the best pipeline (inpaint for removals, pix2pix for modifications, img2img fallback). Major fix to context-menu prompt extraction — "Generate Image from this" no longer leaks metadata (Refinement, Queue Wait, Job ID) into the prompt. New `seekdeepExtractEditResultPrompt` handles img2img/pix2pix/inpaint result formats. 15 new smoke tests (226 total).
+
+### v10.30 — image quality tuning
+
+Scheduler, negative prompt, and guidance scale defaults tuned for Dreamshaper-XL to reduce artifacts.
+
 ### v10.29 — auto-translate channel
 
 `@SeekDeep translate channel here` (admin) designates one channel per server where every non-bot message containing non-Latin script (Cyrillic, CJK, Arabic, Devanagari, Thai, Korean) gets an automatic English translation reply. Uses a fast regex detector for non-Latin Unicode ranges — intentionally conservative, so Latin-script languages like French or Spanish aren't false-positively translated. 3-second per-channel cooldown prevents spam on rapid messages. Fire-and-forget: the message doesn't need to mention the bot. 9 new smoke checks.
 
 ### v10.28 — refinement retry + analytics chart + token budget bump
 
-Two fixes to the dynamic image-prompt refiner, plus a new analytics feature. (1) When the validator rejects the chat model's first output (subject drift, generic phrasing, empty-after-cleanup), the refiner now retries once at +0.15 temperature before falling back to static rules. On Qwen3-8B this recovers most rejections that were previously invisible fallbacks. (2) Max refinement tokens bumped 360 → 512 as insurance against Qwen3's thinking tokens eating the budget despite `enable_thinking=False`. (3) `@SeekDeep stats chart` / `/stats scope:chart` renders the 30-day `dayBuckets` data as a matplotlib line chart — Discord dark theme, area fills, three color-coded series (images, chats, vision). New `POST /chart` endpoint on the Python server; falls back to text-only stats if matplotlib isn't installed.
+Two fixes to the dynamic image-prompt refiner, plus a new analytics feature. (1) When the validator rejects the chat model's first output (subject drift, generic phrasing, empty-after-cleanup), the refiner now retries once at +0.15 temperature before falling back to static rules. This recovers most rejections that were previously invisible fallbacks. (2) Max refinement tokens bumped 360 → 512 as insurance against small models' internal reasoning eating the budget. (3) `@SeekDeep stats chart` / `/stats scope:chart` renders the 30-day `dayBuckets` data as a matplotlib line chart — Discord dark theme, area fills, three color-coded series (images, chats, vision). New `POST /chart` endpoint on the Python server; falls back to text-only stats if matplotlib isn't installed.
 
 ### v10.27 — COMMANDS.md permission column + new command docs
 
@@ -511,7 +519,7 @@ Prune old entries from your archive thread with a two-step preview + confirm flo
 
 ### v10.15 — .env.default quantization fix
 
-`.env.default` shipped `LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat` since v10.1, forcing Qwen3-8B to load at fp16 (~15.6 GB VRAM). On a 24 GB laptop GPU that leaves zero headroom for the task-LRU swap to SDXL during image generation — the transient peak exceeds 24 GB, NVIDIA's Windows driver spills into shared system memory, and the entire desktop locks up. Fix: ship the list empty so `default_chat` gets 4-bit-quantized (~5 GB VRAM), leaving ~10 GB of headroom. Quality cost is ~1–2% on benchmarks (NF4 + double-quant + bf16 compute). Desktop users with 32 GB+ VRAM can re-add `default_chat,fallback_chat` to the list if they want fp16 nuance back.
+`.env.default` shipped `LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat` since v10.1, forcing the default chat model to load at fp16 (~16 GB VRAM). On a 24 GB laptop GPU that leaves zero headroom for the task-LRU swap to SDXL during image generation — the transient peak exceeds 24 GB, NVIDIA's Windows driver spills into shared system memory, and the entire desktop locks up. Fix: ship the list empty so `default_chat` gets 4-bit-quantized (~5 GB VRAM), leaving ~10 GB of headroom. Quality cost is ~1–2% on benchmarks (NF4 + double-quant + bf16 compute). Desktop users with 32 GB+ VRAM can re-add `default_chat,fallback_chat` to the list if they want fp16 nuance back.
 
 ### v10.14 — subject-preservation threshold loosened
 

@@ -52,7 +52,8 @@ When adding a new feature that fetches a user-supplied URL, use this helper. Do 
 
 - `SEEKDEEP_FEATURE_EMOJI_VAULT` — handler short-circuits before fetching any guild emoji or touching threads.
 - `SEEKDEEP_FEATURE_FORCE_REACT` — context-menu entry is omitted from command registration, the dispatcher refuses the route, and any stale picker UI tears down with a "currently disabled" notice.
-- `SEEKDEEP_FEATURE_IMG2IMG` / `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` / `SEEKDEEP_FEATURE_NSFW_GATE` / `SEEKDEEP_FEATURE_TTS_VOICE` — scaffolds only; require additional model downloads and Python endpoints to activate.
+- `SEEKDEEP_FEATURE_IMG2IMG` — on by default since v10.25; reuses the existing Dreamshaper-XL pipeline (no extra model download). The handler short-circuits when the flag is off.
+- `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` / `SEEKDEEP_FEATURE_NSFW_GATE` / `SEEKDEEP_FEATURE_TTS_VOICE` — scaffolds only; require additional model downloads and Python endpoints to activate.
 
 Audit each feature flag's surface before flipping it on in a production server.
 

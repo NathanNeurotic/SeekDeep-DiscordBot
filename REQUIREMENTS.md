@@ -86,7 +86,7 @@ LOCAL_AI_BASE_URL=http://127.0.0.1:7865
 SEARXNG_BASE_URL=http://127.0.0.1:8080
 
 # Models
-LOCAL_CHAT_MODEL_ID=Qwen/Qwen3-8B
+LOCAL_CHAT_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct
 LOCAL_VISION_MODEL_ID=Qwen/Qwen2.5-VL-3B-Instruct
 LOCAL_IMAGE_MODEL_ID=Lykon/dreamshaper-xl-1-0
 
@@ -141,7 +141,7 @@ SEEKDEEP_EMERGENCY_SEEN_TTL_MS=300000      # v10.5 — naming the 5-min Set TTLs
 # Feature flags (all default off — see README "Feature Flags")
 SEEKDEEP_FEATURE_EMOJI_VAULT=off           # demonbot coexistence
 SEEKDEEP_FEATURE_FORCE_REACT=off           # demonbot coexistence
-SEEKDEEP_FEATURE_IMG2IMG=off               # scaffold only
+SEEKDEEP_FEATURE_IMG2IMG=on                # reuses Dreamshaper-XL, no extra download
 SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off    # scaffold only
 SEEKDEEP_FEATURE_NSFW_GATE=off             # scaffold only
 SEEKDEEP_FEATURE_TTS_VOICE=off             # scaffold only
@@ -172,7 +172,7 @@ SEEKDEEP_FETCH_DEFAULT_MAX_BYTES=52428800
 
 ## Current Local Models
 
-- Chat: `Qwen/Qwen3-8B`
+- Chat: `meta-llama/Llama-3.1-8B-Instruct`
 - Vision: `Qwen/Qwen2.5-VL-3B-Instruct`
 - Image: `Lykon/dreamshaper-xl-1-0`
 

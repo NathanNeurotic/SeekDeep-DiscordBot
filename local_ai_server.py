@@ -31,7 +31,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 TEMP_DIR = ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
-CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "Qwen/Qwen3-8B")
+CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct")
 VISION_MODEL_ID = os.getenv("LOCAL_VISION_MODEL_ID", "Qwen/Qwen2.5-VL-3B-Instruct")
 IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Lykon/dreamshaper-xl-1-0")
 
@@ -348,6 +348,7 @@ def unload_all(force: bool = False) -> None:
     The explicit POST /unload endpoint passes force=True and ignores pins."""
     global chat_model, chat_tokenizer, vision_model, vision_processor, vision_tokenizer, image_pipe, loaded_task
     global loaded_chat_role, loaded_chat_model_id
+    global instruct_pix2pix_pipe, clipseg_model, clipseg_processor
     chat_model = None
     chat_tokenizer = None
     keep_vision = (not force) and KEEP_RESIDENT_VISION
@@ -358,6 +359,9 @@ def unload_all(force: bool = False) -> None:
         vision_tokenizer = None
     if not keep_image:
         image_pipe = None
+    instruct_pix2pix_pipe = None
+    clipseg_model = None
+    clipseg_processor = None
     loaded_task = None
     loaded_chat_role = None
     loaded_chat_model_id = None
@@ -436,6 +440,28 @@ class Img2ImgRequest(BaseModel):
     guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
     seed: Optional[int] = None
     negative_prompt: str = ""
+
+
+class InpaintRequest(BaseModel):
+    prompt: str
+    remove_target: str = ""
+    image_b64: str
+    strength: float = Field(default=0.85, ge=0.1, le=1.0)
+    width: int = Field(default=1024, ge=256, le=1536)
+    height: int = Field(default=1024, ge=256, le=1536)
+    steps: int = Field(default=28, ge=1, le=50)
+    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int] = None
+    negative_prompt: str = ""
+
+
+class InstructPix2PixRequest(BaseModel):
+    instruction: str
+    image_b64: str
+    steps: int = Field(default=20, ge=1, le=50)
+    guidance_scale: float = Field(default=7.5, ge=0.0, le=20.0)
+    image_guidance_scale: float = Field(default=1.5, ge=0.5, le=5.0)
+    seed: Optional[int] = None
 
 
 class UpscaleRequest(BaseModel):
@@ -660,7 +686,7 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     messages = build_chat_prompt(req.system, req.context, req.prompt)
 
     try:
-        # Qwen3 tends to emit hidden thinking blocks unless explicitly disabled.
+        # Some models (e.g. Qwen3) emit hidden thinking blocks; disable if supported.
         try:
             text = chat_tokenizer.apply_chat_template(
                 messages,
@@ -1151,6 +1177,194 @@ def upscale(req: UpscaleRequest):
     }
 
 
+# ---------- InstructPix2Pix endpoint ----------
+
+INSTRUCT_PIX2PIX_MODEL = os.getenv("LOCAL_INSTRUCT_PIX2PIX_MODEL_ID", "timbrooks/instruct-pix2pix")
+instruct_pix2pix_pipe = None
+
+
+def load_instruct_pix2pix() -> None:
+    global instruct_pix2pix_pipe, last_loaded_at
+    if instruct_pix2pix_pipe is not None:
+        return
+    prepare_task("instruct_pix2pix")
+    print(f"[SeekDeep] loading InstructPix2Pix model: {INSTRUCT_PIX2PIX_MODEL}", flush=True)
+    _log_vram("before instruct-pix2pix load")
+
+    import torch
+    from diffusers import StableDiffusionInstructPix2PixPipeline
+
+    instruct_pix2pix_pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+        INSTRUCT_PIX2PIX_MODEL,
+        torch_dtype=model_dtype(),
+        cache_dir=str(MODEL_CACHE_DIR),
+        token=HF_TOKEN,
+        local_files_only=HF_LOCAL_FILES_ONLY,
+        safety_checker=None,
+    )
+    if cuda_available():
+        instruct_pix2pix_pipe = instruct_pix2pix_pipe.to("cuda")
+    try:
+        instruct_pix2pix_pipe.set_progress_bar_config(disable=True)
+    except Exception:
+        pass
+    last_loaded_at = time.time()
+    _log_vram("after instruct-pix2pix load")
+    print("[SeekDeep] InstructPix2Pix model loaded", flush=True)
+
+
+@app.post("/instruct-pix2pix")
+def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
+    load_instruct_pix2pix()
+
+    import torch
+
+    source_bytes = b64_to_bytes(req.image_b64)
+    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    source_img = source_img.resize((512, 512), Image.LANCZOS)
+
+    seed = req.seed
+    generator = None
+    if seed is not None:
+        device = "cuda" if cuda_available() else "cpu"
+        generator = torch.Generator(device=device).manual_seed(int(seed))
+
+    args = {
+        "prompt": req.instruction.strip(),
+        "image": source_img,
+        "num_inference_steps": max(1, min(50, int(req.steps))),
+        "guidance_scale": float(req.guidance_scale),
+        "image_guidance_scale": float(req.image_guidance_scale),
+    }
+    if generator is not None:
+        args["generator"] = generator
+
+    result = instruct_pix2pix_pipe(**args)
+    img = result.images[0]
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_pix2pix_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(img),
+        "instruction": req.instruction.strip(),
+        "filename": safe_name,
+        "path": str(out_path),
+    }
+
+
+# ---------- Inpainting endpoint (CLIPSeg auto-mask + SDXL inpaint) ----------
+
+CLIPSEG_MODEL = os.getenv("LOCAL_CLIPSEG_MODEL_ID", "CIDAS/clipseg-rd64-refined")
+clipseg_processor = None
+clipseg_model = None
+
+
+def load_clipseg() -> None:
+    global clipseg_processor, clipseg_model
+    if clipseg_model is not None:
+        return
+    print(f"[SeekDeep] loading CLIPSeg for auto-masking: {CLIPSEG_MODEL}", flush=True)
+    from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+    clipseg_processor = CLIPSegProcessor.from_pretrained(
+        CLIPSEG_MODEL,
+        cache_dir=str(MODEL_CACHE_DIR),
+        local_files_only=HF_LOCAL_FILES_ONLY,
+    )
+    clipseg_model = CLIPSegForImageSegmentation.from_pretrained(
+        CLIPSEG_MODEL,
+        cache_dir=str(MODEL_CACHE_DIR),
+        local_files_only=HF_LOCAL_FILES_ONLY,
+    )
+    if cuda_available():
+        clipseg_model = clipseg_model.to("cuda")
+    print("[SeekDeep] CLIPSeg loaded", flush=True)
+
+
+def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
+    """Use CLIPSeg to generate a binary mask for `target` in `image`."""
+    import torch
+    load_clipseg()
+    inputs = clipseg_processor(
+        text=[target], images=[image], return_tensors="pt", padding=True
+    )
+    if cuda_available():
+        inputs = {k: v.to("cuda") if hasattr(v, "to") else v for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = clipseg_model(**inputs)
+    logits = outputs.logits.squeeze()
+    mask = torch.sigmoid(logits)
+    mask = (mask > 0.4).float()
+    mask_np = mask.cpu().numpy()
+    mask_img = Image.fromarray((mask_np * 255).astype("uint8"), mode="L")
+    return mask_img.resize(image.size, Image.LANCZOS)
+
+
+@app.post("/inpaint")
+def inpaint_endpoint(req: InpaintRequest):
+    load_image_pipe()
+
+    import torch
+    from diffusers import AutoPipelineForInpainting
+
+    source_bytes = b64_to_bytes(req.image_b64)
+    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+
+    width = int(req.width)
+    height = int(req.height)
+    if width % 8:
+        width = width - (width % 8)
+    if height % 8:
+        height = height - (height % 8)
+    source_img = source_img.resize((width, height), Image.LANCZOS)
+
+    remove_target = req.remove_target.strip()
+    if remove_target:
+        mask_img = generate_mask_clipseg(source_img, remove_target)
+    else:
+        mask_img = Image.new("L", (width, height), 255)
+
+    inpaint_pipe = AutoPipelineForInpainting.from_pipe(image_pipe)
+
+    seed = req.seed
+    generator = None
+    if seed is not None:
+        device = "cuda" if cuda_available() else "cpu"
+        generator = torch.Generator(device=device).manual_seed(int(seed))
+
+    args = {
+        "prompt": req.prompt.strip(),
+        "image": source_img,
+        "mask_image": mask_img,
+        "strength": float(req.strength),
+        "num_inference_steps": max(1, min(50, int(req.steps))),
+        "guidance_scale": float(req.guidance_scale),
+    }
+    if req.negative_prompt.strip():
+        args["negative_prompt"] = req.negative_prompt.strip()
+    if generator is not None:
+        args["generator"] = generator
+
+    result = inpaint_pipe(**args)
+    img = result.images[0]
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_inpaint_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(img),
+        "prompt": req.prompt.strip(),
+        "remove_target": remove_target,
+        "filename": safe_name,
+        "path": str(out_path),
+        "strength": float(req.strength),
+    }
+
+
 # ---------- chart: render server-stats dayBuckets as a PNG ----------
 
 class ChartRequest(BaseModel):
@@ -1231,4 +1445,3 @@ def chart(req: ChartRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=7865)
-

@@ -42,8 +42,12 @@ Replying to any non-English message with `@SeekDeep translate this` (or just `tr
 | `/image ... quality:low\|standard\|high` | Image quality preset (12 / 28 / 40 inference steps). | Everyone |
 | `/image ... style:anime\|photoreal\|pixel\|oil-painting\|cyberpunk\|cottagecore\|cinematic\|3d-render\|sketch\|watercolor` | Pre-baked style modifier. | Everyone |
 | `/regen mode:refined\|original\|both` | Regenerate the latest channel image. | Everyone |
-| `@SeekDeep img2img <prompt>` | Transform an attached/replied/recent image with a text prompt. | Everyone |
+| `@SeekDeep img2img [prompt]` | Transform an attached/replied/recent image. Bare command defaults to "enhance this image". | Everyone |
 | `/img2img image:<file> prompt:<text> strength:0.6` | Slash img2img. Strength 0.05-1.0. | Everyone |
+| `@SeekDeep pix2pix <instruction>` | Edit an attached/replied/recent image with InstructPix2Pix. Requires `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on`. | Everyone |
+| `/pix2pix instruction:<text> image:<file>` | Slash InstructPix2Pix. | Everyone |
+| `@SeekDeep inpaint <target>` | Remove something from an attached/replied/recent image via CLIPSeg + SDXL. Requires `SEEKDEEP_FEATURE_INPAINT=on`. | Everyone |
+| `/inpaint remove:<text> prompt:<text> image:<file>` | Slash inpaint. | Everyone |
 | `@SeekDeep upscale [2x\|3x\|4x]` | Upscale an attached/replied/recent image. | Everyone |
 | `/upscale image:<file> scale:2\|3\|4` | Slash upscale. | Everyone |
 
@@ -58,6 +62,11 @@ Image result buttons:
 - `Shared Archive` (server-wide thread)
 
 Use `raw`, `unrefined`, `--raw`, or `no refine` in a prompt when you want to skip refinement.
+
+**Conversational image edits** — reply to a generated image with natural language like "make it darker", "remove the wizard", or "same thing but in winter". SeekDeep auto-routes to the best pipeline:
+- **Removal requests** ("without the tree", "remove the cat") → Inpainting (CLIPSeg mask + SDXL) if enabled, else img2img
+- **Modification requests** ("make it darker", "add snow") → InstructPix2Pix if enabled, else img2img
+- **General edits** → img2img with combined prompt
 
 **Iterative tweaks** — after the bot has generated an image in this channel, follow up with phrases like "now make her wear a hat" / "with sunglasses" / "same but in winter" / "make it black and white". SeekDeep extends the prior refined prompt instead of starting fresh.
 
@@ -193,10 +202,15 @@ Right-click any message → **Apps** → SeekDeep submenu.
 |---------|--------|------------|
 | **Generate Image from this** | Use the message text as an image prompt. | Everyone |
 | **Refine as Image Prompt** | Rewrite as a stronger image prompt. | Everyone |
+| **Describe Image (SeekDeep)** | Run vision analysis on an image attachment (ephemeral). | Everyone |
+| **Upscale Image (SeekDeep)** | Upscale an image attachment 2x. | Everyone |
+| **img2img from this** *(feature-flagged)* | Use text as img2img prompt on the attached or most recent bot image. Requires `SEEKDEEP_FEATURE_IMG2IMG=on`. | Everyone |
+| **Edit Image (SeekDeep)** *(feature-flagged)* | Edit the attached image with InstructPix2Pix. Requires `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on`. | Everyone |
+| **Remove Object (SeekDeep)** *(feature-flagged)* | Remove something from the attached image via CLIPSeg + inpaint. Requires `SEEKDEEP_FEATURE_INPAINT=on`. | Everyone |
 | **Inspect (SeekDeep)** | Ephemeral debug card: IDs, timestamps, attachments. | Everyone |
 | **Translate (SeekDeep)** | Translate to plain English. | Everyone |
 | **Compare with previous** | Compare this message against the prior non-bot message. | Everyone |
-| **Force React (SeekDeep)** *(disabled by default)* | Paginated emoji picker. Enable with `SEEKDEEP_FEATURE_FORCE_REACT=on`. | Everyone |
+| **Force React (SeekDeep)** *(feature-flagged)* | Paginated emoji picker. Requires `SEEKDEEP_FEATURE_FORCE_REACT=on`. | Everyone |
 
 ## Reaction Shortcuts on Bot Messages
 

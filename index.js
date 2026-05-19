@@ -78,6 +78,41 @@ const __dirname = path.dirname(__filename);
 })();
 // SEEKDEEP_FILE_LOGGING_END
 
+// SEEKDEEP_LOADING_GIF_START
+// Optional animated GIF shown in "preparing" / "generating" messages while the
+// user waits. Replaced automatically when the message is edited with the final
+// result. Put any small animated GIF at assets/loading.gif (or override the
+// path via SEEKDEEP_LOADING_GIF). Feature is silently disabled when the file
+// is absent.
+const SEEKDEEP_LOADING_GIF_PATH = (() => {
+  const envPath = process.env.SEEKDEEP_LOADING_GIF || '';
+  const resolved = envPath
+    ? path.resolve(__dirname, envPath)
+    : path.join(__dirname, 'assets', 'loading.gif');
+  try {
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+      console.log(`[SeekDeep] loading GIF found: ${resolved}`);
+      return resolved;
+    }
+  } catch {}
+  return null;
+})();
+let SEEKDEEP_LOADING_GIF_BUFFER = null;
+if (SEEKDEEP_LOADING_GIF_PATH) {
+  try {
+    SEEKDEEP_LOADING_GIF_BUFFER = fs.readFileSync(SEEKDEEP_LOADING_GIF_PATH);
+    console.log(`[SeekDeep] loading GIF cached (${(SEEKDEEP_LOADING_GIF_BUFFER.length / 1024).toFixed(1)} KB)`);
+  } catch (err) {
+    console.warn('[SeekDeep] could not read loading GIF:', err?.message || err);
+  }
+}
+
+function seekdeepLoadingGifAttachment() {
+  if (!SEEKDEEP_LOADING_GIF_BUFFER) return null;
+  return new AttachmentBuilder(SEEKDEEP_LOADING_GIF_BUFFER, { name: 'loading.gif' });
+}
+// SEEKDEEP_LOADING_GIF_END
+
 // SEEKDEEP_CHANGELOG_START
 async function seekdeepReadGitChangelog(limit = 10) {
   try {
@@ -413,7 +448,7 @@ function seekdeepConsumeRecentChatFallback() {
 }
 
 function seekdeepChatModelLabel() {
-  return seekdeepLastChatModelId || process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B';
+  return seekdeepLastChatModelId || process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct';
 }
 
 function seekdeepVisionModelLabel() {
@@ -2279,12 +2314,14 @@ async function seekdeepSendImagePromptChoice(target, prompt, width = 1024, heigh
   const startedAt = (isInteraction ? target?.__seekdeepRequestStartedAt : null) || seekdeepNowMs();
   const requesterId = (isInteraction ? target?.user?.id : target?.author?.id) || 'unknown';
 
+  const loadingGif = seekdeepLoadingGifAttachment();
   const preparingPayload = {
     content: seekdeepAppendResponseFooter(seekdeepPromptChoicePreparationContent(prompt), {
       startedAt,
       modelUsed: (SEEKDEEP_IMAGE_PROMPT_REFINEMENT_ENABLED && SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED) ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
     }),
     components: [],
+    ...(loadingGif ? { files: [loadingGif] } : {}),
   };
 
   let preparingReply = null;
@@ -2318,6 +2355,9 @@ async function seekdeepSendImagePromptChoice(target, prompt, width = 1024, heigh
         modelUsed: choice.dynamicRefinement ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
       }),
       components: [seekdeepPendingPromptChoiceRow(id)],
+      // Do NOT specify files here — omitting it preserves the loading GIF
+      // attachment from the preparing phase so it stays visible through the
+      // button choice and into the "Queued" state.
     };
 
     return await seekdeepReplyToTarget(target, finalPayload, { previousReply: preparingReply });
@@ -2351,22 +2391,25 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
   const startedAt = seekdeepNowMs();
 
   const editChoiceMessage = async (payload) => {
-    try {
-      if (interaction?.message && typeof interaction.message.edit === 'function') {
-        await interaction.message.edit(payload);
-        return true;
-      }
-    } catch (err) {
-      console.warn('Prompt choice message edit failed:', err?.message || err);
-    }
-
+    // Prefer editReply (interaction webhook endpoint) — it reliably handles
+    // file attachments on interaction-originated messages whereas
+    // interaction.message.edit() can silently drop new files.
     try {
       if (interaction?.deferred || interaction?.replied) {
         await interaction.editReply(payload);
         return true;
       }
     } catch (err) {
-      console.warn('Prompt choice editReply fallback failed:', err?.message || err);
+      console.warn('Prompt choice editReply failed:', err?.message || err);
+    }
+
+    try {
+      if (interaction?.message && typeof interaction.message.edit === 'function') {
+        await interaction.message.edit(payload);
+        return true;
+      }
+    } catch (err) {
+      console.warn('Prompt choice message.edit fallback failed:', err?.message || err);
     }
 
     return false;
@@ -2446,6 +2489,8 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
     SEEKDEEP_PENDING_IMAGE_PROMPTS.delete(id);
   }
 
+  // Don't specify files — the loading GIF attachment from the preparing phase
+  // persists automatically through edits when files is omitted.
   await editChoiceMessage({
     content: seekdeepAppendResponseFooter(selectionSummary, {
       startedAt,
@@ -2473,9 +2518,11 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
     }
   };
 
+  const generationPromises = [];
+
   if (needsOriginal) {
     const originalProxy = seekdeepPromptChoiceProxyMessage(interaction, state.requesterId, 'original');
-    void runQueuedSelection(
+    generationPromises.push(runQueuedSelection(
       originalProxy,
       basePrompt,
       {
@@ -2486,13 +2533,13 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
         silentAck: true,
       },
       'image-choice-original'
-    );
+    ));
   }
 
   if (needsRefined) {
     const refinedProxy = seekdeepPromptChoiceProxyMessage(interaction, state.requesterId, 'refined');
     const refinedPrompt = normalizeUserText(state.refinedPrompt || basePrompt).trim() || basePrompt;
-    void runQueuedSelection(
+    generationPromises.push(runQueuedSelection(
       refinedProxy,
       basePrompt,
       {
@@ -2506,7 +2553,14 @@ async function seekdeepHandlePromptChoiceButton(interaction) {
         silentAck: true,
       },
       'image-choice-refined'
-    );
+    ));
+  }
+
+  // Clear the loading GIF from the "Queued" message once all generations finish.
+  if (generationPromises.length && SEEKDEEP_LOADING_GIF_BUFFER) {
+    void Promise.allSettled(generationPromises).then(() => {
+      editChoiceMessage({ files: [] }).catch(() => {});
+    });
   }
 
   return true;
@@ -2930,9 +2984,9 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
     };
   }
 
-  // v10.28: retry once on validator rejection. Small models like Qwen3-8B
-  // can produce a bad first generation (thinking tokens eating the budget,
-  // subject drift, generic phrasing) that gets rejected, but a second attempt
+  // v10.28: retry once on validator rejection. Small local models
+  // can produce a bad first generation (subject drift, generic phrasing)
+  // that gets rejected, but a second attempt
   // with slightly higher temperature often succeeds. We only retry on
   // VALIDATOR rejections — infrastructure errors (model won't load, timeout)
   // are genuine failures and shouldn't be retried.
@@ -4014,24 +4068,28 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   });
 
   const startNotice = seekdeepImageQueueAckText(job, position);
+  const ackLoadingGif = seekdeepLoadingGifAttachment();
 
+  let queueAckReply = null;
   if (!seekdeepSuppressQueueAck) {
     try {
-      await seekdeepReplyToTarget(target, {
+      queueAckReply = await seekdeepReplyToTarget(target, {
         content: seekdeepAppendResponseFooter(startNotice, {
           startedAt: job.enqueuedAt || requestStartedAt,
           modelUsed: seekdeepNoModelLabel(),
         }),
+        ...(ackLoadingGif ? { files: [ackLoadingGif] } : {}),
       });
     } catch (err) {
       console.warn('Could not send image queue acknowledgement; falling back to channel.send:', err?.message || err);
       try {
         if (target?.channel && typeof target.channel.send === 'function') {
-          await target.channel.send({
+          queueAckReply = await target.channel.send({
             content: seekdeepAppendResponseFooter(startNotice, {
               startedAt: job.enqueuedAt || requestStartedAt,
               modelUsed: seekdeepNoModelLabel(),
             }),
+            ...(ackLoadingGif ? { files: [ackLoadingGif] } : {}),
             allowedMentions: { repliedUser: false },
           });
         }
@@ -4084,7 +4142,7 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
       } catch {}
 
       const content = seekdeepAppendResponseFooter([
-        `Generated: ${prompt}`,
+        `Generated: ${seekdeepClipForDiscord(prompt, 500)}`,
         seekdeepRefinedPromptLine(prompt, seekdeepExtractRefinedPrompt(result, normalized)),
         seekdeepGroundingStatusLine(result?.grounding, result?.imageOptions),
         seekdeepRefinementStatusLine(result?.refinementEnabled !== false, result?.imageOptions?.dynamicRefinement, result?.imageOptions?.dynamicRefinementAttempted || result?.dynamicRefinementAttempted),
@@ -4150,6 +4208,11 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
 
       return sent;
     } finally {
+      // Clear the loading GIF from the queue ack now that generation finished
+      // (success or error). Safe no-op when no GIF was attached.
+      if (queueAckReply && typeof queueAckReply.edit === 'function' && SEEKDEEP_LOADING_GIF_BUFFER) {
+        try { await queueAckReply.edit({ files: [] }); } catch {}
+      }
       seekdeepStopWorkingLoop(workingLoop);
       if (!isInteraction) stopSeekDeepTypingLoopForMessage(target);
     }
@@ -4269,13 +4332,20 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
     seed,
   });
 
-  await message.reply({
-    content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
-      startedAt: job.enqueuedAt || requestStartedAt,
-      modelUsed: seekdeepNoModelLabel(),
-    }),
-    allowedMentions: { repliedUser: false },
-  });
+  const regenLoadingGif = seekdeepLoadingGifAttachment();
+  let regenAckReply = null;
+  try {
+    regenAckReply = await message.reply({
+      content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
+        startedAt: job.enqueuedAt || requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+      ...(regenLoadingGif ? { files: [regenLoadingGif] } : {}),
+      allowedMentions: { repliedUser: false },
+    });
+  } catch (err) {
+    console.warn('Could not send regenerate queue ack:', err?.message || err);
+  }
 
   return await seekdeepEnqueueImageJob(job, async (runningJob) => {
     try {
@@ -4350,6 +4420,9 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
 
       return sent;
     } finally {
+      if (regenAckReply && typeof regenAckReply.edit === 'function' && SEEKDEEP_LOADING_GIF_BUFFER) {
+        try { await regenAckReply.edit({ files: [] }); } catch {}
+      }
       seekdeepStopWorkingLoop(workingLoop);
       stopSeekDeepTypingLoopForMessage(message);
     }
@@ -5869,6 +5942,8 @@ async function seekdeepHandleImageButton(interaction) {
     );
   };
 
+  const regenGif = seekdeepLoadingGifAttachment();
+
   if (mode === 'both') {
     await interaction.editReply({
       content: seekdeepAppendResponseFooter([
@@ -5882,10 +5957,15 @@ async function seekdeepHandleImageButton(interaction) {
         startedAt,
         modelUsed: seekdeepNoModelLabel(),
       }),
+      ...(regenGif ? { files: [regenGif] } : {}),
     });
 
-    void queueOne('original', 'image-choice-original', 'regen-original');
-    void queueOne('refined', 'image-choice-refined', 'regen-refined');
+    const p1 = queueOne('original', 'image-choice-original', 'regen-original');
+    const p2 = queueOne('refined', 'image-choice-refined', 'regen-refined');
+    // Delete the ephemeral "Queued" notice once images are posted to the channel.
+    void Promise.allSettled([p1, p2]).then(() => {
+      interaction.deleteReply().catch(() => {});
+    });
     return true;
   }
 
@@ -5907,9 +5987,14 @@ async function seekdeepHandleImageButton(interaction) {
       startedAt,
       modelUsed: seekdeepNoModelLabel(),
     }),
+    ...(regenGif ? { files: [regenGif] } : {}),
   });
 
-  void queueOne(resolvedMode, resolvedMode === 'original' ? 'image-choice-original' : 'image-choice-refined', `regen-${resolvedMode}`);
+  const regenPromise = queueOne(resolvedMode, resolvedMode === 'original' ? 'image-choice-original' : 'image-choice-refined', `regen-${resolvedMode}`);
+  // Delete the ephemeral "Queued" notice once the image is posted to the channel.
+  void regenPromise.then(() => {
+    interaction.deleteReply().catch(() => {});
+  }).catch(() => {});
   return true;
 }
 
@@ -6237,6 +6322,12 @@ async function statusText(verbose = false) {
     ...(verbose ? ['Chat roles:', ...chatRoleLines] : [`Chat roles: ${Object.keys(health.chat_roles || {}).length} configured (use /status verbose:true to expand)`]),
     ...(verbose ? ['Recent chat-role loads:', ...recentRolesLines] : []),
     `Offline model loading: ${health.offline_model_loading ? 'YES' : 'NO'}`,
+    `Memory scope: ${seekdeepMemoryScope()} (${seekdeepMemoryScope() === 'user' ? 'per-user per-channel' : 'shared per-channel'})`,
+    '',
+    'Enabled features:',
+    `  img2img: ${SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'ON' : 'off'}  |  pix2pix: ${SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'ON' : 'off'}  |  inpaint: ${SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'ON' : 'off'}`,
+    `  upscale-esrgan: ${SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'ON' : 'off'}  |  nsfw-gate: ${SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'ON' : 'off'}  |  tts-voice: ${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'off'}`,
+    `  emoji-vault: ${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}  |  force-react: ${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}`,
     ...(verbose ? ['', 'In-memory diagnostics:', ...seekdeepMapDiagnostics()] : []),
   ].join('\n'));
 }
@@ -6393,7 +6484,7 @@ function seekdeepHelpText(source = null) {
     '## ' + check + ' Start',
     '```text',
     prefix + ' help',
-    prefix + ' help <topic>     (chat / image / vision / archive / model /',
+    prefix + ' help <topic>     (chat / image / vision / archive / model / search /',
     '                              recent / admin / reactrule / emoji / context)',
     prefix + ' archive help',
     prefix + ' status',
@@ -6413,27 +6504,47 @@ function seekdeepHelpText(source = null) {
     '',
     '## ' + art + ' Images',
     '```text',
-    prefix + ' show me <image idea>',
-    prefix + ' show <image idea>',
-    prefix + ' draw me <image idea>',
-    prefix + ' draw <image idea>',
-    prefix + ' generate <image idea>',
-    prefix + ' generate me <image idea>',
-    prefix + ' make/create/render/paint/sketch/illustrate/design <image idea>',
-    prefix + ' generate me',
+    prefix + ' show me / draw / generate / make / create / render / paint / sketch',
+    prefix + '   illustrate / design <image idea>',
+    prefix + ' generate me                        (asks what to generate)',
     '/image prompt:<text> width:<n> height:<n> seed:<n>',
+    '/image ... quality:low|standard|high  style:anime|photoreal|pixel|...',
     prefix + ' regenerate',
+    '/regen mode:refined|original|both',
     '```',
-    '`generate me` asks what to generate and consumes your next plain reply as the image subject.',
     'Use `raw`, `unrefined`, `--raw`, or `no refine` to skip prompt refinement.',
     'Buttons: `Original` `Refined` `Both` `Download` `Archive` `Shared Archive`',
+    '',
+    '**Iterative tweaks** — after generating, follow up with:',
+    '  "now make her wear a hat" / "same but in winter" / "make it black and white"',
+    'and the bot extends the prior refined prompt instead of starting fresh.',
+    '',
+    '### Image Editing',
+    '```text',
+    prefix + ' img2img [prompt]                   (transform attached/replied/recent image)',
+    '/img2img image:<file> prompt:<text> strength:0.6',
+    ...(SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? [
+      prefix + ' pix2pix <instruction>              (edit image: "make it darker", "add snow")',
+      '/pix2pix instruction:<text> image:<file>',
+    ] : []),
+    ...(SEEKDEEP_FEATURE_INPAINT_ENABLED ? [
+      prefix + ' inpaint <target>                   (remove object: "the wizard", "background")',
+      '/inpaint remove:<text> prompt:<text> image:<file>',
+    ] : []),
+    prefix + ' upscale [2x|3x|4x]                (upscale attached/replied/recent image)',
+    '/upscale image:<file> scale:2|3|4',
+    '```',
+    '**Conversational edits** — reply to a generated image with natural language:',
+    '  "make it darker" → InstructPix2Pix  |  "remove the cat" → Inpainting  |  fallback → img2img',
     '',
     '## ' + eye + ' Vision',
     '```text',
     'Reply to an image/video:',
     prefix + ' what is this?',
-    '/vision file:<upload> prompt:<question>',
+    prefix + ' tell me more about this image      (re-runs on cached attachment)',
+    '/vision file:<upload> prompt:<question> mode:describe|ocr',
     '```',
+    'OCR mode extracts text from images.',
     '',
     '## ' + coin + ' Archive Setup',
     '```text',
@@ -6447,24 +6558,19 @@ function seekdeepHelpText(source = null) {
     '## ' + folder + ' Archive Use',
     '```text',
     prefix + ' archive me',
-    prefix + ' archive shared',
-    prefix + ' shared archive',
-    prefix + ' archive @user',
-    prefix + ' archive for @user',
-    prefix + ' archive status',
-    prefix + ' archive status @user',
-    prefix + ' archive status shared',
+    prefix + ' archive shared / shared archive',
+    prefix + ' archive @user / archive for @user',
+    prefix + ' archive status / archive status @user',
+    prefix + ' archive search <query>              (find prompts in your archive)',
+    prefix + ' archive clean older than <duration>  (preview old entries, e.g. 7d, 2w, 1m)',
+    prefix + ' archive clean confirm                (confirm pending bulk delete, 2-min TTL)',
     '/archivestatus',
     '/recent kind:archive  (newest 10 entries in your archive thread)',
     '```',
-    'Archive storage uses Discord threads only.',
     '',
     'Natural-language archive of the most recent image:',
     '```text',
-    prefix + ' archive this | archive it | archive too | archive that | archive the image',
-    prefix + ' save this | save it | save the image',
-    prefix + ' add this to my archive | put it in my archive | make it archive too',
-    prefix + ' share this | shared archive this | save to shared archive',
+    prefix + ' archive this | archive it | save this | save it | share this',
     '```',
     'Each archive thread entry has Download (full-res) + grey Delete from Archive buttons.',
     '',
@@ -6488,50 +6594,39 @@ function seekdeepHelpText(source = null) {
     'and "Loaded chat role / Loaded chat model" for what is currently in VRAM.',
     'Bot console prints `[SeekDeep Model Router] role=... reason=...` for each chat.',
     '',
-    '## ' + clock + ' Recent / Cache / Queue / Errors',
+    '## Search & Templates',
     '```text',
-    prefix + ' recent images [limit]',
-    prefix + ' recent prompts',
-    prefix + ' recent errors',
-    prefix + ' changelog',
-    prefix + ' stats              (server-wide totals + top contributors)',
-    prefix + ' stats me           (your activity in this server)',
-    prefix + ' stats chart        (30-day activity chart image)',
-    '/stats scope:server|me|chart  (slash version)',
-    prefix + ' gpu                (one-shot VRAM + loaded-model snapshot)',
-    prefix + ' gpu watch [N]      (live-tail every N sec, default 5, capped at 2 min)',
-    prefix + ' vram               (alias for `gpu`)',
-    '/recent kind:images|prompts|archive',
-    prefix + ' cache status',
-    prefix + ' queue status',
-    '/regen mode:refined|original|both   (regenerate latest channel image)',
-    '/changelog                          (last 10 git commits)',
-    '/gpu watch:true interval:5          (live VRAM tail, slash version)',
-    '/status verbose:true                (chat-roles map + map-size diagnostics)',
-    prefix + ' search <query>      (search recent conversations in this channel)',
-    '/search query:<keywords>       (slash version)',
-    prefix + ' img2img <prompt>             (transform attached/replied/recent image)',
-    '/img2img image:<file> prompt:<text>   (slash version)',
-    prefix + ' upscale [2x|3x|4x]         (upscale attached/replied/recent image)',
-    '/upscale image:<file> scale:2|3|4     (slash version)',
-    prefix + ' template save <name>: <prompt>   (save a reusable image prompt)',
-    prefix + ' template list                    (show your saved templates)',
-    prefix + ' template use <name>              (generate from a saved template)',
-    prefix + ' template delete <name>           (remove a template)',
+    prefix + ' search <query>                     (search recent conversations)',
+    '/search query:<keywords>',
+    prefix + ' template save <name>: <prompt>     (save a reusable image prompt)',
+    prefix + ' template list / use <name> / delete <name>',
     '/template action:save|list|use|delete name:<n> prompt:<p>',
+    '```',
+    '',
+    '## ' + clock + ' Recent / Stats / GPU / Queue',
+    '```text',
+    prefix + ' recent images [limit]   |  recent prompts  |  recent errors',
+    '/recent kind:images|prompts|archive',
+    prefix + ' stats / stats me / stats chart',
+    '/stats scope:server|me|chart',
+    prefix + ' gpu / vram              (one-shot VRAM snapshot)',
+    prefix + ' gpu watch [N]           (live-tail every N sec, max 2 min)',
+    '/gpu watch:true interval:5',
+    prefix + ' cache status  |  queue status  |  changelog',
+    '/changelog  |  /cachestatus  |  /status verbose:true',
     '```',
     '',
     '## Admin / Customization',
     '```text',
     prefix + ' persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]',
-    prefix + ' digest channel here   (or "off"; enable SEEKDEEP_DAILY_DIGEST=on in .env)',
-    prefix + ' translate channel here  (or "off"; auto-translate non-Latin messages in this channel)',
-    prefix + ' archive search <query>   (find prompts in your archive thread)',
-    prefix + ' memory preset add brief | expert | no-emoji | formal | casual | ...',
+    '/persona                               (opens persona editor modal)',
+    prefix + ' digest channel here / off     (daily activity digest)',
+    prefix + ' translate channel here / off  (auto-translate non-Latin messages)',
+    prefix + ' memory preset add brief | expert | no-emoji | formal | casual',
     prefix + ' memory preset list / remove <key> / clear',
-    '/say text:<text> channel:<#chan> image_url:<url>   (admin-only anonymous post)',
+    '/say text:<text> channel:<#chan> image_url:<url>   (admin anonymous post)',
     '```',
-    'Admin-only: persona + digest + /say. SEEKDEEP_ALLOWED_CHANNELS in .env gates which channels respond.',
+    'Admin-only: persona + digest + translate + /say.',
     '',
     '## Auto-reactions (admin / Manage Messages)',
     '```text',
@@ -6563,15 +6658,6 @@ function seekdeepHelpText(source = null) {
       'Imports skip names that already exist. Bot needs Manage Expressions permission.',
       '',
     ] : []),
-    '## ' + art + ' Image options on /image',
-    '```text',
-    '/image prompt:<text> quality:low|standard|high  style:anime|photoreal|pixel|...',
-    '```',
-    'Quality maps to step counts (12/28/40). 10 style presets.',
-    'Iterative tweaks: after generating an image, say things like',
-    '  "now make her wear a hat" / "with sunglasses" / "same but in winter"',
-    'and the bot will extend the prior refined prompt instead of starting fresh.',
-    '',
     '## Reaction shortcuts (react to a SeekDeep bot message)',
     '```text',
     '\u{1F4E5}  inbox tray         : archive the image to your personal archive',
@@ -6584,12 +6670,21 @@ function seekdeepHelpText(source = null) {
     'Right-click any Discord message to access:',
     '```text',
     'Generate Image from this   - use message text as image prompt, queue Original',
-    'Refine as Image Prompt     - rewrite message as a stronger image prompt (refuses chat)',
+    'Refine as Image Prompt     - rewrite message as a stronger image prompt',
+    'Describe Image (SeekDeep)  - run vision analysis on an image attachment',
+    'Upscale Image (SeekDeep)   - upscale an image attachment 2x',
+    ...(SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? [
+      'img2img from this          - img2img: use text as prompt on attached/recent image',
+    ] : []),
+    ...(SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? [
+      'Edit Image (SeekDeep)      - InstructPix2Pix: edit the attached image',
+    ] : []),
+    ...(SEEKDEEP_FEATURE_INPAINT_ENABLED ? [
+      'Remove Object (SeekDeep)   - inpaint: remove something from the attached image',
+    ] : []),
     'Inspect (SeekDeep)         - debug card: ids, attachments, components, cached state',
     'Translate (SeekDeep)       - translate / decode message text to plain English',
     'Compare with previous      - compare this message with the prior non-bot message',
-    // Same flag-gating pattern as the emoji vault: only mention Force React
-    // in help when SEEKDEEP_FEATURE_FORCE_REACT is on. Default off in v10.4.4.
     ...(SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? [
       'Force React (SeekDeep)     - paginated emoji picker; reacts up to 5 to the message',
     ] : []),
@@ -6637,16 +6732,19 @@ function seekdeepHelpTopicSlice(topic, source = null) {
     case 'chat': case 'web': case 'prompt': case 'prompting': case 'ask':
       predicate = (h) => matches(h, 'chat / web', 'prompting'); break;
     case 'image': case 'images': case 'img': case 'draw': case 'picture': case 'pictures': case 'generate':
-      predicate = (h) => matches(h, 'images', 'image options'); break;
+    case 'img2img': case 'pix2pix': case 'inpaint': case 'upscale':
+      predicate = (h) => matches(h, 'images', 'image editing'); break;
     case 'vision': case 'look': case 'see':
       predicate = (h) => matches(h, 'vision'); break;
     case 'archive': case 'archives': case 'shared':
       predicate = (h) => matches(h, 'archive'); break;
     case 'model': case 'models': case 'role': case 'roles':
       predicate = (h) => matches(h, 'chat model roles'); break;
-    case 'recent': case 'cache': case 'queue': case 'errors': case 'changelog':
-      predicate = (h) => matches(h, 'recent', 'cache', 'queue'); break;
-    case 'admin': case 'persona': case 'digest': case 'memory': case 'say':
+    case 'search': case 'template': case 'templates':
+      predicate = (h) => matches(h, 'search', 'template'); break;
+    case 'recent': case 'cache': case 'queue': case 'errors': case 'changelog': case 'stats': case 'gpu': case 'vram':
+      predicate = (h) => matches(h, 'recent', 'stats', 'gpu', 'queue'); break;
+    case 'admin': case 'persona': case 'digest': case 'memory': case 'say': case 'translate':
       predicate = (h) => matches(h, 'admin'); break;
     case 'reactrule': case 'reactrules': case 'autoreact': case 'auto-reactions': case 'autoreactions': case 'reaction': case 'reactions': case 'react':
       predicate = (h) => matches(h, 'auto-reactions', 'reaction shortcuts'); break;
@@ -6658,7 +6756,7 @@ function seekdeepHelpTopicSlice(topic, source = null) {
   }
 
   if (!predicate) {
-    const known = ['start', 'chat', 'image', 'vision', 'archive', 'model', 'recent', 'admin', 'reactrule', 'emoji', 'context', 'all'];
+    const known = ['start', 'chat', 'image', 'vision', 'archive', 'model', 'search', 'recent', 'admin', 'reactrule', 'emoji', 'context', 'all'];
     return [
       titleLines.join('\n').trimEnd(),
       '',
@@ -7032,6 +7130,19 @@ function seekdeepKnownCommandSuggestions() {
     { command: '@SeekDeep queue status', aliases: ['queue status', 'que status', 'image queue'] },
     { command: '@SeekDeep recent images', aliases: ['recent images', 'recent image', 'image history', 'recent generations'] },
     { command: '@SeekDeep recent prompts', aliases: ['recent prompts', 'prompt history'] },
+    { command: '@SeekDeep img2img <prompt>', aliases: ['img2img', 'image to image', 'image2image', 'transform image'] },
+    { command: '@SeekDeep pix2pix <instruction>', aliases: ['pix2pix', 'edit image', 'instruct pix2pix', 'instructpix2pix'] },
+    { command: '@SeekDeep inpaint <target>', aliases: ['inpaint', 'remove object', 'inpainting', 'remove from image'] },
+    { command: '@SeekDeep upscale', aliases: ['upscale', 'upscale image', 'enlarge', 'make bigger', 'enhance image'] },
+    { command: '@SeekDeep search <query>', aliases: ['search', 'find', 'search conversation', 'conversation search'] },
+    { command: '@SeekDeep template list', aliases: ['template', 'templates', 'saved prompts', 'prompt templates'] },
+    { command: '@SeekDeep gpu', aliases: ['gpu', 'vram', 'gpu status', 'vram status', 'gpu usage'] },
+    { command: '@SeekDeep stats', aliases: ['stats', 'statistics', 'usage', 'activity'] },
+    { command: '@SeekDeep changelog', aliases: ['changelog', 'changes', 'whats new', 'version'] },
+    { command: '@SeekDeep digest channel here', aliases: ['digest', 'daily digest', 'digest channel'] },
+    { command: '@SeekDeep translate channel here', aliases: ['translate channel', 'auto translate', 'auto-translate'] },
+    { command: '@SeekDeep persona', aliases: ['persona', 'personality', 'bot persona', 'set persona'] },
+    { command: '@SeekDeep memory preset list', aliases: ['preset', 'presets', 'memory preset', 'behavior preset'] },
   ];
 }
 
@@ -7039,7 +7150,7 @@ function seekdeepLooksCommandLike(value = '') {
   const p = seekdeepNormalizeCommandSuggestionInput(value);
   if (!p) return false;
   const first = p.split(/\s+/)[0] || '';
-  return /^(ask|image|img|draw|picture|generate|make|create|render|paint|sketch|illustrate|design|refine|vision|look|status|stat|help|commands|archive|archiv|arcive|cache|queue|que|recent|prompt|model|ping|pong|regen|regenerate|reroll|purge|clear|delete|wipe)$/.test(first);
+  return /^(ask|image|img|img2img|draw|picture|generate|make|create|render|paint|sketch|illustrate|design|refine|vision|look|status|stat|help|commands|archive|archiv|arcive|cache|queue|que|recent|prompt|model|ping|pong|regen|regenerate|reroll|purge|clear|delete|wipe|upscale|pix2pix|inpaint|search|find|template|gpu|vram|stats|changelog|digest|translate|persona|preset)$/.test(first);
 }
 
 function seekdeepCommandSuggestionText(prompt = '') {
@@ -7538,7 +7649,8 @@ const commands = [
           { name: 'vision', value: 'vision' },
           { name: 'archive', value: 'archive' },
           { name: 'model roles', value: 'model' },
-          { name: 'recent / cache / queue', value: 'recent' },
+          { name: 'search / templates', value: 'search' },
+          { name: 'recent / stats / gpu', value: 'recent' },
           { name: 'admin', value: 'admin' },
           { name: 'reactrule', value: 'reactrule' },
           { name: 'emoji vault', value: 'emoji' },
@@ -7619,13 +7731,13 @@ const commands = [
   new SlashCommandBuilder()
     .setName('img2img')
     .setDescription('Transform an image using a text prompt.')
-    .addAttachmentOption((o) => o.setName('image').setDescription('Source image to transform').setRequired(true))
     .addStringOption((o) => o.setName('prompt').setDescription('How to transform the image').setRequired(true))
+    .addAttachmentOption((o) => o.setName('image').setDescription('Source image to transform').setRequired(false))
     .addNumberOption((o) => o.setName('strength').setDescription('Transformation strength 0.05-1.0 (default 0.6)').setRequired(false)),
   new SlashCommandBuilder()
     .setName('upscale')
     .setDescription('Upscale an image to a larger resolution.')
-    .addAttachmentOption((o) => o.setName('image').setDescription('Image to upscale').setRequired(true))
+    .addAttachmentOption((o) => o.setName('image').setDescription('Image to upscale').setRequired(false))
     .addIntegerOption((o) =>
       o.setName('scale')
         .setDescription('Scale factor')
@@ -7635,6 +7747,17 @@ const commands = [
           { name: '3x', value: 3 },
           { name: '4x', value: 4 },
         )),
+  new SlashCommandBuilder()
+    .setName('pix2pix')
+    .setDescription('Edit an image with a natural-language instruction (InstructPix2Pix).')
+    .addStringOption((o) => o.setName('instruction').setDescription('What to change (e.g. "make it darker", "add snow")').setRequired(true))
+    .addAttachmentOption((o) => o.setName('image').setDescription('Image to edit (or reply to one)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('inpaint')
+    .setDescription('Remove something from an image (CLIPSeg auto-mask + SDXL inpaint).')
+    .addStringOption((o) => o.setName('remove').setDescription('What to remove (e.g. "the wizard", "background trees")').setRequired(true))
+    .addStringOption((o) => o.setName('prompt').setDescription('What to fill the area with (default: infer from image)').setRequired(false))
+    .addAttachmentOption((o) => o.setName('image').setDescription('Image to edit (or reply to one)').setRequired(false)),
   new SlashCommandBuilder()
     .setName('template')
     .setDescription('Save, list, use, or delete prompt templates.')
@@ -7680,6 +7803,27 @@ const commands = [
   new ContextMenuCommandBuilder()
     .setName('Compare with previous')
     .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Describe Image (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Upscale Image (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
+  ...(String(process.env.SEEKDEEP_FEATURE_IMG2IMG || 'off').toLowerCase() === 'on' ? [
+    new ContextMenuCommandBuilder()
+      .setName('img2img from this')
+      .setType(ApplicationCommandType.Message),
+  ] : []),
+  ...(String(process.env.SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX || 'off').toLowerCase() === 'on' ? [
+    new ContextMenuCommandBuilder()
+      .setName('Edit Image (SeekDeep)')
+      .setType(ApplicationCommandType.Message),
+  ] : []),
+  ...(String(process.env.SEEKDEEP_FEATURE_INPAINT || 'off').toLowerCase() === 'on' ? [
+    new ContextMenuCommandBuilder()
+      .setName('Remove Object (SeekDeep)')
+      .setType(ApplicationCommandType.Message),
+  ] : []),
   // Force React is feature-flagged via SEEKDEEP_FEATURE_FORCE_REACT. We read
   // the env var directly here (instead of the SEEKDEEP_FEATURE_FORCE_REACT_ENABLED
   // const) because that const is declared further down the file and this
@@ -7707,7 +7851,7 @@ try {
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log('Chat provider: Local NVIDIA model server');
-  console.log(`Chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B'}`);
+  console.log(`Chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct'}`);
   console.log('Image provider: Local NVIDIA model server');
   console.log('Vision provider: Local model server');
   console.log(`Web search provider: ${WEB_SEARCH_PROVIDER}`);
@@ -8034,13 +8178,27 @@ async function sendLongMessageReply(message, content, meta = {}) {
     return await sendViaChannel(payload);
   }
 
+  // If a loading-GIF placeholder was sent, edit it in-place for the first
+  // chunk so the GIF is seamlessly replaced by the actual response.
+  const loadingReply = message?.__seekdeepLoadingReply || null;
+  if (loadingReply) {
+    try { delete message.__seekdeepLoadingReply; } catch {}
+  }
+
   for (let i = 0; i < chunks.length; i++) {
     const payload = {
       content: chunks[i],
       allowedMentions: { repliedUser: false },
     };
 
-    if (i === 0) {
+    if (i === 0 && loadingReply && typeof loadingReply.edit === 'function') {
+      try {
+        previous = await loadingReply.edit({ ...payload, files: [] });
+      } catch {
+        // Edit failed (e.g. message deleted) — fall back to a fresh reply.
+        previous = await sendFirstChunk(payload);
+      }
+    } else if (i === 0) {
       previous = await sendFirstChunk(payload);
     } else {
       previous = await sendFollowupChunk(previous, payload);
@@ -8207,8 +8365,8 @@ function seekdeepLooksLikeVisionPrompt(text = '') {
 
   return (
     /\bwhat(?:'s| is)\s+(?:this|that)\b/.test(t) ||
-    /\bwhat the fuck is this\b/.test(t) ||
-    /\bwtf is this\b/.test(t) ||
+    /\bwhat the (?:fuck|hell|heck) is (?:this|that)\b/.test(t) ||
+    /\bwtf is (?:this|that)\b/.test(t) ||
     /\bdescribe\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
     /\bidentify\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
     /\bcaption\b(?:\s+(?:this|that|image|picture|photo|media))?/.test(t) ||
@@ -8517,7 +8675,7 @@ function seekdeepExtractImagePrompt(text = '') {
 // SEEKDEEP_NATURAL_MEDIA_ROUTING_START
 
 const SEEKDEEP_IMAGE_TRIGGER_RE = /\b(generate|create|make|draw|draw me|sketch|sketch me|render|paint|paint me|illustrate|illustrate me|show me|show|image of|picture of|photo of|portrait of|poster of|wallpaper of|design)\b/i;
-const SEEKDEEP_VISION_TRIGGER_RE = /\b(what(?:'s| is) this|what am i looking at|describe this|describe (?:the|this) (?:image|picture|photo|screenshot|video)|identify this|analyze this|caption this|explain this(?: image| picture| photo| screenshot| video)?|what(?:'s| is) in this|what does this show)\b/i;
+const SEEKDEEP_VISION_TRIGGER_RE = /\b(what(?:'s| is) (?:this|that)|what am i looking at|describe (?:this|that)|describe (?:the|this|that) (?:image|picture|photo|screenshot|video)|identify (?:this|that)|analyze (?:this|that)|caption (?:this|that)|explain (?:this|that)(?: image| picture| photo| screenshot| video)?|what(?:'s| is) in (?:this|that)|what does (?:this|that) show)\b/i;
 const SEEKDEEP_TEXT_ONLY_RE = /\b(refine|rewrite|improve|explain|tell me about|list|story|checklist|nickname|nicknames|name ideas?|what is|who is|why|how)\b/i;
 
 // SEEKDEEP_DIRECT_IMAGE_ALIAS_ROUTE_START
@@ -8534,19 +8692,31 @@ function seekdeepStripDirectImageVerb(prompt = '') {
 }
 
 function seekdeepLooksLikeConversationalImageEditFollowup(prompt = '') {
-  const p = seekdeepStripCommandAddressingForRouting(prompt).toLowerCase().trim();
-  if (!p) return false;
+  const raw = seekdeepStripCommandAddressingForRouting(prompt).toLowerCase().trim();
+  if (!raw) return false;
+  const p = raw
+    .replace(/^(?:can|could|would|will)\s+you\s+(?:please\s+)?/, '')
+    .replace(/^please\s+/, '')
+    .trim();
 
-  return /^(?:make|change|adjust|revise|refine|rewrite|improve)\s+(?:(?:the|that|this)\s+)?(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|next|previous|prior)\s+(?:one|idea|image|version|option|prompt)?|(?:one|it|that|this))\b/i.test(p);
+  if (/^(?:make|change|adjust|revise|refine|rewrite|improve)\s+(?:(?:the|that|this)\s+)?(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|next|previous|prior)\s+(?:one|idea|image|version|option|prompt)?|(?:one|it|that|this))\b/.test(p)) return true;
+  if (/^(?:make|redo|recreate|re-do|re-create|do)\s+(?:(?:the|that|this|a)\s+)?(?:same\s+)?(?:image|picture|photo|pic|scene|drawing|art|artwork)\s+(?:but\s+)?(?:without|with|except|minus|removing|and\s+remove|and\s+add|and\s+change)\b/.test(p)) return true;
+  if (/^(?:same\s+)?(?:thing|image|picture|photo|pic|one)\s+(?:but\s+)?(?:without|with|except|minus)\b/.test(p)) return true;
+  return false;
 }
 
 function seekdeepCleanConversationalImageEditInstruction(prompt = '') {
   let p = seekdeepStripCommandAddressingForRouting(prompt).trim();
+  p = p
+    .replace(/^(?:can|could|would|will)\s+you\s+(?:please\s+)?/i, '')
+    .replace(/^please\s+/i, '')
+    .trim();
 
   p = p
-    .replace(/^(?:make|change|adjust|revise|refine|rewrite|improve)\s+/i, '')
+    .replace(/^(?:make|change|adjust|revise|refine|rewrite|improve|redo|recreate|re-do|re-create|do)\s+/i, '')
+    .replace(/^(?:(?:the|that|this|a)\s+)?(?:same\s+)?(?:image|picture|photo|pic|scene|drawing|art|artwork|thing|one)\s+/i, '')
     .replace(/^(?:(?:the|that|this)\s+)?(?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|next|previous|prior)\s+(?:one|idea|image|version|option|prompt)?|(?:one|it|that|this))\b/i, '')
-    .replace(/^(?:and|to|as)\s+/i, '')
+    .replace(/^\s*(?:and|to|as|but)\s+/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -8564,30 +8734,42 @@ function seekdeepExtractGeneratedImagePromptFromText(value = '') {
   return '';
 }
 
-async function seekdeepGetGeneratedImageReplyContext(message = null) {
-  if (!message?.reference?.messageId) return null;
-
-  const replied = typeof fetchRepliedMessage === 'function'
-    ? await fetchRepliedMessage(message)
-    : null;
-  if (!replied) return null;
-
-  const content = String(replied.content || '');
+function seekdeepCheckMessageForGeneratedImage(msg) {
+  if (!msg) return null;
+  const content = String(msg.content || '');
   const hasGeneratedMarker = /^(?:Generated:|Refined Prompt:|Refinement:|Job ID:\s*imgq_)/im.test(content);
-  const hasImageAttachment = Array.from(replied.attachments?.values?.() || []).some((attachment) => seekdeepLooksLikeVisualAttachment(attachment));
-  const hasSeekdeepImageButtons = Array.from(replied.components || []).some((row) =>
+  const hasImageAttachment = Array.from(msg.attachments?.values?.() || []).some((attachment) => seekdeepLooksLikeVisualAttachment(attachment));
+  const hasSeekdeepImageButtons = Array.from(msg.components || []).some((row) =>
     Array.from(row?.components || []).some((component) => /^seekdeep:(?:regen|archive|sharedarchive|shared-archive|shared_archive):/i.test(String(component?.customId || '')))
   );
-
   if (!hasGeneratedMarker && !(hasImageAttachment && hasSeekdeepImageButtons)) return null;
-
   const prompt = seekdeepExtractGeneratedImagePromptFromText(content);
-  return {
-    message: replied,
-    prompt,
-    hasImageAttachment,
-    hasSeekdeepImageButtons,
-  };
+  return { message: msg, prompt, hasImageAttachment, hasSeekdeepImageButtons };
+}
+
+async function seekdeepGetGeneratedImageReplyContext(message = null) {
+  if (message?.reference?.messageId) {
+    const replied = typeof fetchRepliedMessage === 'function'
+      ? await fetchRepliedMessage(message)
+      : null;
+    const ctx = seekdeepCheckMessageForGeneratedImage(replied);
+    if (ctx) return ctx;
+  }
+
+  const botId = message?.client?.user?.id || (typeof client !== 'undefined' && client?.user?.id) || '';
+  if (message?.channel?.messages?.fetch && botId) {
+    const fetched = await message.channel.messages.fetch({ limit: 15, before: message.id }).catch(() => null);
+    if (fetched) {
+      const sorted = Array.from(fetched.values()).sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+      for (const msg of sorted) {
+        if (msg.author?.id !== botId) continue;
+        const ctx = seekdeepCheckMessageForGeneratedImage(msg);
+        if (ctx) return ctx;
+      }
+    }
+  }
+
+  return null;
 }
 
 function seekdeepBuildImagePromptFromReplyEdit(replyContext = null, editPrompt = '') {
@@ -8606,7 +8788,7 @@ function seekdeepIsDirectImageAliasPrompt(prompt = '', options = {}) {
   if (seekdeepIsBareConfirmationPrompt(p)) return false;
   if (/\b(help|commands|status|queue|archive|cache|recent images|recent prompts|purge|delete|remove)\b/i.test(p)) return false;
   if (/\b(list|ideas?|suggestions?|options?|names?|nicknames?|summary|summarize|explain|rewrite|translate|code|script|powershell|javascript|python|logs?|error|bug)\b/i.test(p)) return false;
-  if (!options.allowConversationalEditImage && seekdeepLooksLikeConversationalImageEditFollowup(p)) return false;
+  if (seekdeepLooksLikeConversationalImageEditFollowup(p)) return Boolean(options.allowConversationalEditImage);
   if (/^(?:show\s+me|show|draw\s+me|draw|sketch\s+me|sketch|paint\s+me|paint|render\s+me|render|illustrate\s+me|illustrate|design\s+me|design)\s+\S/i.test(lower)) return true;
   if (/^(?:generate|create|make)\s+(?!(?:a\s+)?(?:list|summary|song|lyrics|description|script|code|function|patch|plan|guide|readme|email|message|reply)\b)(?:me\s+)?(?:a\s+|an\s+|the\s+|some\s+)?\S/i.test(lower)) return true;
   if (/^(?:show me|give me)\s+(?:a\s+|an\s+|the\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|illustration|poster|logo|icon|wallpaper)\b/i.test(lower)) return true;
@@ -9522,7 +9704,8 @@ function seekdeepIsResearchFollowupPrompt(prompt = '') {
 
   return (
     /\b(pros?\s*\/\s*cons?|pros and cons|advantages?|disadvantages?|downsides?|upsides?|strengths?|weaknesses?)\b/.test(p) ||
-    /\b(of each|each one|each model|each laptop|for each|both of them|those|these|that comparison|the comparison)\b/.test(p) ||
+    /\b(of each|each one|each model|each laptop|for each|both of them|that comparison|the comparison)\b/.test(p) ||
+    /\b(compare|rank|review|summarize|break down)\s+(those|these)\b/.test(p) ||
     /\b(can you|could you|would you|please)?\s*(give|make|create|show|list|break down)\s+(me\s+)?(a\s+)?(pros?\s*\/\s*cons?|pros and cons|summary|recommendation|winner|ranking|table|chart)\b/.test(p) ||
     /^(audit|fact\s*check|fact-check|check that|check the answer|verify that|verify the answer|review that|review the answer|was that right|is that right|source audit|sources audit)\b/.test(p)
   );
@@ -11292,8 +11475,21 @@ async function seekdeepResolveSourceImage(target) {
 }
 
 function seekdeepImg2ImgQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+img2img\s+(.+)$/is);
-  return m ? String(m[1] || '').trim() : '';
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+img2img(?:\s+(.+))?$/is);
+  if (!m) return null;
+  return String(m[1] || '').trim();
+}
+
+function seekdeepPix2PixQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+pix2pix(?:\s+(.+))?$/is);
+  if (!m) return null;
+  return String(m[1] || '').trim();
+}
+
+function seekdeepInpaintQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+inpaint(?:\s+(.+))?$/is);
+  if (!m) return null;
+  return String(m[1] || '').trim();
 }
 
 function seekdeepUpscaleQueryFromMessage(raw = '') {
@@ -11306,7 +11502,18 @@ function seekdeepUpscaleQueryFromMessage(raw = '') {
 
 async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
   seekdeepSetActivityStatus('Transforming image...');
+  const img2imgGif = seekdeepLoadingGifAttachment();
+  let img2imgAck = null;
   try {
+    if (img2imgGif) {
+      try {
+        img2imgAck = await seekdeepReplyToTarget(target, {
+          content: 'Transforming image...',
+          files: [img2imgGif],
+        });
+      } catch {}
+    }
+
     const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
     const strengthMatch = prompt.match(/\bstrength[:\s]*([0-9.]+)/i);
     const strength = strengthMatch ? Math.max(0.05, Math.min(1.0, parseFloat(strengthMatch[1]))) : 0.6;
@@ -11325,10 +11532,77 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_img2img.png';
 
-    await seekdeepReplyToTarget(target, {
+    const resultPayload = {
       content: `img2img complete (strength ${strength}): ${cleanPrompt.slice(0, 200)}`,
       files: [new AttachmentBuilder(buffer, { name: filename })],
+    };
+
+    await seekdeepReplyToTarget(target, resultPayload, { previousReply: img2imgAck });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+}
+
+async function seekdeepHandleInstructPix2Pix(target, instruction, imageUrl) {
+  seekdeepSetActivityStatus('Editing image (InstructPix2Pix)...');
+  const gif = seekdeepLoadingGifAttachment();
+  let ack = null;
+  try {
+    if (gif) {
+      try {
+        ack = await seekdeepReplyToTarget(target, { content: 'Editing image with InstructPix2Pix...', files: [gif] });
+      } catch {}
+    }
+
+    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const response = await postLocal('/instruct-pix2pix', {
+      instruction: instruction || 'enhance this image',
+      image_b64: imageB64,
+      steps: 20,
+      guidance_scale: 7.5,
+      image_guidance_scale: 1.5,
     });
+
+    const buffer = Buffer.from(response.image_b64, 'base64');
+    const filename = response.filename || 'seekdeep_pix2pix.png';
+    await seekdeepReplyToTarget(target, {
+      content: `InstructPix2Pix edit: ${instruction.slice(0, 200)}`,
+      files: [new AttachmentBuilder(buffer, { name: filename })],
+    }, { previousReply: ack });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+}
+
+async function seekdeepHandleInpaint(target, prompt, removeTarget, imageUrl) {
+  seekdeepSetActivityStatus('Inpainting image...');
+  const gif = seekdeepLoadingGifAttachment();
+  let ack = null;
+  try {
+    if (gif) {
+      try {
+        ack = await seekdeepReplyToTarget(target, { content: 'Inpainting image (auto-masking with CLIPSeg)...', files: [gif] });
+      } catch {}
+    }
+
+    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const response = await postLocal('/inpaint', {
+      prompt: prompt || 'background scene',
+      remove_target: removeTarget || '',
+      image_b64: imageB64,
+      strength: 0.85,
+      width: 1024,
+      height: 1024,
+      steps: Number(process.env.IMAGE_STEPS || 28),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
+    });
+
+    const buffer = Buffer.from(response.image_b64, 'base64');
+    const filename = response.filename || 'seekdeep_inpaint.png';
+    await seekdeepReplyToTarget(target, {
+      content: `Inpaint complete: removed "${removeTarget}" — ${prompt.slice(0, 150)}`,
+      files: [new AttachmentBuilder(buffer, { name: filename })],
+    }, { previousReply: ack });
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -11336,7 +11610,18 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
 
 async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
   seekdeepSetActivityStatus('Upscaling image...');
+  const upscaleGif = seekdeepLoadingGifAttachment();
+  let upscaleAck = null;
   try {
+    if (upscaleGif) {
+      try {
+        upscaleAck = await seekdeepReplyToTarget(target, {
+          content: `Upscaling image ${scale}x...`,
+          files: [upscaleGif],
+        });
+      } catch {}
+    }
+
     const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
     const response = await postLocal('/upscale', {
       image_b64: imageB64,
@@ -11348,10 +11633,12 @@ async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
     const filename = response.filename || 'seekdeep_upscale.png';
     const note = response.note ? `\n${response.note}` : '';
 
-    await seekdeepReplyToTarget(target, {
+    const resultPayload = {
       content: `Upscaled ${scale}x (${response.method}) → ${response.width}×${response.height}${note}`,
       files: [new AttachmentBuilder(buffer, { name: filename })],
-    });
+    };
+
+    await seekdeepReplyToTarget(target, resultPayload, { previousReply: upscaleAck });
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -11672,6 +11959,8 @@ async function seekdeepHandleAutoTranslateChannelCommand(message, raw = '') {
 //   "Vary this" on an image. Requires the SDXL pipeline to expose img2img,
 //   which it does by default in diffusers >=0.27.
 const SEEKDEEP_FEATURE_IMG2IMG_ENABLED = String(process.env.SEEKDEEP_FEATURE_IMG2IMG || 'off').toLowerCase() === 'on';
+const SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED = String(process.env.SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX || 'off').toLowerCase() === 'on';
+const SEEKDEEP_FEATURE_INPAINT_ENABLED = String(process.env.SEEKDEEP_FEATURE_INPAINT || 'off').toLowerCase() === 'on';
 // SEEKDEEP_FEATURE_UPSCALE_REALESRGAN: enables right-click "Upscale 2x" on
 //   an image. Requires Real-ESRGAN weights downloaded and a Python endpoint.
 const SEEKDEEP_FEATURE_UPSCALE_ENABLED = String(process.env.SEEKDEEP_FEATURE_UPSCALE_REALESRGAN || 'off').toLowerCase() === 'on';
@@ -11694,9 +11983,11 @@ const SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED = String(process.env.SEEKDEEP_FEATURE
 //   component handler stays out of the interaction chain.
 const SEEKDEEP_FEATURE_FORCE_REACT_ENABLED = String(process.env.SEEKDEEP_FEATURE_FORCE_REACT || 'off').toLowerCase() === 'on';
 
-if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED || SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
+if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED || SEEKDEEP_FEATURE_INPAINT_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED || SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
   console.log('[SeekDeep] Optional features flagged on:',
     SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'img2img' : '',
+    SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'instruct-pix2pix' : '',
+    SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'inpaint' : '',
     SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'upscale-real-esrgan' : '',
     SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'nsfw-gate' : '',
     SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'tts-voice' : '',
@@ -13084,6 +13375,12 @@ function seekdeepPromptShouldSkipRollingMemory(prompt = '') {
   return false;
 }
 
+function seekdeepMemoryScope() {
+  const s = String(process.env.SEEKDEEP_MEMORY_SCOPE || 'user').trim().toLowerCase();
+  if (['channel', 'shared'].includes(s)) return 'channel';
+  return 'user';
+}
+
 function memoryKeyFrom(source) {
   if (!source) return 'global';
   const channelId =
@@ -13094,15 +13391,22 @@ function memoryKeyFrom(source) {
     source.channel_id ||
     source.channelID ||
     '';
-  return channelId ? 'channel:' + channelId : 'global';
+  if (!channelId) return 'global';
+  if (seekdeepMemoryScope() === 'channel') return 'channel:' + channelId;
+  const userId =
+    source.author?.id ||
+    source.user?.id ||
+    source.member?.user?.id ||
+    '';
+  return userId ? 'user:' + channelId + ':' + userId : 'channel:' + channelId;
 }
 
 function remember(key, role, value) {
   const clean = normalizeUserText(value || '');
   if (!key || !clean) return;
 
-  const maxEntries = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_MESSAGES', 'SEEKDEEP_MEMORY_MAX_ENTRIES'], 28, 8, 80);
-  const maxChars = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_CHARS', 'SEEKDEEP_MEMORY_MAX_CHARS'], 14000, 3000, 60000);
+  const maxEntries = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_MESSAGES', 'SEEKDEEP_MEMORY_MAX_ENTRIES'], 28, 8, 120);
+  const maxChars = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_CHARS', 'SEEKDEEP_MEMORY_MAX_CHARS'], 14000, 3000, 80000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_ENTRY_MAX_CHARS', 1800, 600, 5000);
   const existing = SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || [];
 
@@ -13121,8 +13425,8 @@ function remember(key, role, value) {
 }
 
 function getRecentContext(key) {
-  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 40);
-  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 40000);
+  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 80);
+  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 60000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_RENDER_ENTRY_MAX_CHARS', 1400, 500, 3000);
   let entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []).slice(-maxEntries);
   if (!entries.length) return '';
@@ -13365,6 +13669,17 @@ client.on('messageCreate', async (message) => {
     message.__seekdeepTypingLoop = typingLoop;
   } catch {}
 
+  // Send a loading GIF placeholder that sendLongMessageReply will edit in-place.
+  const chatLoadingGif = seekdeepLoadingGifAttachment();
+  if (chatLoadingGif) {
+    try {
+      message.__seekdeepLoadingReply = await message.reply({
+        files: [chatLoadingGif],
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+  }
+
   await seekdeepDispatchAddressedMessage(message, {
     prompt,
     seekdeepReplyPromptInfo,
@@ -13564,14 +13879,58 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
-    // img2img: "@SeekDeep img2img <prompt>" (attach image or reply to one)
+    // img2img: "@SeekDeep img2img [prompt]" (attach image or reply to one)
     const img2imgPrompt = seekdeepImg2ImgQueryFromMessage(seekdeepArchiveOpenRawContent);
-    if (img2imgPrompt) {
+    if (img2imgPrompt !== null) {
+      if (!SEEKDEEP_FEATURE_IMG2IMG_ENABLED) {
+        await message.reply({ content: 'img2img is not enabled. Set `SEEKDEEP_FEATURE_IMG2IMG=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
       const sourceImage = await seekdeepResolveSourceImage(message);
       if (!sourceImage) {
         await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to use img2img.', allowedMentions: { repliedUser: false } });
       } else {
-        await seekdeepHandleImg2Img(message, img2imgPrompt, sourceImage.url);
+        await seekdeepHandleImg2Img(message, img2imgPrompt || 'enhance this image', sourceImage.url);
+      }
+      return true;
+    }
+
+    // pix2pix: "@SeekDeep pix2pix [instruction]" (attach image or reply to one)
+    const pix2pixInstruction = seekdeepPix2PixQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (pix2pixInstruction !== null) {
+      if (!SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED) {
+        await message.reply({ content: 'InstructPix2Pix is not enabled. Set `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      if (!pix2pixInstruction) {
+        await message.reply({ content: 'Tell me what to change. Example: `@SeekDeep pix2pix make it darker`', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to use pix2pix.', allowedMentions: { repliedUser: false } });
+      } else {
+        await seekdeepHandleInstructPix2Pix(message, pix2pixInstruction, sourceImage.url);
+      }
+      return true;
+    }
+
+    // inpaint: "@SeekDeep inpaint [target]" (attach image or reply to one)
+    const inpaintTarget = seekdeepInpaintQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (inpaintTarget !== null) {
+      if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+        await message.reply({ content: 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      if (!inpaintTarget) {
+        await message.reply({ content: 'Tell me what to remove. Example: `@SeekDeep inpaint the wizard`', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to use inpaint.', allowedMentions: { repliedUser: false } });
+      } else {
+        await seekdeepHandleInpaint(message, 'background scene', inpaintTarget, sourceImage.url);
       }
       return true;
     }
@@ -13738,12 +14097,15 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
 
 	    // SEEKDEEP_DIRECT_IMAGE_ALIAS_MESSAGE_ROUTE_START
     if (typeof seekdeepIsBareConfirmationPrompt === 'function' && seekdeepIsBareConfirmationPrompt(prompt)) {
-      seekdeepLogRoute('bare-confirmation-local', prompt);
-      remember(key, 'user', prompt);
-      remember(key, 'assistant', 'No pending confirmation command is active.');
-      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-      await sendLongMessageReply(message, ['No pending confirmation command is active.', '', 'Use a full command instead:', '@SeekDeep draw me <image idea>', '@SeekDeep generate <image idea>'].join('\n'));
-      return;
+      const hasPendingSubject = typeof seekdeepPeekPendingImageSubjectRequestV2 === 'function' && seekdeepPeekPendingImageSubjectRequestV2(message);
+      if (hasPendingSubject) {
+        seekdeepLogRoute('bare-confirmation-local', prompt);
+        remember(key, 'user', prompt);
+        remember(key, 'assistant', 'Bare confirmation with no pending image subject.');
+        seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+        await sendLongMessageReply(message, ['Tell me what to generate.', '', 'Example: `@SeekDeep draw me a crystal ball wizard`'].join('\n'));
+        return;
+      }
     }
 
     const removedArchiveCommandText = typeof seekdeepRemovedArchiveCommandText === 'function'
@@ -13758,12 +14120,66 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       return;
     }
 
-    const seekdeepConversationalEditReplyImageContext =
-      typeof seekdeepLooksLikeConversationalImageEditFollowup === 'function' &&
-      seekdeepLooksLikeConversationalImageEditFollowup(prompt) &&
-      typeof seekdeepGetGeneratedImageReplyContext === 'function'
-        ? await seekdeepGetGeneratedImageReplyContext(message)
-        : null;
+    const seekdeepConvEditDetected = typeof seekdeepLooksLikeConversationalImageEditFollowup === 'function' && seekdeepLooksLikeConversationalImageEditFollowup(prompt);
+    const seekdeepConversationalEditReplyImageContext = seekdeepConvEditDetected && typeof seekdeepGetGeneratedImageReplyContext === 'function'
+      ? await seekdeepGetGeneratedImageReplyContext(message)
+      : null;
+    if (seekdeepConvEditDetected) seekdeepLogRoute('conv-edit-detect', `hasRef=${!!message?.reference?.messageId} replyCtx=${!!seekdeepConversationalEditReplyImageContext} hasImg=${!!seekdeepConversationalEditReplyImageContext?.hasImageAttachment}`);
+
+    if (seekdeepConvEditDetected && seekdeepConversationalEditReplyImageContext?.hasImageAttachment) {
+      const convEditSourceMsg = seekdeepConversationalEditReplyImageContext.message;
+      const convEditImageAtt = Array.from(convEditSourceMsg?.attachments?.values?.() || []).find((a) => /\.(png|jpe?g|gif|webp)/i.test(a?.url || ''));
+      if (convEditImageAtt?.url && (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED || SEEKDEEP_FEATURE_INPAINT_ENABLED)) {
+        const seekdeepRouteCooldownRemaining = seekdeepImageCooldownRemaining(message.author?.id || message.author?.username || 'unknown');
+        if (seekdeepRouteCooldownRemaining > 0) {
+          seekdeepLogRoute('image-cooldown', prompt);
+          await seekdeepSendImageCooldownNotice(message, seekdeepRouteCooldownRemaining);
+          seekdeepStopTypingSafelyForMessage(message);
+          return;
+        }
+        try { if (message.__seekdeepLoadingReply?.deletable) await message.__seekdeepLoadingReply.delete(); } catch {}
+        message.__seekdeepLoadingReply = null;
+        const convEditInstruction = seekdeepCleanConversationalImageEditInstruction(prompt);
+        const convEditBasePrompt = seekdeepConversationalEditReplyImageContext.prompt || '';
+        const convEditIsRemoval = /\b(?:without|remove|delete|no\s+more|get rid of|take away|erase)\b/i.test(convEditInstruction);
+        const convEditIsModification = /\b(?:change|make|adjust|add|darker|brighter|older|younger|bigger|smaller|more|less|turn|convert|style|color|colour)\b/i.test(convEditInstruction);
+        const convEditRemoveTarget = convEditIsRemoval
+          ? (convEditInstruction.match(/\b(?:without|remove|delete|erase|get rid of|take away)\s+(?:the\s+)?(.+)/i)?.[1] || '').replace(/[?.!]+$/, '').trim()
+          : '';
+
+        if (convEditIsRemoval && SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+          const inpaintScenePrompt = convEditBasePrompt
+            ? convEditBasePrompt.replace(new RegExp(convEditRemoveTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').replace(/,\s*,/g, ',').replace(/^\s*,|,\s*$/g, '').trim()
+            : 'background scene';
+          seekdeepLogRoute('conv-edit-inpaint', `remove="${convEditRemoveTarget}" prompt="${inpaintScenePrompt}"`);
+          remember(key, 'user', '[conv-edit-inpaint] ' + prompt);
+          await seekdeepHandleInpaint(message, inpaintScenePrompt, convEditRemoveTarget, convEditImageAtt.url);
+          remember(key, 'assistant', 'inpaint: removed ' + convEditRemoveTarget);
+          return;
+        }
+
+        if (convEditIsModification && SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED) {
+          seekdeepLogRoute('conv-edit-pix2pix', convEditInstruction);
+          remember(key, 'user', '[conv-edit-pix2pix] ' + prompt);
+          await seekdeepHandleInstructPix2Pix(message, convEditInstruction, convEditImageAtt.url);
+          remember(key, 'assistant', 'pix2pix edit: ' + convEditInstruction);
+          return;
+        }
+
+        if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED) {
+          const convEditStrength = convEditIsRemoval ? 'strength:0.85' : '';
+          const convEditPrompt = convEditBasePrompt
+            ? [convEditBasePrompt, convEditInstruction, convEditStrength].filter(Boolean).join(', ')
+            : [convEditInstruction || 'enhance this image', convEditStrength].filter(Boolean).join(', ');
+          seekdeepLogRoute('conv-edit-img2img', convEditPrompt);
+          remember(key, 'user', '[conv-edit-img2img] ' + prompt);
+          await seekdeepHandleImg2Img(message, convEditPrompt, convEditImageAtt.url);
+          remember(key, 'assistant', 'img2img edit: ' + convEditPrompt);
+          return;
+        }
+      }
+    }
+
     const seekdeepDirectImageAliasOptions = {
       allowConversationalEditImage: Boolean(seekdeepConversationalEditReplyImageContext),
     };
@@ -14089,6 +14505,14 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     stopSeekDeepTypingLoopForMessage(message);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
     await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
+  } finally {
+    // Clean up any unconsumed loading-GIF placeholder (e.g. route went to
+    // image gen which sends its own messages, not via sendLongMessageReply).
+    const unclaimed = message?.__seekdeepLoadingReply;
+    if (unclaimed && typeof unclaimed.delete === 'function') {
+      try { delete message.__seekdeepLoadingReply; } catch {}
+      try { await unclaimed.delete(); } catch {}
+    }
   }
 }
 
@@ -14518,8 +14942,47 @@ function seekdeepStripBotMentionsFromContextMessage(text = '') {
 
 function seekdeepExtractContextMenuPromptText(targetMessage) {
   const content = String(targetMessage?.content || '').trim();
-  const cleaned = seekdeepStripBotMentionsFromContextMessage(content);
-  return cleaned;
+
+  const imagePrompt = seekdeepExtractGeneratedImagePromptFromText(content);
+  if (imagePrompt) return imagePrompt;
+
+  const editPrompt = seekdeepExtractEditResultPrompt(content);
+  if (editPrompt) return editPrompt;
+
+  const metadataStripped = seekdeepStripImageMetadataLines(content);
+  const footerStripped = seekdeepStripResponseFooter(metadataStripped);
+  return seekdeepStripBotMentionsFromContextMessage(footerStripped);
+}
+
+function seekdeepExtractEditResultPrompt(text = '') {
+  const s = String(text || '').trim();
+  const img2imgMatch = s.match(/^img2img complete\s*\([^)]*\):\s*(.+)/i);
+  if (img2imgMatch?.[1]) return normalizeUserText(img2imgMatch[1].split('\n')[0]);
+  const pix2pixMatch = s.match(/^InstructPix2Pix edit:\s*(.+)/i);
+  if (pix2pixMatch?.[1]) return normalizeUserText(pix2pixMatch[1].split('\n')[0]);
+  const inpaintMatch = s.match(/^Inpaint complete:.*?—\s*(.+)/i);
+  if (inpaintMatch?.[1]) return normalizeUserText(inpaintMatch[1].split('\n')[0]);
+  return '';
+}
+
+function seekdeepStripImageMetadataLines(text = '') {
+  return String(text || '')
+    .replace(/^(?:Refinement:.*|Queue Wait:.*|Job ID:.*|Time to Generate:.*|Model Used:.*|Fallback used:.*|Size:.*)$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function seekdeepStripResponseFooter(text = '') {
+  return String(text || '')
+    .replace(/\n\n(?:Generated:.*\n?|Refined Prompt:.*\n?|Refinement:.*\n?|Queue Wait:.*\n?|Job ID:.*\n?|Time to Generate:.*\n?|Model Used:.*\n?|Fallback used:.*\n?|Size:.*\n?)*$/s, '')
+    .trim();
+}
+
+function seekdeepContextMenuGetImageAttachment(targetMessage) {
+  for (const att of targetMessage?.attachments?.values?.() || []) {
+    if (/\.(png|jpe?g|gif|webp)/i.test(att?.url || '')) return att;
+  }
+  return null;
 }
 
 async function seekdeepHandleMessageContextMenu(interaction) {
@@ -14550,6 +15013,33 @@ async function seekdeepHandleMessageContextMenu(interaction) {
   }
   if (name === 'Compare with previous') {
     return seekdeepHandleContextMenuCompareWithPrevious(interaction, targetMessage);
+  }
+  if (name === 'Describe Image (SeekDeep)') {
+    return seekdeepHandleContextMenuDescribeImage(interaction, targetMessage);
+  }
+  if (name === 'Upscale Image (SeekDeep)') {
+    return seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage);
+  }
+  if (name === 'img2img from this') {
+    if (!SEEKDEEP_FEATURE_IMG2IMG_ENABLED) {
+      try { await interaction.reply({ content: 'img2img is currently disabled on this bot.', flags: MessageFlags.Ephemeral }); } catch {}
+      return;
+    }
+    return seekdeepHandleContextMenuImg2Img(interaction, targetMessage);
+  }
+  if (name === 'Edit Image (SeekDeep)') {
+    if (!SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED) {
+      try { await interaction.reply({ content: 'InstructPix2Pix is currently disabled on this bot.', flags: MessageFlags.Ephemeral }); } catch {}
+      return;
+    }
+    return seekdeepHandleContextMenuEditImage(interaction, targetMessage);
+  }
+  if (name === 'Remove Object (SeekDeep)') {
+    if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+      try { await interaction.reply({ content: 'Inpainting is currently disabled on this bot.', flags: MessageFlags.Ephemeral }); } catch {}
+      return;
+    }
+    return seekdeepHandleContextMenuRemoveObject(interaction, targetMessage);
   }
   if (name === 'Force React (SeekDeep)') {
     // v10.4.4: defensive gate. The registration block already excludes the
@@ -14666,13 +15156,15 @@ async function seekdeepHandleContextMenuInspect(interaction, targetMessage) {
 async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const prompt = seekdeepExtractContextMenuPromptText(targetMessage);
-  if (!prompt) {
+  const rawPrompt = seekdeepExtractContextMenuPromptText(targetMessage);
+  if (!rawPrompt) {
     await interaction.editReply({
       content: 'That message has no text I can use as an image prompt (only attachments/embeds). Pick a message with text.',
     });
     return;
   }
+
+  const prompt = rawPrompt.slice(0, 500).replace(/[,;:\s]+$/g, '').trim();
 
   // Right-click is an intentional user action — do NOT block on frustration
   // heuristics. If the user picked this message on purpose, send it through.
@@ -14682,7 +15174,7 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
   }
 
   await interaction.editReply({
-    content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 1500),
+    content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 400),
   });
 
   // Build a proxy message so we can reuse seekdeepSendImageWithButtons exactly
@@ -14727,13 +15219,15 @@ async function seekdeepHandleContextMenuRefine(interaction, targetMessage) {
   const refineEphemeral = String(process.env.SEEKDEEP_CONTEXT_REFINE_EPHEMERAL || 'off').toLowerCase() === 'on';
   await interaction.deferReply(refineEphemeral ? { flags: MessageFlags.Ephemeral } : {});
 
-  const prompt = seekdeepExtractContextMenuPromptText(targetMessage);
-  if (!prompt) {
+  const rawRefinePrompt = seekdeepExtractContextMenuPromptText(targetMessage);
+  if (!rawRefinePrompt) {
     await interaction.editReply({
       content: 'That message has no text I can refine.',
     });
     return;
   }
+
+  const prompt = rawRefinePrompt.slice(0, 500).replace(/[,;:\s]+$/g, '').trim();
 
   // Right-click is intentional. Only block on the truly degenerate cases:
   // one-word standalone-curse messages (where refining would invent "dogwater"-
@@ -14886,6 +15380,158 @@ async function seekdeepHandleContextMenuCompareWithPrevious(interaction, targetM
   const body = ('Comparison:\n' + (answer || '(no output)')).slice(0, MAX_DISCORD_CHARS);
   await interaction.editReply({ content: body });
 }
+async function seekdeepHandleContextMenuDescribeImage(interaction, targetMessage) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const att = seekdeepContextMenuGetImageAttachment(targetMessage);
+  if (!att) {
+    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    return;
+  }
+
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-describe-image', att.name || 'image');
+
+  try {
+    const answer = await askVision(att, 'Describe this image clearly and in detail.');
+    seekdeepSetResponseModel(interaction, seekdeepVisionModelLabel());
+    await interaction.editReply({ content: (answer || '(no output)').slice(0, MAX_DISCORD_CHARS) });
+  } catch (err) {
+    console.error('Context menu Describe Image failed:', err?.stack || err?.message || err);
+    await interaction.editReply({ content: 'Vision analysis failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+  }
+}
+
+async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage) {
+  await interaction.deferReply();
+
+  const att = seekdeepContextMenuGetImageAttachment(targetMessage);
+  if (!att) {
+    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    return;
+  }
+
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-upscale', att.name || 'image');
+
+  try {
+    const proxy = {
+      author: { id: interaction.user?.id || 'unknown' },
+      channel: interaction.channel || null,
+      guild: interaction.guild || null,
+      client: interaction.client || client,
+      id: `ctx:${interaction.id}`,
+      reply: async (payload) => interaction.channel?.send?.(payload) || null,
+    };
+    await seekdeepHandleUpscale(proxy, att.url, 2);
+    await interaction.editReply({ content: 'Upscale complete (2x).' });
+  } catch (err) {
+    console.error('Context menu Upscale failed:', err?.stack || err?.message || err);
+    await interaction.editReply({ content: 'Upscale failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+  }
+}
+
+async function seekdeepHandleContextMenuImg2Img(interaction, targetMessage) {
+  await interaction.deferReply();
+
+  const att = seekdeepContextMenuGetImageAttachment(targetMessage);
+  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
+
+  if (!att && !promptText) {
+    await interaction.editReply({ content: 'That message has no image or text to work with.' });
+    return;
+  }
+
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', promptText?.slice(0, 80) || '(image-only)');
+
+  try {
+    const proxy = {
+      author: { id: interaction.user?.id || 'unknown' },
+      channel: interaction.channel || null,
+      guild: interaction.guild || null,
+      client: interaction.client || client,
+      id: `ctx:${interaction.id}`,
+      reply: async (payload) => interaction.channel?.send?.(payload) || null,
+    };
+
+    if (att) {
+      await seekdeepHandleImg2Img(proxy, promptText || 'enhance this image', att.url);
+      await interaction.editReply({ content: 'img2img complete.' });
+    } else {
+      const sourceImage = await seekdeepResolveSourceImage(proxy);
+      if (!sourceImage) {
+        await interaction.editReply({ content: 'No image found. Right-click a message with an image, or post after a recent SeekDeep image.' });
+        return;
+      }
+      await seekdeepHandleImg2Img(proxy, promptText, sourceImage.url);
+      await interaction.editReply({ content: 'img2img complete.' });
+    }
+  } catch (err) {
+    console.error('Context menu img2img failed:', err?.stack || err?.message || err);
+    await interaction.editReply({ content: 'img2img failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+  }
+}
+
+async function seekdeepHandleContextMenuEditImage(interaction, targetMessage) {
+  await interaction.deferReply();
+
+  const att = seekdeepContextMenuGetImageAttachment(targetMessage);
+  if (!att) {
+    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    return;
+  }
+
+  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
+  const instruction = promptText || 'enhance this image';
+
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-edit-image', instruction.slice(0, 80));
+
+  try {
+    const proxy = {
+      author: { id: interaction.user?.id || 'unknown' },
+      channel: interaction.channel || null,
+      guild: interaction.guild || null,
+      client: interaction.client || client,
+      id: `ctx:${interaction.id}`,
+      reply: async (payload) => interaction.channel?.send?.(payload) || null,
+    };
+    await seekdeepHandleInstructPix2Pix(proxy, instruction, att.url);
+    await interaction.editReply({ content: 'InstructPix2Pix edit complete.' });
+  } catch (err) {
+    console.error('Context menu Edit Image failed:', err?.stack || err?.message || err);
+    await interaction.editReply({ content: 'Edit failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+  }
+}
+
+async function seekdeepHandleContextMenuRemoveObject(interaction, targetMessage) {
+  await interaction.deferReply();
+
+  const att = seekdeepContextMenuGetImageAttachment(targetMessage);
+  if (!att) {
+    await interaction.editReply({ content: 'That message has no image attachment. Right-click a message with an image.' });
+    return;
+  }
+
+  const promptText = seekdeepExtractContextMenuPromptText(targetMessage);
+  const removeTarget = promptText || 'the main subject';
+
+  if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-remove-object', removeTarget.slice(0, 80));
+
+  try {
+    const proxy = {
+      author: { id: interaction.user?.id || 'unknown' },
+      channel: interaction.channel || null,
+      guild: interaction.guild || null,
+      client: interaction.client || client,
+      id: `ctx:${interaction.id}`,
+      reply: async (payload) => interaction.channel?.send?.(payload) || null,
+    };
+    await seekdeepHandleInpaint(proxy, 'background scene', removeTarget, att.url);
+    await interaction.editReply({ content: 'Inpaint complete.' });
+  } catch (err) {
+    console.error('Context menu Remove Object failed:', err?.stack || err?.message || err);
+    await interaction.editReply({ content: 'Inpaint failed: ' + (err?.message || 'unknown error').slice(0, 400) });
+  }
+}
+
 // SEEKDEEP_FORCE_REACT_PICKER_START
 // v10.4.1: Force React replaces the text-input modal with a demonbot-style
 // paginated emoji picker. Shows up to 100 of the guild's custom emoji per
@@ -15419,13 +16065,18 @@ client.on('interactionCreate', async (interaction) => {
       const attachment = interaction.options.getAttachment('image');
       const prompt = String(interaction.options.getString('prompt') || '').trim();
       const strength = interaction.options.getNumber('strength');
-      if (!attachment?.url) {
-        await sendLongInteractionReply(interaction, 'Provide an image attachment.');
+      let imageUrl = attachment?.url || null;
+      if (!imageUrl) {
+        const resolved = await seekdeepResolveSourceImage(interaction).catch(() => null);
+        imageUrl = resolved?.url || null;
+      }
+      if (!imageUrl) {
+        await sendLongInteractionReply(interaction, 'Attach an image, reply to an image, or use after a recent SeekDeep image.');
         return;
       }
       const fullPrompt = strength != null ? `${prompt} strength:${strength}` : prompt;
       try {
-        await seekdeepHandleImg2Img(interaction, fullPrompt || 'enhance this image', attachment.url);
+        await seekdeepHandleImg2Img(interaction, fullPrompt || 'enhance this image', imageUrl);
       } catch (err) {
         await sendLongInteractionReply(interaction, 'img2img failed: ' + (err?.message || String(err)));
       }
@@ -15436,14 +16087,70 @@ client.on('interactionCreate', async (interaction) => {
       if (!(await safeDefer(interaction))) return;
       const attachment = interaction.options.getAttachment('image');
       const scale = interaction.options.getInteger('scale') || 2;
-      if (!attachment?.url) {
-        await sendLongInteractionReply(interaction, 'Provide an image attachment.');
+      let imageUrl = attachment?.url || null;
+      if (!imageUrl) {
+        const resolved = await seekdeepResolveSourceImage(interaction).catch(() => null);
+        imageUrl = resolved?.url || null;
+      }
+      if (!imageUrl) {
+        await sendLongInteractionReply(interaction, 'Attach an image or use after a recent SeekDeep image to upscale.');
         return;
       }
       try {
-        await seekdeepHandleUpscale(interaction, attachment.url, scale);
+        await seekdeepHandleUpscale(interaction, imageUrl, scale);
       } catch (err) {
         await sendLongInteractionReply(interaction, 'Upscale failed: ' + (err?.message || String(err)));
+      }
+      return;
+    }
+
+    if (commandName === 'pix2pix') {
+      if (!SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED) {
+        await interaction.reply({ content: 'InstructPix2Pix is not enabled. Set SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on in .env.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!(await safeDefer(interaction))) return;
+      const instruction = String(interaction.options.getString('instruction') || '').trim();
+      const attachment = interaction.options.getAttachment('image');
+      let imageUrl = attachment?.url || null;
+      if (!imageUrl) {
+        const resolved = await seekdeepResolveSourceImage(interaction).catch(() => null);
+        imageUrl = resolved?.url || null;
+      }
+      if (!imageUrl) {
+        await sendLongInteractionReply(interaction, 'Attach an image, reply to an image, or use after a recent SeekDeep image.');
+        return;
+      }
+      try {
+        await seekdeepHandleInstructPix2Pix(interaction, instruction || 'enhance this image', imageUrl);
+      } catch (err) {
+        await sendLongInteractionReply(interaction, 'InstructPix2Pix failed: ' + (err?.message || String(err)));
+      }
+      return;
+    }
+
+    if (commandName === 'inpaint') {
+      if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+        await interaction.reply({ content: 'Inpainting is not enabled. Set SEEKDEEP_FEATURE_INPAINT=on in .env.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (!(await safeDefer(interaction))) return;
+      const removeTarget = String(interaction.options.getString('remove') || '').trim();
+      const prompt = String(interaction.options.getString('prompt') || '').trim();
+      const attachment = interaction.options.getAttachment('image');
+      let imageUrl = attachment?.url || null;
+      if (!imageUrl) {
+        const resolved = await seekdeepResolveSourceImage(interaction).catch(() => null);
+        imageUrl = resolved?.url || null;
+      }
+      if (!imageUrl) {
+        await sendLongInteractionReply(interaction, 'Attach an image, reply to an image, or use after a recent SeekDeep image.');
+        return;
+      }
+      try {
+        await seekdeepHandleInpaint(interaction, prompt || 'background scene', removeTarget, imageUrl);
+      } catch (err) {
+        await sendLongInteractionReply(interaction, 'Inpainting failed: ' + (err?.message || String(err)));
       }
       return;
     }
@@ -15827,7 +16534,7 @@ client.on('interactionCreate', async (interaction) => {
     }
     console.error(err);
     try {
-      const configuredChatModel = process.env.LOCAL_CHAT_MODEL_ID || 'Qwen/Qwen3-8B';
+      const configuredChatModel = process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct';
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
       await sendLongInteractionReply(interaction, [
         'SeekDeep request failed.',
@@ -15915,12 +16622,28 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepTemplateNameSanitize,
     seekdeepGetUserTemplates,
     SEEKDEEP_MAX_TEMPLATES_PER_USER,
-    // v10.25: img2img + upscale
+    // v10.25: img2img + upscale + pix2pix + inpaint mention commands
     seekdeepImg2ImgQueryFromMessage,
     seekdeepUpscaleQueryFromMessage,
+    seekdeepPix2PixQueryFromMessage,
+    seekdeepInpaintQueryFromMessage,
     // v10.29: auto-translate
     seekdeepLooksLikeNonLatin,
     SEEKDEEP_NON_LATIN_REGEX,
+    // v10.31: loading GIF
+    seekdeepLoadingGifAttachment,
+    SEEKDEEP_LOADING_GIF_PATH,
+    SEEKDEEP_LOADING_GIF_BUFFER,
+    // research-followup predicate + context-menu footer stripper
+    seekdeepIsResearchFollowupPrompt,
+    seekdeepStripResponseFooter,
+    seekdeepStripImageMetadataLines,
+    // context-menu prompt extraction (handles Generated:, img2img, pix2pix, inpaint)
+    seekdeepExtractContextMenuPromptText,
+    seekdeepExtractEditResultPrompt,
+    // conversational image-edit followup detection + instruction cleaner
+    seekdeepLooksLikeConversationalImageEditFollowup,
+    seekdeepCleanConversationalImageEditInstruction,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
@@ -15978,22 +16701,24 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
   const state = pendingMap?.get?.(id) || null;
 
   const editChoiceMessage = async (payload) => {
-    try {
-      if (interaction?.message && typeof interaction.message.edit === 'function') {
-        await interaction.message.edit(payload);
-        return true;
-      }
-    } catch (err) {
-      console.warn('Emergency prompt-choice message edit failed:', err?.message || err);
-    }
-
+    // Prefer editReply — it reliably handles file attachments on
+    // interaction-originated messages. See primary handler comment.
     try {
       if (interaction?.deferred || interaction?.replied) {
         await interaction.editReply(payload);
         return true;
       }
     } catch (err) {
-      console.warn('Emergency prompt-choice editReply fallback failed:', err?.message || err);
+      console.warn('Emergency prompt-choice editReply failed:', err?.message || err);
+    }
+
+    try {
+      if (interaction?.message && typeof interaction.message.edit === 'function') {
+        await interaction.message.edit(payload);
+        return true;
+      }
+    } catch (err) {
+      console.warn('Emergency prompt-choice message.edit fallback failed:', err?.message || err);
     }
 
     return false;
@@ -16102,6 +16827,8 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
     }
   };
 
+  const emergencyGenPromises = [];
+
   if (needsOriginal) {
     const originalProxy = typeof seekdeepPromptChoiceProxyMessage === 'function'
       ? seekdeepPromptChoiceProxyMessage(interaction, state.requesterId, 'original')
@@ -16112,7 +16839,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
           reply: async () => null,
         };
 
-    void runQueuedSelection(
+    emergencyGenPromises.push(runQueuedSelection(
       originalProxy,
       basePrompt,
       {
@@ -16123,7 +16850,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
         silentAck: true,
       },
       'image-choice-original'
-    );
+    ));
   }
 
   if (needsRefined) {
@@ -16137,7 +16864,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
         };
 
     const refinedPrompt = normalizeUserText(state.refinedPrompt || basePrompt).trim() || basePrompt;
-    void runQueuedSelection(
+    emergencyGenPromises.push(runQueuedSelection(
       refinedProxy,
       basePrompt,
       {
@@ -16151,7 +16878,14 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
         silentAck: true,
       },
       'image-choice-refined'
-    );
+    ));
+  }
+
+  // Clear loading GIF once all emergency generations finish.
+  if (emergencyGenPromises.length && SEEKDEEP_LOADING_GIF_BUFFER) {
+    void Promise.allSettled(emergencyGenPromises).then(() => {
+      editChoiceMessage({ files: [] }).catch(() => {});
+    });
   }
 
   return true;
@@ -16494,6 +17228,8 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
     );
   };
 
+  const emergencyRegenGif = seekdeepLoadingGifAttachment();
+
   if (mode === 'both') {
     await interaction.editReply({
       content: typeof seekdeepAppendResponseFooter === 'function'
@@ -16512,10 +17248,14 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
             }
           )
         : 'Queued both regenerate versions.',
+      ...(emergencyRegenGif ? { files: [emergencyRegenGif] } : {}),
     });
 
-    void queueOne('original', 'image-choice-original', 'regen-original');
-    void queueOne('refined', 'image-choice-refined', 'regen-refined');
+    const ep1 = queueOne('original', 'image-choice-original', 'regen-original');
+    const ep2 = queueOne('refined', 'image-choice-refined', 'regen-refined');
+    void Promise.allSettled([ep1, ep2]).then(() => {
+      interaction.deleteReply().catch(() => {});
+    });
     return true;
   }
 
@@ -16542,13 +17282,17 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
           }
         )
       : 'Queued regenerate.',
+    ...(emergencyRegenGif ? { files: [emergencyRegenGif] } : {}),
   });
 
-  void queueOne(
+  const emergencyRegenPromise = queueOne(
     resolvedMode,
     resolvedMode === 'original' ? 'image-choice-original' : 'image-choice-refined',
     `regen-${resolvedMode}`
   );
+  void emergencyRegenPromise.then(() => {
+    interaction.deleteReply().catch(() => {});
+  }).catch(() => {});
   return true;
 }
 

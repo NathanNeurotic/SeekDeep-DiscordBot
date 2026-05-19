@@ -7,27 +7,27 @@
       "userArchives": {
         "640897985382973440": {
           "threadId": "1504257634314879016",
-          "count": 83,
+          "count": 88,
           "lastNickname": "! ! NathanNeurotic (Ripto)",
-          "updatedAt": "2026-05-16T05:31:47.024Z",
+          "updatedAt": "2026-05-18T19:39:15.162Z",
           "countSource": "seekdeep-archive-posts-v3",
           "legacyUntrustedCount": 75,
           "legacyUntrustedCountIgnoredAt": "2026-05-14T05:39:41.502Z",
-          "lastArchivedAt": "2026-05-16T05:31:47.024Z",
-          "lastCountBackfillAt": "2026-05-16T05:31:45.385Z",
-          "lastCountBackfillScannedMessages": 110,
-          "lastCountBackfillArchiveEntries": 81
+          "lastArchivedAt": "2026-05-18T19:39:15.162Z",
+          "lastCountBackfillAt": "2026-05-18T19:39:13.927Z",
+          "lastCountBackfillScannedMessages": 123,
+          "lastCountBackfillArchiveEntries": 87
         },
         "741414123711234048": {
           "threadId": "1504896055450534061",
-          "count": 4,
+          "count": 5,
           "countSource": "seekdeep-archive-posts-v3",
           "lastNickname": "GLP-2 Roooo",
-          "updatedAt": "2026-05-16T15:57:58.066Z",
-          "lastCountBackfillAt": "2026-05-16T15:57:56.094Z",
-          "lastCountBackfillScannedMessages": 5,
-          "lastCountBackfillArchiveEntries": 2,
-          "lastArchivedAt": "2026-05-16T15:57:58.065Z"
+          "updatedAt": "2026-05-18T21:19:17.360Z",
+          "lastCountBackfillAt": "2026-05-18T21:19:10.281Z",
+          "lastCountBackfillScannedMessages": 9,
+          "lastCountBackfillArchiveEntries": 4,
+          "lastArchivedAt": "2026-05-18T21:19:17.360Z"
         },
         "1203252560362868766": {
           "threadId": "1504313134683394101",
@@ -39,18 +39,18 @@
       },
       "sharedArchive": {
         "threadId": "1504467609196957808",
-        "threadName": "🪙 • Shared Archive • 25",
-        "count": 25,
+        "threadName": "🪙 • Shared Archive • 41",
+        "count": 41,
         "countSource": "seekdeep-shared-archive-posts-v1",
         "bootstrapSource": "shared-archive-get-or-create",
-        "bootstrapAt": "2026-05-16T15:58:01.862Z",
-        "updatedAt": "2026-05-16T15:58:03.860Z",
-        "lastArchivedAt": "2026-05-16T15:58:03.859Z",
+        "bootstrapAt": "2026-05-19T05:19:48.546Z",
+        "updatedAt": "2026-05-19T05:19:50.181Z",
+        "lastArchivedAt": "2026-05-19T05:19:50.180Z",
         "lastArchivedBy": "640897985382973440",
         "lastArchiveSource": "shared-archive-button-count-finalize-v6",
-        "lastCountScanAt": "2026-05-16T15:58:03.859Z",
-        "lastCountScanMessages": 56,
-        "lastCountScanEntries": 25
+        "lastCountScanAt": "2026-05-19T05:19:50.180Z",
+        "lastCountScanMessages": 99,
+        "lastCountScanEntries": 41
       }
     },
     "741414359967989854": {

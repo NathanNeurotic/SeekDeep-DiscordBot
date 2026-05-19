@@ -31,6 +31,7 @@ checkpoints/
 diagnostics/
 .previous_chat_model.txt
 data/server-stats.json
+data/archive-guild-config.json
 data/archive-guild-config.json.bak*
 
 # Old broken git directory (renamed during init)

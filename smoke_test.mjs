@@ -227,13 +227,13 @@ const sample = {
   reserved_pct: 32.5,
   loaded: { chat_model: true, vision_model: false, image_pipe: false },
   loaded_chat_role: 'default_chat',
-  loaded_chat_model_id: 'Qwen/Qwen3-8B',
+  loaded_chat_model_id: 'meta-llama/Llama-3.1-8B-Instruct',
   keep_resident: { vision: true, image: false },
 };
 const formatted = T.seekdeepFormatGpuStats(sample);
 check('gpu format: summary includes device name', /RTX 5090/.test(formatted.summary));
 check('gpu format: summary includes used/total GB', /14\.2[34] \/ 24\.00 GB/.test(formatted.summary));
-check('gpu format: detail shows loaded chat model', formatted.detail.some((l) => l.includes('Qwen/Qwen3-8B')));
+check('gpu format: detail shows loaded chat model', formatted.detail.some((l) => l.includes('meta-llama/Llama-3.1-8B-Instruct')));
 check('gpu format: detail shows pinned vision', formatted.detail.some((l) => /Pinned.*vision/.test(l)));
 check('gpu format: no thrashing warning at 32% reserved', formatted.thrashing !== true);
 
@@ -502,8 +502,8 @@ const {
 // img2img query extraction
 check('img2img: "@SeekDeep img2img make it cyberpunk" extracts', img2imgQuery('@SeekDeep img2img make it cyberpunk') === 'make it cyberpunk');
 check('img2img: "<@123> img2img oil painting" extracts', img2imgQuery('<@123> img2img oil painting') === 'oil painting');
-check('img2img: empty = empty', img2imgQuery('') === '');
-check('img2img: no img2img keyword = empty', img2imgQuery('@SeekDeep draw a cat') === '');
+check('img2img: empty = null', img2imgQuery('') === null);
+check('img2img: no img2img keyword = null', img2imgQuery('@SeekDeep draw a cat') === null);
 
 // upscale query extraction
 check('upscale: "@SeekDeep upscale" extracts default 2x', upscaleQuery('@SeekDeep upscale')?.scale === 2);
@@ -547,6 +547,93 @@ check('non-latin: empty is false', looksNL('') === false);
 check('non-latin: short (<3 chars) is false', looksNL('ab') === false);
 check('non-latin: mentions stripped before check', looksNL('<@123456789> hello') === false);
 check('non-latin: mixed mention + CJK still detects', looksNL('<@123> 你好世界') === true);
+
+// ---------- Suite 27: Loading GIF feature ----------
+console.log('27. Loading GIF feature.');
+check('loading-gif: helper function exists', typeof T.seekdeepLoadingGifAttachment === 'function');
+const gifPresent = T.SEEKDEEP_LOADING_GIF_PATH !== null;
+if (gifPresent) {
+  // assets/loading.gif exists on this machine — verify the loader cached it.
+  check('loading-gif: path resolved when file exists', typeof T.SEEKDEEP_LOADING_GIF_PATH === 'string' && T.SEEKDEEP_LOADING_GIF_PATH.length > 0);
+  check('loading-gif: buffer loaded when file exists', T.SEEKDEEP_LOADING_GIF_BUFFER instanceof Buffer || T.SEEKDEEP_LOADING_GIF_BUFFER instanceof Uint8Array);
+  check('loading-gif: helper returns AttachmentBuilder when file exists', T.seekdeepLoadingGifAttachment() !== null);
+} else {
+  // No GIF on disk — verify graceful no-op.
+  check('loading-gif: returns null when no GIF file present', T.seekdeepLoadingGifAttachment() === null);
+  check('loading-gif: SEEKDEEP_LOADING_GIF_PATH is null when file missing', T.SEEKDEEP_LOADING_GIF_PATH === null);
+  check('loading-gif: SEEKDEEP_LOADING_GIF_BUFFER is null when file missing', T.SEEKDEEP_LOADING_GIF_BUFFER === null);
+}
+
+// ── Suite 28: Research-followup predicate (false-positive fix) ───────
+check('research-followup: "pros and cons of each" matches', T.seekdeepIsResearchFollowupPrompt('pros and cons of each'));
+check('research-followup: "compare those" matches', T.seekdeepIsResearchFollowupPrompt('compare those'));
+check('research-followup: "compare these" matches', T.seekdeepIsResearchFollowupPrompt('compare these'));
+check('research-followup: "rank these" matches', T.seekdeepIsResearchFollowupPrompt('rank these'));
+check('research-followup: "Are these real give me embed links" does NOT match', !T.seekdeepIsResearchFollowupPrompt('Are these real give me embed links'));
+check('research-followup: "these are my favourite songs" does NOT match', !T.seekdeepIsResearchFollowupPrompt('these are my favourite songs'));
+check('research-followup: "I like those shoes" does NOT match', !T.seekdeepIsResearchFollowupPrompt('I like those shoes'));
+check('research-followup: "fact check this" matches', T.seekdeepIsResearchFollowupPrompt('fact check this'));
+
+// ── Suite 29: Context-menu footer stripper ──────────────────────────
+check('footer-strip: strips Time to Generate + Model Used', T.seekdeepStripResponseFooter('Hello world\n\nTime to Generate: 5.23 seconds\nModel Used: meta-llama/Llama-3.1-8B-Instruct') === 'Hello world');
+check('footer-strip: strips image footer with Generated/Refined/Queue', T.seekdeepStripResponseFooter('Pretty cat\n\nGenerated: a cat\nRefined Prompt: a pretty cat on a hill\nRefinement: on (AI-refined)\nQueue Wait: 12.00 seconds\nJob ID: imgq_123_1\nTime to Generate: 8.00 seconds\nModel Used: Lykon/dreamshaper-xl-1-0') === 'Pretty cat');
+check('footer-strip: preserves text with no footer', T.seekdeepStripResponseFooter('Just normal text here') === 'Just normal text here');
+check('footer-strip: handles empty string', T.seekdeepStripResponseFooter('') === '');
+
+// ── Suite 30: Conversational image-edit followup detection ──────────
+check('conv-edit: "make it darker"', T.seekdeepLooksLikeConversationalImageEditFollowup('make it darker') === true);
+check('conv-edit: "Can you make the same image but without wizard"', T.seekdeepLooksLikeConversationalImageEditFollowup('Can you make the same image but without wizard and his ball?') === true);
+check('conv-edit: "could you make this one brighter"', T.seekdeepLooksLikeConversationalImageEditFollowup('could you make this one brighter') === true);
+check('conv-edit: "same thing but without the background"', T.seekdeepLooksLikeConversationalImageEditFollowup('same thing but without the background') === true);
+check('conv-edit: "redo the image without the cat"', T.seekdeepLooksLikeConversationalImageEditFollowup('redo the image without the cat') === true);
+check('conv-edit: "what does this image show" is NOT edit', T.seekdeepLooksLikeConversationalImageEditFollowup('what does this image show') === false);
+check('conv-edit: "make me a sandwich" is NOT edit', T.seekdeepLooksLikeConversationalImageEditFollowup('make me a sandwich') === false);
+check('conv-edit: "change the first one to red"', T.seekdeepLooksLikeConversationalImageEditFollowup('change the first one to red') === true);
+
+// ── Suite 31: Conversational image-edit instruction cleaner ─────────
+check('conv-clean: "Can you make the same image but without wizard" → "without wizard..."', T.seekdeepCleanConversationalImageEditInstruction('Can you make the same image but without wizard and his ball?') === 'without wizard and his ball?');
+check('conv-clean: "make it darker" → "darker"', T.seekdeepCleanConversationalImageEditInstruction('make it darker') === 'darker');
+check('conv-clean: "change the first one to red" → "red"', T.seekdeepCleanConversationalImageEditInstruction('change the first one to red') === 'red');
+
+// ── Suite 32: Context-menu prompt extraction (image messages) ─────────
+console.log('32. Context-menu prompt extraction.');
+
+check('ctx-extract: Generated message → clean prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Generated: crystal ball wizard\nRefinement: off\nQueue Wait: 0.00 seconds\nJob ID: imgq_123_1\n\nTime to Generate: 7.92 seconds\nModel Used: Lykon/dreamshaper-xl-1-0' }) === 'crystal ball wizard');
+check('ctx-extract: Refined Prompt message → refined prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Generated: raw prompt\nRefined Prompt: a beautiful sunset over mountains\nRefinement: on\nQueue Wait: 1.00 seconds\nJob ID: imgq_456_1\n\nTime to Generate: 10.00 seconds\nModel Used: Lykon/dreamshaper-xl-1-0' }) === 'a beautiful sunset over mountains');
+check('ctx-extract: img2img result → clean prompt', T.seekdeepExtractContextMenuPromptText({ content: 'img2img complete (strength 0.85): crystal ball wizard, without the wizard' }) === 'crystal ball wizard, without the wizard');
+check('ctx-extract: InstructPix2Pix result → instruction', T.seekdeepExtractContextMenuPromptText({ content: 'InstructPix2Pix edit: make it darker and more dramatic' }) === 'make it darker and more dramatic');
+check('ctx-extract: Inpaint result → prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Inpaint complete: removed "wizard" — crystal ball on a table' }) === 'crystal ball on a table');
+check('ctx-extract: plain text → unchanged', T.seekdeepExtractContextMenuPromptText({ content: 'A beautiful sunset over the ocean' }) === 'A beautiful sunset over the ocean');
+check('ctx-extract: chat with footer → footer stripped', T.seekdeepExtractContextMenuPromptText({ content: 'Here is my analysis.\n\nTime to Generate: 3.00 seconds\nModel Used: meta-llama/Llama-3.1-8B-Instruct' }) === 'Here is my analysis.');
+check('ctx-extract: nested Generated: Generated: → just inner prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Generated: Generated: wizard with ball Refinement: off Queue Wait: 0.00 seconds Job ID: imgq_123_1\nRefinement: off\nQueue Wait: 0.00 seconds\nJob ID: imgq_456_1' }) === 'Generated: wizard with ball Refinement: off Queue Wait: 0.00 seconds Job ID: imgq_123_1');
+
+// ── Suite 33: Edit result prompt extraction ───────────────────────────
+console.log('33. Edit result prompt extraction.');
+check('edit-extract: img2img with parenthetical', T.seekdeepExtractEditResultPrompt('img2img complete (strength 0.6): a cat in a hat') === 'a cat in a hat');
+check('edit-extract: pix2pix', T.seekdeepExtractEditResultPrompt('InstructPix2Pix edit: make the sky blue') === 'make the sky blue');
+check('edit-extract: inpaint with em-dash', T.seekdeepExtractEditResultPrompt('Inpaint complete: removed "tree" — forest clearing with sunlight') === 'forest clearing with sunlight');
+check('edit-extract: normal text → empty', T.seekdeepExtractEditResultPrompt('just some text') === '');
+
+// ── Suite 34: Image metadata line stripper ────────────────────────────
+console.log('34. Image metadata line stripper.');
+check('meta-strip: strips Refinement/Queue/Job lines', T.seekdeepStripImageMetadataLines('hello world\nRefinement: off\nQueue Wait: 0.00 seconds\nJob ID: imgq_123') === 'hello world');
+check('meta-strip: strips Time to Generate + Model Used', T.seekdeepStripImageMetadataLines('response text\nTime to Generate: 5.00 seconds\nModel Used: some/model') === 'response text');
+check('meta-strip: preserves normal text', T.seekdeepStripImageMetadataLines('no metadata here') === 'no metadata here');
+
+// ── Suite 35: img2img / pix2pix / inpaint mention command extraction ─
+console.log('35. Mention command query extraction (img2img, pix2pix, inpaint).');
+check('img2img: with prompt', T.seekdeepImg2ImgQueryFromMessage('<@123> img2img make it dark') === 'make it dark');
+check('img2img: bare (no prompt) → empty string', T.seekdeepImg2ImgQueryFromMessage('<@123> img2img') === '');
+check('img2img: non-match → null', T.seekdeepImg2ImgQueryFromMessage('<@123> help') === null);
+check('img2img: @seekdeep alias', T.seekdeepImg2ImgQueryFromMessage('@seekdeep img2img enhance') === 'enhance');
+check('pix2pix: with instruction', T.seekdeepPix2PixQueryFromMessage('<@123> pix2pix make it darker') === 'make it darker');
+check('pix2pix: bare → empty string', T.seekdeepPix2PixQueryFromMessage('<@123> pix2pix') === '');
+check('pix2pix: non-match → null', T.seekdeepPix2PixQueryFromMessage('<@123> help') === null);
+check('pix2pix: @seekdeep alias', T.seekdeepPix2PixQueryFromMessage('@seekdeep pix2pix add snow') === 'add snow');
+check('inpaint: with target', T.seekdeepInpaintQueryFromMessage('<@123> inpaint the wizard') === 'the wizard');
+check('inpaint: bare → empty string', T.seekdeepInpaintQueryFromMessage('<@123> inpaint') === '');
+check('inpaint: non-match → null', T.seekdeepInpaintQueryFromMessage('<@123> draw me a cat') === null);
+check('inpaint: @seekdeep alias', T.seekdeepInpaintQueryFromMessage('@seekdeep inpaint background trees') === 'background trees');
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);

@@ -46,6 +46,10 @@ QUARANTINE_ROOT = ROOT / "models" / "_quarantine"
 
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_INSTRUCT_PIX2PIX_MODEL_ID = "timbrooks/instruct-pix2pix"
+DEFAULT_CLIPSEG_MODEL_ID = "CIDAS/clipseg-rd64-refined"
+
 
 # ---------------------------------------------------------------------------
 # Model role / repo resolution
@@ -55,9 +59,13 @@ def _env(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
+def _env_truthy(name: str) -> bool:
+    return _env(name).lower() in TRUTHY_ENV_VALUES
+
+
 def _chat_role_repos() -> list[tuple[str, str, str, bool]]:
     """Return list of (role, repo_id, env_var, required) for chat roles."""
-    default_id = _env("LOCAL_CHAT_MODEL_ID") or "Qwen/Qwen3-8B"
+    default_id = _env("LOCAL_CHAT_MODEL_ID") or "meta-llama/Llama-3.1-8B-Instruct"
     roles = [
         ("default_chat", default_id, "LOCAL_CHAT_MODEL_ID", True),
         ("fallback_chat", _env("LOCAL_CHAT_FALLBACK_MODEL_ID"), "LOCAL_CHAT_FALLBACK_MODEL_ID", False),
@@ -68,10 +76,38 @@ def _chat_role_repos() -> list[tuple[str, str, str, bool]]:
     return roles
 
 
-def _active_repo_ids(include_optional: bool, skip_image: bool, skip_vision: bool, chat_only: bool) -> list[tuple[str, str, str, bool]]:
+def _enabled_feature_model_repos() -> list[tuple[str, str, str, bool]]:
+    """Optional feature model repos enabled by SEEKDEEP_FEATURE_* flags."""
+    items: list[tuple[str, str, str, bool]] = []
+    if _env_truthy("SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX"):
+        items.append((
+            "instruct_pix2pix",
+            _env("LOCAL_INSTRUCT_PIX2PIX_MODEL_ID") or DEFAULT_INSTRUCT_PIX2PIX_MODEL_ID,
+            "LOCAL_INSTRUCT_PIX2PIX_MODEL_ID",
+            False,
+        ))
+    if _env_truthy("SEEKDEEP_FEATURE_INPAINT"):
+        items.append((
+            "clipseg_inpaint_mask",
+            _env("LOCAL_CLIPSEG_MODEL_ID") or DEFAULT_CLIPSEG_MODEL_ID,
+            "LOCAL_CLIPSEG_MODEL_ID",
+            False,
+        ))
+    return items
+
+
+def _active_repo_ids(
+    include_optional: bool,
+    include_enabled_features: bool,
+    skip_image: bool,
+    skip_vision: bool,
+    chat_only: bool,
+) -> list[tuple[str, str, str, bool]]:
     """Return the active list of (role, repo_id, env_var, required) tuples to warm.
 
     ``lightweight_chat`` is only included when ``include_optional`` is True.
+    Enabled optional feature models are included when ``include_enabled_features``
+    is True.
     ``LOCAL_VISION_MODEL_ID`` / ``LOCAL_IMAGE_MODEL_ID`` are only included when not
     explicitly skipped and ``chat_only`` is False.
     """
@@ -93,6 +129,8 @@ def _active_repo_ids(include_optional: bool, skip_image: bool, skip_vision: bool
             image_repo = _env("LOCAL_IMAGE_MODEL_ID")
             if image_repo:
                 items.append(("image", image_repo, "LOCAL_IMAGE_MODEL_ID", True))
+        if include_enabled_features:
+            items.extend(_enabled_feature_model_repos())
     return items
 
 
@@ -108,6 +146,9 @@ def configured_active_repo_ids() -> set[str]:
             repos.add(repo)
     for env_name in ("LOCAL_VISION_MODEL_ID", "LOCAL_IMAGE_MODEL_ID"):
         repo = _env(env_name)
+        if repo:
+            repos.add(repo)
+    for _role, repo, _var, _required in _enabled_feature_model_repos():
         if repo:
             repos.add(repo)
     return repos
@@ -255,6 +296,9 @@ def audit_cache(show_unused: bool, include_optional: bool) -> int:
             label = repo or "(unset)"
             cached_flag = "cached" if repo and repo in cached_repo_to_folder else ("not cached" if repo else "not configured")
             print(f"  role={role_name:<16} env={env_name:<35} repo={label:<55} {cached_flag}")
+        for role, repo, env_var, _required in _enabled_feature_model_repos():
+            cached_flag = "cached" if repo in cached_repo_to_folder else "not cached"
+            print(f"  role={role:<16} env={env_var:<35} repo={repo:<55} {cached_flag}")
     print()
 
     print(f"Cached models still in use ({len(kept_used)}):")
@@ -379,7 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Warm/audit/quarantine the SeekDeep local Hugging Face model cache.",
     )
-    parser.add_argument("--include-optional", action="store_true", help="Also warm/list optional models (lightweight_chat).")
+    parser.add_argument("--include-optional", action="store_true", help="Also warm/list optional models (lightweight_chat plus enabled feature models).")
+    parser.add_argument("--include-enabled-features", action="store_true", help="Also warm optional model caches for SEEKDEEP_FEATURE_* flags currently set to on.")
     parser.add_argument("--skip-image", action="store_true", help="Skip LOCAL_IMAGE_MODEL_ID warmup.")
     parser.add_argument("--skip-vision", action="store_true", help="Skip LOCAL_VISION_MODEL_ID warmup.")
     parser.add_argument("--chat-only", action="store_true", help="Only warm chat-role models.")
@@ -409,6 +454,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     items = _active_repo_ids(
         include_optional=args.include_optional,
+        include_enabled_features=args.include_enabled_features or args.include_optional,
         skip_image=args.skip_image,
         skip_vision=args.skip_vision,
         chat_only=args.chat_only,

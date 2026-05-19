@@ -4,6 +4,18 @@ This file tracks everything that's been discussed, scoped, or partially scaffold
 
 ## Recently Shipped
 
+### v10.31 — InstructPix2Pix + Inpainting + routing overhaul ✅ shipped
+- `/pix2pix instruction:<text> image:<file>` — edit images with natural-language instructions via `timbrooks/instruct-pix2pix`.
+- `/inpaint remove:<text> prompt:<text> image:<file>` — remove objects using CLIPSeg auto-mask + SDXL inpainting (`CIDAS/clipseg-rd64-refined`).
+- Conversational image edit auto-routing: reply to a generated image with "make it darker" or "remove the wizard" and SeekDeep picks the best pipeline (inpaint → pix2pix → img2img).
+- Fixed context-menu "Generate Image from this" metadata leak — `seekdeepExtractContextMenuPromptText` now extracts clean prompts from all image result formats (Generated:, img2img, pix2pix, inpaint).
+- Added `seekdeepExtractEditResultPrompt` and `seekdeepStripImageMetadataLines` for robust prompt extraction.
+- Fixed `/img2img` slash command option ordering (required before optional).
+- 15 new smoke tests (226 total).
+
+### v10.30 — Image quality tuning ✅ shipped
+Scheduler, negative prompt, and guidance scale defaults tuned for Dreamshaper-XL.
+
 ### v10.29 — Auto-translate channel ✅ shipped
 `@SeekDeep translate channel here` designates one channel per server where every non-bot message containing non-Latin script gets an automatic English translation reply. Fast regex detector for CJK, Cyrillic, Arabic, Devanagari, Thai, Korean. 3-second cooldown per channel. 9 smoke checks.
 
@@ -45,9 +57,7 @@ What was scoped but NOT shipped:
 ## Next Up
 
 - **TTS voice channel** — Piper or XTTS. Biggest remaining lift. Requires model download (user approval needed, limited SSD space).
-- ~~**Architecture diagram**~~ — shipped in docs commit, ASCII diagram in README.
-- ~~**data/*.json schema docs**~~ — shipped in docs commit, full schemas in AGENTS.md.
-- **Real-ESRGAN model download** — scaffolded in v10.25 but needs user approval.
+- **Real-ESRGAN model download** — scaffolded in v10.25 but needs user approval for the model cache.
 
 ## Deferred From the v10.5 Audit
 
@@ -58,7 +68,15 @@ These were flagged in the audit but deliberately not pursued during v10.5–v10.
 
 ## Optional Features (Scaffolded, Off By Default)
 
-Each is gated behind a `SEEKDEEP_FEATURE_*` flag. Code paths exist but the underlying model/endpoint isn't wired up.
+Each is gated behind a `SEEKDEEP_FEATURE_*` flag.
+
+### `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` ✅ shipped v10.31
+
+Natural-language image editing via `timbrooks/instruct-pix2pix` (~6 GB). Slash command `/pix2pix` + auto-routing from conversational edits (modifications like "make it darker").
+
+### `SEEKDEEP_FEATURE_INPAINT` ✅ shipped v10.31
+
+Object removal via CLIPSeg auto-mask + SDXL inpainting. `CIDAS/clipseg-rd64-refined` (~400 MB) for segmentation. Slash command `/inpaint` + auto-routing from conversational edits (removals like "remove the wizard").
 
 ### `SEEKDEEP_FEATURE_NSFW_GATE`
 

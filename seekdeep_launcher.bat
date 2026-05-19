@@ -84,7 +84,11 @@ cls
 call :ensureVenv
 if errorlevel 1 goto back_to_menu
 call :loadEnv
-powershell -NoExit -ExecutionPolicy Bypass -Command "& { Set-Location -LiteralPath '%CD%'; .\.venv\Scripts\Activate.ps1; python warmup_local_cache.py }"
+call :buildWarmupArgs
+if defined WARMUP_FEATURES (
+    echo Enabled optional feature model warmup: %WARMUP_FEATURES%
+)
+powershell -NoExit -ExecutionPolicy Bypass -Command "& { Set-Location -LiteralPath '%CD%'; .\.venv\Scripts\Activate.ps1; python warmup_local_cache.py %WARMUP_ARGS% }"
 goto menu
 
 :start_ai
@@ -207,6 +211,32 @@ if "%LOCAL_VISION_MODEL_ID%"=="" set "LOCAL_VISION_MODEL_ID=Qwen/Qwen2.5-VL-3B-I
 if "%LOCAL_IMAGE_MODEL_ID%"=="" set "LOCAL_IMAGE_MODEL_ID=Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers"
 if "%LOCAL_MODEL_CACHE_DIR%"=="" set "LOCAL_MODEL_CACHE_DIR=./models/huggingface"
 exit /b 0
+
+:buildWarmupArgs
+set "WARMUP_ARGS="
+set "WARMUP_FEATURES="
+call :appendWarmupFeature "%SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX%" "instruct-pix2pix"
+call :appendWarmupFeature "%SEEKDEEP_FEATURE_INPAINT%" "inpaint-clipseg"
+if defined WARMUP_FEATURES set "WARMUP_ARGS=--include-enabled-features"
+exit /b 0
+
+:appendWarmupFeature
+call :isTruthy "%~1"
+if errorlevel 1 exit /b 0
+if defined WARMUP_FEATURES (
+    set "WARMUP_FEATURES=!WARMUP_FEATURES!, %~2"
+) else (
+    set "WARMUP_FEATURES=%~2"
+)
+exit /b 0
+
+:isTruthy
+set "SEEKDEEP_BOOL=%~1"
+if /I "%SEEKDEEP_BOOL%"=="1" exit /b 0
+if /I "%SEEKDEEP_BOOL%"=="true" exit /b 0
+if /I "%SEEKDEEP_BOOL%"=="yes" exit /b 0
+if /I "%SEEKDEEP_BOOL%"=="on" exit /b 0
+exit /b 1
 
 :ensureDocker
 docker version >nul 2>nul
