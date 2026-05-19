@@ -57,7 +57,8 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
          |   |   |   |   |   |
        /chat /image /vision  |
              /img2img /upscale
-                  /gpu  /chart
+          /instruct-pix2pix  |
+             /inpaint /gpu /chart
                       |
     +-----------------+--+
     |   SearXNG (Docker)  |
@@ -83,6 +84,8 @@ The local AI server exposes:
 - `POST /vision` — image/video analysis (Qwen2.5-VL-3B)
 - `POST /image` — SDXL image generation (Dreamshaper-XL)
 - `POST /img2img` — image-to-image transformation (shared SDXL weights)
+- `POST /instruct-pix2pix` — natural-language image editing (InstructPix2Pix)
+- `POST /inpaint` — object removal via CLIPSeg auto-mask + SDXL inpainting
 - `POST /upscale` — Lanczos upscale (Real-ESRGAN scaffolded)
 - `POST /chart` — matplotlib stats chart rendering
 - `POST /unload` — force-unload current model
@@ -231,18 +234,23 @@ Archive thread names track archived generation entries, not general messages. Ar
 
 ## Right-click Context Menu Commands
 
-Right-click any Discord message → **Apps** → SeekDeep submenu. Five message context menu commands ship by default; a sixth is flag-gated off.
+Right-click any Discord message, then **Apps**, then the SeekDeep submenu.
 
 | Command | Action |
 |---|---|
-| **Generate Image from this** | Use the message text as an image prompt, queue Original generation. |
-| **Refine as Image Prompt** | Rewrite the message text as a stronger image prompt. Refuses non-image input. |
-| **Inspect (SeekDeep)** | Ephemeral debug card: IDs, timestamps, attachments, buttons, and any cached SeekDeep image state. |
+| **Generate Image from this** | Use the message text as an image prompt. |
+| **Refine as Image Prompt** | Rewrite the message text as a stronger image prompt. |
+| **Describe Image (SeekDeep)** | Run vision analysis on an image attachment (ephemeral). |
+| **Upscale Image (SeekDeep)** | Upscale an image attachment 2x (ephemeral). |
+| **img2img from this** | Opens a modal for img2img prompt. Auto-routes instruction-like prompts to pix2pix/inpaint when enabled. Requires `SEEKDEEP_FEATURE_IMG2IMG=on`. |
+| **Edit Image (SeekDeep)** | Opens a modal for InstructPix2Pix editing. Requires `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on`. |
+| **Remove Object (SeekDeep)** | Opens a modal for CLIPSeg + inpaint removal. Requires `SEEKDEEP_FEATURE_INPAINT=on`. |
+| **Inspect (SeekDeep)** | Ephemeral debug card: IDs, timestamps, attachments, cached image state. |
 | **Translate (SeekDeep)** | Translate / decode the message text to plain English. |
-| **Compare with previous** | Compare this message against the prior non-bot message in the channel. |
-| **Force React (SeekDeep)** *(disabled by default)* | Paginated emoji picker — pick up to 5 custom emoji from a 4-select-menu grid, applied as reactions to the target message. Enable with `SEEKDEEP_FEATURE_FORCE_REACT=on` in `.env`. Off by default so SeekDeep doesn't fight demonbot for the same slot in shared servers. |
+| **Compare with previous** | Compare this message against the prior non-bot message. |
+| **Force React (SeekDeep)** | Paginated emoji picker. Requires `SEEKDEEP_FEATURE_FORCE_REACT=on`. |
 
-By default the **Refine / Translate / Compare** results post publicly so everyone in the channel sees them. Flip the corresponding `SEEKDEEP_CONTEXT_*_EPHEMERAL=on` env var to make any one of them ephemeral (only the clicker sees it).
+By default **Refine / Translate / Compare** results post publicly. Flip the corresponding `SEEKDEEP_CONTEXT_*_EPHEMERAL=on` env var to make any ephemeral.
 
 ## Chat Model Roles
 
@@ -254,7 +262,7 @@ Roles:
 - `quality_text` — detailed explanations, comparisons, pros/cons, planning, strategy, long-form answers.
 - `reasoning_code` — code, stack traces, logs, debugging, architecture, repo edits, PowerShell/Python/JavaScript/TypeScript/Node/FastAPI/Transformers/CUDA/VRAM questions.
 - `fallback_chat` — used automatically when the selected role fails to load or generate.
-- `lightweight_chat` — optional low-VRAM fallback, only loaded if `LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID` is set and `--include-optional` is passed to warmup.
+- `lightweight_chat` — auto-routed for translations, greetings, and trivial queries when `LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID` is set. Saves VRAM by not loading the full 8B model for throwaway tasks.
 
 Configure role models in `.env`:
 
@@ -382,6 +390,7 @@ MAX_WEB_RESULTS=12                        # SearXNG hits passed to the model
 
 # Image generation
 SEEKDEEP_IMAGE_COOLDOWN_MS=15000          # per-user image cooldown (15s default)
+IMAGE_IMG2IMG_GUIDANCE_SCALE=5.0          # img2img guidance (lower than txt2img for better edits)
 SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS=900000   # Original/Refined/Both button TTL (15min)
 SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS=900000  # 'generate me' follow-up TTL (15min)
 SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=600000   # refined-prompt reuse window (10min)

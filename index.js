@@ -6618,7 +6618,7 @@ function seekdeepHelpText(source = null) {
     'quality_text    compare / pros and cons / planning / detailed / explain',
     'reasoning_code  code / stack trace / debug / repo / CUDA / VRAM / etc.',
     'fallback_chat   used automatically if the chosen role fails',
-    'lightweight_chat optional low-VRAM fallback (only if configured)',
+    'lightweight_chat translations, greetings, trivial Q&A (if configured)',
     '```',
     'See `' + prefix + ' status` -> "Chat roles" for the role -> model mapping,',
     'and "Loaded chat role / Loaded chat model" for what is currently in VRAM.',
