@@ -151,11 +151,20 @@ async function seekdeepReadGitChangelog(limit = 10) {
 const SEEKDEEP_RECENT_ERRORS = [];
 const SEEKDEEP_RECENT_ERRORS_MAX = 50;
 function seekdeepRedactErrorMsg(msg) {
-  return String(msg || '')
-    .replace(/(?:token|key|secret|password|authorization)[=: ]+\S+/gi, '$&'.replace(/\S+$/, '***'))
-    .replace(/(?:token|key|secret|password|authorization)[=:"' ]+[^\s"']+/gi, (m) => m.replace(/[^\s=:"']+$/, '***'))
-    .replace(/(?:C:|\/home\/|\/root\/|\/mnt\/)[^\s"']+/gi, '<path>')
-    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '<email>');
+  let out = String(msg || '');
+  // Discord bot token shape: 24-30+ chars separated by 2 dots.
+  out = out.replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}/g, '[redacted-token]');
+  // Bearer/Authorization headers.
+  out = out.replace(/(authorization\s*[:=]\s*['"]?bearer\s+)[^'"\s]+/gi, '$1[redacted]');
+  // hf_* / sk-* / nvapi-* style API keys.
+  out = out.replace(/\b(?:hf_|sk-|nvapi-)[A-Za-z0-9_-]{16,}\b/g, '[redacted-key]');
+  // Generic key=value patterns for token/secret/password env vars.
+  out = out.replace(/(?:token|key|secret|password|authorization)[=:"' ]+[^\s"']+/gi, (m) => m.replace(/[^\s=:"']+$/, '***'));
+  // Filesystem paths.
+  out = out.replace(/(?:C:|\/home\/|\/root\/|\/mnt\/)[^\s"']+/gi, '<path>');
+  // Email addresses.
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '<email>');
+  return out;
 }
 
 function seekdeepCaptureRecentError(level, args) {
@@ -589,6 +598,14 @@ function seekdeepAppendResponseFooter(content, meta = {}) {
     return body;
   }
 
+  // Suppress footer on fast responses — timing and model attribution are noise
+  // when the answer came back nearly instantly. Default threshold: 1.9 seconds.
+  const footerMinSeconds = Number(process.env.SEEKDEEP_FOOTER_MIN_SECONDS || 1.9);
+  const elapsedSec = meta.startedAt ? (Date.now() - Number(meta.startedAt)) / 1000 : 0;
+  if (elapsedSec > 0 && elapsedSec < footerMinSeconds) {
+    return body;
+  }
+
   if (typeof seekdeepResponseFooter === 'function') {
     const footer = seekdeepResponseFooter({
       ...meta,
@@ -975,6 +992,8 @@ async function seekdeepFetchWithLimits(url, options = {}) {
   } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  let timerCleared = false;
+  const clearTimer = () => { if (!timerCleared) { clearTimeout(timer); timerCleared = true; } };
   try {
     const res = await fetch(url, { ...rest, signal: controller.signal });
     if (!res.ok) {
@@ -986,29 +1005,35 @@ async function seekdeepFetchWithLimits(url, options = {}) {
       throw new Error(`Attachment too large: ${cl} bytes > ${maxBytes} byte cap`);
     }
     // Wrap the response body with a streaming byte cap so responses without
-    // Content-Length can't exhaust memory.
+    // Content-Length can't exhaust memory. The abort timer stays alive through
+    // body consumption so a slow trickle can't hang the caller forever.
     if (res.body) {
       const reader = res.body.getReader();
       let consumed = 0;
       const capped = new ReadableStream({
         async pull(ctrl) {
           const { done, value } = await reader.read();
-          if (done) { ctrl.close(); return; }
+          if (done) { ctrl.close(); clearTimer(); return; }
           consumed += value.byteLength;
           if (consumed > maxBytes) {
             ctrl.error(new Error(`Streamed body exceeded ${maxBytes} byte cap at ${consumed} bytes`));
             reader.cancel().catch(() => {});
+            clearTimer();
             return;
           }
           ctrl.enqueue(value);
         },
-        cancel() { reader.cancel().catch(() => {}); },
+        cancel() { reader.cancel().catch(() => {}); clearTimer(); },
       });
+      // Return WITHOUT clearing timer — it stays alive during body reads.
+      // Timer is cleared by the stream's close/cancel/error callbacks above.
       return new Response(capped, { status: res.status, statusText: res.statusText, headers: res.headers });
     }
+    clearTimer();
     return res;
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    clearTimer();
+    throw err;
   }
 }
 
@@ -6152,7 +6177,7 @@ function seekdeepHelpText(source = null) {
     '',
     '## ' + clock + ' Recent / Stats / GPU / Queue',
     '```text',
-    prefix + ' recent images [limit]   |  recent prompts  |  recent errors',
+    prefix + ' recent images [limit]   |  recent prompts  |  recent errors (admin)',
     '/recent kind:images|prompts|archive',
     prefix + ' stats / stats me / stats chart',
     '/stats scope:server|me|chart',
@@ -7052,7 +7077,7 @@ function seekdeepUtilityPromptKind(prompt = '') {
   return '';
 }
 
-function seekdeepUtilityText(kind, source, key) {
+async function seekdeepUtilityText(kind, source, key) {
   switch (kind) {
     case 'help': return seekdeepHelpText(source);
     case 'cache': return seekdeepCacheStatusText();
@@ -7060,7 +7085,7 @@ function seekdeepUtilityText(kind, source, key) {
     case 'recent-images': return seekdeepRecentImagesText(10);
     case 'recent-prompts': return seekdeepRecentPromptsText(key, 12);
     case 'recent-errors': return seekdeepIsAdminSource(source) ? seekdeepRecentErrorsText(20) : 'Recent errors are admin-only. Ask a server admin or bot owner.';
-    case 'changelog': return '(use /changelog for a fresh git log — chat fallback)';
+    case 'changelog': return typeof seekdeepReadGitChangelog === 'function' ? await seekdeepReadGitChangelog(10) : '(git log unavailable)';
     case 'admin': return ['SeekDeep admin status', '', seekdeepAdminLine(source)].join('\n');
     case 'image-queue': return seekdeepImageQueueStatusText();
     default: return '';
@@ -14037,7 +14062,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
           content = topic ? seekdeepHelpTopicSlice(topic, message) : seekdeepHelpText(message);
         }
       } else {
-        content = seekdeepUtilityText(utilityKind, message, key);
+        content = await seekdeepUtilityText(utilityKind, message, key);
       }
       remember(key, 'assistant', content);
       if (utilityKind === 'help') {
@@ -15757,7 +15782,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      const content = seekdeepUtilityText(kind, interaction, key);
+      const content = await seekdeepUtilityText(kind, interaction, key);
       await sendLongInteractionReply(interaction, asTextBlock(content));
       return;
     }

@@ -97,7 +97,7 @@ Use `raw`, `unrefined`, `--raw`, or `no refine` in a prompt when you want to ski
 | `@SeekDeep archive shared` | Open or create the shared archive thread. | Everyone |
 | `@SeekDeep archive status` | Show your archive status. | Everyone |
 | `@SeekDeep archive status @user` | Show a user's archive status. | Everyone |
-| `@SeekDeep archive count set <number>` | Manually set the count for your archive thread. | Admin |
+| `@SeekDeep archive count set <number>` | Manually set the count for your own archive thread. | Everyone |
 | `@SeekDeep archive count @user set <number>` | Set another user's count. | Admin |
 | `@SeekDeep archive search <query>` | Text-search prompts in your archive thread. | Everyone |
 | `@SeekDeep archive clean older than <duration>` | Preview old entries for bulk deletion (e.g. `7d`, `2w`, `1m`). | Everyone |
@@ -137,7 +137,7 @@ Each archive thread entry has:
 |---------|---------|------------|
 | `@SeekDeep recent images [limit]` | Show recent image generations (defaults to 5, max 10). | Everyone |
 | `@SeekDeep recent prompts` | Show recent prompts for the current context. | Everyone |
-| `@SeekDeep recent errors` | Show recent bot-side errors. | Everyone |
+| `@SeekDeep recent errors` | Show recent bot-side errors (redacted). | Admin only |
 | `@SeekDeep changelog` | Show the last 10 git commits. | Everyone |
 | `@SeekDeep cache status` | Show temporary image cache status. | Everyone |
 | `@SeekDeep queue status` | Show current image queue status. | Everyone |
