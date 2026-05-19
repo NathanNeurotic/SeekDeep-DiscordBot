@@ -13151,9 +13151,20 @@ function getRecentContext(key) {
 
   const render = (items) => items
     .map((entry) => {
-      const clean = String(entry.text || '')
-        .replace(/\nSources:\n[\s\S]*$/i, '')
-        .slice(0, entryChars);
+      const raw = String(entry.text || '')
+        .replace(/\nSources:\n[\s\S]*$/i, '');
+      // For long assistant entries, preserve both the opening (topic context)
+      // and the ending (conversational hook / question / call-to-action).
+      // A naive head-only truncation drops the ending, so a followup like
+      // "Yes" loses the question it's answering.
+      let clean;
+      if (raw.length > entryChars && entry.role === 'assistant') {
+        const tailKeep = Math.min(400, Math.floor(entryChars * 0.3));
+        const headKeep = entryChars - tailKeep - 5; // 5 for "\n...\n"
+        clean = raw.slice(0, headKeep) + '\n...\n' + raw.slice(-tailKeep);
+      } else {
+        clean = raw.slice(0, entryChars);
+      }
       return (entry.role === 'assistant' ? 'Assistant' : 'User') + ': ' + clean;
     })
     .join('\n');
