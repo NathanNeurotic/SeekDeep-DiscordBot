@@ -1292,6 +1292,8 @@ def load_clipseg() -> None:
 def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
     """Use CLIPSeg to generate a binary mask for `target` in `image`."""
     import torch
+    import numpy as np
+    from PIL import ImageFilter
     load_clipseg()
     inputs = clipseg_processor(
         text=[target], images=[image], return_tensors="pt", padding=True
@@ -1302,10 +1304,13 @@ def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
         outputs = clipseg_model(**inputs)
     logits = outputs.logits.squeeze()
     mask = torch.sigmoid(logits)
-    mask = (mask > 0.4).float()
+    mask = (mask > 0.3).float()
     mask_np = mask.cpu().numpy()
     mask_img = Image.fromarray((mask_np * 255).astype("uint8"), mode="L")
-    return mask_img.resize(image.size, Image.LANCZOS)
+    mask_img = mask_img.resize(image.size, Image.LANCZOS)
+    mask_img = mask_img.filter(ImageFilter.MaxFilter(21))
+    mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=8))
+    return mask_img
 
 
 @app.post("/inpaint")

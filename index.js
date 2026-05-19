@@ -1866,6 +1866,22 @@ function seekdeepSelectChatModelRole(prompt, purpose = 'chat') {
     return 'quality_text';
   }
 
+  // Lightweight tasks — translation, greetings, trivial Q&A — route to the small
+  // model when configured. Saves VRAM and avoids reloading the 8B default for
+  // throwaway queries. Falls back to default_chat on the Python side if not available.
+  if (process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID) {
+    const isTranslation = purposeNorm === 'translation' || /\b(?:translate|translation)\b/i.test(text);
+    const isGreeting = /^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening|night)|thanks|thank\s+you|ok|okay|bye|gn|gm)\b[.!?]*$/i.test(text.trim());
+    const isShortTrivial = text.length < 80 && /^(?:what\s+(?:time|day)|how\s+are\s+you|who\s+(?:are\s+you|made\s+you)|ping|test)\b/i.test(text.trim());
+    if (isTranslation || isGreeting || isShortTrivial) {
+      if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
+        const reason = isTranslation ? 'translation' : isGreeting ? 'greeting' : 'short-trivial';
+        console.log(`[SeekDeep Model Router] purpose=${purposeNorm} role=lightweight_chat reason=${reason}`);
+      }
+      return 'lightweight_chat';
+    }
+  }
+
   if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
     console.log(`[SeekDeep Model Router] purpose=${purposeNorm} role=default_chat reason=default-fallback`);
   }
@@ -4876,10 +4892,18 @@ async function seekdeepArchiveThreadResolveMember(target, user) {
   return null;
 }
 
+// Debounce: Discord rate-limits thread renames (2 per 10 min per thread).
+// Track last rename time per thread and skip if too recent.
+const SEEKDEEP_THREAD_RENAME_COOLDOWN_MS = 30_000;
+const SEEKDEEP_THREAD_RENAME_LAST = new Map();
+
 async function seekdeepMaybeRenameArchiveThread(thread, desiredName) {
   try {
     const name = seekdeepArchiveThreadClampName(desiredName);
     if (thread && name && thread.name !== name && typeof thread.setName === 'function') {
+      const lastRenamed = SEEKDEEP_THREAD_RENAME_LAST.get(thread.id) || 0;
+      if (Date.now() - lastRenamed < SEEKDEEP_THREAD_RENAME_COOLDOWN_MS) return;
+      SEEKDEEP_THREAD_RENAME_LAST.set(thread.id, Date.now());
       await thread.setName(name, 'SeekDeep archive tracked-count name update');
     }
   } catch (err) {
@@ -11007,7 +11031,7 @@ function seekdeepBuildPersonaModal(currentPersona, channelOverride, guildOverrid
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('persona')
-          .setLabel('Persona (neurotic / unsettling / clinical / chaotic)')
+          .setLabel('Persona name (or reset)')
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('neurotic')
           .setValue(currentPersona || 'neurotic')
@@ -11143,9 +11167,22 @@ async function seekdeepHandleContextMenuEditModalSubmit(interaction) {
     await interaction.editReply({ content: 'Inpaint complete.' });
   } else if (customId === SEEKDEEP_CTX_IMG2IMG_MODAL_ID) {
     const prompt = String(interaction.fields.getTextInputValue('prompt') || '').trim() || 'enhance this image';
-    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('context-menu-img2img', prompt.slice(0, 80));
-    await seekdeepHandleImg2Img(proxy, prompt, pending.imageUrl);
-    await interaction.editReply({ content: 'img2img complete.' });
+    const isRemoval = /\b(?:without|remove|delete|no\s+more|get rid of|take away|erase)\b/i.test(prompt);
+    const isModification = /\b(?:change|make|adjust|add|darker|brighter|older|younger|bigger|smaller|more|less|turn|convert|style|color|colour)\b/i.test(prompt);
+    if (isRemoval && SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+      const removeTarget = (prompt.match(/\b(?:without|remove|delete|erase|get rid of|take away)\s+(?:the\s+)?(.+)/i)?.[1] || '').replace(/[?.!]+$/, '').trim() || 'the main subject';
+      seekdeepLogRoute('context-menu-img2img→inpaint', `remove="${removeTarget}"`);
+      await seekdeepHandleInpaint(proxy, 'background scene', removeTarget, pending.imageUrl);
+      await interaction.editReply({ content: 'Inpaint complete.' });
+    } else if (isModification && SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED) {
+      seekdeepLogRoute('context-menu-img2img→pix2pix', prompt.slice(0, 80));
+      await seekdeepHandleInstructPix2Pix(proxy, prompt, pending.imageUrl);
+      await interaction.editReply({ content: 'InstructPix2Pix edit complete.' });
+    } else {
+      seekdeepLogRoute('context-menu-img2img', prompt.slice(0, 80));
+      await seekdeepHandleImg2Img(proxy, prompt, pending.imageUrl);
+      await interaction.editReply({ content: 'img2img complete.' });
+    }
   }
 
   return true;
@@ -11165,17 +11202,17 @@ async function seekdeepHandlePersonaModalSubmit(interaction) {
       delete data.channels[String(interaction.channel?.id || '')];
     }
     seekdeepWritePersonaOverrides(data);
-    await interaction.reply({ content: `Persona override removed (scope: ${scope}).`, ephemeral: true });
+    await interaction.reply({ content: `Persona override removed (scope: ${scope}).`, flags: MessageFlags.Ephemeral });
     return true;
   }
 
   if (!SEEKDEEP_VALID_PERSONAS.has(persona)) {
-    await interaction.reply({ content: `Invalid persona "${persona}". Valid: neurotic, unsettling, clinical, chaotic, reset.`, ephemeral: true });
+    await interaction.reply({ content: `Invalid persona "${persona}". Valid: neurotic, unsettling, clinical, chaotic, reset.`, flags: MessageFlags.Ephemeral });
     return true;
   }
 
   if (!seekdeepUserCanChangePersona(interaction)) {
-    await interaction.reply({ content: 'Only server admins can change persona.', ephemeral: true });
+    await interaction.reply({ content: 'Only server admins can change persona.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
@@ -11187,7 +11224,7 @@ async function seekdeepHandlePersonaModalSubmit(interaction) {
     data.channels[String(interaction.channel?.id || '')] = entry;
   }
   seekdeepWritePersonaOverrides(data);
-  await interaction.reply({ content: `Persona for this ${scope} set to: **${persona}**`, ephemeral: true });
+  await interaction.reply({ content: `Persona for this ${scope} set to: **${persona}**`, flags: MessageFlags.Ephemeral });
   return true;
 }
 // SEEKDEEP_PERSONA_MODAL_END
@@ -11628,7 +11665,8 @@ function seekdeepAdaptiveImg2ImgStrength(prompt) {
   const p = String(prompt || '').toLowerCase();
   if (/\b(?:add|include|put|place|insert|give|attach|stick|warrior|figure|character|person|people)\b/.test(p)) return 0.80;
   if (/\b(?:remove|without|delete|take\s+away|get\s+rid|erase)\b/.test(p)) return 0.75;
-  if (/\b(?:make\s+it|turn\s+(?:it\s+)?into|as\s+a|style\s+of|in\s+the\s+style|themed|recolor|color|colour)\b/.test(p)) return 0.65;
+  if (/\b(?:winter|summer|autumn|fall|spring|night|day|sunset|sunrise|underwater|space|snow|rain|storm|apocalyptic|medieval|futuristic|ancient|destroyed|flooded|frozen|burning)\b/.test(p)) return 0.80;
+  if (/\b(?:make\s+it|turn\s+(?:it\s+)?into|as\s+a|style\s+of|in\s+the\s+style|themed|recolor|color|colour)\b/.test(p)) return 0.70;
   if (/\b(?:enhance|improve|sharpen|better|cleaner|refine|polish|upscale)\b/.test(p)) return 0.45;
   return 0.60;
 }
@@ -11662,7 +11700,7 @@ async function seekdeepHandleImg2Img(target, prompt, imageUrl) {
       width: 1024,
       height: 1024,
       steps: Number(process.env.IMAGE_STEPS || 28),
-      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
+      guidance_scale: Number(process.env.IMAGE_IMG2IMG_GUIDANCE_SCALE || 5.0),
       ...(negativePrompt ? { negative_prompt: negativePrompt } : {}),
     });
 
@@ -11692,12 +11730,18 @@ async function seekdeepHandleInstructPix2Pix(target, instruction, imageUrl) {
     }
 
     const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    // Adaptive image_guidance_scale: heavy edits (scene change) preserve less of source,
+    // light edits (color/brightness tweaks) preserve more.
+    const p2pInst = String(instruction || '').toLowerCase();
+    const p2pHeavy = /\b(?:turn|convert|transform|winter|summer|night|day|underwater|space|destroyed|anime|cartoon|pixel|oil.?paint|watercolor|sketch)\b/.test(p2pInst);
+    const p2pLight = /\b(?:slightly|subtle|a bit|little|brighter|darker|warmer|cooler|sharper|softer)\b/.test(p2pInst);
+    const imageGuidance = p2pHeavy ? 1.2 : p2pLight ? 2.0 : 1.5;
     const response = await postLocal('/instruct-pix2pix', {
       instruction: instruction || 'enhance this image',
       image_b64: imageB64,
       steps: 30,
       guidance_scale: 9.0,
-      image_guidance_scale: 1.0,
+      image_guidance_scale: imageGuidance,
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
@@ -11727,11 +11771,12 @@ async function seekdeepHandleInpaint(target, prompt, removeTarget, imageUrl) {
       prompt: prompt || 'background scene',
       remove_target: removeTarget || '',
       image_b64: imageB64,
-      strength: 0.85,
+      strength: 0.95,
       width: 1024,
       height: 1024,
-      steps: Number(process.env.IMAGE_STEPS || 28),
-      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
+      steps: 30,
+      guidance_scale: 5.0,
+      ...(String(process.env.IMAGE_NEGATIVE_PROMPT || '').trim() ? { negative_prompt: String(process.env.IMAGE_NEGATIVE_PROMPT || '').trim() } : {}),
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
@@ -14774,7 +14819,7 @@ async function seekdeepSharedArchiveButtonAckV4(interaction) {
 
   try {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
   } catch (ackErr) {
     if (seekdeepIsDiscordInteractionTerminalError(ackErr)) {
@@ -14791,15 +14836,15 @@ async function seekdeepSharedArchiveButtonRespondV4(interaction, content) {
   const payload = { content: String(content || '').slice(0, MAX_DISCORD_CHARS), allowedMentions: { parse: [] } };
   try {
     if (interaction?.deferred) return await interaction.editReply(payload);
-    if (interaction?.replied) return await interaction.followUp({ ...payload, ephemeral: true });
-    return await interaction.reply({ ...payload, ephemeral: true });
+    if (interaction?.replied) return await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
+    return await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
   } catch (err) {
     if (seekdeepIsDiscordInteractionTerminalError(err)) {
       console.warn('[SeekDeep] shared archive button response skipped: interaction already closed.');
       return null;
     }
     console.error('[SeekDeep] shared archive button response failed:', err);
-    try { return await interaction.followUp({ ...payload, ephemeral: true }); } catch (followErr) {
+    try { return await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }); } catch (followErr) {
       if (seekdeepIsDiscordInteractionTerminalError(followErr)) {
         console.warn('[SeekDeep] shared archive button followUp skipped: interaction already closed.');
         return null;
@@ -14924,20 +14969,10 @@ async function seekdeepSharedArchiveButtonManualArchiveV4(interaction) {
   });
   await seekdeepAddArchiveEntryButtons(sentManualArchiveMsg);
 
-  let finalCount = nextCount;
-  let scanStats = null;
-  try {
-    if (typeof seekdeepScanThreadArchiveEntryStats === 'function') {
-      scanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
-      if (scanStats.ok && Number(scanStats.count || 0) > 0) {
-        finalCount = Math.max(0, Number(scanStats.count || 0));
-      } else if (!scanStats.ok) {
-        console.warn('[SeekDeep] shared archive count recount failed:', scanStats.error || 'unknown scan failure');
-      }
-    }
-  } catch (scanErr) {
-    console.error('[SeekDeep] shared archive count recount failed:', scanErr);
-  }
+  // Trust the fast count from the JSON profile — skip the O(n) full thread scan
+  // that was causing 77s–637s delays and interaction token expiry (50027).
+  // Verification scans now only run on `archive status`.
+  const finalCount = nextCount;
 
   let threadName = '';
   try {
@@ -14951,9 +14986,6 @@ async function seekdeepSharedArchiveButtonManualArchiveV4(interaction) {
         lastArchivedAt: archivedAt,
         lastArchivedBy: interaction?.user?.id || '',
         lastArchiveSource: 'shared-archive-button-count-finalize-v6',
-        lastCountScanAt: scanStats?.ok ? new Date().toISOString() : undefined,
-        lastCountScanMessages: scanStats?.ok ? (Number(scanStats.scannedMessages || 0) || 0) : undefined,
-        lastCountScanEntries: scanStats?.ok ? (Number(scanStats.count || 0) || 0) : undefined,
       });
     }
   } catch (countErr) {
@@ -15024,7 +15056,7 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
   const thread = interaction.channel;
 
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
 
   if (!thread?.isThread?.()) {
@@ -15044,9 +15076,18 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
   const threadName = String(thread.name || '');
   const isShared = /Shared\s+Archive/i.test(threadName);
 
+  // Decrement count from profile instead of O(n) full thread scan.
+  // Wrap editReply in try/catch — if interaction token expired, fall back to channel.send.
+  const safeDeleteReply = async (text) => {
+    try { await interaction.editReply({ content: text }); } catch {
+      try { await thread.send({ content: text }); } catch {}
+    }
+  };
+
   if (isShared) {
-    const scanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
-    const newCount = scanStats.ok ? scanStats.count : 0;
+    const profile = guildId && typeof seekdeepSharedArchiveGetProfile === 'function'
+      ? seekdeepSharedArchiveGetProfile(guildId) : {};
+    const newCount = Math.max(0, (Number(profile?.count || 0) || 0) - 1);
     await seekdeepSharedArchiveMaybeFastRenameV6(thread, newCount);
     if (guildId && typeof seekdeepSharedArchiveSaveProfile === 'function') {
       seekdeepSharedArchiveSaveProfile(guildId, {
@@ -15054,16 +15095,10 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
         threadName: thread.name,
         count: newCount,
         countSource: typeof SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE !== 'undefined' ? SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE : 'seekdeep-shared-archive-posts-v1',
-        lastCountScanAt: new Date().toISOString(),
-        lastCountScanMessages: scanStats.scannedMessages || 0,
-        lastCountScanEntries: newCount,
       });
     }
-    await interaction.editReply({ content: 'Entry removed from shared archive. Count: ' + newCount });
+    await safeDeleteReply('Entry removed from shared archive. Count: ' + newCount);
   } else {
-    const scan = await seekdeepArchiveThreadCountExistingEntries(thread);
-    const newCount = scan.ok ? scan.count : 0;
-
     const config = seekdeepArchiveThreadReadConfig();
     const guildConfig = config?.guilds?.[guildId] || {};
     const userArchives = guildConfig?.userArchives || {};
@@ -15072,6 +15107,7 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
     for (const [uid, profile] of Object.entries(userArchives)) {
       if (profile.threadId === thread.id) { matchedUserId = uid; matchedProfile = profile; break; }
     }
+    const newCount = Math.max(0, (Number(matchedProfile?.count || 0) || 0) - 1);
     if (matchedUserId) {
       seekdeepArchiveThreadSaveUserProfile(guildId, matchedUserId, {
         count: newCount,
@@ -15081,7 +15117,7 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
       const newName = seekdeepArchiveThreadBuildName(subject, newCount);
       await seekdeepMaybeRenameArchiveThread(thread, newName);
     }
-    await interaction.editReply({ content: 'Entry removed from archive. Count: ' + newCount });
+    await safeDeleteReply('Entry removed from archive. Count: ' + newCount);
   }
 
   return true;
@@ -15116,8 +15152,12 @@ function seekdeepExtractEditResultPrompt(text = '') {
   if (img2imgMatch?.[1]) return normalizeUserText(img2imgMatch[1].split('\n')[0]);
   const pix2pixMatch = s.match(/^InstructPix2Pix edit:\s*(.+)/i);
   if (pix2pixMatch?.[1]) return normalizeUserText(pix2pixMatch[1].split('\n')[0]);
-  const inpaintMatch = s.match(/^Inpaint complete:.*?—\s*(.+)/i);
-  if (inpaintMatch?.[1]) return normalizeUserText(inpaintMatch[1].split('\n')[0]);
+  const inpaintMatch = s.match(/^Inpaint complete:\s*removed\s+"([^"]+)"\s*(?:—|--)\s*(.+)/i);
+  if (inpaintMatch?.[1]) {
+    const target = inpaintMatch[1].trim();
+    const scene = (inpaintMatch[2] || '').trim();
+    return normalizeUserText(scene && scene !== 'background scene' ? `${scene} without ${target}` : target);
+  }
   return '';
 }
 
@@ -16075,7 +16115,7 @@ client.on('interactionCreate', async (interaction) => {
           if (await seekdeepHandlePersonaModalSubmit(interaction)) return;
         } catch (err) {
           console.error('Persona modal handler failed:', err?.stack || err?.message || err);
-          try { await interaction.reply({ content: 'Persona update failed.', ephemeral: true }); } catch {}
+          try { await interaction.reply({ content: 'Persona update failed.', flags: MessageFlags.Ephemeral }); } catch {}
         }
         return;
       }
@@ -16802,6 +16842,8 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     // context-menu prompt extraction (handles Generated:, img2img, pix2pix, inpaint)
     seekdeepExtractContextMenuPromptText,
     seekdeepExtractEditResultPrompt,
+    // model router
+    seekdeepSelectChatModelRole,
     // conversational image-edit followup detection + instruction cleaner
     seekdeepLooksLikeConversationalImageEditFollowup,
     seekdeepCleanConversationalImageEditInstruction,
@@ -17492,7 +17534,7 @@ client.on('interactionCreate', async (interaction) => {
     try {
       const payload = { content: 'Failed to delete archive entry: ' + (err?.message || 'unknown error') };
       if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
-      else await interaction.reply({ ...payload, ephemeral: true });
+      else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     } catch {}
   }
 });

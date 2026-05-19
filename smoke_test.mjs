@@ -602,7 +602,7 @@ check('ctx-extract: Generated message → clean prompt', T.seekdeepExtractContex
 check('ctx-extract: Refined Prompt message → refined prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Generated: raw prompt\nRefined Prompt: a beautiful sunset over mountains\nRefinement: on\nQueue Wait: 1.00 seconds\nJob ID: imgq_456_1\n\nTime to Generate: 10.00 seconds\nModel Used: Lykon/dreamshaper-xl-1-0' }) === 'a beautiful sunset over mountains');
 check('ctx-extract: img2img result → clean prompt', T.seekdeepExtractContextMenuPromptText({ content: 'img2img complete (strength 0.85): crystal ball wizard, without the wizard' }) === 'crystal ball wizard, without the wizard');
 check('ctx-extract: InstructPix2Pix result → instruction', T.seekdeepExtractContextMenuPromptText({ content: 'InstructPix2Pix edit: make it darker and more dramatic' }) === 'make it darker and more dramatic');
-check('ctx-extract: Inpaint result → prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Inpaint complete: removed "wizard" — crystal ball on a table' }) === 'crystal ball on a table');
+check('ctx-extract: Inpaint result → prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Inpaint complete: removed "wizard" — crystal ball on a table' }) === 'crystal ball on a table without wizard');
 check('ctx-extract: plain text → unchanged', T.seekdeepExtractContextMenuPromptText({ content: 'A beautiful sunset over the ocean' }) === 'A beautiful sunset over the ocean');
 check('ctx-extract: chat with footer → footer stripped', T.seekdeepExtractContextMenuPromptText({ content: 'Here is my analysis.\n\nTime to Generate: 3.00 seconds\nModel Used: meta-llama/Llama-3.1-8B-Instruct' }) === 'Here is my analysis.');
 check('ctx-extract: nested Generated: Generated: → just inner prompt', T.seekdeepExtractContextMenuPromptText({ content: 'Generated: Generated: wizard with ball Refinement: off Queue Wait: 0.00 seconds Job ID: imgq_123_1\nRefinement: off\nQueue Wait: 0.00 seconds\nJob ID: imgq_456_1' }) === 'Generated: wizard with ball Refinement: off Queue Wait: 0.00 seconds Job ID: imgq_123_1');
@@ -611,7 +611,7 @@ check('ctx-extract: nested Generated: Generated: → just inner prompt', T.seekd
 console.log('33. Edit result prompt extraction.');
 check('edit-extract: img2img with parenthetical', T.seekdeepExtractEditResultPrompt('img2img complete (strength 0.6): a cat in a hat') === 'a cat in a hat');
 check('edit-extract: pix2pix', T.seekdeepExtractEditResultPrompt('InstructPix2Pix edit: make the sky blue') === 'make the sky blue');
-check('edit-extract: inpaint with em-dash', T.seekdeepExtractEditResultPrompt('Inpaint complete: removed "tree" — forest clearing with sunlight') === 'forest clearing with sunlight');
+check('edit-extract: inpaint with em-dash', T.seekdeepExtractEditResultPrompt('Inpaint complete: removed "tree" — forest clearing with sunlight') === 'forest clearing with sunlight without tree');
 check('edit-extract: normal text → empty', T.seekdeepExtractEditResultPrompt('just some text') === '');
 
 // ── Suite 34: Image metadata line stripper ────────────────────────────
@@ -638,7 +638,7 @@ check('inpaint: @seekdeep alias', T.seekdeepInpaintQueryFromMessage('@seekdeep i
 // ── Suite 36: adaptive img2img strength ─
 console.log('36. Adaptive img2img strength.');
 check('strength: additive "add warrior stick figures" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('add warrior stick figures wielding weapons') === 0.80);
-check('strength: style "make it cyberpunk" → 0.65', T.seekdeepAdaptiveImg2ImgStrength('make it cyberpunk themed') === 0.65);
+check('strength: style "make it cyberpunk" → 0.70', T.seekdeepAdaptiveImg2ImgStrength('make it cyberpunk themed') === 0.70);
 check('strength: enhance → 0.45', T.seekdeepAdaptiveImg2ImgStrength('enhance this image') === 0.45);
 check('strength: removal "remove the background" → 0.75', T.seekdeepAdaptiveImg2ImgStrength('remove the background') === 0.75);
 check('strength: default "oil painting of cats" → 0.60', T.seekdeepAdaptiveImg2ImgStrength('oil painting of cats') === 0.60);
@@ -646,6 +646,10 @@ check('strength: empty string → default 0.60', T.seekdeepAdaptiveImg2ImgStreng
 check('strength: null → default 0.60', T.seekdeepAdaptiveImg2ImgStrength(null) === 0.60);
 check('strength: undefined → default 0.60', T.seekdeepAdaptiveImg2ImgStrength(undefined) === 0.60);
 check('strength: mixed "add color to the figure" → additive 0.80 wins', T.seekdeepAdaptiveImg2ImgStrength('add color to the figure') === 0.80);
+check('strength: scene "make it winter" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('make it winter') === 0.80);
+check('strength: scene "turn it into night" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('turn it into night') === 0.80);
+check('strength: scene "underwater ruins" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('underwater ruins') === 0.80);
+check('strength: scene "frozen wasteland" → 0.80', T.seekdeepAdaptiveImg2ImgStrength('frozen wasteland') === 0.80);
 
 // ── Suite 37: research-followup tightening ─
 console.log('37. Research-followup pattern tightening.');
@@ -656,8 +660,34 @@ check('research: "details for each" matches', T.seekdeepIsResearchFollowupPrompt
 check('research: bare "for each separate" does NOT match', !T.seekdeepIsResearchFollowupPrompt('data for each separate'));
 check('research: Kamo SSD message does NOT match', !T.seekdeepIsResearchFollowupPrompt('Nah too complex and can lead to flaws just make reasonable split including the data for each separate but be aware that win 11 pro is the main OS'));
 
-// ── Suite 38: context menu image extraction (embed fallback) ─
-console.log('38. Context menu image extraction (embed fallback).');
+// ── Suite 38: inpaint prompt extraction ─
+console.log('38. Inpaint prompt extraction.');
+check('inpaint extract: removal target when fill is generic', T.seekdeepExtractEditResultPrompt('Inpaint complete: removed "the small houses" — background scene') === 'the small houses');
+check('inpaint extract: combines target+scene when scene is specific', T.seekdeepExtractEditResultPrompt('Inpaint complete: removed "the wizard" — medieval castle courtyard') === 'medieval castle courtyard without the wizard');
+check('img2img extract: unchanged', T.seekdeepExtractEditResultPrompt('img2img complete (strength 0.65, auto): make it winter') === 'make it winter');
+check('pix2pix extract: unchanged', T.seekdeepExtractEditResultPrompt('InstructPix2Pix edit: make it darker') === 'make it darker');
+
+// ── Suite 39: model router lightweight_chat ─
+console.log('39. Model router lightweight_chat.');
+// Only runs routing checks if the env var is set for the test
+process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID = 'google/gemma-3n-E4B-it';
+check('router: translation routes to lightweight', T.seekdeepSelectChatModelRole('translate this to english', 'translation') === 'lightweight_chat');
+check('router: greeting routes to lightweight', T.seekdeepSelectChatModelRole('hello', 'chat') === 'lightweight_chat');
+check('router: short trivial routes to lightweight', T.seekdeepSelectChatModelRole('who are you', 'chat') === 'lightweight_chat');
+check('router: complex prompt routes to default', T.seekdeepSelectChatModelRole('tell me a story about a dragon and a knight in a faraway kingdom', 'chat') === 'default_chat');
+check('router: image_refinement always default', T.seekdeepSelectChatModelRole('hello', 'image_refinement') === 'default_chat');
+delete process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID;
+check('router: without env var, greeting falls to default', T.seekdeepSelectChatModelRole('hello', 'chat') === 'default_chat');
+
+// ── Suite 40: adaptive strength scene tier ─
+console.log('40. Adaptive strength scene/environment tier.');
+check('strength: "make it winter" scene tier → 0.80', T.seekdeepAdaptiveImg2ImgStrength('make it winter') === 0.80);
+check('strength: "destroyed city" scene tier → 0.80', T.seekdeepAdaptiveImg2ImgStrength('destroyed city ruins') === 0.80);
+check('strength: "make it anime" style → 0.70', T.seekdeepAdaptiveImg2ImgStrength('make it anime style') === 0.70);
+check('strength: "enhance" → 0.45', T.seekdeepAdaptiveImg2ImgStrength('enhance and polish') === 0.45);
+
+// ── Suite 41: context menu image extraction (embed fallback) ─
+console.log('41. Context menu image extraction (embed fallback).');
 check('ctxImage: attachment hit', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [{ url: 'https://cdn.discord.com/foo.png', name: 'test.png' }] } })?.url === 'https://cdn.discord.com/foo.png');
 check('ctxImage: embed image fallback', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ image: { url: 'https://example.com/bar.jpg' } }] })?.url === 'https://example.com/bar.jpg');
 check('ctxImage: no image returns null', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ title: 'no image' }] }) === null);

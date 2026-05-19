@@ -2,117 +2,135 @@
 
 This file tracks everything that's been discussed, scoped, or partially scaffolded but not yet shipped. Items here are not commitments — they're a parking lot for "next time we sit down with this codebase, here's what's on deck."
 
+Last full audit: 2026-05-19
+
+---
+
+## v10.34 Sprint — All Fixed (pending commit)
+
+All confirmed bugs from live testing on 2026-05-19. 274 smoke tests pass.
+
+### 1. Persona modal crash ✅ fixed
+Label shortened from 52 to 25 chars (`'Persona name (or reset)'`).
+
+### 2. Deprecated `ephemeral: true` ✅ fixed
+All 11 occurrences migrated to `flags: MessageFlags.Ephemeral`.
+
+### 3. Shared archive button 77s-637s ✅ fixed
+Removed O(n) full thread scan (`seekdeepScanThreadArchiveEntryStats`) from shared archive button path. Now trusts the JSON profile fast count. Verification scans reserved for `archive status`.
+
+### 4. Archive delete button `50027` ✅ fixed
+Removed full thread scan from delete path. Now decrements profile count atomically. Final `editReply` wrapped in try/catch with fallback to `channel.send`.
+
+### 5. Inpaint prompt extraction ✅ fixed
+Now extracts removal target ("the small houses") instead of generic fill prompt. Combines target+scene when scene is non-generic.
+
+---
+
+## Image Pipeline Quality — Priority Improvements
+
+Audited all 5 image pipelines on 2026-05-19. Parameters listed are what the Node side sends (not just Python defaults).
+
+### Pipeline Parameter Summary
+
+| Pipeline | Steps | Guidance | Strength | Resolution | Neg Prompt |
+|----------|-------|----------|----------|------------|------------|
+| txt2img (`/image`) | env `IMAGE_STEPS` (28) | env `IMAGE_GUIDANCE_SCALE` (7.0) | n/a | 1024x1024 | env `IMAGE_NEGATIVE_PROMPT` |
+| img2img | env `IMAGE_STEPS` (28) | env `IMAGE_GUIDANCE_SCALE` (7.0) | adaptive 0.45-0.80 | 1024x1024 | env `IMAGE_NEGATIVE_PROMPT` |
+| pix2pix | 30 hardcoded | 9.0 hardcoded | n/a | 512->1024 upscale | env fallback |
+| inpaint | 30 hardcoded | 5.0 hardcoded | 0.95 hardcoded | 1024x1024 | none sent |
+| upscale | n/a | n/a | n/a | Lanczos NxN | n/a |
+
+### 6. Inpainting quality improvements ✅ tuned
+CLIPSeg mask: threshold 0.4->0.3, MaxFilter(21) dilation, GaussianBlur(8) feathering. Inpaint params: strength 0.95, guidance 5.0, steps 30, negative prompt now sent. CLIPSeg remains a lightweight model — future upgrade path is SAM/GroundingDINO.
+**Remaining improvement ideas:**
+  - [ ] Mask preview option (`mask_preview:true`)
+  - [ ] Multi-prompt CLIPSeg for complex targets
+  - [ ] Stronger segmentation model (SAM, GroundingDINO)
+
+### 7. Pix2Pix image_guidance_scale ✅ fixed
+Now adaptive: heavy edits (scene/style transforms) get 1.2, light edits (brightness/color tweaks) get 2.0, default 1.5. Was hardcoded at 1.0.
+
+### 8. img2img guidance_scale ✅ fixed
+Changed from `IMAGE_GUIDANCE_SCALE` (txt2img's 7.0) to `IMAGE_IMG2IMG_GUIDANCE_SCALE` (default 5.0).
+
+### 9. Context menu img2img modal auto-routing ✅ fixed
+Instruction-like prompts auto-route to pix2pix (modifications) or inpaint (removals) when features are enabled.
+
+### 10. Adaptive strength scene/environment tier ✅ fixed
+Added 0.80 tier for scene keywords. Generic "make it" bumped 0.65->0.70.
+
+---
+
+## Model Router Gaps
+
+### 11. `lightweight_chat` routing ✅ fixed
+Model router now routes to `lightweight_chat` (gemma-3n-E4B-it) for: translation tasks, greetings (hi/hello/thanks/bye), short trivial prompts (who are you, what time, ping). Only activates when `LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID` env var is set. Falls back to `default_chat` on Python side if model unavailable.
+
+---
+
+## Performance
+
+### 12. Archive thread scan removed ✅ fixed (same as #3/#4)
+
+### 13. Thread rename debounce ✅ fixed
+`seekdeepMaybeRenameArchiveThread` now tracks last rename time per thread with 30-second cooldown. Rapid archive clicks no longer queue up rename API calls.
+
+---
+
 ## Recently Shipped
 
-### v10.31 — InstructPix2Pix + Inpainting + routing overhaul ✅ shipped
-- `/pix2pix instruction:<text> image:<file>` — edit images with natural-language instructions via `timbrooks/instruct-pix2pix`.
-- `/inpaint remove:<text> prompt:<text> image:<file>` — remove objects using CLIPSeg auto-mask + SDXL inpainting (`CIDAS/clipseg-rd64-refined`).
-- Conversational image edit auto-routing: reply to a generated image with "make it darker" or "remove the wizard" and SeekDeep picks the best pipeline (inpaint → pix2pix → img2img).
-- Fixed context-menu "Generate Image from this" metadata leak — `seekdeepExtractContextMenuPromptText` now extracts clean prompts from all image result formats (Generated:, img2img, pix2pix, inpaint).
-- Added `seekdeepExtractEditResultPrompt` and `seekdeepStripImageMetadataLines` for robust prompt extraction.
-- Fixed `/img2img` slash command option ordering (required before optional).
-- 15 new smoke tests (226 total).
+### v10.33 -- Bug fixes + loading gif + image edit routing
+- Ephemeral modal ack (fixed double-message on context menu modal submits).
+- Pix2Pix output: fixed aspect ratio stretch on non-square images (now always 512->1024 square).
+- Context menu embed image fallback (images in embeds now found by vision/upscale/img2img).
+- Loading gif added to 8 context menu handlers + 3 slash commands.
+- Stats chart orphan loading gif fix.
+- Context menu upscale + img2img text-path changed to ephemeral defer.
+- 7 new smoke tests (249->256).
 
-### v10.30 — Image quality tuning ✅ shipped
-Scheduler, negative prompt, and guidance scale defaults tuned for Dreamshaper-XL.
+### v10.32 -- Context menu modals + adaptive img2img + pix2pix tuning
+### v10.31 -- InstructPix2Pix + Inpainting + routing overhaul
+### v10.30 -- Image quality tuning (Dreamshaper-XL defaults)
+### v10.29 -- Auto-translate channel
+### v10.28 -- Refinement retry + analytics chart
+### v10.27 -- COMMANDS.md permission column
+### v10.22-v10.26 -- Phase 2 features (archive fix, search, templates, img2img, persona modal)
+### v10.16-v10.21 -- QoL + maintenance (status rotation, help search, OCR, archive clean, repo cleanup)
+### v10.12 -- GPU / VRAM live monitoring
 
-### v10.29 — Auto-translate channel ✅ shipped
-`@SeekDeep translate channel here` designates one channel per server where every non-bot message containing non-Latin script gets an automatic English translation reply. Fast regex detector for CJK, Cyrillic, Arabic, Devanagari, Thai, Korean. 3-second cooldown per channel. 9 smoke checks.
-
-### v10.28 — Refinement retry + analytics chart ✅ shipped
-Dynamic refinement retries once at a higher temperature on validator rejection before falling back to static rules. Token budget bumped 360 → 512. `@SeekDeep stats chart` / `/stats scope:chart` renders a matplotlib 30-day activity chart via the Python server's new `/chart` endpoint.
-
-### v10.27 — COMMANDS.md permission column ✅ shipped
-Added Permission column to every command table. Documented all v10.16–v10.26 additions.
-
-### v10.22–v10.26 — Phase 2 features ✅ shipped
-- v10.22: Archive numbering reliability fix (off-by-one, ratchet, clean arithmetic)
-- v10.23: Conversation search (`@SeekDeep search <query>` / `/search`)
-- v10.24: Saved prompt templates (`@SeekDeep template save/list/use/delete` / `/template`)
-- v10.25: img2img + upscale (zero extra model download for img2img; Lanczos upscale)
-- v10.26: Persona editor modal (`/persona` opens a Discord popup form)
-
-### v10.16–v10.21 — QoL + maintenance ✅ shipped
-- v10.16: Rotating Discord status (52 statuses, 10-min shuffle)
-- v10.17: `/help search` fuzzy-match across all commands
-- v10.18: OCR mode for vision
-- v10.19: Archive clean (prune old entries with preview + confirm)
-- v10.20: Context-aware Discord status during inference
-- v10.21: Repo cleanup (473 → 27 tracked files)
-
-### v10.12 — GPU / VRAM live monitoring ✅ shipped
-
-Built in response to an observed lag pattern: host began to severely lag after a couple of image generations, likely VRAM thrashing into Windows shared memory once chat + pinned vision + SDXL coexisted past the GPU's hardware VRAM budget.
-
-- ✅ `local_ai_server.py` exposes `gpu_stats()` via new `/gpu` endpoint and a `gpu` sub-object on `/health`. Returns `allocated_mb`, `reserved_mb`, `free_mb`, `total_mb`, `used_mb`, `used_pct`, `reserved_pct`, plus `loaded` + `keep_resident` state.
-- ✅ `@SeekDeep gpu` / `@SeekDeep vram` natural commands and `/gpu` slash command.
-- ✅ Live-tail mode: `@SeekDeep gpu watch [N]` or `/gpu watch:true interval:N`. Edits one message every N seconds (clamped 2–60). Auto-stops after 2 minutes. React ✋ to stop early. Per-channel single-active-watcher lock.
-- ✅ `@SeekDeep status` now shows a one-line GPU summary at the top + a thrashing warning when PyTorch's reserved pool ≥ 90% of total VRAM.
-- ✅ 17 new smoke checks in `smoke_test.mjs` covering the bar renderer, formatter, thrashing detector, and watch-interval parser.
-
-What was scoped but NOT shipped:
-- Optional background sampler that writes `logs/gpu-YYYY-MM-DD.log` every 30s when `SEEKDEEP_GPU_LOGGING=on`. Could add later if retrospective debugging needs it.
-- A "VRAM budget" table in README documenting which model combinations fit a 24 GB card. Worth adding after observing real-world numbers from the live watcher.
+---
 
 ## Next Up
 
-- **TTS voice channel** — Piper or XTTS. Biggest remaining lift. Requires model download (user approval needed, limited SSD space).
-- **Real-ESRGAN model download** — scaffolded in v10.25 but needs user approval for the model cache.
-
-## Deferred From the v10.5 Audit
-
-These were flagged in the audit but deliberately not pursued during v10.5–v10.10 because the risk/reward didn't justify the work in those passes. Revisit when there's a focused reason.
-
-- **`shouldAutoSearch` refactor** — 200-line function but ~180 lines are inline data arrays (`noSearchPatterns`, `explicitSearch`, `currentInfoHints`, `highChangeTopics`). Extracting to module-level constants would scatter the data away from where it's used. Only worth doing if we add a second consumer that needs the same lists.
-- **`seekdeepLegacyArchiveUserThreadName` migration** — kept in v10.10 as backward-compat. Could be deleted IF we run a one-time migration that renames every legacy `archive-<user>-<id>` thread to the coin format `🪙 • Archive • <user> • <count>` first. Migration tool not yet written.
+- **Real-ESRGAN model download** -- scaffolded in v10.25 but needs user approval for the model cache.
+- **TTS voice channel** -- Piper or XTTS. Biggest remaining lift. Requires model download.
 
 ## Optional Features (Scaffolded, Off By Default)
 
-Each is gated behind a `SEEKDEEP_FEATURE_*` flag.
-
-### `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` ✅ shipped v10.31
-
-Natural-language image editing via `timbrooks/instruct-pix2pix` (~6 GB). Slash command `/pix2pix` + auto-routing from conversational edits (modifications like "make it darker").
-
-### `SEEKDEEP_FEATURE_INPAINT` ✅ shipped v10.31
-
-Object removal via CLIPSeg auto-mask + SDXL inpainting. `CIDAS/clipseg-rd64-refined` (~400 MB) for segmentation. Slash command `/inpaint` + auto-routing from conversational edits (removals like "remove the wizard").
+### `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` -- shipped v10.31
+### `SEEKDEEP_FEATURE_INPAINT` -- shipped v10.31
 
 ### `SEEKDEEP_FEATURE_NSFW_GATE`
-
-CLIP-based NSFW scorer on generated images. Work needed:
-
-- Add `compel-ml/clip-vit-base-patch32` (or similar) to the model cache.
-- New scoring step in `makeImageResult` after the image is generated.
-- Thresholds + behavior split: spoiler-wrap, refuse with text-only notice, or pass through.
-- `.env` knobs for the threshold and the spoiler-vs-refuse boundary.
+CLIP-based NSFW scorer on generated images. Needs model, scoring step, thresholds, `.env` knobs.
 
 ### `SEEKDEEP_FEATURE_TTS_VOICE`
-
-Voice-channel TTS reader (Piper or XTTS). Biggest lift of the four:
-
-- Voice connection management.
-- Piper / XTTS model setup + warmup.
-- Per-channel opt-in.
-- Probably needs a dedicated VoiceAgent in `AGENTS.md`.
+Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-channel opt-in.
 
 ## Quality-of-Life Wishlist
 
-Lower-priority polish ideas. Pull when there's an itch.
+- **GPU logging** -- optional background sampler, `SEEKDEEP_GPU_LOGGING=on`.
+- **VRAM budget table** -- document which model combinations fit a 24 GB card.
+- **Latin-script language detection** -- extend auto-translate to detect French, Spanish, etc.
+- **Inpaint mask preview** -- show CLIPSeg segmentation before running the fill.
 
-- **GPU logging** — optional background sampler that writes `logs/gpu-YYYY-MM-DD.log` every 30s. Env: `SEEKDEEP_GPU_LOGGING=on`.
-- **VRAM budget table** — document which model combinations fit a 24 GB card.
-- **Latin-script language detection** — extend auto-translate to detect French, Spanish, etc. Harder because the regex approach doesn't work for Latin-based scripts.
+## Deferred
 
-## Documentation Backlog
+- **`shouldAutoSearch` refactor** -- only worth doing if a second consumer needs the same lists.
+- **`seekdeepLegacyArchiveUserThreadName` migration** -- needs one-time migration tool.
 
-- [x] ~~One-page architecture diagram~~ — shipped in docs commit. ASCII diagram in README between "Architecture" and "Quick Start".
-- [x] ~~data/*.json schema docs~~ — shipped in docs commit. Full schemas for all 6 persistence files in AGENTS.md.
-- [x] ~~COMMANDS.md could grow a "Permission requirements" column on each table~~ — shipped in v10.27.
+## Won't Do
 
-## Won't Do (Decided Against)
-
-- **Quote Cards** (from demonbot) — explicitly skipped per user direction.
-- **Game Lookup** (from demonbot) — explicitly skipped per user direction.
-- **Single-line extraction of `seekdeepLegacyArchiveUserThreadName`** — it's backward-compat code, not dead. See v10.10 audit notes.
-- **Further messageCreate handler extraction (Phase 3-4 address-gate)** — the remaining 112 lines ARE the high-level orchestration. Extracting further would be cosmetic.
+- **Quote Cards** (from demonbot) -- explicitly skipped.
+- **Game Lookup** (from demonbot) -- explicitly skipped.
+- **Further messageCreate handler extraction** -- remaining lines ARE orchestration.
