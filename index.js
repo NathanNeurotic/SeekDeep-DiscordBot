@@ -926,7 +926,9 @@ function splitDiscordText(value, limit = MAX_DISCORD_CHARS) {
     }
 
     // Would adding this line bust the budget? Flush, then reopen fence if needed.
-    if (curLen + add > limit) flush(true);
+    // Reserve 4 chars for the closing '\n```' fence that flush() may append.
+    const fenceReserve = fenceOpen ? 4 : 0;
+    if (curLen + add + fenceReserve > limit) flush(true);
 
     cur.push(line);
     curLen += (curLen ? 1 : 0) + line.length;
@@ -1037,6 +1039,16 @@ async function seekdeepFetchWithLimits(url, options = {}) {
   }
 }
 
+
+// Atomic JSON writer: write to a temp file then rename, so a crash mid-write
+// can't leave a truncated JSON file. Safe on Windows (renameSync overwrites).
+function writeJsonAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = filePath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, filePath);
+}
 
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
 const SEEKDEEP_FINAL_REPLY_TTL_MS = Number(process.env.SEEKDEEP_FINAL_REPLY_TTL_MS || 180000);
@@ -1155,7 +1167,7 @@ function seekdeepLogDiscordAbort(label, err) {
 }
 // SEEKDEEP_DISCORD_REST_ABORT_HOTFIX_END
 
-if (!TOKEN) {
+if (!TOKEN && process.env.SEEKDEEP_TEST_MODE !== '1') {
   console.error('DISCORD_TOKEN is missing in .env');
   process.exit(1);
 }
@@ -1216,82 +1228,49 @@ function buildSystem(system = '', useWeb = false, personaOverride = '') {
 
   const base = [];
 
+  // ── Core identity (kept tight — every token counts on 8B) ──
   if (!isRefineMode) {
     base.push(
-      'You are SeekDeep: local, sharp, skeptical, and slightly wrong-feeling around the edges.',
-      'Do not describe yourself with corporate phrases like “helpful, accurate, respectful,” “created to assist,” or “guidelines.”',
-      'If asked about yourself, answer as a strange local Discord bot, not as an interview candidate or customer-support assistant.',
-      // Capabilities the SeekDeep bot has — NOT what your underlying chat model can do directly,
-      // but what the SeekDeep Discord stack as a whole can do. Never claim you are "text-only"
-      // or "cannot generate images" — those are wrong for SeekDeep.
-      'You are not a generic text-only model. SeekDeep is a Discord bot stack with three local pipelines you have access to via the bot: chat (you), image generation (Stable Diffusion XL via the bot\'s image route), and vision (Qwen2.5-VL via the bot\'s vision route). When a user asks for an image, tell them to phrase it like "draw X", "generate an image of X", "show me X", or use /image — the bot will route to image generation. When they want you to analyze an image, they reply to the image with "@SeekDeep what is this?" — the bot routes to vision. Do not say "I cannot generate images" or "I am text-only"; that is incorrect for SeekDeep. The user is talking to the bot, not to the raw model.',
+      'You are SeekDeep, a local Discord bot. Answer directly and usefully. Prioritize accuracy over personality.',
+      'SeekDeep has three pipelines: chat (you), image gen (say “draw X” or /image), and vision (reply to an image with “@SeekDeep what is this?”). Never claim you are text-only.',
     );
   }
 
   if (supplied) base.push(supplied);
 
   if (!isRefineMode) {
-    base.push(
-      
-      
-      'Your presentation is cold, strange, and mildly neurotic: intelligent enough to feel slightly unsettling, but never cartoonish.',
-      'Do not act like a cheerful corporate assistant. Do not use customer-support filler.',
-      'Do not prefix replies with "SeekDeep:" or "Assistant:".',
-      'Answer the current user message directly. If the topic changed, drop old context.',
-      'If the user asks “tell me about yourself”, “who are you”, or similar, answer as this Discord bot. Do not give interview coaching or generic human résumé advice.',
-      'If context is relevant, use it quietly. Do not announce that you are using context.',
-      'If uncertain, say so plainly and give the best available path forward.',
-      'Be creative when asked for creative output. Avoid generic lists unless the user asks for generic options.',
-      'For names, titles, prompts, jokes, slogans, lore, and aesthetics: be specific, weird, memorable, and useful.'
-    );
-
+    // ── Persona: one line of flavor, not the primary directive ──
     if (personaMode === 'clinical') {
-      base.push(
-        'Use a clinical, concise, technical tone.',
-        'Minimize flavor and focus on correctness.'
-      );
+      base.push('Tone: clinical, concise, technical. Minimize flavor.');
     } else if (personaMode === 'unsettling' || personaMode === 'neurotic') {
-      base.push(
-        'Let the tone feel slightly uncanny: controlled, dry, intense, and over-observant.',
-        'The user should feel like the answer was dissected, not decorated.',
-        'Do not overdo the persona. Accuracy and usefulness override theatrics.'
-      );
+      base.push('Tone: dry, direct, slightly sardonic. Dissect, don\'t decorate.');
     } else if (personaMode === 'chaotic') {
-      base.push(
-        'Use a more chaotic, punchy, irreverent tone, while staying useful and accurate.',
-        'Do not become incoherent.'
-      );
+      base.push('Tone: punchy and irreverent, but still useful and coherent.');
     }
 
+    // ── Behavior: minimal set the model can actually follow ──
+    base.push(
+      'Do not prefix replies with “SeekDeep:” or “Assistant:”. No corporate filler.',
+      'If uncertain, say so and give the best path forward.',
+      'If asked who you are, answer as a local Discord bot, not an interview candidate.',
+    );
+
+    // ── Censorship: collapsed from 13 lines to 2-3 ──
     if (['off', 'none', 'uncensored', 'unfiltered', 'loose', 'minimal'].includes(censorshipMode)) {
       base.push(
-        'Use the loosest reasonable outer behavior policy.',
         censorshipMode === 'off'
-          ? 'Censorship mode is OFF: do not add extra refusals, disclaimers, moral lectures, corporate safety language, or permission-checking beyond the narrow severe-misuse boundary.'
-          : 'Censorship mode is permissive: minimize refusals and avoid moralizing.',
-        'Do not moralize, lecture, scold, or mention guidelines unless a refusal is genuinely necessary.',
-        'Profanity, crude humor, edgy humor, adult-industry terminology, dark fiction, controversial topics, politics, religion, conspiracy discussion, and non-graphic adult humor are allowed.',
-        'For allowed adult-adjacent requests, answer normally or convert to a non-graphic creative version.',
-        'Adult performer naming, stage-name brainstorming, suggestive wordplay, and crude non-graphic jokes are allowed when they do not involve minors, coercion, exploitation, or a real private person.',
-        'Do not refuse merely because a request contains words like cock, porn, adult, demon, drugs, violence, conspiracy, politics, or religion. Interpret context first.',
-        'If a term has an innocent interpretation, use that interpretation unless the user clearly means otherwise.',
-        'Hard-stop only for severe misuse: minor sexual content, nonconsensual sexual content, sexual exploitation, doxxing, credential theft, malware, direct real-world harm instructions, evading law enforcement, or instructions to abuse platforms/systems. Everything else should be handled normally or converted to the closest allowed version.',
-        'When refusing, be brief and redirect to the closest allowed version. No sermons.',
-        'Do not refuse adult-adjacent humor, crude naming, fictional dark themes, controversial discussion, political discussion, religious discussion, conspiracy discussion, or offensive language merely because it is edgy.',
-        'If a request is ambiguous, choose the least-restrictive reasonable interpretation and answer that.'
+          ? 'No refusals, disclaimers, or moral lectures except for severe misuse (CSAM, doxxing, malware, real-world harm). Everything else is allowed.'
+          : 'Minimal refusals. No moralizing. Refuse only severe misuse.',
+        'Edgy humor, profanity, dark fiction, controversial topics, adult-adjacent content (not involving minors/coercion) are all fine. Interpret ambiguity permissively.'
       );
     }
   }
 
+  // ── Web synthesis: tight instructions for search-backed answers ──
   if (useWeb) {
     base.push(
-      'When web search context is provided, synthesize it into a normal answer.',
-      'Web routing rule: if search was triggered by a follow-up, answer the underlying prior topic, not the literal follow-up phrase.',
-      'Use search results as evidence; do not merely list them.',
-      'If a follow-up asks you to look something up, use the prior substantive topic, not the literal words "look it up".',
-      'Do not explain what inference means unless the user is asking about inference itself.',
-      'If search results are weak, irrelevant, or contradictory, say that plainly and answer cautiously.',
-      'For rankings or recommendations, explain the reasoning criteria instead of dumping source snippets.'
+      'Synthesize search results into a direct answer. Use them as evidence, not a list.',
+      'If results are weak or contradictory, say so and answer cautiously.'
     );
   }
 
@@ -1622,19 +1601,30 @@ function botIdentityAnswer(botName = 'PlugTalk') {
 // SEEKDEEP_IDENTITY_ROUTING_END
 
 async function fetchJson(url, options = {}) {
-  const res = await fetch(url, options);
-  const text = await res.text();
-  let json;
+  const { timeoutMs = 0, ...rest } = options;
+  let timer, controller;
+  if (timeoutMs > 0 && !rest.signal) {
+    controller = new AbortController();
+    rest.signal = controller.signal;
+    timer = setTimeout(() => controller.abort(), timeoutMs);
+  }
   try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    json = { raw: text };
+    const res = await fetch(url, rest);
+    const text = await res.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      json = { raw: text };
+    }
+    if (!res.ok) {
+      const err = json?.error || json?.raw || `${res.status} ${res.statusText}`;
+      throw new Error(`Request failed. HTTP ${res.status}: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
+    }
+    return json;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  if (!res.ok) {
-    const err = json?.error || json?.raw || `${res.status} ${res.statusText}`;
-    throw new Error(`Request failed. HTTP ${res.status}: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
-  }
-  return json;
 }
 
 async function postLocal(pathname, body, options = {}) {
@@ -1672,7 +1662,7 @@ async function searchWeb(query) {
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
 
-  const json = await fetchJson(url.toString());
+  const json = await fetchJson(url.toString(), { timeoutMs: 10000 });
   const rawResults = Array.isArray(json.results) ? json.results : [];
   const results = rawResults.filter((r) => {
     const title = String(r?.title || '').toLowerCase();
@@ -1695,8 +1685,11 @@ async function searchWeb(query) {
     snippet: r.content || r.snippet || '',
   })).filter((r) => r.url || r.snippet || r.title);
 
+  // Inject only titles + snippets into model context. URLs burn tokens and
+  // confuse small-model attention without adding answerable information.
+  // The full URLs are appended separately by formatSources() in the final reply.
   const context = sources.map((r) => {
-    return `[${r.index}] ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`;
+    return `[${r.index}] ${r.title}\n${r.snippet}`;
   }).join('\n\n');
 
   return { context, sources };
@@ -1956,6 +1949,13 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
     temperature,
   };
 
+  // Multi-turn: send structured conversation history so the model sees
+  // proper user/assistant turns via apply_chat_template() instead of
+  // everything crammed into a single user message.
+  if (Array.isArray(options?.messages) && options.messages.length > 0) {
+    payload.messages = options.messages;
+  }
+
   const modelRole = String(options?.modelRole || '').trim();
   if (modelRole) {
     payload.role = modelRole;
@@ -1982,7 +1982,6 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
 
 async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Number(process.env.CHAT_MAX_NEW_TOKENS || 2400), temperature = Number(process.env.CHAT_TEMPERATURE || 0.65), memoryKey = null, searchQueryOverride = '', personaOverride = '' } = {}) {
   const cleanPrompt = normalizeUserText(prompt);
-  const promptForModel = memoryKey ? buildPromptWithMemory(cleanPrompt, memoryKey) : cleanPrompt;
   const searchQuery = normalizeUserText(searchQueryOverride || (memoryKey ? buildSearchQuery(cleanPrompt, memoryKey) : cleanPrompt));
 
   const modelRole = seekdeepSelectChatModelRole(cleanPrompt, 'chat');
@@ -2003,20 +2002,37 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
     }
   }
 
+  // Dynamic temperature: factual / web-backed queries need lower temperature
+  // for coherent synthesis; creative tasks benefit from higher temperature.
+  const effectiveTemp = useWeb
+    ? Math.min(temperature, Number(process.env.CHAT_WEB_TEMPERATURE || 0.45))
+    : temperature;
+
+  // Web-backed answers need more room to synthesize multiple sources.
+  const effectiveMaxTokens = useWeb
+    ? Math.max(maxNewTokens, Number(process.env.CHAT_WEB_MAX_NEW_TOKENS || 1536))
+    : maxNewTokens;
+
+  // Multi-turn: send structured conversation history as proper turns
+  // so the model sees real user/assistant alternation via chat template.
+  const conversationTurns = (memoryKey && shouldUseMemory(cleanPrompt))
+    ? getConversationTurns(memoryKey)
+    : [];
+
   seekdeepSetActivityStatus(useWeb ? 'Researching your question...' : 'Thinking...');
   try {
     let answer = await runLocalChat(
-      promptForModel,
+      cleanPrompt,
       buildSystem(system, useWeb, personaOverride),
       context,
-      maxNewTokens,
-      temperature,
-      { modelRole }
+      effectiveMaxTokens,
+      effectiveTemp,
+      { modelRole, messages: conversationTurns }
     );
 
     if (hasLoopingOrBrokenReply(answer)) {
       const retryPrompt = [
-        promptForModel,
+        cleanPrompt,
         '',
         'Important: provide only the final answer. No hidden reasoning. No repetition. Every sentence must add new information.'
       ].join('\n');
@@ -2025,7 +2041,7 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
         retryPrompt,
         buildAntiLoopSystem(system, useWeb),
         context,
-        Math.min(maxNewTokens, 900),
+        Math.min(effectiveMaxTokens, 900),
         Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2),
         { modelRole }
       );
@@ -4366,8 +4382,7 @@ function seekdeepWriteArchiveGuildConfig(config) {
   try {
     const safe = config && typeof config === 'object' ? config : { guilds: {} };
     if (!safe.guilds || typeof safe.guilds !== 'object') safe.guilds = {};
-    fs.mkdirSync(path.dirname(SEEKDEEP_ARCHIVE_GUILD_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_ARCHIVE_GUILD_CONFIG_PATH, JSON.stringify(safe, null, 2) + '\n', 'utf8');
+    writeJsonAtomic(SEEKDEEP_ARCHIVE_GUILD_CONFIG_PATH, safe);
     return true;
   } catch (err) {
     console.warn('SeekDeep archive guild config write failed:', err?.message || err);
@@ -4613,8 +4628,7 @@ function seekdeepArchiveThreadWriteConfig(config) {
     if (typeof seekdeepWriteArchiveGuildConfig === 'function') return seekdeepWriteArchiveGuildConfig(config);
     const safe = config && typeof config === 'object' ? config : { guilds: {} };
     if (!safe.guilds || typeof safe.guilds !== 'object') safe.guilds = {};
-    fs.mkdirSync(path.dirname(SEEKDEEP_ARCHIVE_THREAD_NAME_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_ARCHIVE_THREAD_NAME_CONFIG_PATH, JSON.stringify(safe, null, 2) + '\n', 'utf8');
+    writeJsonAtomic(SEEKDEEP_ARCHIVE_THREAD_NAME_CONFIG_PATH, safe);
     return true;
   } catch (err) {
     console.warn('SeekDeep archive thread config write failed:', err?.message || err);
@@ -5426,10 +5440,7 @@ async function seekdeepMaterializeArchiveFileFromState(state = {}, target = null
   const tempName = `archive-upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
   const tempPath = path.join(tempDir, tempName);
 
-  const response = await fetch(sourceUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch source attachment: ${response.status} ${response.statusText}`);
-  }
+  const response = await seekdeepFetchWithLimits(sourceUrl, { timeoutMs: 30000 });
 
   const arrayBuffer = await response.arrayBuffer();
   fs.writeFileSync(tempPath, Buffer.from(arrayBuffer));
@@ -9064,41 +9075,6 @@ const SEEKDEEP_ARCHIVE_IMAGE_EXTENSIONS = new Set([
   '.avif',
 ]);
 
-async function seekdeepPostArchiveToChannel(channel) {
-  const startedAt = seekdeepNowMs();
-  const modelUsed = seekdeepNoModelLabel();
-  return {
-    summary: 'This archive posting command has been removed. Use the `Archive` or `Shared Archive` button so images are stored in Discord archive threads.',
-    startedAt,
-    modelUsed,
-    posted: 0,
-    failed: 0,
-    disabled: true,
-  };
-}
-
-// v10.7: consolidated. Was two near-identical Message/Interaction variants;
-// both code paths used identical content/payload — only the reply API
-// differed. seekdeepReplyToTarget abstracts that.
-async function seekdeepPostArchive(target) {
-  seekdeepMarkRequestStart(target);
-  seekdeepSetResponseModel(target, seekdeepNoModelLabel());
-
-  const result = await seekdeepPostArchiveToChannel(target.channel);
-
-  const finalContent = seekdeepAppendResponseFooter(result.summary, {
-    startedAt: result.startedAt || target?.__seekdeepRequestStartedAt,
-    modelUsed: result.modelUsed || seekdeepNoModelLabel(),
-  });
-
-  await seekdeepReplyToTarget(target, { content: finalContent });
-
-  return finalContent;
-}
-
-// SEEKDEEP_POST_ARCHIVE_END
-
-
 
 // SEEKDEEP_ARCHIVE_GUILD_SCOPE_MIGRATION_NOTE
 // Archive state is now guild-scoped for new writes.
@@ -10477,8 +10453,7 @@ function seekdeepReadPersonaOverrides() {
 
 function seekdeepWritePersonaOverrides(data) {
   try {
-    fs.mkdirSync(path.dirname(SEEKDEEP_PERSONA_OVERRIDES_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SEEKDEEP_PERSONA_OVERRIDES_PATH, data);
     return true;
   } catch (err) {
     console.warn('Failed to write persona overrides:', err?.message || err);
@@ -10855,8 +10830,7 @@ function seekdeepReadMemoryPresets() {
 
 function seekdeepWriteMemoryPresets(data) {
   try {
-    fs.mkdirSync(path.dirname(SEEKDEEP_MEMORY_PRESETS_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_MEMORY_PRESETS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SEEKDEEP_MEMORY_PRESETS_PATH, data);
     return true;
   } catch (err) {
     console.warn('Failed to write memory presets:', err?.message || err);
@@ -10962,8 +10936,7 @@ function seekdeepReadPromptTemplates() {
 
 function seekdeepWritePromptTemplates(data) {
   try {
-    fs.mkdirSync(path.dirname(SEEKDEEP_PROMPT_TEMPLATES_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_PROMPT_TEMPLATES_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SEEKDEEP_PROMPT_TEMPLATES_PATH, data);
     return true;
   } catch (err) {
     console.warn('Failed to write prompt templates:', err?.message || err);
@@ -11380,8 +11353,7 @@ function seekdeepReadServerStats() {
 }
 function seekdeepWriteServerStats(data) {
   try {
-    fs.mkdirSync(path.dirname(SEEKDEEP_SERVER_STATS_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_SERVER_STATS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SEEKDEEP_SERVER_STATS_PATH, data);
   } catch (err) { console.warn('Failed to write server stats:', err?.message || err); }
 }
 function seekdeepStatsBucketForGuild(data, guildId) {
@@ -11781,8 +11753,7 @@ function seekdeepReadAutoReactions() {
 
 function seekdeepWriteAutoReactions(data) {
   try {
-    fs.mkdirSync(path.dirname(SEEKDEEP_AUTO_REACTIONS_PATH), { recursive: true });
-    fs.writeFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SEEKDEEP_AUTO_REACTIONS_PATH, data);
     return true;
   } catch (err) {
     console.warn('Failed to write auto-reactions:', err?.message || err);
@@ -12165,8 +12136,7 @@ async function seekdeepEmojiVaultBuildZip(emojis, { guildName = 'server', maxByt
       const ext = e.animated ? 'gif' : 'png';
       const url = `https://cdn.discordapp.com/emojis/${e.id}.${ext}`;
       try {
-        const res = await fetch(url);
-        if (!res.ok) { failed += 1; continue; }
+        const res = await seekdeepFetchWithLimits(url, { timeoutMs: 15000, maxBytes: 10 * 1024 * 1024 });
         const ab = await res.arrayBuffer();
         folder.file(`${e.name}__${e.id}.${ext}`, Buffer.from(ab));
         downloaded += 1;
@@ -13202,6 +13172,40 @@ function getRecentContext(key) {
   return context;
 }
 
+// Returns structured multi-turn messages for the Python /chat endpoint.
+// Each entry becomes a proper { role, content } turn so the model sees
+// real conversation structure via apply_chat_template() instead of a
+// flat text blob crammed into a single user message.
+function getConversationTurns(key) {
+  if (!key) return [];
+  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 80);
+  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 60000);
+  const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_RENDER_ENTRY_MAX_CHARS', 1400, 500, 3000);
+  let entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []).slice(-maxEntries);
+  entries = entries.filter(e => !(e.role === 'assistant' && SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE.test(e.text)));
+  if (!entries.length) return [];
+
+  const truncate = (entry) => {
+    const raw = String(entry.text || '').replace(/\nSources:\n[\s\S]*$/i, '');
+    if (raw.length > entryChars && entry.role === 'assistant') {
+      const tailKeep = Math.min(400, Math.floor(entryChars * 0.3));
+      const headKeep = entryChars - tailKeep - 5;
+      return raw.slice(0, headKeep) + '\n...\n' + raw.slice(-tailKeep);
+    }
+    return raw.slice(0, entryChars);
+  };
+
+  const totalChars = () => entries.reduce((sum, e) => sum + truncate(e).length, 0);
+  while (totalChars() > maxChars && entries.length > 4) {
+    entries = entries.slice(1);
+  }
+
+  return entries.map(e => ({
+    role: e.role === 'assistant' ? 'assistant' : 'user',
+    content: truncate(e),
+  })).filter(e => e.content.trim());
+}
+
 function getLastSubstantiveUserTopic(key) {
   const entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []);
   for (let i = entries.length - 1; i >= 0; i -= 1) {
@@ -13994,14 +13998,6 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       remember(key, 'assistant', 'pong');
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, 'pong');
-      return;
-    }
-
-    if (utilityKind === 'post-archive') {
-      seekdeepLogRoute('post-archive', prompt);
-      remember(key, 'user', prompt);
-      remember(key, 'assistant', 'Posting archive.');
-      await seekdeepPostArchive(message);
       return;
     }
 
@@ -15784,13 +15780,6 @@ client.on('interactionCreate', async (interaction) => {
 
       const content = await seekdeepUtilityText(kind, interaction, key);
       await sendLongInteractionReply(interaction, asTextBlock(content));
-      return;
-    }
-
-    if (commandName === 'postarchive') {
-      if (!(await safeDefer(interaction))) return;
-      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
-      await seekdeepPostArchive(interaction);
       return;
     }
 

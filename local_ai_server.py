@@ -187,12 +187,14 @@ MODEL_LOG_VRAM = os.getenv("MODEL_LOG_VRAM", "true").lower() in {"1", "true", "y
 # Chat-model quantization mode: 4bit (recommended for laptops), 8bit, or none/off/fp16/bf16.
 LOCAL_CHAT_QUANT = (os.getenv("LOCAL_CHAT_QUANT", "4bit") or "").strip().lower()
 
-# Roles that should always load at full precision (no bnb quant), e.g. 8B models that
-# already fit on a 24 GB GPU. These keep their full-precision quality. The big roles
-# (quality_text 12B, reasoning_code 14B) still use LOCAL_CHAT_QUANT.
+# Roles that always load at full precision (skip bnb quant).
+# Empty by default — on a 24GB laptop GPU, loading default_chat at fp16
+# (~16GB) alongside SDXL (~7GB) spills into system memory and kills
+# desktop responsiveness. Set to "default_chat,fallback_chat" only if
+# you have 32GB+ VRAM and want fp16 nuance back.
 LOCAL_CHAT_QUANT_FULL_ROLES = {
     role.strip().lower()
-    for role in (os.getenv("LOCAL_CHAT_QUANT_FULL_ROLES", "default_chat,fallback_chat") or "").split(",")
+    for role in (os.getenv("LOCAL_CHAT_QUANT_FULL_ROLES", "") or "").split(",")
     if role.strip()
 }
 
@@ -580,10 +582,16 @@ def prepare_task(task: str, role: str = "") -> None:
 # Request models
 # ---------------------------------------------------------------------------
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     prompt: str
     system: str = ""
     context: str = ""
+    messages: list[ChatMessage] = Field(default_factory=list)
     max_new_tokens: int = Field(default=700, ge=32, le=4096)
     temperature: float = Field(default=0.35, ge=0.0, le=2.0)
     role: str = "default_chat"
@@ -913,7 +921,7 @@ def _is_fallback_eligible_exception(exc: Exception) -> bool:
     return False
 
 
-def build_chat_prompt(system: str, context: str, prompt: str):
+def build_chat_prompt(system: str, context: str, prompt: str, messages: list | None = None):
     base_system = system.strip() or (
         "You are SeekDeep, a locally running Discord assistant. "
         "Answer directly and naturally. Do not claim you searched the web unless search context is provided. "
@@ -921,15 +929,29 @@ def build_chat_prompt(system: str, context: str, prompt: str):
         "For casual/simple questions, answer without mentioning tools."
     )
 
+    # Build the current user message (with optional web context)
     if context.strip():
         user_content = (
-            "Use the following context only where relevant. Infer a proper answer; do not merely list results.\n\n"
+            "Answer using these search results as evidence:\n\n"
             f"{context.strip()}\n\n"
             f"User question:\n{prompt.strip()}"
         )
     else:
         user_content = prompt.strip()
 
+    # Multi-turn: proper conversation structure when history is available
+    if messages:
+        result = [{"role": "system", "content": base_system}]
+        for msg in messages:
+            r = msg["role"] if isinstance(msg, dict) else msg.role
+            c = msg["content"] if isinstance(msg, dict) else msg.content
+            if r in ("user", "assistant") and c.strip():
+                result.append({"role": r, "content": c.strip()})
+        # Append the current user message as the final turn
+        result.append({"role": "user", "content": user_content})
+        return result
+
+    # Legacy single-turn fallback
     return [
         {"role": "system", "content": base_system},
         {"role": "user", "content": user_content},
@@ -942,7 +964,7 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
 
     import torch
 
-    messages = build_chat_prompt(req.system, req.context, req.prompt)
+    messages = build_chat_prompt(req.system, req.context, req.prompt, req.messages or None)
 
     try:
         # Some models (e.g. Qwen3) emit hidden thinking blocks; disable if supported.
@@ -966,8 +988,9 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
         "do_sample": float(req.temperature) > 0,
         "temperature": max(float(req.temperature), 0.01),
         "top_p": 0.9,
+        "top_k": max(int(os.getenv("CHAT_TOP_K", "50")), 0) or None,
         "repetition_penalty": max(float(os.getenv("CHAT_REPETITION_PENALTY", "1.08")), 1.0),
-        "no_repeat_ngram_size": max(int(os.getenv("CHAT_NO_REPEAT_NGRAM_SIZE", "6")), 0),
+        "no_repeat_ngram_size": max(int(os.getenv("CHAT_NO_REPEAT_NGRAM_SIZE", "4")), 0),
         "use_cache": True,
         "pad_token_id": getattr(chat_tokenizer, "eos_token_id", None),
         "eos_token_id": getattr(chat_tokenizer, "eos_token_id", None),
