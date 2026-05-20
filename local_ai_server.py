@@ -674,7 +674,12 @@ _SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-p
 @app.middleware("http")
 async def seekdeep_singleflight_middleware(request, call_next):
     if request.url.path in _SEEKDEEP_LOCKED_PATHS:
+        locked = _SEEKDEEP_MODEL_REQUEST_LOCK.locked()
+        if locked:
+            print(f"[SeekDeep Local AI] {request.url.path} waiting for model lock (another request is in progress)", flush=True)
         async with _SEEKDEEP_MODEL_REQUEST_LOCK:
+            if locked:
+                print(f"[SeekDeep Local AI] {request.url.path} acquired model lock after wait", flush=True)
             return await call_next(request)
     return await call_next(request)
 # SEEKDEEP_SINGLEFLIGHT_MIDDLEWARE_END
@@ -1013,6 +1018,8 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
 @app.post("/chat")
 def chat(req: ChatRequest):
     requested_role = (req.role or "default_chat").strip().lower() or "default_chat"
+    n_msgs = len(req.messages) if req.messages else 0
+    print(f"[SeekDeep Local AI] /chat entry role={requested_role} msgs={n_msgs} prompt={req.prompt[:120]!r}", flush=True)
 
     try:
         answer, resolved_role, model_id = _run_chat_generation(req, requested_role)

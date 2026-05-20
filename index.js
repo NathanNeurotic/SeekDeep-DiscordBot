@@ -1231,8 +1231,9 @@ function buildSystem(system = '', useWeb = false, personaOverride = '') {
   // ── Core identity (kept tight — every token counts on 8B) ──
   if (!isRefineMode) {
     base.push(
-      'You are SeekDeep, a local Discord bot. Answer directly and usefully. Prioritize accuracy over personality.',
+      'You are SeekDeep, a local Discord bot running on a private machine — not a cloud service, not ChatGPT, not Claude. Answer directly and usefully. Prioritize accuracy over personality.',
       'SeekDeep has three pipelines: chat (you), image gen (say “draw X” or /image), and vision (reply to an image with “@SeekDeep what is this?”). Never claim you are text-only.',
+      'Do not reveal or guess hardware specs (GPU, CPU, RAM, IP, ports). If asked, say that info is private.',
     );
   }
 
@@ -1310,6 +1311,10 @@ function shouldAutoSearch(prompt) {
     /^generate a prompt\b/,
     /^make a joke\b/,
     /^tell me a joke\b/,
+    /^(?:stop|don't|do not|quit|can you)\s+(?:talking|speaking|responding|being|acting|sounding)\b/,
+    /\b(?:talk|speak|respond|reply|answer|write|act|behave|sound)\s+(?:like|as|more|less)\b/,
+    /\b(?:give|show)\s+me\s+(?:the|a|an|your)\s+\w+\s+version\b/,
+    /\b(?:tone|voice|style|vibe)\s+(?:to|into|of)\b/,
   ];
 
   if (noSearchPatterns.some((re) => re.test(p))) return false;
@@ -1386,7 +1391,6 @@ function shouldAutoSearch(prompt) {
     'launched',
     'announcement',
     'announced',
-    'version',
     'update',
     'updated',
     'patch notes',
@@ -1457,6 +1461,10 @@ function shouldAutoSearch(prompt) {
   ];
 
   if (highChangeTopics.some((hint) => p.includes(hint))) return true;
+
+  // "version" only in software/release context — bare "version" matches
+  // conversational uses like "give me the bad guy version" (false positive).
+  if (/\b(?:version|v)\s*\d|\b(?:latest|new|current|next|stable|beta|alpha)\s+version\b|\bversion\s+(?:of|for|info|history|log)\b/i.test(p)) return true;
 
   // Public/living-figure style questions often need current context.
   if (/^what (is|are|was|were).+\bon about\b/i.test(prompt)) return true;
@@ -1961,7 +1969,8 @@ async function runLocalChat(prompt, systemText, context, maxNewTokens, temperatu
     payload.role = modelRole;
   }
 
-  const response = await postLocal('/chat', payload, options);
+  const chatTimeoutMs = Number(process.env.LOCAL_AI_TIMEOUT_MS || 300000);
+  const response = await postLocal('/chat', payload, { ...options, timeoutMs: chatTimeoutMs });
 
   if (response && typeof response === 'object') {
     seekdeepRememberLastChatModel(response.model_id, response.model_role);
@@ -2019,6 +2028,9 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
     ? getConversationTurns(memoryKey)
     : [];
 
+  if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
+    console.log(`[SeekDeep askChat] role=${modelRole} useWeb=${useWeb} turns=${conversationTurns.length} temp=${effectiveTemp} maxTokens=${effectiveMaxTokens} prompt=${cleanPrompt.slice(0, 120)}`);
+  }
   seekdeepSetActivityStatus(useWeb ? 'Researching your question...' : 'Thinking...');
   try {
     let answer = await runLocalChat(
@@ -13341,9 +13353,21 @@ client.on('messageCreate', async (message) => {
 
   if (await seekdeepProcessPreAddressMessageRoutes(message)) return;
 
-  const seekdeepMessageAddressesBot = typeof seekdeepMessageMentionsBot === 'function'
+  let seekdeepMessageAddressesBot = typeof seekdeepMessageMentionsBot === 'function'
     ? seekdeepMessageMentionsBot(message)
     : Boolean(message.mentions?.has(client.user));
+
+  // Reply-to-bot: treat Discord replies to bot messages as addressed, even
+  // without an @mention.  This lets users hold a conversation by replying
+  // to SeekDeep's messages instead of typing "@SeekDeep" every turn.
+  if (!seekdeepMessageAddressesBot && message.reference?.messageId) {
+    try {
+      const refMsg = await message.channel?.messages?.fetch(message.reference.messageId).catch(() => null);
+      if (refMsg?.author?.id === client.user?.id) {
+        seekdeepMessageAddressesBot = true;
+      }
+    } catch {}
+  }
 
   if (!seekdeepMessageAddressesBot) {
     if (typeof seekdeepPeekPendingImageSubjectRequestV2 === 'function' && seekdeepPeekPendingImageSubjectRequestV2(message)) {
