@@ -301,6 +301,21 @@ const genericOutput = clean(
 );
 check('cleaner: generic-only refine rejected', genericOutput.reason === 'too-generic');
 
+const inventedHumanScene = clean(
+  'A super-sized, curvaceous woman with vibrant turquoise hair and a bright red sari stands confidently on a rocky beach at sunset, her figure silhouetted against the warm orange-pink sky, with a sea of calm turquoise water lapping gently at her feet.',
+  'Super Sized Big Beatiful Woman',
+);
+check('cleaner: rejects invented human setting/clothing from short generic prompt', /^unrequested-/.test(inventedHumanScene.reason));
+check('human-specifics: reports unrequested setting', /^unrequested-setting:beach$/.test(T.seekdeepDynamicHumanPromptUnrequestedSpecificsReason('Super Sized Big Beatiful Woman', 'a woman on a rocky beach with turquoise hair')));
+
+const longRefine = clean(
+  'a brass lantern in a foggy forest, tarnished metal frame, warm amber flame behind rippled glass, mossy roots, drifting mist, wet leaves, cinematic rim light, shallow depth of field, soft film grain, cool green shadows, golden highlights, close-up composition, ornate handle, weathered patina, tiny water droplets, quiet mysterious mood',
+  'a brass lantern in a foggy forest',
+);
+const longRefineWords = String(longRefine.value || '').split(/\s+/).filter(Boolean).length;
+check('cleaner: dynamic refine is clamped for SDXL CLIP', longRefine.reason === 'ok' && longRefineWords <= T.imagePromptConstants.dynamicMaxWords && longRefine.value.length <= T.imagePromptConstants.dynamicMaxChars);
+check('clamp: keeps prompt under configured word cap', T.seekdeepClampImagePromptForSdxl('one two three four five six seven eight nine ten', { maxWords: 8, maxChars: 200 }).split(/\s+/).length <= 8);
+
 // Reason field is always present and non-empty.
 check('cleaner: success has reason="ok"', realCase.reason === 'ok');
 check('cleaner: reason field is always a non-empty string',
@@ -691,6 +706,60 @@ console.log('41. Context menu image extraction (embed fallback).');
 check('ctxImage: attachment hit', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [{ url: 'https://cdn.discord.com/foo.png', name: 'test.png' }] } })?.url === 'https://cdn.discord.com/foo.png');
 check('ctxImage: embed image fallback', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ image: { url: 'https://example.com/bar.jpg' } }] })?.url === 'https://example.com/bar.jpg');
 check('ctxImage: no image returns null', T.seekdeepContextMenuGetImageAttachment({ attachments: { values: () => [] }, embeds: [{ title: 'no image' }] }) === null);
+
+// -- Suite 42: Discord message-link / embed extraction --
+console.log('42. Discord message-link / embed extraction.');
+const msgLink = T.seekdeepExtractDiscordMessageLink('its here https://discord.com/channels/1256458065834676244/1449291472540274781/1506688005992349716');
+check('msg-link: parses guild/channel/message ids', msgLink?.guildId === '1256458065834676244' && msgLink?.channelId === '1449291472540274781' && msgLink?.messageId === '1506688005992349716');
+check('msg-link: parses discordapp legacy host', T.seekdeepExtractDiscordMessageLink('https://discordapp.com/channels/111111/222222/333333')?.messageId === '333333');
+check('embed-intent: read this embed matches', T.seekdeepLooksLikeEmbedInspectPrompt('can you read this embed') === true);
+check('embed-intent: ordinary chat does not match', T.seekdeepLooksLikeEmbedInspectPrompt('how are you') === false);
+const embedReport = T.seekdeepFormatDiscordMessageExtract({
+  id: '333',
+  guildId: '111',
+  channelId: '222',
+  author: { tag: 'tester#0001' },
+  channel: { name: 'spam-it-up' },
+  createdTimestamp: Date.UTC(2026, 4, 20, 16, 0, 0),
+  content: 'hello @everyone',
+  embeds: [{ data: { type: 'rich', title: 'Webhook post', description: 'A globe icon', image: { url: 'https://example.com/globe.png' }, fields: [{ name: 'Name', value: 'SeekDeep' }] } }],
+  attachments: { values: () => [{ name: 'pfp.png', contentType: 'image/png', size: 2048, url: 'https://cdn.discordapp.com/pfp.png' }] },
+}, msgLink);
+check('embed-format: includes embed title/description/image', /Webhook post/.test(embedReport) && /A globe icon/.test(embedReport) && /globe\.png/.test(embedReport));
+check('embed-format: includes attachments', /Attachment 1: pfp\.png/.test(embedReport));
+check('embed-format: neutralizes everyone mention', embedReport.includes('@\u200beveryone'));
+
+// -- Suite 43: Web-search query distillation --
+console.log('43. Web-search query distillation.');
+const todayIso = T.seekdeepCurrentDateIso();
+const headlineQuery = T.seekdeepDistillWebSearchQuery("Supposedly you're more inference capable now. We should test it, look up today's top headlines in the USA world news");
+check('search-query: strips inference/test lead-in', !/inference|capable|test it/i.test(headlineQuery));
+check('search-query: preserves headline/news intent', /top headlines/i.test(headlineQuery) && /USA/i.test(headlineQuery) && /world news/i.test(headlineQuery));
+check('search-query: resolves today to current ISO date', headlineQuery.includes(todayIso));
+check('search-query: buildSearchQuery uses distilled prompt', T.buildSearchQuery("Supposedly you're more inference capable now. We should test it, look up today's top headlines in the USA world news").includes(todayIso));
+check('search-query: non-search prompt stays recognizable', /crystal ball wizard/i.test(T.seekdeepDistillWebSearchQuery('draw a crystal ball wizard')));
+
+// -- Suite 44: Archive dedupe keys + safe source links --
+console.log('44. Archive dedupe keys + safe source links.');
+const archiveKeyA = T.seekdeepArchiveKeyFromState({ buffer: Buffer.from('same image bytes') });
+const archiveKeyB = T.seekdeepArchiveKeyFromState({ buffer: Buffer.from('same image bytes') });
+check('archive-key: stable hash from buffer', archiveKeyA && archiveKeyA === archiveKeyB && archiveKeyA.startsWith('sha256:'));
+check('archive-key: parses archive message key', T.seekdeepArchiveMessageArchiveKey({ content: '**SeekDeep Image Archive Entry**\nArchive Key: sha256:abc123\nRequester: <@1>\nPrompt: x' }) === 'sha256:abc123');
+const sourceFooter = T.formatSources([{ index: 1, title: 'Example', url: 'https://example.com/story' }]);
+check('sources: wraps URL in angle brackets to suppress embeds', sourceFooter.includes('<https://example.com/story>'));
+check('sources: safe URL helper is idempotent', T.seekdeepDiscordSafeUrl('<https://example.com/a>') === '<https://example.com/a>');
+
+// -- Suite 45: Image reply intent + RE-REFINE mode --
+console.log('45. Image reply intent + RE-REFINE mode.');
+check('image-reply: question routes to vision', T.seekdeepClassifyImageReplyIntent('what is this?', { hasReplyImage: true }).intent === 'vision');
+check('image-reply: upscale routes to upscale', T.seekdeepClassifyImageReplyIntent('upscale this 4x', { hasReplyImage: true }).intent === 'upscale');
+check('image-reply: edit routes to edit', T.seekdeepClassifyImageReplyIntent('make it darker', { hasReplyImage: true }).intent === 'edit');
+check('image-reply: inspired routes fresh', T.seekdeepClassifyImageReplyIntent('make a new image inspired by this', { hasReplyImage: true }).intent === 'fresh_image');
+check('image-reply: referential image request is ambiguous', T.seekdeepClassifyImageReplyIntent('make an image of this', { hasReplyImage: true }).intent === 'ambiguous');
+check('image-reply: standalone image request does not hijack reply image', T.seekdeepClassifyImageReplyIntent('draw a red apple', { hasReplyImage: true }).intent === 'none');
+const rerefineOptions = T.seekdeepRegenerateModeOptions('rerefine', { prompt: 'a cat', refinedPrompt: 'a fancy cat', imageModeOptions: { imageStepsOverride: 40 } });
+check('RE-REFINE: forces fresh refinement', rerefineOptions.forceFreshRefinement === true && rerefineOptions.refine === true && rerefineOptions.preRefinedPrompt === undefined);
+check('RE-REFINE: preserves image settings', rerefineOptions.imageStepsOverride === 40);
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);

@@ -86,7 +86,7 @@ The local AI server exposes:
 - `POST /img2img` — image-to-image transformation (shared SDXL weights)
 - `POST /instruct-pix2pix` — natural-language image editing (InstructPix2Pix)
 - `POST /inpaint` — object removal via CLIPSeg auto-mask + SDXL inpainting
-- `POST /upscale` — Lanczos upscale (Real-ESRGAN scaffolded)
+- `POST /upscale` — PIL upscale (Lanczos by default) with optional mild sharpening; Real-ESRGAN scaffolded
 - `POST /chart` — matplotlib stats chart rendering
 - `POST /unload` — force-unload current model
 
@@ -151,7 +151,7 @@ See [COMMANDS.md](COMMANDS.md) for the full command map.
 
 ## Conversation Memory
 
-Chat uses rolling channel memory by default, so a short sequence of requests can carry earlier goals, constraints, names, and decisions forward. Utility commands, archive commands, status/cache/queue checks, identity questions, and image prompts do not inject chat memory.
+Chat uses rolling memory by default, scoped per channel and user unless `SEEKDEEP_MEMORY_SCOPE=channel` is set. Short follow-ups can carry earlier goals, constraints, names, and decisions forward without borrowing another user's intent in a busy channel. Explicit Discord replies add the replied-to message as bounded context for that turn; the current user message still wins over remembered context.
 
 Relevant knobs (defaults shown — `.env.default` may differ from the running `.env`):
 
@@ -173,7 +173,7 @@ Image requests support:
 
 - Original prompt generation
 - Dynamic AI-refined prompt generation using the local chat model
-- `Original`, `Refined`, and `Both` prompt-choice buttons
+- `Original`, `Refined`, `RE-REFINE`, and `Both` image buttons
 - `Download`, `Archive`, and `Shared Archive` buttons
 - Missing-subject follow-up flow, for example `@SeekDeep generate me`
 - Optional raw/unrefined mode via `raw`, `unrefined`, `--raw`, or `no refine`
@@ -184,9 +184,26 @@ Dynamic refinement is enabled by default:
 SEEKDEEP_IMAGE_PROMPT_MAX_CHARS=650
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT=true
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS=180000
+SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS=160
+SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS=45
+SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS=360
 ```
 
-While dynamic refinement runs, SeekDeep shows a visible prompt-refinement status and then edits it into the Original / Refined / Both choice. If dynamic refinement fails or times out, SeekDeep falls back to its local static prompt cleanup instead of failing the image request.
+While dynamic refinement runs, SeekDeep shows a visible prompt-refinement status and then edits it into the Original / Refined / Both choice. Dynamic image refinement and `/refine` are pinned to the `default_chat` role so router keywords inside the prompt do not accidentally select code/reasoning models. If AI refinement fails or times out, SeekDeep logs the reason and visibly marks the output as static-rule fallback instead of silently using an empty or bad prompt.
+
+`RE-REFINE` re-runs refinement from the original prompt/context and then generates from that new refined prompt. It bypasses the refined-prompt cache, preserves the original width/height/seed/quality/style settings, and suppresses repeated clicks while one RE-REFINE job is already queued.
+
+### Image Reply Intent
+
+When you reply to an image, SeekDeep classifies the request before acting:
+
+- questions like `what is this?`, OCR/read-text requests, or `describe it` go to vision
+- `upscale 2x/3x/4x` goes to upscale
+- edit instructions like `make it darker`, `remove the cat`, or `add snow` go to inpaint/pix2pix/img2img depending on enabled features
+- `make a new image inspired by this` generates a fresh image using the replied image as visual reference
+- `RE-REFINE`, `refine this`, or `regenerate this` on generated images reuses the original generation context
+
+If the reply is genuinely ambiguous, SeekDeep asks one short clarification instead of guessing.
 
 ## Archive System
 
@@ -231,6 +248,19 @@ Browse the newest 10 entries in your archive thread via slash command:
 ```
 
 Archive thread names track archived generation entries, not general messages. Archive actions require Discord thread storage to be configured and working.
+
+Each archived generation now carries a stable `Archive Key` derived from the image bytes when available. Personal and shared archive writes scan for that key and suppress duplicates, so retries, repeated button clicks, edited archive messages, restarts, and reaction shortcuts do not increment counts twice for the same image. Counts are serialized per archive thread and increment only after a Discord archive post succeeds.
+
+## Web Search And Sources
+
+Web-backed answers use SearXNG results as evidence inside the chat prompt. Search query cleanup removes conversational lead-ins, resolves relative dates like "today" to the current date, and keeps follow-up searches tied to the user's own recent topic. Source footers stay compact:
+
+```text
+Sources:
+[1] Title - <https://example.com/article>
+```
+
+Source URLs are wrapped in angle brackets so Discord does not create giant link-preview embeds.
 
 ## Right-click Context Menu Commands
 
@@ -393,7 +423,18 @@ SEEKDEEP_IMAGE_COOLDOWN_MS=15000          # per-user image cooldown (15s default
 IMAGE_IMG2IMG_GUIDANCE_SCALE=5.0          # img2img guidance (lower than txt2img for better edits)
 SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS=900000   # Original/Refined/Both button TTL (15min)
 SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS=900000  # 'generate me' follow-up TTL (15min)
-SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=600000   # refined-prompt reuse window (10min)
+SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=3600000  # refined-prompt reuse window (RE-REFINE bypasses it)
+SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS=45    # SDXL-friendly refinement clamp
+SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS=360   # SDXL-friendly refinement clamp
+
+# Upscale
+SEEKDEEP_UPSCALE_METHOD=lanczos           # lanczos | realesrgan (scaffolded)
+SEEKDEEP_UPSCALE_RESAMPLE=lanczos         # lanczos | bicubic | nearest
+SEEKDEEP_UPSCALE_SHARPEN=true             # mild UnsharpMask after resize
+SEEKDEEP_UPSCALE_SHARPEN_RADIUS=1.1
+SEEKDEEP_UPSCALE_SHARPEN_PERCENT=115
+SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD=3
+SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS=20000000
 
 # Logging
 SEEKDEEP_FILE_LOGGING=on                  # mirror console output to logs/seekdeep-YYYY-MM-DD.log
@@ -459,8 +500,15 @@ npm run smoke
 - If SearXNG fails, check the Docker container on port `8080`.
 - If archive setup fails, verify the bot has access to the chosen archive channel and can create/manage threads.
 - If `Fallback used: role=fallback_chat ...` appears in a chat reply footer, the originally-routed role failed to load (typically CUDA OOM) and the server fell back to `fallback_chat`. Check `LOCAL_CHAT_QUANT` and consider pinning more roles in `LOCAL_CHAT_QUANT_FULL_ROLES`.
+- If refinement says `static rules; AI refine unavailable`, check `logs/seekdeep-YYYY-MM-DD.log` for the exact validator/timeout/model-load reason. RE-REFINE intentionally bypasses the cached refined prompt.
+- If archive counts look wrong, run `@SeekDeep archive status`. New writes use `Archive Key` dedupe and only increment after a successful thread post; manual `archive count set` should be reserved for repairing corrupted historical profiles.
+- If an upscale loading GIF remains visible, the final edit likely failed due to a Discord interaction timeout. Retrying should now edit the status to success/failure and clear prior attachments; check the console for `[SeekDeep] upscale failed` if it does not.
 
 ## Release Notes
+
+### v10.35 — repair/audit pass
+
+Archive writes now include stable `Archive Key` metadata, duplicate suppression, and per-thread count locking so a successfully archived image increments exactly once. Prompt refinement is pinned to `default_chat`, reports AI-refine fallback reasons, clamps SDXL prompts, and adds the generated-image **RE-REFINE** button for a fresh refinement pass from the original prompt. Upscale now clears loading attachments on success/failure and defaults to Lanczos plus configurable mild sharpening. Image replies are classified as edit, fresh inspired image, vision, upscale, regenerate, or RE-REFINE; ambiguous replies ask a short clarification. Web source URLs are wrapped in Discord-safe angle brackets to suppress preview spam. New smoke checks cover archive keys, source formatting, image-reply intent, and RE-REFINE settings.
 
 ### v10.34 — archive perf, persona crash, ephemeral migration, image pipeline tuning, lightweight routing
 

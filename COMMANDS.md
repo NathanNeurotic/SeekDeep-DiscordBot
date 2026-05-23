@@ -29,6 +29,8 @@ Use one command per Discord message when smoke-testing routing. SeekDeep accepts
 
 `web:auto` lets SeekDeep decide whether SearXNG is needed. Use `web:off` for local-only answers. Use `web:always` to force a search.
 
+Web answers append compact `Sources:` lines. Source URLs are wrapped like `<https://...>` so Discord keeps them clickable without creating large preview embeds.
+
 Replying to any non-English message with `@SeekDeep translate this` (or just `translate`) auto-routes to translation.
 
 ## Image Generation
@@ -51,19 +53,30 @@ Replying to any non-English message with `@SeekDeep translate this` (or just `tr
 | `@SeekDeep upscale [2x\|3x\|4x]` | Upscale an attached/replied/recent image. | Everyone |
 | `/upscale image:<file> scale:2\|3\|4` | Slash upscale. | Everyone |
 
+Upscale defaults to local PIL Lanczos resampling plus a mild configurable sharpen pass (`SEEKDEEP_UPSCALE_*`). It clears the processing/loading state on success or failure and reports the final method/settings.
+
 If the subject is missing, for example `@SeekDeep generate me`, SeekDeep asks what to generate and consumes the next plain reply as the image subject.
 
-Image requests offer `Original`, `Refined`, and `Both` choices. Refined prompts use the local chat model dynamically, then fall back to static cleanup if refinement fails.
+Image requests offer `Original`, `Refined`, and `Both` choices before queueing. Refined prompts use the pinned `default_chat` refinement route dynamically, then fall back to static cleanup with a visible note if AI refinement fails.
 
 Image result buttons:
 
 - `Download` (full-resolution CDN URL)
 - `Archive` (your personal thread)
 - `Shared Archive` (server-wide thread)
+- `RE-REFINE` (freshly rerun refinement from the original prompt/context, preserving width/height/seed/quality/style)
 
 Use `raw`, `unrefined`, `--raw`, or `no refine` in a prompt when you want to skip refinement.
 
-**Conversational image edits** — reply to a generated image with natural language like "make it darker", "remove the wizard", or "same thing but in winter". SeekDeep auto-routes to the best pipeline:
+**Image replies** — reply to an image with natural language and SeekDeep classifies the intent first:
+- `what is this?`, `describe it`, OCR/read-text requests → vision
+- `upscale 2x`, `upscale this 4x` → upscale
+- `make it darker`, `remove the wizard`, `same thing but in winter` → image edit pipeline
+- `make a new image inspired by this` → fresh generation using the image as visual reference
+- `RE-REFINE`, `refine this`, `regenerate this` on generated images → regeneration/refinement flow
+- ambiguous replies like `make an image of this` → one clarification question
+
+**Conversational image edits** — for edit intent, SeekDeep auto-routes to the best enabled pipeline:
 - **Removal requests** ("without the tree", "remove the cat") → Inpainting (CLIPSeg mask + SDXL) if enabled, else img2img
 - **Modification requests** ("make it darker", "add snow") → InstructPix2Pix if enabled, else img2img
 - **General edits** → img2img with combined prompt
@@ -109,6 +122,8 @@ Each archive thread entry has:
 
 - A **Download** link button (full-resolution CDN URL).
 - A grey **Delete from Archive** button that removes that single entry and updates the thread's count.
+
+Archive entries include an `Archive Key`. Repeated Archive/Shared Archive clicks, retries, restarts, and reaction shortcuts detect the key and do not double-count the same generated image.
 
 **Natural-language archive** of the most recent SeekDeep image in the channel (no button click required):
 

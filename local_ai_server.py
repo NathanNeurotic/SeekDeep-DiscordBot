@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from PIL import Image
+from PIL import Image, ImageFilter
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -655,6 +655,11 @@ class UpscaleRequest(BaseModel):
     image_b64: str
     scale: int = Field(default=2, ge=2, le=4)
     method: Literal["lanczos", "realesrgan"] = "lanczos"
+    resample: Literal["lanczos", "bicubic", "nearest"] = "lanczos"
+    sharpen: bool = True
+    sharpen_radius: float = Field(default=1.1, ge=0.0, le=5.0)
+    sharpen_percent: int = Field(default=115, ge=0, le=300)
+    sharpen_threshold: int = Field(default=3, ge=0, le=20)
 
 
 # ---------------------------------------------------------------------------
@@ -1418,52 +1423,67 @@ def upscale(req: UpscaleRequest):
     source_bytes = b64_to_bytes(req.image_b64)
     source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
     scale = int(req.scale)
+    resample_map = {
+        "lanczos": Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS,
+        "bicubic": Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC,
+        "nearest": Image.Resampling.NEAREST if hasattr(Image, "Resampling") else Image.NEAREST,
+    }
+    resample_name = str(req.resample or "lanczos").lower()
+    resample_filter = resample_map.get(resample_name, resample_map["lanczos"])
+
+    def finish_pil_upscale(note: str = ""):
+        new_w = source_img.width * scale
+        new_h = source_img.height * scale
+        max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
+        if new_w * new_h > max_pixels:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upscaled image would be {new_w}x{new_h} ({new_w * new_h} pixels), over SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS={max_pixels}.",
+            )
+
+        img = source_img.resize((new_w, new_h), resample_filter)
+        sharpened = bool(req.sharpen and int(req.sharpen_percent) > 0)
+        if sharpened:
+            img = img.filter(ImageFilter.UnsharpMask(
+                radius=float(req.sharpen_radius),
+                percent=int(req.sharpen_percent),
+                threshold=int(req.sharpen_threshold),
+            ))
+
+        ts = int(time.time())
+        safe_name = f"seekdeep_upscale_{ts}.png"
+        out_path = OUTPUT_DIR / safe_name
+        img.save(out_path)
+        result = {
+            "image_b64": image_to_b64_png(img),
+            "filename": safe_name,
+            "path": str(out_path),
+            "method": "lanczos",
+            "resample": resample_name,
+            "sharpened": sharpened,
+            "sharpen_radius": float(req.sharpen_radius),
+            "sharpen_percent": int(req.sharpen_percent),
+            "sharpen_threshold": int(req.sharpen_threshold),
+            "scale": scale,
+            "width": new_w,
+            "height": new_h,
+        }
+        if note:
+            result["note"] = note
+        return result
 
     if req.method == "realesrgan":
         # Placeholder — Real-ESRGAN requires a separate model download.
         # Check if it's available; if not, fall back to Lanczos with a note.
         realesrgan_path = MODEL_CACHE_DIR / "realesrgan"
         if not realesrgan_path.exists():
-            # Fall back to Lanczos with a note
-            new_w = source_img.width * scale
-            new_h = source_img.height * scale
-            img = source_img.resize((new_w, new_h), Image.LANCZOS)
-            ts = int(time.time())
-            safe_name = f"seekdeep_upscale_{ts}.png"
-            out_path = OUTPUT_DIR / safe_name
-            img.save(out_path)
-            return {
-                "image_b64": image_to_b64_png(img),
-                "filename": safe_name,
-                "path": str(out_path),
-                "method": "lanczos",
-                "note": "Real-ESRGAN model not installed; used Lanczos fallback.",
-                "scale": scale,
-                "width": new_w,
-                "height": new_h,
-            }
+            return finish_pil_upscale("Real-ESRGAN model not installed; used Lanczos fallback.")
         # Future: load Real-ESRGAN and run inference here
         return JSONResponse(status_code=501, content={"error": "Real-ESRGAN is scaffolded but not yet implemented."})
 
-    # Lanczos upscale — high-quality bicubic, no model needed
-    new_w = source_img.width * scale
-    new_h = source_img.height * scale
-    img = source_img.resize((new_w, new_h), Image.LANCZOS)
-
-    ts = int(time.time())
-    safe_name = f"seekdeep_upscale_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
-    img.save(out_path)
-
-    return {
-        "image_b64": image_to_b64_png(img),
-        "filename": safe_name,
-        "path": str(out_path),
-        "method": "lanczos",
-        "scale": scale,
-        "width": new_w,
-        "height": new_h,
-    }
+    # Lanczos + a mild unsharp mask is the default: zero extra model download,
+    # fast enough for Discord, and visibly cleaner than a bare resize.
+    return finish_pil_upscale()
 
 
 # ---------- InstructPix2Pix endpoint ----------

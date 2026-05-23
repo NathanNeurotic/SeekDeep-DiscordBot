@@ -23,7 +23,7 @@ The handler also wires:
 **Purpose**: Conversational queries via the role-routed local chat model.
 
 **Key Functions**:
-- `askChat(prompt, options)` — main entry. Resolves chat role, builds prompt with memory, calls the FastAPI `/chat` endpoint, post-processes the reply.
+- `askChat(prompt, options)` — main entry. Resolves chat role (including `purpose: "image_refinement"`), builds prompt with memory/reply context, calls the FastAPI `/chat` endpoint, post-processes the reply.
 - `shouldAutoSearch(prompt)` — keyword + regex cascade deciding whether SearXNG should run first (200 lines of inline data arrays — intentional, see v10.10 audit notes).
 - `seekdeepResolveChatRoleForPrompt(prompt, opts)` — selects `default_chat` / `quality_text` / `reasoning_code` / `fallback_chat` / `lightweight_chat` from prompt content.
 - `seekdeepBuildSystemPrompt(personaOverride, extra)` — composes the persona + user-preset system prompt.
@@ -48,13 +48,14 @@ The handler also wires:
 **Purpose**: SDXL generation with prompt refinement, queueing, and cooldown management.
 
 **Key Functions**:
-- `seekdeepSendImageWithButtons(target, prompt, w, h, seed, opts)` — unified message- and interaction-shaped image send. Resolves prompt context, gates on cooldown, queues a job, awaits result, posts with `Original/Refined/Both/Download/Archive/Shared Archive` button rows.
+- `seekdeepSendImageWithButtons(target, prompt, w, h, seed, opts)` — unified message- and interaction-shaped image send. Resolves prompt context, gates on cooldown, queues a job, awaits result, posts with `Original/Refined/RE-REFINE/Both/Download/Archive/Shared Archive` button rows.
 - `seekdeepSendImagePromptChoice(target, prompt, w, h, seed, opts)` — "preparing... → Original / Refined / Both" choice flow before queueing.
 - `makeImageResult(prompt, w, h, seed, options)` — calls `/image`, returns `{ buffer, refinedPrompt, grounding, imageOptions }`.
 - `seekdeepEnqueueImageJob(job, runner)` — FIFO queue with admin-priority insertion.
 - `seekdeepImageCooldownRemaining(userId)` / `seekdeepRememberImageCooldown(userId)` — per-user cooldown TTLs (`SEEKDEEP_IMAGE_COOLDOWN_MS`).
 - `seekdeepBuildImagePromptChoice(prompt, options)` — dynamic AI-refined prompt with static-cleanup fallback.
 - `seekdeepImageModeOptionsFromPrompt(prompt)` — parses `raw`, `unrefined`, `--raw`, `no refine`, ground/refine toggles.
+- `seekdeepRegenerateModeOptions(mode, state)` — maps button/text regenerate modes, including `rerefine` / `RE-REFINE` which bypasses the refined-prompt cache and preserves original generation settings.
 - `seekdeepLooksLikeIterativeImageModification(prompt)` + `seekdeepBuildIterativeImagePrompt(prompt, prior)` — "now make her wear a hat" etc.
 - `seekdeepRememberTempImageState` / `seekdeepGetTempImageState` — TTL cache for the regenerate/archive button flow.
 - `seekdeepAttachDownloadButton(sentMessage, actionId)` — adds the full-res Download link button to an already-sent image message.
@@ -66,7 +67,7 @@ The handler also wires:
 **Key Functions**:
 - `searchWeb(query, options)` — POSTs SearXNG, returns sources.
 - `buildSearchQuery(prompt, key)` — distills the prompt + recent memory into a focused search query.
-- `formatSources(sources)` — formats hits into the model prompt + the visible "Sources:" footer.
+- `formatSources(sources)` — formats hits into the model prompt + the visible compact "Sources:" footer; URLs are wrapped in angle brackets to suppress Discord previews.
 - `shouldAutoSearch(prompt)` — see Chat Agent.
 
 ## Archive Agent
@@ -74,11 +75,12 @@ The handler also wires:
 **Purpose**: Discord-thread-based image archive (per-user and shared).
 
 **Key Functions**:
-- `seekdeepArchiveImageStateToDiscordThread(state, target)` — writes a single image to the user's archive thread.
+- `seekdeepArchiveImageStateToDiscordThread(state, target)` — writes a single image to the user's archive thread, using `Archive Key` dedupe and per-thread count locking.
 - `seekdeepArchiveImageStateToSharedDiscordThread(state, target)` — same for the shared thread.
 - `seekdeepGetOrCreateSharedArchiveThread(target)` — bootstraps the shared archive thread on first use.
 - `seekdeepArchiveThreadReadConfig()` / `seekdeepArchiveThreadSaveUserProfile(...)` — persistence (file-based, `data/archive-guild-config.json`).
 - `seekdeepArchiveThreadCountExistingEntries(thread)` — scans the thread for archive-entry markers to get an accurate count after manual deletions.
+- `seekdeepArchiveKeyFromState(state)` / `seekdeepArchiveThreadFindEntryByKey(thread, key)` — stable duplicate suppression for repeated archive operations, retries, and restarts.
 - `seekdeepArchiveUserThreadName(user, count)` — coin-emoji thread name (`🪙 • Archive • <user> • <count>`).
 - `seekdeepLegacyArchiveUserThreadName(user)` — pre-v10 plain-ASCII name format, kept for thread-discovery fallback (do not delete; orphans existing legacy threads).
 - `seekdeepHandleArchiveOpenMessage(message, raw)` / `seekdeepHandleArchiveConfigMessage(...)` / `seekdeepHandleArchiveStatusMessage(...)` — command dispatchers for the three archive sub-commands.
@@ -94,6 +96,7 @@ The handler also wires:
 - `seekdeepDispatchAddressedMessage(message, ctx)` — the dispatcher. See "Discord Event Pipeline" above.
 - `seekdeepLooksLikeImagePrompt(prompt)`, `isNaturalImagePrompt(prompt)`, `seekdeepLooksLikeVisualRequest(prompt)`, `seekdeepIsDirectImageAliasPrompt(prompt, opts)` — image-intent detectors.
 - `seekdeepLooksLikeRecentImageFollowup(prompt)` — "tell me more about this image" auto-routes to vision (reuses cached attachment).
+- `seekdeepClassifyImageReplyIntent(prompt, context)` / `seekdeepHandleImageReplyIntent(message, prompt, key)` — classifies replies to images as edit, fresh inspired generation, vision/OCR, upscale, regenerate, RE-REFINE, or clarification.
 - `seekdeepLooksLikeProperNounLookupPrompt(prompt)` — "tell me about KK Slider" / "what is Skyrim" auto-routes through web search + `quality_text`.
 - `seekdeepShouldKeepPromptAsChatBeforeImage(prompt)` — guard against "what is" / "explain" routing to image.
 - `seekdeepResolveImagePromptFromContext(message, prompt)` — looks back at recent messages when the prompt is referential ("him", "the same but in winter").
@@ -104,12 +107,12 @@ The handler also wires:
 
 **Key Functions**:
 - `seekdeepHandleImg2Img(target, prompt, sourceUrl)` — fetches source image, calls `/img2img`, posts result with buttons.
-- `seekdeepHandleUpscale(target, sourceUrl, scale)` — fetches source image, calls `/upscale`, posts result.
+- `seekdeepHandleUpscale(target, sourceUrl, scale)` — fetches source image, calls `/upscale`, posts result, and clears loading state on success/failure.
 - `seekdeepResolveSourceImage(target)` — 3-step waterfall: direct attachment → replied message → most recent bot image in channel.
 - `seekdeepFetchImageAsBase64(url)` — download + base64-encode an image URL.
 - `seekdeepImg2ImgQueryFromMessage(raw)` / `seekdeepUpscaleQueryFromMessage(raw)` — extract prompt/scale from message text.
 
-img2img uses `AutoPipelineForImage2Image.from_pipe()` on the Python server to share existing SDXL weights — zero extra model download. Upscale uses Lanczos (PIL); Real-ESRGAN is scaffolded for future opt-in.
+img2img uses `AutoPipelineForImage2Image.from_pipe()` on the Python server to share existing SDXL weights — zero extra model download. Upscale defaults to PIL Lanczos with a mild configurable unsharp mask (`SEEKDEEP_UPSCALE_*`); Real-ESRGAN is scaffolded for future opt-in.
 
 ## Conversation Search (v10.23)
 
@@ -146,7 +149,7 @@ img2img uses `AutoPipelineForImage2Image.from_pipe()` on the Python server to sh
 
 **Key Functions**:
 - `seekdeepBuildImagePromptChoice(prompt, options)` — orchestrates dynamic + static refinement.
-- `seekdeepPrepareImagePromptDynamic(prompt, options)` — AI refinement via the local chat model.
+- `seekdeepPrepareImagePromptDynamic(prompt, options)` — AI refinement via the pinned `default_chat` role; supports force-fresh refinement for RE-REFINE and logs rejection/fallback reasons.
 - `seekdeepPrepareImagePrompt(prompt)` — static keyword-rule fallback.
 - `seekdeepRefinedPromptCacheGet` / `seekdeepRefinedPromptCacheSet` — TTL cache so clicking Refined twice in a row doesn't re-run the chat model.
 - `seekdeepCleanRefinedPrompt(text)` + `removeRepeatedSentences(text)` — post-processing.
@@ -225,6 +228,9 @@ When `SEEKDEEP_TEST_MODE=1` is set in the environment, the bot:
   - `seekdeepTemplateNameSanitize`, `seekdeepGetUserTemplates`, `SEEKDEEP_MAX_TEMPLATES_PER_USER`
   - `seekdeepImg2ImgQueryFromMessage`, `seekdeepUpscaleQueryFromMessage`
   - `seekdeepLooksLikeNonLatin`, `SEEKDEEP_NON_LATIN_REGEX`
+  - `seekdeepArchiveKeyFromState`, `seekdeepArchiveMessageArchiveKey`
+  - `seekdeepClassifyImageReplyIntent`, `seekdeepImageReplyEditPlan`, `seekdeepRegenerateModeOptions`
+  - `formatSources`, `seekdeepDiscordSafeUrl`
   - `forceReactConstants`, `emojiVaultConstants`, `chunkerConstants`
 
 `smoke_test.mjs` sets the env var before its dynamic `import('./index.js')` so every assertion runs against the real function bodies. New pure helpers worth testing should be added to the whitelist near the bottom of `index.js`.

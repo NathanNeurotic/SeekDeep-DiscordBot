@@ -9,7 +9,7 @@ The fast path — runs the three regression layers in one command:
 - [ ] `npm run preflight` exits 0 with `3 ok · 0 fail`
    - `js` stage: `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`
    - `py` stage: `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`
-   - `smoke` stage: `node smoke_test.mjs` reports `pass=61 fail=0` (or higher as new checks are added)
+   - `smoke` stage: `node smoke_test.mjs` reports all checks passing (the current count may rise as regression checks are added)
 
 If preflight fails, do not proceed to live-Discord smoke. Fix the failure first.
 
@@ -67,6 +67,9 @@ Help topic slicing (v10.4):
 - [ ] Click **Original** → image generates without re-running prompt refinement.
 - [ ] Click **Refined** → image generates with refined prompt.
 - [ ] Quickly click **Refined** again on the same prompt → console does NOT show another `image prompt refined: ...` line (cache reused).
+- [ ] Generated image action row includes **RE-REFINE** exactly.
+- [ ] Click **RE-REFINE** → bot runs a fresh refinement pass from the original prompt/context, does not reuse the previous refined prompt, preserves generation settings, and shows the new refined prompt in metadata when available.
+- [ ] Double-click **RE-REFINE** quickly → only one fresh job is queued.
 - [ ] `@SeekDeep i need a red glass apple` → routes to image (natural-language detector).
 - [ ] `@SeekDeep can you please generate an image of him` (after a prior context image) → routes to image, not chat.
 - [ ] `@SeekDeep draw KK Slider` → image of a white dog with black eye markings + guitar (franchise grounding override).
@@ -75,6 +78,10 @@ Help topic slicing (v10.4):
 ## 6. Vision
 
 - [ ] Reply to an image with `@SeekDeep what is this?` → vision route. Footer shows `Qwen/Qwen2.5-VL-3B-Instruct`.
+- [ ] Reply to an image with `@SeekDeep make it darker` → edit/img2img route, not plain vision or fresh generation.
+- [ ] Reply to an image with `@SeekDeep make a new image inspired by this` → fresh generation inspired by the image, not an edit.
+- [ ] Reply to an image with `@SeekDeep upscale this 4x` → upscale route.
+- [ ] Reply to an image with ambiguous text such as `@SeekDeep make an image of this` → one concise clarification question, no accidental generation.
 - [ ] Reply to a **forwarded** image → still routes to vision (forward-snapshot resolver).
 - [ ] Vision response does NOT start with "This image depicts ..." boilerplate.
 - [ ] Follow up with `@SeekDeep tell me about him` → chat picks up the vision context (memory tagged `[vision-description]`) and answers grounded in what the image showed.
@@ -83,7 +90,10 @@ Help topic slicing (v10.4):
 
 - [ ] Generate an image. Click **Archive** → ephemeral confirmation. New entry posted to your archive thread.
 - [ ] Archive thread entry has Download (link button) + grey Delete from Archive button.
+- [ ] Archive thread entry includes an `Archive Key:` metadata line.
+- [ ] Click **Archive** again on the same image → bot reports it is already archived and the thread count does not increment.
 - [ ] Click **Shared Archive** on another image → entry posts to the shared thread. Count increments to actual entry count.
+- [ ] Click **Shared Archive** again on the same image → bot reports it is already in shared archive and the shared count does not increment.
 - [ ] Manually delete one shared archive entry → on next archive, count reflects actual (Math.max removed).
 
 ## 8. Archive — natural language
@@ -151,7 +161,7 @@ Only run these when a flag is intentionally flipped to `on`. Otherwise expect th
 
 Quick smoke for the v10.5–v10.10 refactors — none of these have visible UX changes, but they all flow through code that moved:
 
-- [ ] `@SeekDeep ask what is rust?` → chat reply with web sources, no errors in console.
+- [ ] `@SeekDeep ask what is rust?` → chat reply with compact web sources, source URLs wrapped like `<https://...>` so Discord does not create link-preview walls, no errors in console.
 - [ ] `@SeekDeep tell me about Mario` → routes to `quality_text` AND auto-searches web (proper-noun lookup detector).
 - [ ] `/image prompt:a serene mountain lake` → cooldown gate works, queue ack posts, image arrives with the action button row, Download button links to the full-res CDN URL.
 - [ ] Generate an image, then `@SeekDeep archive this` → posts to your archive thread with both Download + Delete from Archive buttons.
