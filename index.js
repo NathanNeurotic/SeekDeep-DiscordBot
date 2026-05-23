@@ -1,4 +1,4 @@
-﻿import 'dotenv/config';
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
@@ -1751,8 +1751,22 @@ async function fetchJson(url, options = {}) {
       json = { raw: text };
     }
     if (!res.ok) {
-      const err = json?.error || json?.raw || `${res.status} ${res.statusText}`;
-      throw new Error(`Request failed. HTTP ${res.status}: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
+      const detail = json?.detail ?? json?.error ?? json?.message ?? json?.raw ?? `${res.status} ${res.statusText}`;
+      let detailText;
+      try {
+        detailText = typeof detail === 'string' ? detail : JSON.stringify(detail);
+      } catch {
+        detailText = String(detail);
+      }
+      const error = new Error(`Request failed. HTTP ${res.status}: ${detailText || res.statusText || 'unknown error'}`);
+      error.status = res.status;
+      error.statusText = res.statusText;
+      error.url = url;
+      error.responseText = text;
+      error.responseJson = json;
+      error.responseBody = json;
+      error.detail = detail;
+      throw error;
     }
     return json;
   } finally {
@@ -6414,19 +6428,6 @@ function seekdeepIsAdminSource(source) {
 
 function seekdeepAdminLine(source) {
   return `Admin: ${seekdeepIsAdminSource(source) ? 'YES' : 'NO'}`;
-}
-
-function seekdeepFormatBytes(bytes = 0) {
-  const value = Number(bytes || 0);
-  if (!Number.isFinite(value) || value <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let unit = 0;
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit += 1;
-  }
-  return `${size.toFixed(unit === 0 ? 0 : 2)} ${units[unit]}`;
 }
 
 function seekdeepSafeReadJson(fullPath) {
@@ -12051,47 +12052,156 @@ async function seekdeepHandleTemplateCommand(message, raw = '') {
 // upscale: enlarge an image (Lanczos fallback; Real-ESRGAN when available).
 // Both call the Python server endpoints added in the same version.
 
+function seekdeepImageSourceFromAttachment(attachment, source = 'attachment') {
+  if (!attachment) return null;
+  const url = String(attachment.url || attachment.proxyURL || '').trim();
+  if (!url) return null;
+  return {
+    url,
+    attachment,
+    source,
+    contentType: String(attachment.contentType || '').trim(),
+    name: String(attachment.name || attachment.filename || '').trim(),
+  };
+}
+
+function seekdeepImageMimeFromExtension(value = '') {
+  const text = String(value || '').toLowerCase().split(/[?#]/, 1)[0];
+  if (/\.png$/.test(text)) return 'image/png';
+  if (/\.jpe?g$/.test(text)) return 'image/jpeg';
+  if (/\.gif$/.test(text)) return 'image/gif';
+  if (/\.webp$/.test(text)) return 'image/webp';
+  if (/\.bmp$/.test(text)) return 'image/bmp';
+  if (/\.(tif|tiff)$/.test(text)) return 'image/tiff';
+  if (/\.avif$/.test(text)) return 'image/avif';
+  return '';
+}
+
+function seekdeepNormalizeImageMime(value = '') {
+  const mime = String(value || '').split(';', 1)[0].trim().toLowerCase();
+  if (mime === 'image/jpg') return 'image/jpeg';
+  return mime;
+}
+
+function seekdeepDetectImageMime(buffer) {
+  const b = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) return 'image/png';
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length >= 6 && (b.slice(0, 6).toString('ascii') === 'GIF87a' || b.slice(0, 6).toString('ascii') === 'GIF89a')) return 'image/gif';
+  if (b.length >= 12 && b.slice(0, 4).toString('ascii') === 'RIFF' && b.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
+  if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0x00) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0x00 && b[3] === 0x2a))) return 'image/tiff';
+  if (b.length >= 12 && b.slice(4, 8).toString('ascii') === 'ftyp' && /^(?:avif|avis|mif1|heic|heix|hevc|hevx)$/.test(b.slice(8, 12).toString('ascii'))) return 'image/avif';
+  return '';
+}
+
+function seekdeepIsSupportedImageMime(mime = '') {
+  return new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff', 'image/avif']).has(seekdeepNormalizeImageMime(mime));
+}
+
+async function seekdeepResolveImageInput(input, options = {}) {
+  const maxBytes = Math.max(1, Number(options.maxBytes || SEEKDEEP_FETCH_DEFAULT_MAX_BYTES));
+  let source = String(options.source || 'unknown');
+  let name = String(options.name || '').trim();
+  let declaredMime = seekdeepNormalizeImageMime(options.contentType || '');
+  let url = '';
+  let buffer = null;
+
+  if (Buffer.isBuffer(input)) {
+    buffer = input;
+    source = source === 'unknown' ? 'buffer' : source;
+  } else if (input instanceof Uint8Array) {
+    buffer = Buffer.from(input);
+    source = source === 'unknown' ? 'buffer' : source;
+  } else if (typeof input === 'string') {
+    url = input;
+    source = source === 'unknown' ? 'url' : source;
+  } else if (input?.url || input?.proxyURL) {
+    url = String(input.url || input.proxyURL || '').trim();
+    declaredMime = seekdeepNormalizeImageMime(input.contentType || input.mime || declaredMime || '');
+    name = String(input.name || input.filename || name || '').trim();
+    source = String(input.source || source || 'attachment');
+  } else {
+    const resolved = await seekdeepResolveSourceImage(input).catch(() => null);
+    if (resolved?.url) {
+      url = String(resolved.url || '').trim();
+      declaredMime = seekdeepNormalizeImageMime(resolved.contentType || resolved.attachment?.contentType || declaredMime || '');
+      name = String(resolved.name || resolved.attachment?.name || resolved.attachment?.filename || name || '').trim();
+      source = String(resolved.source || source || 'resolved-target');
+    }
+  }
+
+  if (!buffer) {
+    if (!url) throw new Error('No image URL or buffer was available.');
+    const resp = await seekdeepFetchWithLimits(url, { maxBytes });
+    declaredMime = seekdeepNormalizeImageMime(resp.headers?.get?.('content-type') || declaredMime || '');
+    buffer = Buffer.from(await resp.arrayBuffer());
+  }
+
+  if (!buffer?.length) throw new Error('Image download returned no bytes.');
+  if (buffer.byteLength > maxBytes) throw new Error(`Image is too large: ${buffer.byteLength} bytes > ${maxBytes} byte cap.`);
+
+  const magicMime = seekdeepDetectImageMime(buffer);
+  const extMime = seekdeepImageMimeFromExtension(name || url);
+  const mime = magicMime || (seekdeepIsSupportedImageMime(declaredMime) ? declaredMime : '') || extMime;
+
+  if (declaredMime && !declaredMime.startsWith('image/') && declaredMime !== 'application/octet-stream') {
+    throw new Error(`Unsupported attachment content-type: ${declaredMime}.`);
+  }
+  if (!mime || !seekdeepIsSupportedImageMime(mime)) {
+    throw new Error('Unsupported or unrecognized image format. Use PNG, JPG, WebP, GIF, BMP, TIFF, or AVIF.');
+  }
+  if (!magicMime && (!declaredMime || declaredMime === 'application/octet-stream') && !extMime) {
+    throw new Error('Could not verify the file as an image.');
+  }
+
+  return {
+    buffer,
+    image_b64: buffer.toString('base64'),
+    mime,
+    declaredMime,
+    magicMime,
+    extMime,
+    bytes: buffer.byteLength,
+    url,
+    name,
+    source,
+  };
+}
+
 async function seekdeepFetchImageAsBase64(url) {
-  const resp = await seekdeepFetchWithLimits(url, { maxBytes: 20 * 1024 * 1024 });
-  if (!resp.ok) throw new Error('Failed to fetch image: ' + resp.statusText);
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  return buffer.toString('base64');
+  const resolved = await seekdeepResolveImageInput(url, { maxBytes: 20 * 1024 * 1024, source: 'url' });
+  return resolved.image_b64;
 }
 
 async function seekdeepResolveSourceImage(target) {
-  // 1. Check for an attachment on the message itself
-  const attachment = target?.attachments?.first?.() || null;
-  if (attachment?.url && /\.(png|jpe?g|gif|webp)/i.test(attachment.url)) {
-    return { url: attachment.url, source: 'attachment' };
-  }
+  const optionAttachment = target?.options?.getAttachment?.('image') || target?.options?.getAttachment?.('source') || null;
+  const optionSource = seekdeepImageSourceFromAttachment(optionAttachment, 'interaction-option-attachment');
+  if (optionSource) return optionSource;
 
-  // 2. Check if replying to a message with an attachment or embed image
-  const ref = target?.reference;
-  if (ref?.messageId) {
-    try {
-      const replied = await target.channel.messages.fetch(ref.messageId);
-      const replyAttachment = replied?.attachments?.first?.();
-      if (replyAttachment?.url && /\.(png|jpe?g|gif|webp)/i.test(replyAttachment.url)) {
-        return { url: replyAttachment.url, source: 'reply-attachment' };
-      }
-      const embed = replied?.embeds?.find?.((e) => e.image?.url || e.thumbnail?.url);
-      if (embed?.image?.url) return { url: embed.image.url, source: 'reply-embed' };
-      if (embed?.thumbnail?.url) return { url: embed.thumbnail.url, source: 'reply-thumbnail' };
-    } catch {}
-  }
+  const direct = seekdeepImageSourceFromAttachment(firstVisualAttachmentFrom(target), 'attachment');
+  if (direct) return direct;
 
-  // 3. Search recent channel messages for the last bot image
+  let replied = null;
+  try {
+    replied = await fetchRepliedMessage(target);
+  } catch {}
+  if (!replied && target?.reference?.messageId && target?.channel?.messages?.fetch) {
+    try { replied = await target.channel.messages.fetch(target.reference.messageId); } catch {}
+  }
+  const replySource = seekdeepImageSourceFromAttachment(firstVisualAttachmentFrom(replied), 'reply-attachment');
+  if (replySource) return replySource;
+
   const botId = target?.client?.user?.id || (typeof client !== 'undefined' && client?.user?.id) || '';
   if (target?.channel?.messages?.fetch && botId) {
-    const fetched = await target.channel.messages.fetch({ limit: 15, before: target.id }).catch(() => null);
+    const fetchArgs = target?.id ? { limit: 15, before: target.id } : { limit: 15 };
+    const fetched = await target.channel.messages.fetch(fetchArgs).catch(() => null);
     if (fetched) {
       const sorted = Array.from(fetched.values()).sort((a, b) => b.createdTimestamp - a.createdTimestamp);
       for (const msg of sorted) {
         if (msg.author?.id !== botId) continue;
-        const att = msg.attachments?.first?.();
-        if (att?.url && /\.(png|jpe?g|gif|webp)/i.test(att.url)) {
-          return { url: att.url, source: 'recent-bot-image' };
-        }
+        const source = seekdeepImageSourceFromAttachment(firstVisualAttachmentFrom(msg), 'recent-bot-image');
+        if (source) return source;
       }
     }
   }
@@ -12135,6 +12245,62 @@ const SEEKDEEP_UPSCALE_SHARPEN = !/^(0|false|off|no)$/i.test(String(process.env.
 const SEEKDEEP_UPSCALE_SHARPEN_RADIUS = Math.max(0, Math.min(5, Number(process.env.SEEKDEEP_UPSCALE_SHARPEN_RADIUS || 1.1)));
 const SEEKDEEP_UPSCALE_SHARPEN_PERCENT = Math.max(0, Math.min(300, Number(process.env.SEEKDEEP_UPSCALE_SHARPEN_PERCENT || 115)));
 const SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD = Math.max(0, Math.min(20, Number(process.env.SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD || 3)));
+
+function seekdeepGuildPremiumTier(target) {
+  const raw = target?.guild?.premiumTier
+    ?? target?.message?.guild?.premiumTier
+    ?? target?.channel?.guild?.premiumTier
+    ?? target?.guild?.premium_subscription_tier
+    ?? 0;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) return asNumber;
+  const text = String(raw || '').toLowerCase();
+  if (text.includes('3')) return 3;
+  if (text.includes('2')) return 2;
+  if (text.includes('1')) return 1;
+  return 0;
+}
+
+function seekdeepGetUploadLimit(target) {
+  const override = Number(process.env.SEEKDEEP_MAX_UPLOAD_LIMIT_BYTES || 0);
+  if (Number.isFinite(override) && override > 0) return Math.floor(override);
+
+  const mb = 1024 * 1024;
+  const tier = seekdeepGuildPremiumTier(target);
+  if (tier >= 3) return 100 * mb;
+  if (tier >= 2) return 50 * mb;
+  return 25 * mb;
+}
+
+function seekdeepFormatBytes(bytes = 0) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${Math.round(n)} B`;
+}
+
+function seekdeepUpscaleFriendlyError(err) {
+  const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.responseBody?.detail ?? err?.responseBody?.error ?? err?.responseText ?? err?.message ?? err;
+  let text;
+  try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+  text = String(text || 'unknown error');
+
+  if (/animated\s+gifs?\s+are\s+not\s+supported/i.test(text)) {
+    return 'animated GIFs are not supported for upscaling.';
+  }
+  if (/cannot identify image file|unidentifiedimageerror|unsupported or unrecognized image|could not verify|not a readable image|invalid image/i.test(text)) {
+    return 'the selected file is not a readable supported image.';
+  }
+  if (/too large|exceed|over .*byte|upload limit|byte cap|max_bytes|max upload/i.test(text)) {
+    return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
+  }
+  if (/content-type/i.test(text)) {
+    return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
+  }
+
+  return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
+}
 
 function seekdeepAdaptiveImg2ImgStrength(prompt) {
   const p = String(prompt || '').toLowerCase();
@@ -12265,11 +12431,13 @@ async function seekdeepHandleInpaint(target, prompt, removeTarget, imageUrl) {
   }
 }
 
-async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
+async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
   seekdeepSetActivityStatus('Upscaling image...');
   const targetIsInteraction = typeof target?.deferReply === 'function' || typeof target?.editReply === 'function';
   const upscaleGif = seekdeepLoadingGifAttachment();
+  const maxUploadBytes = seekdeepGetUploadLimit(target);
   let upscaleAck = null;
+  let notifiedFailure = false;
   try {
     if (upscaleGif) {
       try {
@@ -12280,9 +12448,15 @@ async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
       } catch {}
     }
 
-    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const resolvedInput = await seekdeepResolveImageInput(imageInput || target, {
+      maxBytes: maxUploadBytes,
+      source: typeof imageInput === 'string' ? 'url' : '',
+    });
+
+    console.log(`[SeekDeep] upscale input source=${resolvedInput.source} mime=${resolvedInput.mime} declared=${resolvedInput.declaredMime || 'none'} magic=${resolvedInput.magicMime || 'none'} bytes=${resolvedInput.bytes} upload_limit=${maxUploadBytes}`);
+
     const response = await postLocal('/upscale', {
-      image_b64: imageB64,
+      image_b64: resolvedInput.image_b64,
       scale,
       method: SEEKDEEP_UPSCALE_METHOD,
       resample: SEEKDEEP_UPSCALE_RESAMPLE,
@@ -12290,6 +12464,7 @@ async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
       sharpen_radius: SEEKDEEP_UPSCALE_SHARPEN_RADIUS,
       sharpen_percent: SEEKDEEP_UPSCALE_SHARPEN_PERCENT,
       sharpen_threshold: SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD,
+      max_bytes: maxUploadBytes,
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
@@ -12298,30 +12473,35 @@ async function seekdeepHandleUpscale(target, imageUrl, scale = 2) {
     const settings = response.sharpened
       ? `, ${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} + sharpen`
       : `, ${response.resample || SEEKDEEP_UPSCALE_RESAMPLE}`;
+    const outputFormat = response.output_format ? `, ${String(response.output_format).toUpperCase()}` : '';
+    const outputBytes = response.output_bytes ? `, ${seekdeepFormatBytes(response.output_bytes)}` : '';
 
     const resultPayload = {
-      content: `Upscale complete: ${scale}x (${response.method}${settings}) -> ${response.width}x${response.height}${note}`,
+      content: `Upscale complete: ${scale}x (${response.method}${settings}${outputFormat}${outputBytes}) -> ${response.width}x${response.height}${note}`,
       files: [new AttachmentBuilder(buffer, { name: filename })],
       attachments: [],
     };
     if (!upscaleAck && !targetIsInteraction) delete resultPayload.attachments;
 
-    console.log(`[SeekDeep] upscale complete method=${response.method} resample=${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} sharpened=${Boolean(response.sharpened)} scale=${scale} size=${response.width}x${response.height}`);
+    console.log(`[SeekDeep] upscale complete method=${response.method} resample=${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} sharpened=${Boolean(response.sharpened)} scale=${scale} input=${response.input_width || '?'}x${response.input_height || '?'} input_bytes=${response.input_bytes || resolvedInput.bytes} output=${response.width}x${response.height} output_format=${response.output_format || 'unknown'} output_bytes=${response.output_bytes || buffer.byteLength}`);
     await seekdeepReplyToTarget(target, resultPayload, { previousReply: upscaleAck });
     return response;
   } catch (err) {
-    console.error('[SeekDeep] upscale failed:', err?.stack || err?.message || err);
+    console.error('[SeekDeep] upscale failed:', err?.stack || err?.message || err, err?.responseJson || '');
     const failure = {
-      content: 'Upscale failed: ' + String(err?.message || err || 'unknown error').slice(0, 500),
+      content: 'Upscale failed: ' + seekdeepUpscaleFriendlyError(err),
       files: [],
       attachments: [],
       components: [],
     };
     if (!upscaleAck && !targetIsInteraction) delete failure.attachments;
     if (upscaleAck) {
-      try { await seekdeepReplyToTarget(target, failure, { previousReply: upscaleAck }); } catch {}
+      try {
+        await seekdeepReplyToTarget(target, failure, { previousReply: upscaleAck });
+        notifiedFailure = true;
+      } catch {}
     }
-    try { err.seekdeepUpscaleFailureNotified = Boolean(upscaleAck); } catch {}
+    try { err.seekdeepUpscaleFailureNotified = notifiedFailure; } catch {}
     throw err;
   } finally {
     seekdeepClearActivityStatus();

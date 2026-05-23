@@ -15,7 +15,7 @@ from typing import Any, Literal, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -660,6 +660,7 @@ class UpscaleRequest(BaseModel):
     sharpen_radius: float = Field(default=1.1, ge=0.0, le=5.0)
     sharpen_percent: int = Field(default=115, ge=0, le=300)
     sharpen_threshold: int = Field(default=3, ge=0, le=20)
+    max_bytes: int = Field(default=0, ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -1420,9 +1421,34 @@ def img2img(req: Img2ImgRequest):
 def upscale(req: UpscaleRequest):
     """Upscale an image. 'lanczos' is a zero-model PIL fallback that works
     immediately. 'realesrgan' requires the model to be downloaded separately."""
-    source_bytes = b64_to_bytes(req.image_b64)
-    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    try:
+        source_bytes = b64_to_bytes(req.image_b64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid base64 image payload: {exc}") from exc
+
+    try:
+        opened_img = Image.open(io.BytesIO(source_bytes))
+        opened_img.load()
+    except UnidentifiedImageError as exc:
+        raise HTTPException(status_code=400, detail="Unsupported or unrecognized image format.") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid image: {exc}") from exc
+
+    is_animated = bool(getattr(opened_img, "is_animated", False) or getattr(opened_img, "n_frames", 1) > 1)
+    if is_animated:
+        if str(getattr(opened_img, "format", "")).upper() == "GIF":
+            raise HTTPException(status_code=400, detail="animated GIFs are not supported for upscaling.")
+        raise HTTPException(status_code=400, detail="Animated images are not supported for upscaling.")
+
+    try:
+        source_img = ImageOps.exif_transpose(opened_img).convert("RGB")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not normalize image orientation: {exc}") from exc
+
     scale = int(req.scale)
+    max_bytes = max(0, int(req.max_bytes or 0))
+    input_width, input_height = source_img.width, source_img.height
+    input_bytes = len(source_bytes)
     resample_map = {
         "lanczos": Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS,
         "bicubic": Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC,
@@ -1430,6 +1456,64 @@ def upscale(req: UpscaleRequest):
     }
     resample_name = str(req.resample or "lanczos").lower()
     resample_filter = resample_map.get(resample_name, resample_map["lanczos"])
+    lanczos_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
+    def encode_image_bytes(img: Image.Image, fmt: str, **save_kwargs: Any) -> bytes:
+        buf = io.BytesIO()
+        to_save = img.convert("RGB") if fmt.upper() in {"JPEG", "JPG", "WEBP"} else img
+        to_save.save(buf, format=fmt, **save_kwargs)
+        return buf.getvalue()
+
+    def select_output_bytes(img: Image.Image) -> dict[str, Any]:
+        candidates: list[tuple[str, str, bytes, int, int]] = []
+
+        def add_candidate(fmt: str, ext: str, candidate_img: Image.Image, **kwargs: Any) -> None:
+            try:
+                encoded = encode_image_bytes(candidate_img, fmt, **kwargs)
+                candidates.append((fmt.upper(), ext, encoded, candidate_img.width, candidate_img.height))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SeekDeep Local AI] upscale encode candidate failed fmt={fmt}: {exc}", flush=True)
+
+        add_candidate("PNG", ".png", img)
+        if max_bytes <= 0 or (candidates and len(candidates[-1][2]) <= max_bytes):
+            fmt, ext, encoded, width, height = candidates[-1]
+            return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
+
+        add_candidate("PNG", ".png", img, optimize=True, compress_level=9)
+        if candidates and len(candidates[-1][2]) <= max_bytes:
+            fmt, ext, encoded, width, height = candidates[-1]
+            return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
+
+        for quality in (90, 80):
+            add_candidate("WEBP", ".webp", img, quality=quality, method=6)
+            if candidates and len(candidates[-1][2]) <= max_bytes:
+                fmt, ext, encoded, width, height = candidates[-1]
+                return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
+
+        for quality in (90, 80):
+            add_candidate("JPEG", ".jpg", img, quality=quality, optimize=True, progressive=True)
+            if candidates and len(candidates[-1][2]) <= max_bytes:
+                fmt, ext, encoded, width, height = candidates[-1]
+                return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
+
+        for pct in range(90, 49, -10):
+            w = max(1, int(img.width * pct / 100))
+            h = max(1, int(img.height * pct / 100))
+            reduced = img.resize((w, h), lanczos_filter)
+            add_candidate("JPEG", ".jpg", reduced, quality=80, optimize=True, progressive=True)
+            if candidates and len(candidates[-1][2]) <= max_bytes:
+                fmt, ext, encoded, width, height = candidates[-1]
+                return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
+
+        smallest = min(candidates, key=lambda c: len(c[2])) if candidates else None
+        smallest_bytes = len(smallest[2]) if smallest else 0
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Upscaled output is too large for this server upload limit "
+                f"({smallest_bytes} bytes after compression/downscale, limit {max_bytes} bytes)."
+            ),
+        )
 
     def finish_pil_upscale(note: str = ""):
         new_w = source_img.width * scale
@@ -1450,12 +1534,13 @@ def upscale(req: UpscaleRequest):
                 threshold=int(req.sharpen_threshold),
             ))
 
+        selected = select_output_bytes(img)
         ts = int(time.time())
-        safe_name = f"seekdeep_upscale_{ts}.png"
+        safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
         out_path = OUTPUT_DIR / safe_name
-        img.save(out_path)
+        out_path.write_bytes(selected["bytes"])
         result = {
-            "image_b64": image_to_b64_png(img),
+            "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
             "filename": safe_name,
             "path": str(out_path),
             "method": "lanczos",
@@ -1465,8 +1550,14 @@ def upscale(req: UpscaleRequest):
             "sharpen_percent": int(req.sharpen_percent),
             "sharpen_threshold": int(req.sharpen_threshold),
             "scale": scale,
-            "width": new_w,
-            "height": new_h,
+            "width": int(selected["width"]),
+            "height": int(selected["height"]),
+            "input_width": input_width,
+            "input_height": input_height,
+            "input_bytes": input_bytes,
+            "output_format": selected["format"],
+            "output_bytes": len(selected["bytes"]),
+            "max_bytes": max_bytes,
         }
         if note:
             result["note"] = note
