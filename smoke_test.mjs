@@ -769,8 +769,23 @@ check('status-intent: "what model are you using?"', T.seekdeepGetLocalStatusInte
 check('status-intent: "are you local?"', T.seekdeepGetLocalStatusIntent('are you local?') === 'local_runtime_status');
 check('status-intent: non-status returns null', T.seekdeepGetLocalStatusIntent('what is the weather like?') === null);
 
+check('status-intent: "status gpu"', T.seekdeepGetLocalStatusIntent('status gpu') === 'local_gpu_status');
+check('status-intent: "gpu status"', T.seekdeepGetLocalStatusIntent('gpu status') === 'local_gpu_status');
+check('status-intent: "status vram"', T.seekdeepGetLocalStatusIntent('status vram') === 'local_gpu_status');
+check('status-intent: "what are you running as a gpu?"', T.seekdeepGetLocalStatusIntent('what are you running as a gpu?') === 'local_gpu_status');
+check('status-intent: "what are you running on as gpu?"', T.seekdeepGetLocalStatusIntent('what are you running on as gpu?') === 'local_gpu_status');
+
 check('gpu-generation-mapping: RTX 5090', T.seekdeepGpuGenerationFromName('NVIDIA GeForce RTX 5090 Laptop GPU') === 'RTX 50-series / Blackwell-generation');
+check('gpu-generation-mapping: RTX 3080 Ti', T.seekdeepGpuGenerationFromName('NVIDIA GeForce RTX 3080 Ti') === 'RTX 30-series / Ampere-generation');
+check('gpu-generation-mapping: Unknown', T.seekdeepGpuGenerationFromName('Some GPU') === 'unknown GPU generation');
+
+check('gpu-generation-line: empty string does not contain 5090', !T.seekdeepGetGpuGenerationLine('').includes('5090'));
 check('gpu-generation-line: laptop GPU suffix', T.seekdeepGetGpuGenerationLine('NVIDIA GeForce RTX 5090 Laptop GPU').includes('RTX 50-series / Blackwell-generation laptop GPU. Current device: NVIDIA GeForce RTX 5090 Laptop GPU.'));
+
+// Trivial reply checks
+check('trivial reply: how are you feeling?', T.seekdeepGetTrivialLocalReply('how are you feeling?') !== '');
+check('trivial reply: are you online?', T.seekdeepGetTrivialLocalReply('are you online?') !== '');
+check('trivial reply: tell me a story', T.seekdeepGetTrivialLocalReply('tell me a story') === '');
 
 check('brief-prompt: "keep it brief"', T.seekdeepIsBriefPrompt('keep it brief') === true);
 check('brief-prompt: "1 or 2 lines"', T.seekdeepIsBriefPrompt('give me 1 or 2 lines') === true);
