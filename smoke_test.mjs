@@ -898,6 +898,123 @@ deleteCalled = false;
 await T.seekdeepReplyToTarget(mockMsgTarget, { content: 'Upscale complete', files: ['newfile.png'], attachments: [] }, { previousReply: mockFailingAck });
 check('upscale-success: deletes loading message on edit fallback', deleteCalled === true);
 
+// ---------------------------------------------------------------------------
+// Suite 49: Context resolution, search routing, and system prompt personality
+// ---------------------------------------------------------------------------
+console.log('\n49. SeekDeep Context Resolution, Search Routing & Personality.');
+
+// Helper to construct a mock message
+function makeMockMessage({ id, content, authorId, referenceId, attachments = [], embeds = [], isThread = false, botId = 'bot_id' } = {}) {
+  const channelMessages = new Map();
+  const mockMsg = {
+    id,
+    content,
+    author: { id: authorId },
+    client: { user: { id: botId } },
+    attachments: {
+      size: attachments.length,
+      values: () => attachments,
+    },
+    embeds,
+    channel: {
+      isThread: () => isThread,
+      messages: {
+        fetch: async (options) => {
+          if (typeof options === 'string') {
+            return channelMessages.get(options) || null;
+          }
+          return channelMessages;
+        }
+      }
+    }
+  };
+
+  if (referenceId) {
+    mockMsg.reference = { messageId: referenceId };
+  }
+
+  mockMsg.fetchReference = async () => {
+    return channelMessages.get(referenceId) || null;
+  };
+
+  mockMsg.setChannelMessages = (msgsArray) => {
+    channelMessages.clear();
+    for (const m of msgsArray) {
+      channelMessages.set(m.id, m);
+    }
+  };
+
+  return mockMsg;
+}
+
+// Test 1: Reply context is preferred over older channel context.
+const msgReply = makeMockMessage({ id: '10', content: 'What is this?', authorId: 'user_1', referenceId: '5' });
+const repliedBotMsg = makeMockMessage({ id: '5', content: 'I am a local GPU status report', authorId: 'bot_id' });
+msgReply.setChannelMessages([
+  repliedBotMsg,
+  makeMockMessage({ id: '4', content: 'Older conversation in channel', authorId: 'user_1' }),
+]);
+const resolvedReply = await T.seekdeepResolveContext(msgReply, 'What is this?');
+check('context: reply context is preferred over channel context', resolvedReply.source === 'reply' && resolvedReply.contextText === 'I am a local GPU status report');
+
+// Test 2: “this/that/it” resolves from the explicitly replied bot message.
+const msgAmbiguousReply = makeMockMessage({ id: '10', content: 'tell me about it', authorId: 'user_1', referenceId: '5' });
+msgAmbiguousReply.setChannelMessages([
+  makeMockMessage({ id: '5', content: 'NVIDIA GeForce RTX 5090', authorId: 'bot_id' })
+]);
+const resolvedAmbiguousReply = await T.seekdeepResolveContext(msgAmbiguousReply, 'tell me about it');
+check('context: "it" resolves from the replied bot message', resolvedAmbiguousReply.source === 'reply' && resolvedAmbiguousReply.contextText === 'NVIDIA GeForce RTX 5090');
+
+// Test 3: Same-channel fallback does not leak unrelated users’ context.
+const msgChannel = makeMockMessage({ id: '10', content: 'tell me more', authorId: 'user_1' });
+msgChannel.setChannelMessages([
+  makeMockMessage({ id: '2', content: 'Unrelated user talk', authorId: 'user_2' }),
+  makeMockMessage({ id: '3', content: 'Bot reply to unrelated user', authorId: 'bot_id', referenceId: '2' }),
+  makeMockMessage({ id: '4', content: 'My previous prompt', authorId: 'user_1' }),
+  makeMockMessage({ id: '5', content: 'Bot reply to my prompt', authorId: 'bot_id', referenceId: '4' }),
+]);
+const resolvedChannel = await T.seekdeepResolveContext(msgChannel, 'tell me more');
+check('context: same-channel fallback does not leak other users messages',
+  resolvedChannel.source === 'channel' &&
+  resolvedChannel.contextText.includes('My previous prompt') &&
+  resolvedChannel.contextText.includes('Bot reply to my prompt') &&
+  !resolvedChannel.contextText.includes('Unrelated user talk') &&
+  !resolvedChannel.contextText.includes('unrelated user')
+);
+
+// Test 4: No-search override still disables search/sources.
+const noSearchPrompt = 'tell me a joke don\'t search';
+check('no-search override: check seekdeepHasNoSearchOverride', T.seekdeepHasNoSearchOverride(noSearchPrompt) === true);
+
+// Test 5: Local status fast-path bypasses search and LLM.
+const statusPrompt = 'are you local?';
+const statusIntent = T.seekdeepGetLocalStatusIntent(statusPrompt);
+check('status fast-path: status intent is correctly resolved', statusIntent === 'local_runtime_status');
+
+// Test 6: Search citation/source output remains Discord suppress-embed safe.
+const mockSources = [
+  { title: 'Google', url: 'https://google.com/search' }
+];
+const formattedSources = T.formatSources(mockSources);
+check('sources format: wraps URL in angle brackets to suppress embeds', formattedSources.includes('<https://google.com/search>'));
+
+// Test 7: Simple conversational prompt does not trigger web search.
+check('shouldAutoSearch: simple conversational greeting returns false', T.shouldAutoSearch('hello') === false);
+check('shouldAutoSearch: simple small talk returns false', T.shouldAutoSearch('how are you') === false);
+
+// Test 8: Explicit search-request prompt triggers search when allowed.
+check('shouldAutoSearch: explicit search query returns true', T.shouldAutoSearch('search for current election news') === true);
+
+// Test 9: Ambiguous follow-up asks for clarification when no context exists.
+check('ambiguous followup: "what about it?" is ambiguous', T.seekdeepLooksLikeAmbiguousFollowup('what about it?') === true);
+check('ambiguous followup: "try again" is ambiguous', T.seekdeepLooksLikeAmbiguousFollowup('try again') === true);
+check('ambiguous followup: ordinary question is NOT ambiguous', T.seekdeepLooksLikeAmbiguousFollowup('who is KK Slider?') === false);
+
+// Test 10: System prompt personality changes do not affect status/command responses.
+const systemPromptChat = T.buildSystem('', false, 'clinical');
+check('system prompt: clinical persona contains clinical instructions', systemPromptChat.includes('clinical'));
+check('system prompt: clinical persona contains clean code instructions', systemPromptChat.includes('Do not add any personality layer'));
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

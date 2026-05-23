@@ -72,3 +72,99 @@ dist/
 # Misc
 *.log
 *.tmp
+
+# ============================================================
+# GitHub publish safety additions
+# ============================================================
+
+# Env/secrets
+.env
+.env.*
+!.env.example
+.env.default
+keys.txt
+key.txt
+*keys*.txt
+*secret*
+*token*
+*credential*
+*password*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+discord*.json
+
+# Local AI/model/cache bulk
+models/
+model/
+huggingface/
+.cache/
+cache/
+ollama/
+
+# Runtime/generated data
+outputs/
+outputs_old/
+output/
+generated/
+generations/
+saved_generations/
+logs/
+tmp/
+temp/
+backups/
+checkpoints/
+diagnostics/
+SeekDeep-publish-audit-*.txt
+*.zip
+*.7z
+*.rar
+*.tgz
+*.tar
+*.tar.gz
+
+# Python/Node local installs
+.venv/
+venv/
+env/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+
+# Agent/tool workspaces
+.claude/
+.agents/
+.codex/
+.gemini/
+.antigravity/
+
+# Local Discord/server state
+data/server-stats.json
+data/archive-guild-config.json
+data/archive-guild-config.json.bak*
+
+# Build/editor noise
+dist/
+build/
+out/
+.next/
+.turbo/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+*.bak
+*.backup
+*.backup*
+*.bak.*
+*.bak-*
+*.swp
+*.swo
