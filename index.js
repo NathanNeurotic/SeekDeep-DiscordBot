@@ -6398,6 +6398,14 @@ function seekdeepFormatGpuStats(gpu) {
 function seekdeepGetLocalStatusIntent(prompt) {
   const clean = String(prompt || '').toLowerCase().trim();
   
+  // Exact or very close matches for GPU status/info
+  if (
+    /^(?:status\s+gpu|gpu\s+status|status\s+vram|vram\s+status|show\s+gpu|current\s+gpu|gpu\s+specs)$/i.test(clean) ||
+    /\b(?:what\s+gpu\s+do\s+you\s+have|what\s+gpu\s+are\s+you\s+running\s+on|what\s+are\s+you\s+running\s+(?:on\s+as|as\s+a)\s+gpu|what\s+hardware\s+are\s+you\s+running)\b/i.test(clean)
+  ) {
+    return 'local_gpu_status';
+  }
+
   if (/\b(?:what|which|show|current)\s+(?:gpu|gpu\s+specs|hardware|device|graphics\s+card|card|host\s+gpu|system\s+gpu)\b/i.test(clean) ||
       /\b(?:what|which|show|current)\s+gpu\b/i.test(clean) ||
       /\b(?:gpu|hardware|graphics\s+card|device)\s+(?:are\s+you|is\s+the\s+bot|is\s+running|on|do\s+you\s+have)\b/i.test(clean)) {
@@ -6429,19 +6437,53 @@ function seekdeepGetLocalStatusIntent(prompt) {
   return null;
 }
 
+function seekdeepGetTrivialLocalReply(prompt) {
+  const clean = String(prompt || '').toLowerCase().trim().replace(/[?.!]$/g, '').trim();
+  
+  const healthQueries = [
+    'how are you feeling',
+    'how are you',
+    'are you alive',
+    'are you online',
+    'you alive',
+    'you online',
+    'are you okay',
+    'you ok'
+  ];
+
+  if (healthQueries.includes(clean)) {
+    return "I'm online and responding normally.";
+  }
+  return "";
+}
+
 function seekdeepGpuGenerationFromName(deviceName) {
   const name = String(deviceName || '').toLowerCase();
-  if (name.includes('5090') || name.includes('blackwell') || name.includes('rtx 50')) {
+  if (name.includes('5090') || name.includes('5080') || name.includes('5070') || name.includes('5060') || name.includes('blackwell') || name.includes('rtx 50')) {
     return 'RTX 50-series / Blackwell-generation';
   }
-  return 'RTX 50-series / Blackwell-generation';
+  if (name.includes('4090') || name.includes('4080') || name.includes('4070') || name.includes('4060') || name.includes('ada') || name.includes('rtx 40')) {
+    return 'RTX 40-series / Ada Lovelace-generation';
+  }
+  if (name.includes('3090') || name.includes('3080') || name.includes('3070') || name.includes('3060') || name.includes('ampere') || name.includes('rtx 30')) {
+    return 'RTX 30-series / Ampere-generation';
+  }
+  if (name.includes('2080') || name.includes('2070') || name.includes('2060') || name.includes('turing') || name.includes('rtx 20')) {
+    return 'RTX 20-series / Turing-generation';
+  }
+  if (name.includes('1080') || name.includes('1070') || name.includes('1060') || name.includes('pascal') || name.includes('gtx 10')) {
+    return 'GTX 10-series / Pascal-generation';
+  }
+  return 'unknown GPU generation';
 }
 
 function seekdeepGetGpuGenerationLine(deviceName) {
-  const dev = String(deviceName || 'NVIDIA GeForce RTX 5090 Laptop GPU');
+  const dev = String(deviceName || '').trim();
+  if (!dev) {
+    return 'unknown GPU generation. Current device: unknown.';
+  }
   const gen = seekdeepGpuGenerationFromName(dev);
-  const isLaptop = dev.toLowerCase().includes('laptop') || dev.toLowerCase().includes('5090');
-  const suffix = isLaptop ? ' laptop GPU' : ' GPU';
+  const suffix = dev.toLowerCase().includes('laptop') ? ' laptop GPU' : ' GPU';
   return `${gen}${suffix}. Current device: ${dev}.`;
 }
 
@@ -15618,6 +15660,20 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
   try {
     const key = memoryKeyFrom(message);
 
+    const trivialReply = typeof seekdeepGetTrivialLocalReply === 'function' ? seekdeepGetTrivialLocalReply(prompt) : '';
+    if (trivialReply) {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(trivialReply, {
+            startedAt,
+            modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
+          })
+        : trivialReply;
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
     const statusIntent = seekdeepGetLocalStatusIntent(prompt);
     if (statusIntent) {
       const isBrief = seekdeepIsBriefPrompt(prompt);
@@ -15629,21 +15685,23 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       
       if (statusIntent === 'local_gpu_status' || statusIntent === 'local_gpu_generation') {
         const gpuResult = await seekdeepFetchGpuStats();
-        const devName = gpuResult.ok && gpuResult.data?.device_name 
-          ? gpuResult.data.device_name 
-          : 'NVIDIA GeForce RTX 5090 Laptop GPU';
-          
-        if (statusIntent === 'local_gpu_generation' || isBrief) {
-          replyText = seekdeepGetGpuGenerationLine(devName);
+        if (!gpuResult.ok) {
+          replyText = `Error: Failed to fetch GPU stats from endpoint \`/gpu\`. Error details: ${gpuResult.error || 'unknown error'}`;
         } else {
-          if (gpuResult.ok && gpuResult.data) {
-            const totalMb = Number(gpuResult.data.total_mb || 0);
-            const freeMb = Number(gpuResult.data.free_mb || 0);
-            const usedMb = Number(gpuResult.data.used_mb || (totalMb - freeMb)) || 0;
-            const gb = (mb) => (Number(mb) / 1024).toFixed(2);
-            replyText = `GPU: ${devName}. VRAM currently: ${gb(usedMb)} / ${gb(totalMb)} GB.`;
+          const devName = gpuResult.data?.device_name || '';
+          if (!devName) {
+            replyText = `Error: GPU status cannot currently be read (no device name returned).`;
           } else {
-            replyText = `I’m SeekDeep, a Discord bot running local AI models on the host machine. GPU status cannot be read at the moment.`;
+            if (statusIntent === 'local_gpu_generation') {
+              replyText = seekdeepGetGpuGenerationLine(devName);
+            } else {
+              const formatted = seekdeepFormatGpuStats(gpuResult.data);
+              if (isBrief) {
+                replyText = formatted.summary;
+              } else {
+                replyText = `${formatted.summary}\n\n${formatted.detail.join('\n')}`;
+              }
+            }
           }
         }
       } else if (statusIntent === 'local_model_status') {
@@ -18384,6 +18442,7 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     shouldAutoSearch,
     buildSystem,
     seekdeepDispatchAddressedMessage,
+    seekdeepGetTrivialLocalReply,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
