@@ -2125,12 +2125,29 @@ function seekdeepSelectChatModelRole(prompt, purpose = 'chat') {
   // model when configured. Saves VRAM and avoids reloading the 8B default for
   // throwaway queries. Falls back to default_chat on the Python side if not available.
   if (process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID) {
-    const isTranslation = purposeNorm === 'translation' || /\b(?:translate|translation)\b/i.test(text);
-    const isGreeting = /^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening|night)|thanks|thank\s+you|ok|okay|bye|gn|gm)\b[.!?]*$/i.test(text.trim());
-    const isShortTrivial = text.length < 80 && /^(?:what\s+(?:time|day)|how\s+are\s+you|who\s+(?:are\s+you|made\s+you)|ping|test)\b/i.test(text.trim());
-    if (isTranslation || isGreeting || isShortTrivial) {
+    const textTrimmed = text.trim();
+    const isTranslation = purposeNorm === 'translation' || /\b(?:translate|translation)\b/i.test(textTrimmed);
+    const isGreeting = /^(?:hi|hello|hey|yo|sup|good\s+(?:morning|afternoon|evening|night)|thanks|thank\s+you|ok|okay|bye|gn|gm)\b[.!?]*$/i.test(textTrimmed) ||
+                        /^(?:whats\s+crackin|what's\s+up|wassup|whats\s+new|yo|hey)\b/i.test(textTrimmed);
+    const isShortTrivial = textTrimmed.length < 80 && /^(?:what\s+(?:time|day)|how\s+are\s+you|who\s+(?:are\s+you|made\s+you)|ping|test)\b/i.test(textTrimmed);
+    
+    // Casual remarks or short small talk
+    const isCasualRemark = textTrimmed.length < 80 && 
+                           !seekdeepHasQuestionOrExplanationIntent(textTrimmed) && 
+                           !shouldAutoSearch(textTrimmed) &&
+                           !/^(?:generate|create|make|draw|render|paint|illustrate|design|show|explain|tell|summarize|compare)\b/i.test(textTrimmed);
+
+    // Contextual text follow-up that doesn't need web search
+    const isContextualTextFollowup = typeof seekdeepLooksLikeContextualTextFollowup === 'function' &&
+                                     seekdeepLooksLikeContextualTextFollowup(textTrimmed) && 
+                                     !shouldAutoSearch(textTrimmed);
+
+    if (isTranslation || isGreeting || isShortTrivial || isCasualRemark || isContextualTextFollowup) {
       if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
-        const reason = isTranslation ? 'translation' : isGreeting ? 'greeting' : 'short-trivial';
+        const reason = isTranslation ? 'translation' : 
+                       isGreeting ? 'greeting' : 
+                       isShortTrivial ? 'short-trivial' : 
+                       isCasualRemark ? 'casual-remark' : 'contextual-text-followup';
         console.log(`[SeekDeep Model Router] purpose=${purposeNorm} role=lightweight_chat reason=${reason}`);
       }
       return 'lightweight_chat';
@@ -8769,6 +8786,11 @@ function seekdeepLooksLikeOcrPrompt(text = '') {
 // SEEKDEEP_OCR_MODE_END
 
 // SEEKDEEP_ROUTING_TEXT_GUARD_HELPERS_START
+function seekdeepHasVisualMediumIndicator(p = '') {
+  const text = String(p).toLowerCase();
+  return /\b(image|picture|photo|pic|art|artwork|drawing|illustration|painting|poster|album\s+cover|cover\s+art|banner|wallpaper|logo|icon|emblem|badge|portrait|sticker|thumbnail|concept\s+art|screenshot|infographic|panels?|comics?|storyboard|diagram|sketch|doodle|rendering|canvas|render|graphic)\b/i.test(text);
+}
+
 function seekdeepHasExplicitImageRequest(p = '') {
   const text = seekdeepCleanMessageCommandPrompt(
     (typeof normalizeUserText === 'function' ? normalizeUserText(p) : String(p || ''))
@@ -8776,16 +8798,24 @@ function seekdeepHasExplicitImageRequest(p = '') {
 
   if (!text) return false;
 
-  if (/^(?:show\s+me|show|draw\s+me|draw|generate(?:\s+me)?|create(?:\s+me)?|make(?:\s+me)?|render(?:\s+me)?|paint(?:\s+me)?|sketch(?:\s+me)?|illustrate(?:\s+me)?|design(?:\s+me)?)\s+\S+/i.test(text) &&
-      !/\b(?:status|queue|help|commands|archive|cache|recent|prompt history|model status|list|ideas|suggestions|options|names|script|code|powershell|table|spreadsheet|summary|explanation)\b/i.test(text)) {
+  const hasVisualMedium = seekdeepHasVisualMediumIndicator(text);
+
+  if (/^(?:show\s+me|show|draw\s+me|draw|generate(?:\s+me)?|create(?:\s+me)?|make(?:\s+me)?|render(?:\s+me)?|paint(?:\s+me)?|sketch(?:\s+me)?|illustrate(?:\s+me)?|design(?:\s+me)?)\s+\S+/i.test(text)) {
+    if (hasVisualMedium) {
+      return true;
+    }
+    if (/\b(?:status|queue|help|commands|archive|cache|recent|prompt history|model status|list|ideas|suggestions|options|names|script|code|powershell|table|spreadsheet|summary|explanation|tutorial|guide|walkthrough|instruction|instructions|steps|procedure)\b/i.test(text) ||
+        /\b(?:step\s+by\s+step|step-by-step|noob\s+friendly)\b/i.test(text)) {
+      return false;
+    }
     return true;
   }
 
-  if (/\b(generate|create|make|draw|render|paint|illustrate|design)\s+(?:me\s+)?(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait)\b/i.test(text)) {
+  if (/\b(generate|create|make|draw|render|paint|illustrate|design)\s+(?:me\s+)?(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait|infographic|panels?|comic|storyboard|sketch)\b/i.test(text)) {
     return true;
   }
 
-  if (/\b(image|picture|photo|pic|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait)\s+(?:of|for)\b/i.test(text)) {
+  if (/\b(image|picture|photo|pic|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait|infographic|panels?|comic|storyboard|sketch)\s+(?:of|for)\b/i.test(text)) {
     return true;
   }
 
@@ -8795,17 +8825,17 @@ function seekdeepHasExplicitImageRequest(p = '') {
 
   // Third-person / mention-form image asks: "X wants an image", "user needs a picture",
   // "we need an image to accompany this", "an image please", "image to go with this story".
-  if (/\b(?:wants?|wanted|wanting|needs?|needed|needing|would\s+like|d\s*like|prefer|like|love|please|pls)\s+(?:to\s+(?:see|have|get)\s+)?(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait|illustration|render|painting|sketch)\b/i.test(text)) {
+  if (/\b(?:wants?|wanted|wanting|needs?|needed|needing|would\s+like|d\s*like|prefer|like|love|please|pls)\s+(?:to\s+(?:see|have|get)\s+)?(?:an?\s+|some\s+)?(?:image|picture|photo|pic|art|artwork|drawing|wallpaper|banner|logo|icon|poster|portrait|illustration|render|painting|sketch|infographic|panels?|comic)\b/i.test(text)) {
     return true;
   }
 
   // "image/picture to accompany this" / "to go with this" / "for this story"
-  if (/\b(?:image|picture|photo|pic|art|artwork|drawing|illustration|render|painting|sketch)\s+(?:to\s+(?:accompany|go\s+with|match|pair\s+with|illustrate)|for\s+(?:this|that|the))\b/i.test(text)) {
+  if (/\b(?:image|picture|photo|pic|art|artwork|drawing|illustration|render|painting|sketch|infographic|panels?|comic)\s+(?:to\s+(?:accompany|go\s+with|match|pair\s+with|illustrate)|for\s+(?:this|that|the))\b/i.test(text)) {
     return true;
   }
 
   // "make/create/render an image" without a direct subject — relies on context
-  if (/\b(?:make|create|render|paint|draw|sketch|illustrate|design|produce|whip\s+up)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|art|artwork|drawing|illustration|painting|render|sketch)\b/i.test(text)) {
+  if (/\b(?:make|create|render|paint|draw|sketch|illustrate|design|produce|whip\s+up)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|art|artwork|drawing|illustration|painting|render|sketch|infographic|panels?|comic)\b/i.test(text)) {
     return true;
   }
 
@@ -8822,7 +8852,7 @@ function seekdeepHasCountRequest(p = '') {
 }
 
 function seekdeepHasQuestionOrExplanationIntent(p = '') {
-  return /\b(refine|rewrite|improve|explain|tell me about|story|checklist|what is|who is|why|how|status|help|advice|compare|summarize|describe in words)\b/i.test(p);
+  return /\b(refine|rewrite|improve|explain|tell me about|story|checklist|what is|who is|why|how|status|help|advice|compare|summarize|describe in words|tutorial|guide|walkthrough|steps|procedure|instruction|instructions|step\s+by\s+step|step-by-step|noob\s+friendly)\b/i.test(p);
 }
 
 function seekdeepHasVisualStyleWords(p = '') {
@@ -8877,6 +8907,9 @@ function seekdeepShouldStayChatInsteadOfImage(p = '') {
   }
 
   if (seekdeepHasQuestionOrExplanationIntent(p)) {
+    if (seekdeepHasVisualMediumIndicator(p)) {
+      return false;
+    }
     return true;
   }
 
@@ -9160,7 +9193,10 @@ function seekdeepIsDirectImageAliasPrompt(prompt = '', options = {}) {
   if (typeof seekdeepIsMissingImageSubjectPromptV2 === 'function' && seekdeepIsMissingImageSubjectPromptV2(p)) return false;
   if (seekdeepIsBareConfirmationPrompt(p)) return false;
   if (/\b(help|commands|status|queue|archive|cache|recent images|recent prompts|purge|delete|remove)\b/i.test(p)) return false;
-  if (/\b(list|ideas?|suggestions?|options?|names?|nicknames?|summary|summarize|explain|rewrite|translate|code|script|powershell|javascript|python|logs?|error|bug)\b/i.test(p)) return false;
+  if (/\b(list|ideas?|suggestions?|options?|names?|nicknames?|summary|summarize|explain|rewrite|translate|code|script|powershell|javascript|python|logs?|error|bug|tutorial|guide|walkthrough|instruction|instructions)\b/i.test(p) ||
+      /\b(?:step\s+by\s+step|step-by-step|noob\s+friendly)\b/i.test(p)) {
+    return false;
+  }
   if (seekdeepLooksLikeConversationalImageEditFollowup(p)) return Boolean(options.allowConversationalEditImage);
   if (/^(?:show\s+me|show|draw\s+me|draw|sketch\s+me|sketch|paint\s+me|paint|render\s+me|render|illustrate\s+me|illustrate|design\s+me|design)\s+\S/i.test(lower)) return true;
   if (/^(?:generate|create|make)\s+(?!(?:a\s+)?(?:list|summary|song|lyrics|description|script|code|function|patch|plan|guide|readme|email|message|reply)\b)(?:me\s+)?(?:a\s+|an\s+|the\s+|some\s+)?\S/i.test(lower)) return true;
@@ -9650,7 +9686,12 @@ function seekdeepShouldKeepPromptAsChatBeforeImage(prompt = '') {
   if (typeof seekdeepLooksLikeConversationalImageEditFollowup === 'function' && seekdeepLooksLikeConversationalImageEditFollowup(p)) return true;
 
   // Direct visual commands should still be image even if they contain "can/could" later.
-  if (/^(show|draw|paint|sketch|illustrate|render|generate|create|make|design)\b/.test(p)) return false;
+  if (/^(show|draw|paint|sketch|illustrate|render|generate|create|make|design)\b/.test(p)) {
+    if (typeof seekdeepShouldStayChatInsteadOfImage === 'function' && seekdeepShouldStayChatInsteadOfImage(p)) {
+      return true;
+    }
+    return false;
+  }
 
   // Question-form image requests like "can you please generate an image of him"
   // or "could you make a picture of that?" should still route to image, not chat.
@@ -11226,6 +11267,44 @@ function seekdeepLooksLikeContextualFollowup(prompt = '') {
   
   const referentialWords = /\b(?:this|that|it|them|those|him|her|previously|before|above|mentioned|the\s+same|earlier|latter|former|referred|referred\s+to|what\s+about|who\s+is\s+he|who\s+is\s+she)\b/i;
   return referentialWords.test(p);
+}
+
+function seekdeepLastSubstantiveTurnWasImage(key) {
+  const entries = SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || [];
+  if (!entries.length) return false;
+
+  const limit = Math.min(2, entries.length);
+  for (let i = entries.length - 1; i >= entries.length - limit; i--) {
+    const entry = entries[i];
+    const text = String(entry.text || '');
+    if (entry.role === 'assistant') {
+      if (/^(?:Queued image|Prepared image|Generated image|inpaint:|pix2pix:|img2img:|upscale:)/i.test(text)) {
+        return true;
+      }
+    } else if (entry.role === 'user') {
+      if (text.startsWith('[natural-image]') || text.startsWith('[direct-image]') || text.startsWith('[conv-edit-')) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function seekdeepLooksLikeContextualTextFollowup(prompt = '') {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  if (!p) return false;
+
+  const textFollowupRegexes = [
+    /^(?:yes|no|ok|okay|sure|indeed|correct|do\s+that|do\s+it|go\s+ahead)$/i,
+    /^(?:more\s+detail|more\s+details|details|explain|explain\s+more|explain\s+it|explain\s+that|tell\s+me\s+more)$/i,
+    /\b(?:step\s+by\s+step|step-by-step|tutorial|guide|walkthrough|instructions?|noob\s+friendly)\b/i,
+    /\b(?:how\s+do\s+you\s+make\s+it|how\s+to\s+make\s+it|how\s+to\s+do\s+it|how\s+do\s+i\s+do\s+it)\b/i,
+    /^(?:show\s+me|show\s+me\s+how|show\s+how)$/i,
+    /^(?:make\s+it|make\s+this|make\s+that)(?:\s+(?:simple|easy|clear|detailed|step\s*by\s*step|noob\s*friendly|longer|shorter|better|friendly|understandable|readable|comprehensive|thorough|concise|brief))?$/i,
+    /^(?:i\s+need\s+)?more\s+(?:detail|info|information|context|explanation)\b/i,
+  ];
+
+  return textFollowupRegexes.some(re => re.test(p));
 }
 
 function seekdeepBuildChatPromptWithContextBlock(prompt = '', contextText = '', sourceLabel = '') {
@@ -14730,6 +14809,12 @@ function seekdeepLogRoute(route, prompt = '') {
     .trim()
     .slice(0, 500);
 
+  if (typeof globalThis.__seekdeepRouteSpy === 'function') {
+    try {
+      globalThis.__seekdeepRouteSpy(safeRoute, safePrompt);
+    } catch {}
+  }
+
   try {
     console.log(`[SeekDeep] route=${safeRoute} prompt=${safePrompt}`);
   } catch {}
@@ -15577,6 +15662,43 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
         
       seekdeepSetResponseModel(message, seekdeepNoModelLabel());
       await sendLongMessageReply(message, content);
+      return;
+    }
+
+    // PRE-ROUTE SAFETY GATE: If the message is a contextual follow-up, the prior turn was NOT image-related,
+    // and there is no explicit visual request, force bypass image routing and go directly to conversational chat.
+    const isContextualFollowup = typeof seekdeepLooksLikeContextualTextFollowup === 'function' && seekdeepLooksLikeContextualTextFollowup(prompt);
+    const lastWasImage = typeof seekdeepLastSubstantiveTurnWasImage === 'function' && seekdeepLastSubstantiveTurnWasImage(key);
+    const hasExplicitImage = (typeof seekdeepHasExplicitImageRequest === 'function' && seekdeepHasExplicitImageRequest(prompt)) ||
+                            (typeof isNaturalImagePrompt === 'function' && isNaturalImagePrompt(prompt));
+
+    if (isContextualFollowup && !lastWasImage && !hasExplicitImage) {
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('chat-context-safety-gate', prompt);
+      }
+      const resolvedContext = await seekdeepResolveContext(message, prompt);
+      const personaOverride = typeof seekdeepGetEffectivePersona === 'function'
+        ? seekdeepGetEffectivePersona(message.channel?.id, message.guild?.id)
+        : '';
+      const userPresetLines = typeof seekdeepGetUserMemoryPresetsLines === 'function'
+        ? seekdeepGetUserMemoryPresetsLines(message.author?.id)
+        : [];
+      const composedSystem = userPresetLines.length
+        ? `User-specific preferences for this user:\n${userPresetLines.map((l) => '- ' + l).join('\n')}`
+        : '';
+      const answer = await askChat(prompt, {
+        web: 'auto',
+        memoryKey: key,
+        personaOverride,
+        system: composedSystem,
+        contextText: resolvedContext.contextText,
+        contextSource: resolvedContext.source
+      });
+      remember(key, 'user', prompt);
+      remember(key, 'assistant', answer);
+      seekdeepSetResponseModel(message, seekdeepChatModelLabel());
+      try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'chat' }); } catch {}
+      await sendLongMessageReply(message, answer);
       return;
     }
 
@@ -18254,9 +18376,14 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepResolveContext,
     seekdeepLooksLikeAmbiguousFollowup,
     seekdeepLooksLikeContextualFollowup,
+    seekdeepLastSubstantiveTurnWasImage,
+    seekdeepLooksLikeContextualTextFollowup,
     seekdeepBuildChatPromptWithContextBlock,
+    seekdeepHasExplicitImageRequest,
+    isNaturalImagePrompt,
     shouldAutoSearch,
     buildSystem,
+    seekdeepDispatchAddressedMessage,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

@@ -1015,6 +1015,168 @@ const systemPromptChat = T.buildSystem('', false, 'clinical');
 check('system prompt: clinical persona contains clinical instructions', systemPromptChat.includes('clinical'));
 check('system prompt: clinical persona contains clean code instructions', systemPromptChat.includes('Do not add any personality layer'));
 
+// Test 11: Verb hijacking and image request safety routing
+check('image false-positive: "make a tutorial step by step super noob friendly" is not explicit image request',
+  T.seekdeepHasExplicitImageRequest('make a tutorial step by step super noob friendly') === false
+);
+check('image false-positive: "make a tutorial step by step super noob friendly" is not natural image prompt',
+  T.isNaturalImagePrompt('make a tutorial step by step super noob friendly') === false
+);
+
+check('valid image check: "generate an image of a robot reading a book" is explicit image request',
+  T.seekdeepHasExplicitImageRequest('generate an image of a robot reading a book') === true
+);
+check('valid image check: "make album art for a metalcore song" is explicit image request',
+  T.seekdeepHasExplicitImageRequest('make album art for a metalcore song') === true
+);
+
+check('casual chat check: "whats crackin yo" is not explicit image request',
+  T.seekdeepHasExplicitImageRequest('whats crackin yo') === false
+);
+check('casual chat check: "science bitch" is not explicit image request',
+  T.seekdeepHasExplicitImageRequest('science bitch') === false
+);
+
+check('contextual followup check: "make it noob friendly" is contextual text followup',
+  T.seekdeepLooksLikeContextualTextFollowup('make it noob friendly') === true
+);
+check('contextual followup check: "how do you make it" is contextual text followup',
+  T.seekdeepLooksLikeContextualTextFollowup('how do you make it') === true
+);
+check('contextual followup check: "I need more detail" is contextual text followup',
+  T.seekdeepLooksLikeContextualTextFollowup('I need more detail') === true
+);
+check('contextual followup check: "step by step" is contextual text followup',
+  T.seekdeepLooksLikeContextualTextFollowup('step by step') === true
+);
+check('contextual followup check: "make a tutorial" is contextual text followup',
+  T.seekdeepLooksLikeContextualTextFollowup('make a tutorial') === true
+);
+
+const testKey = 'test-session-key-routing';
+globalThis.__seekdeepMemoryCompatStoreV13.set(testKey, []);
+check('lastWasImage: empty history should return false', T.seekdeepLastSubstantiveTurnWasImage(testKey) === false);
+
+globalThis.__seekdeepMemoryCompatStoreV13.set(testKey, [
+  { role: 'user', text: 'explain fiber internet', at: Date.now() },
+  { role: 'assistant', text: 'Fiber internet uses fiber-optic cables to transmit data...', at: Date.now() }
+]);
+check('lastWasImage: after chat history, should return false', T.seekdeepLastSubstantiveTurnWasImage(testKey) === false);
+
+globalThis.__seekdeepMemoryCompatStoreV13.set(testKey, [
+  { role: 'user', text: '[natural-image] generate an image of a cat', at: Date.now() },
+  { role: 'assistant', text: 'Queued image locally for: a cat', at: Date.now() }
+]);
+check('lastWasImage: after image history, should return true', T.seekdeepLastSubstantiveTurnWasImage(testKey) === true);
+
+// Test 11.f Visual medium overrides for negative keywords
+check('visual override: "make a tutorial-style infographic" is explicit image request',
+  T.seekdeepHasExplicitImageRequest('make a tutorial-style infographic') === true
+);
+check('visual override: "make a tutorial-style infographic" is natural image prompt',
+  T.isNaturalImagePrompt('make a tutorial-style infographic') === true
+);
+check('visual override: "draw step-by-step panels" is explicit image request',
+  T.seekdeepHasExplicitImageRequest('draw step-by-step panels') === true
+);
+check('visual override: "draw step-by-step panels" is natural image prompt',
+  T.isNaturalImagePrompt('draw step-by-step panels') === true
+);
+
+// Test 11.g Model selection tests for lightweight conversational model
+process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID = 'phi-3';
+check('model role: tutorial follow-up selects lightweight_chat',
+  T.seekdeepSelectChatModelRole('make a tutorial step by step super noob friendly') === 'lightweight_chat'
+);
+check('model role: short casual greeting selects lightweight_chat',
+  T.seekdeepSelectChatModelRole('whats crackin yo') === 'lightweight_chat'
+);
+check('model role: casual remark selects lightweight_chat',
+  T.seekdeepSelectChatModelRole('science bitch') === 'lightweight_chat'
+);
+check('model role: contextual noob friendly selects lightweight_chat',
+  T.seekdeepSelectChatModelRole('make it noob friendly') === 'lightweight_chat'
+);
+check('model role: complex query does NOT select lightweight_chat',
+  T.seekdeepSelectChatModelRole('explain fiber internet') !== 'lightweight_chat'
+);
+
+// Test 11.h Dispatcher routing validation (deep tests proving it does not queue images/search/refine)
+const dispatcherMsg = makeMockMessage({
+  id: 'dispatcher_test_msg_id',
+  content: 'make it noob friendly',
+  authorId: 'user_dispatcher',
+  botId: 'bot_dispatcher'
+});
+dispatcherMsg.channel.send = async (payload) => {
+  return dispatcherMsg;
+};
+dispatcherMsg.channel.id = 'channel_dispatcher';
+
+// Setup mock channel history (prior turn was chat: User asks to explain, bot answers)
+dispatcherMsg.setChannelMessages([
+  makeMockMessage({ id: 'msg_1', content: 'explain fiber internet', authorId: 'user_dispatcher' }),
+  makeMockMessage({ id: 'msg_2', content: 'Fiber internet uses glass fibers to transmit data.', authorId: 'bot_dispatcher', referenceId: 'msg_1' })
+]);
+
+// Mock history memory compat store
+const dispatcherMemoryKey = 'channel_dispatcher-user_dispatcher';
+globalThis.__seekdeepMemoryCompatStoreV13.set(dispatcherMemoryKey, [
+  { role: 'user', text: 'explain fiber internet', at: Date.now() },
+  { role: 'assistant', text: 'Fiber internet uses glass fibers to transmit data.', at: Date.now() }
+]);
+
+// Intercept routing logs
+const routesLogged = [];
+globalThis.__seekdeepRouteSpy = (route, prompt) => {
+  routesLogged.push({ route, prompt });
+};
+
+// Mock fetch for askChat call
+const originalFetch = globalThis.fetch;
+let fetchCalled = false;
+globalThis.fetch = async (url, options) => {
+  fetchCalled = true;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ text: 'Here is a simplified explanation.' }),
+    text: async () => JSON.stringify({ text: 'Here is a simplified explanation.' }),
+  };
+};
+
+// Spy on reply/send
+let replyCalled = false;
+dispatcherMsg.reply = async (payload) => {
+  replyCalled = true;
+  return dispatcherMsg;
+};
+
+// Call the dispatcher
+await T.seekdeepDispatchAddressedMessage(dispatcherMsg, {
+  prompt: 'make it noob friendly',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+// Restore fetch/spy
+globalThis.fetch = originalFetch;
+globalThis.__seekdeepRouteSpy = null;
+
+// Assertions
+check('dispatcher: route went to contextual safety gate',
+  routesLogged.some(r => r.route === 'chat-context-safety-gate')
+);
+check('dispatcher: did NOT route to image generation',
+  !routesLogged.some(r => r.route === 'image' || r.route === 'image-direct-alias' || r.route.startsWith('conv-edit-'))
+);
+check('dispatcher: did NOT route to web search (no search log)',
+  !routesLogged.some(r => r.route === 'web-search' || r.route === 'search')
+);
+check('dispatcher: reply was sent successfully',
+  replyCalled === true
+);
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
