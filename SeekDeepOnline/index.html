@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .hub-shell { max-width: 1280px; margin: 0 auto; padding: 64px 36px 120px; }
+  .hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 64px; align-items: center; margin-bottom: 80px; }
+  .hero .mark {
+    position: relative;
+    aspect-ratio: 1; max-width: 460px; margin-left: auto;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(45,212,255,0.18), transparent 60%);
+    display: grid; place-items: center;
+  }
+  .hero .mark::before, .hero .mark::after {
+    content: ""; position: absolute; inset: 0;
+    border-radius: 50%;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 25%, transparent);
+  }
+  .hero .mark::before {
+    inset: -8%;
+    border-style: dashed;
+    animation: spin 60s linear infinite;
+    opacity: 0.4;
+  }
+  .hero .mark::after {
+    inset: 8%;
+    border-color: color-mix(in oklab, var(--cyan-1) 12%, transparent);
+    animation: spin 100s linear infinite reverse;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hero .mark img {
+    width: 75%; height: 75%;
+    object-fit: contain;
+    filter: drop-shadow(0 0 60px rgba(45,212,255,0.5));
+    animation: bob 6s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50%      { transform: translateY(-10px) rotate(1deg); }
+  }
+  .meta-strip {
+    display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap;
+  }
+  .meta-strip .pill { background: rgba(8,20,52,0.4); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 18px;
+  }
+  .card {
+    grid-column: span 4;
+    padding: 28px;
+    border-radius: var(--r-lg);
+    background: linear-gradient(165deg, rgba(13,33,82,0.45), rgba(5,11,28,0.7));
+    border: 1px solid var(--stroke);
+    position: relative;
+    overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.25s ease, border-color 0.2s ease, box-shadow 0.25s ease;
+    min-height: 240px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .card:hover {
+    border-color: var(--cyan-1);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5), 0 0 60px rgba(45,212,255,0.18);
+    transform: translateY(-3px);
+  }
+  .card .num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--cyan-1);
+    opacity: 0.8;
+  }
+  .card h3 {
+    font-size: 28px;
+    margin: 14px 0 8px;
+    letter-spacing: -0.02em;
+  }
+  .card p {
+    color: var(--hull-3);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .card .arrow {
+    align-self: flex-end;
+    font-family: var(--font-mono);
+    color: var(--cyan-1);
+    font-size: 18px;
+  }
+  .card.tall { grid-column: span 8; min-height: 320px; }
+  .card.tall h3 { font-size: 42px; }
+  .card .ph-icon {
+    position: absolute; top: 24px; right: 24px;
+    width: 56px; height: 56px;
+    border: 1px solid var(--stroke);
+    border-radius: 12px;
+    display: grid; place-items: center;
+    color: var(--cyan-1);
+    background: rgba(2,6,15,0.5);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+  }
+
+  .session {
+    display: grid;
+    grid-template-columns: 1.4fr 0.6fr;
+    gap: 18px;
+    margin-top: 32px;
+  }
+  .session .panel { padding: 24px; }
+  .stack-row {
+    display: grid; grid-template-columns: 1fr auto auto auto; gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px dashed color-mix(in oklab, var(--cyan-1) 12%, transparent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    align-items: center;
+  }
+  .stack-row:last-child { border-bottom: none; }
+  .footer {
+    margin-top: 80px;
+    display: flex; justify-content: space-between;
+    color: var(--hull-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;  animation-duration:24s; animation-delay:-3s;"></span>
+  <span class="cube sm" style="left:10%; animation-duration:38s; animation-delay:-8s;"></span>
+  <span style="left:14%; animation-duration:30s; animation-delay:-12s;"></span>
+  <span style="left:20%; animation-duration:18s; animation-delay:-6s;  width:3px; height:3px;"></span>
+  <span class="cube" style="left:28%; animation-duration:42s; animation-delay:-22s;"></span>
+  <span style="left:36%; animation-duration:34s; animation-delay:-18s;"></span>
+  <span class="cube sm" style="left:42%; animation-duration:36s; animation-delay:-5s;"></span>
+  <span style="left:48%; animation-duration:22s; animation-delay:-2s;  width:3px; height:3px;"></span>
+  <span class="cube big" style="left:54%; animation-duration:48s; animation-delay:-30s;"></span>
+  <span style="left:58%; animation-duration:28s; animation-delay:-9s;"></span>
+  <span class="cube" style="left:64%; animation-duration:40s; animation-delay:-14s;"></span>
+  <span style="left:67%; animation-duration:20s; animation-delay:-14s;"></span>
+  <span class="cube sm" style="left:73%; animation-duration:34s; animation-delay:-11s;"></span>
+  <span style="left:78%; animation-duration:32s; animation-delay:-7s;  width:4px; height:4px;"></span>
+  <span class="cube" style="left:84%; animation-duration:44s; animation-delay:-25s;"></span>
+  <span style="left:88%; animation-duration:26s; animation-delay:-21s;"></span>
+  <span class="cube sm" style="left:92%; animation-duration:36s; animation-delay:-16s;"></span>
+  <span style="left:95%; animation-duration:19s; animation-delay:-4s;  width:3px; height:3px;"></span>
+</div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.png" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html" class="active">Hub</a>
+    <a href="brand.html">Brand</a>
+    <a href="landing.html">Landing</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat Client</a>
+  </div>
+  <div class="row">
+    <span class="pill on"><span class="dot"></span>v10.15 LOCAL</span>
+  </div>
+</nav>
+
+<main class="hub-shell">
+
+  <section class="hero">
+    <div>
+      <div class="eyebrow">Project hub · 2026.05.23</div>
+      <h1 class="h-display" style="margin-top:16px;">Surface the<br/>local <em>abyss</em>.</h1>
+      <p style="color:var(--hull-2); font-size:17px; line-height:1.6; max-width:46ch; margin-top:24px;">
+        SeekDeep is a local-first Discord bot that runs Llama, Qwen-VL, SDXL and SearXNG entirely on your own machine.
+        This project turns the terminal-only stack into a full GUI — five linked surfaces, one visual identity.
+      </p>
+      <div class="meta-strip">
+        <span class="pill cyan"><span class="dot"></span>5 surfaces</span>
+        <span class="pill"><span class="dot"></span>10 GUI modules</span>
+        <span class="pill"><span class="dot"></span>Windows-first</span>
+        <span class="pill"><span class="dot"></span>Offline capable</span>
+      </div>
+    </div>
+    <div class="mark">
+      <img src="assets/seekdeep-mark.png" alt="SeekDeep mark" />
+    </div>
+  </section>
+
+  <div class="grid">
+    <a class="card tall" href="app.html">
+      <div>
+        <div class="num">01 · CONTROL CENTER</div>
+        <h3>The GUI that replaces the .bat&nbsp;file.</h3>
+        <p>Launcher, GPU/VRAM monitor, model manager, config editor, logs tail, archive browser, image &amp; chat playgrounds, auto-react rules, server stats — every knob in one window.</p>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="mono tiny" style="color:var(--cyan-1);">app.html</span>
+        <span class="arrow">→</span>
+      </div>
+      <div class="ph-icon">GUI</div>
+    </a>
+
+    <a class="card" href="chat.html">
+      <div>
+        <div class="num">02 · CHAT CLIENT</div>
+        <h3>SeekDeep, our way.</h3>
+        <p>Original chat surface — servers, channels, threads, image attachments, persona overrides.</p>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="mono tiny" style="color:var(--cyan-1);">chat.html</span>
+        <span class="arrow">→</span>
+      </div>
+      <div class="ph-icon">CHAT</div>
+    </a>
+
+    <a class="card" href="landing.html">
+      <div>
+        <div class="num">03 · LANDING</div>
+        <h3>Marketing page.</h3>
+        <p>What it is, why local, install, the abyss vibe in one scroll.</p>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="mono tiny" style="color:var(--cyan-1);">landing.html</span>
+        <span class="arrow">→</span>
+      </div>
+      <div class="ph-icon">WEB</div>
+    </a>
+
+    <a class="card" href="brand.html">
+      <div>
+        <div class="num">04 · BRAND</div>
+        <h3>Logo, tokens, motion.</h3>
+        <p>Color ramps, type ladder, lockups and the rules that hold it all together.</p>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="mono tiny" style="color:var(--cyan-1);">brand.html</span>
+        <span class="arrow">→</span>
+      </div>
+      <div class="ph-icon">SYS</div>
+    </a>
+
+    <a class="card" href="https://github.com/" onclick="return false;">
+      <div>
+        <div class="num">05 · DOCS</div>
+        <h3>Commands &amp; setup.</h3>
+        <p>Lifted from <span class="mono">COMMANDS.md</span> — slash + mention reference, env knobs, troubleshooting.</p>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="mono tiny muted">in COMMANDS.md</span>
+        <span class="arrow">→</span>
+      </div>
+      <div class="ph-icon">DOC</div>
+    </a>
+  </div>
+
+  <section class="session">
+    <div class="panel">
+      <div class="eyebrow" style="margin-bottom:14px;">Local stack · live</div>
+      <div class="stack-row">
+        <span>SeekDeep bot · node index.js</span>
+        <span class="muted">:48ms ping</span>
+        <span class="muted">9% CPU</span>
+        <span class="pill on"><span class="dot"></span>UP</span>
+      </div>
+      <div class="stack-row">
+        <span>Local AI server · uvicorn 7865</span>
+        <span class="muted">queue: 0</span>
+        <span class="muted">14.2 / 24 GB VRAM</span>
+        <span class="pill on"><span class="dot"></span>UP</span>
+      </div>
+      <div class="stack-row">
+        <span>SearXNG · 8080</span>
+        <span class="muted">last: 12s ago</span>
+        <span class="muted">—</span>
+        <span class="pill on"><span class="dot"></span>UP</span>
+      </div>
+      <div class="stack-row">
+        <span>Llama-3.1-8B-Instruct · 4bit</span>
+        <span class="muted">role: default_chat</span>
+        <span class="muted">5.1 GB</span>
+        <span class="pill cyan"><span class="dot"></span>RESIDENT</span>
+      </div>
+      <div class="stack-row">
+        <span>Dreamshaper-XL · sdxl</span>
+        <span class="muted">role: image</span>
+        <span class="muted">6.8 GB</span>
+        <span class="pill"><span class="dot"></span>WARM</span>
+      </div>
+      <div class="stack-row">
+        <span>Qwen2.5-VL-3B · vision</span>
+        <span class="muted">role: vision</span>
+        <span class="muted">3.4 GB</span>
+        <span class="pill warn"><span class="dot"></span>EVICTABLE</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="eyebrow" style="margin-bottom:14px;">Project roadmap</div>
+      <div class="col" style="font-size:13px;">
+        <div class="row" style="justify-content:space-between;"><span>Brand system</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+        <div class="row" style="justify-content:space-between;"><span>Landing page</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+        <div class="row" style="justify-content:space-between;"><span>Control Center</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+        <div class="row" style="justify-content:space-between;"><span>Chat client</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+        <div class="row" style="justify-content:space-between;"><span>Docs / commands</span><span class="pill"><span class="dot"></span>NEXT</span></div>
+        <div class="row" style="justify-content:space-between;"><span>Installer wizard</span><span class="pill"><span class="dot"></span>LATER</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    <span>SEEKDEEP / v10.15 / LOCAL</span>
+    <span>NO TELEMETRY · NO CLOUD · YOUR MACHINE ONLY</span>
+  </div>
+</main>
+</body>
+</html>
