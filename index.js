@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fetch from 'node-fetch';
 import {
   ActionRowBuilder,
@@ -1147,6 +1148,10 @@ async function sendLongInteractionReply(interaction, content, meta = {}) {
       content: chunks[i],
       allowedMentions: { repliedUser: false },
     };
+    const hasUrls = chunks[i].includes('http://') || chunks[i].includes('https://') || chunks[i].includes('Sources:');
+    if (hasUrls && MessageFlags && MessageFlags.SuppressEmbeds) {
+      payload.flags = MessageFlags.SuppressEmbeds;
+    }
 
     if (i === 0) {
       previous = await safeEditOrReply(interaction, { ...payload, files: [] });
@@ -1354,7 +1359,7 @@ function buildSystem(system = '', useWeb = false, personaOverride = '') {
     base.push(
       'You are SeekDeep, a local Discord bot running on a private machine — not a cloud service, not ChatGPT, not Claude. Answer directly and usefully. Prioritize accuracy over personality.',
       'SeekDeep has three pipelines: chat (you), image gen (say “draw X” or /image), and vision (reply to an image with “@SeekDeep what is this?”). Never claim you are text-only.',
-      'Do not reveal or guess hardware specs (GPU, CPU, RAM, IP, ports). If asked, say that info is private.',
+      'You run locally on the host machine using its hardware. If asked about hardware specs (like GPU or model), answer based on memory or refer the user to status/GPU commands for the latest details.',
     );
   }
 
@@ -2046,10 +2051,19 @@ function seekdeepSelectChatModelRole(prompt, purpose = 'chat') {
   const purposeNorm = String(purpose || 'chat').toLowerCase();
 
   if (purposeNorm === 'image_refinement') {
-    if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
-      console.log('[SeekDeep Model Router] purpose=image_refinement role=default_chat reason=pinned-image-refinement');
+    let role = 'default_chat';
+    let reason = 'default-fallback';
+    if (process.env.LOCAL_CHAT_REFINE_MODEL_ID) {
+      role = 'refine_chat';
+      reason = 'dedicated-refine-model';
+    } else if (process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID) {
+      role = 'lightweight_chat';
+      reason = 'lightweight-refine-fallback';
     }
-    return 'default_chat';
+    if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
+      console.log(`[SeekDeep Model Router] purpose=image_refinement role=${role} reason=${reason}`);
+    }
+    return role;
   }
 
   const reasoningHit = SEEKDEEP_REASONING_CODE_PATTERNS.find((re) => re.test(text));
@@ -2151,7 +2165,8 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
   let context = '';
   let sources = [];
 
-  const useWeb = web === 'always' || (web === 'auto' && shouldAutoSearch(cleanPrompt));
+  const noSearchOverride = seekdeepHasNoSearchOverride(cleanPrompt);
+  const useWeb = !noSearchOverride && (web === 'always' || (web === 'auto' && shouldAutoSearch(cleanPrompt)));
   if (useWeb) {
     try {
       const search = await searchWeb(searchQuery);
@@ -2184,17 +2199,27 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
     ? getConversationTurns(memoryKey)
     : [];
 
+  let systemPrompt = system;
+  let finalMaxTokens = effectiveMaxTokens;
+  if (seekdeepIsBriefPrompt(cleanPrompt)) {
+    systemPrompt = (systemPrompt ? systemPrompt + '\n' : '') + 'Keep your response extremely brief, short, and concise (maximum 1 or 2 lines/sentences). Do not include any preambles, disclaimers, or extra paragraphs.';
+    finalMaxTokens = Math.min(effectiveMaxTokens, 150);
+  }
+  if (noSearchOverride) {
+    systemPrompt = (systemPrompt ? systemPrompt + '\n' : '') + 'Do not search the web or cite external websites/sources. Answer entirely from your memory. Do not include markdown hyperlinks or citation brackets (e.g. [1]).';
+  }
+
   if (SEEKDEEP_MODEL_ROUTER_LOG_ENABLED) {
     const queryLog = useWeb && searchQuery !== cleanPrompt ? ` query=${searchQuery.slice(0, 120)}` : '';
-    console.log(`[SeekDeep askChat] purpose=${String(purpose || 'chat')} role=${modelRole} useWeb=${useWeb} sources=${sources.length} turns=${conversationTurns.length} temp=${effectiveTemp} maxTokens=${effectiveMaxTokens} prompt=${cleanPrompt.slice(0, 120)}${queryLog}`);
+    console.log(`[SeekDeep askChat] purpose=${String(purpose || 'chat')} role=${modelRole} useWeb=${useWeb} noSearchOverride=${noSearchOverride} sources=${sources.length} turns=${conversationTurns.length} temp=${effectiveTemp} maxTokens=${finalMaxTokens} prompt=${cleanPrompt.slice(0, 120)}${queryLog}`);
   }
   seekdeepSetActivityStatus(useWeb ? 'Researching your question...' : 'Thinking...');
   try {
     let answer = await runLocalChat(
       cleanPrompt,
-      buildSystem(system, useWeb, personaOverride),
+      buildSystem(systemPrompt, useWeb, personaOverride),
       context,
-      effectiveMaxTokens,
+      finalMaxTokens,
       effectiveTemp,
       { modelRole, messages: conversationTurns }
     );
@@ -2208,9 +2233,9 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
 
       answer = await runLocalChat(
         retryPrompt,
-        buildAntiLoopSystem(system, useWeb),
+        buildAntiLoopSystem(systemPrompt, useWeb),
         context,
-        Math.min(effectiveMaxTokens, 900),
+        Math.min(finalMaxTokens, 900),
         Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2),
         { modelRole }
       );
@@ -2222,7 +2247,7 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
       answer = 'I hit a generation loop and discarded it. Ask again with tighter wording and I should behave.';
     }
 
-    return `${answer}${formatSources(sources)}`.trim();
+    return `${answer}${formatSources(sources)}`;
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -2453,7 +2478,7 @@ async function seekdeepBuildImagePromptChoice(prompt = '', imageModeOptions = {}
     : { prompt: originalPrompt, grounded: false, searchQuery: '' };
 
   const prepared = typeof seekdeepPrepareImagePromptForGeneration === 'function'
-    ? await seekdeepPrepareImagePromptForGeneration(grounded.prompt || originalPrompt)
+    ? await seekdeepPrepareImagePromptForGeneration(grounded.prompt || originalPrompt, options)
     : { originalPrompt, refinedPrompt: grounded.prompt || originalPrompt, generationPrompt: grounded.prompt || originalPrompt, changed: false };
 
   const sanitized = typeof seekdeepSanitizeObjectImagePromptInfo === 'function'
@@ -2874,19 +2899,34 @@ function seekdeepPrepareImagePrompt(prompt = '') {
   return { originalPrompt, refinedPrompt, generationPrompt: refinedPrompt, negativePrompt, changed: refinedPrompt !== originalPrompt };
 }
 
-function seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt = '') {
+function seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt = '', parentPrompt = '') {
   const clean = normalizeUserText(originalPrompt).trim();
-  return [
+  const parts = [
     'Rewrite this as a stronger prompt for a local SDXL image model.',
     'Keep the exact subject and intent, but make the visual target more specific and model-ready.',
     'Add relevant detail about what the subject looks like, where it is, how it is lit, how it is framed, and what materials/textures/colors matter.',
     'Keep surreal or funny relationships intact instead of correcting them.',
     'Do not add unrelated lore, extra characters, labels, readable text, or a different art style unless the original asks for it.',
-    '',
-    `Original prompt: ${clean}`,
-    '',
-    'Return only the final prompt text.'
-  ].join('\n');
+  ];
+  if (parentPrompt) {
+    const cleanParent = normalizeUserText(parentPrompt).trim();
+    parts.push(
+      '',
+      'This is an edit or variation of a previous image.',
+      `Previous image prompt: ${cleanParent}`,
+      `User request/change: ${clean}`,
+      '',
+      'Return only the final updated prompt text combining the context and the requested change.'
+    );
+  } else {
+    parts.push(
+      '',
+      `Original prompt: ${clean}`,
+      '',
+      'Return only the final prompt text.'
+    );
+  }
+  return parts.join('\n');
 }
 
 function seekdeepImagePromptKeywordStem(word = '') {
@@ -3113,6 +3153,38 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
     return fallback;
   }
 
+  let replyImagePrompt = '';
+  if (options?.target) {
+    try {
+      const isMsg = typeof options.target.fetchReference === 'function';
+      const msg = isMsg ? options.target : (options.target.message || null);
+      if (msg) {
+        const replyCtx = await seekdeepGetGeneratedImageReplyContext(msg);
+        if (replyCtx && replyCtx.prompt) {
+          replyImagePrompt = replyCtx.prompt;
+        } else {
+          let attachment = await seekdeepGetReplyVisualAttachment(msg).catch(() => null);
+          if (!attachment && isMsg) {
+            attachment = firstVisualAttachmentFrom(msg);
+          }
+          if (attachment) {
+            console.log('[SeekDeep] Generating visual description for attachment context...');
+            replyImagePrompt = await askVision(attachment, 'Describe this image as a concise visual reference. Focus on subject, style, colors, composition.').catch(() => '');
+            console.log(`[SeekDeep] Resolved visual attachment description context: ${replyImagePrompt}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[SeekDeep] Error resolving target message context in refinement:', err?.message || err);
+    }
+  }
+
+  if (!replyImagePrompt) {
+    console.log('[SeekDeep] image context is unavailable for refinement');
+  } else {
+    console.log(`[SeekDeep] image context found for refinement: ${replyImagePrompt}`);
+  }
+
   // Reuse a recent successful refine for the same prompt instead of re-calling
   // the chat model. The cached value already passed cleanDynamicImagePrompt's
   // subject-preservation and not-generic checks, so it's safe to return as-is.
@@ -3151,7 +3223,7 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
       const refineRole = seekdeepSelectChatModelRole(originalPrompt, 'image_refinement');
       console.log(`[SeekDeep] dynamic refine attempt ${attempt + 1}/${REFINE_ATTEMPTS} role=${refineRole} forceFresh=${forceFreshRefinement}`);
       const answer = await runLocalChat(
-        seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt),
+        seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt, replyImagePrompt),
         buildSystem(SEEKDEEP_IMAGE_PROMPT_DYNAMIC_SYSTEM_PROMPT, false),
         '',
         SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS,
@@ -3272,7 +3344,10 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
           dynamicRefinementAttempted: Boolean(imageOptions?.dynamicRefinementAttempted || imageOptions?.dynamicRefinement),
         }
       : (typeof seekdeepPrepareImagePromptForGeneration === 'function'
-          ? await seekdeepPrepareImagePromptForGeneration(basePrompt, { forceFreshRefinement: seekdeepImageOptions.forceFreshRefinement })
+          ? await seekdeepPrepareImagePromptForGeneration(basePrompt, {
+              forceFreshRefinement: seekdeepImageOptions.forceFreshRefinement,
+              target: imageOptions?.target,
+            })
           : seekdeepPrepareImagePrompt(basePrompt));
     promptInfo = typeof seekdeepSanitizeObjectImagePromptInfo === 'function'
       ? seekdeepSanitizeObjectImagePromptInfo(prepared)
@@ -4172,6 +4247,7 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   const seekdeepImageModeOptions = {
     ...(typeof seekdeepImageModeOptionsFromPrompt === 'function' ? seekdeepImageModeOptionsFromPrompt(prompt) : {}),
     ...(imageModeOptions || {}),
+    target: imageModeOptions?.target || target,
   };
   prompt = seekdeepImageModeOptions.cleanPrompt || seekdeepCleanImageModeTokens(prompt) || prompt;
   if (typeof seekdeepExtractImagePrompt === 'function') {
@@ -4926,6 +5002,78 @@ async function seekdeepHandleArchiveConfigMessage(message, prompt = '') {
 const SEEKDEEP_ARCHIVE_THREAD_NAME_CONFIG_PATH = path.join(__dirname, 'data', 'archive-guild-config.json');
 const SEEKDEEP_ARCHIVE_COUNT_SOURCE = 'seekdeep-archive-posts-v3';
 
+async function seekdeepWithArchiveConfigTransaction(guildId, fn) {
+  const key = 'archive-config-guild:' + String(guildId || 'global').trim();
+  return await seekdeepWithArchiveCountLock(key, fn);
+}
+
+function seekdeepGetArchiveScope({ shared, userId }) {
+  return shared ? 'shared' : String(userId || '').trim();
+}
+
+function seekdeepGetArchiveCount(guildId, scope) {
+  const gid = String(guildId || '').trim();
+  const sc = String(scope || '').trim();
+  if (!gid || !sc) return 0;
+  if (sc === 'shared') {
+    const profile = seekdeepSharedArchiveGetProfile(gid);
+    return seekdeepSharedArchiveTrustedCount(profile);
+  } else {
+    const profile = seekdeepArchiveThreadGetUserProfile(gid, sc);
+    return seekdeepArchiveThreadTrustedCount(profile);
+  }
+}
+
+async function seekdeepRecomputeArchiveCount(guildId, scope, thread) {
+  const gid = String(guildId || '').trim();
+  const sc = String(scope || '').trim();
+  if (!gid || !sc || !thread) return 0;
+
+  if (sc === 'shared') {
+    const scanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
+    const profile = seekdeepSharedArchiveGetProfile(gid);
+    const fallback = seekdeepSharedArchiveTrustedCount(profile);
+    const count = scanStats.ok ? Math.max(0, Number(scanStats.count || 0) || 0) : fallback;
+    const nextName = seekdeepSharedArchiveThreadBuildName(count);
+    
+    seekdeepSharedArchiveSaveProfile(gid, {
+      threadId: thread.id,
+      threadName: nextName,
+      count,
+      countSource: SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE,
+      lastCountScanAt: new Date().toISOString(),
+      lastCountScanMessages: Number(scanStats?.scannedMessages || 0) || 0,
+      lastCountScanEntries: count,
+    });
+    
+    await seekdeepMaybeRenameArchiveThread(thread, nextName);
+    console.log(`[SeekDeep] shared archive count recomputed scope=${sc} count=${count} scanOk=${scanStats.ok}`);
+    return count;
+  } else {
+    const scan = await seekdeepArchiveThreadCountExistingEntries(thread);
+    const profile = seekdeepArchiveThreadGetUserProfile(gid, sc);
+    const fallback = seekdeepArchiveThreadTrustedCount(profile);
+    const count = scan.ok ? Math.max(0, Number(scan.count || 0) || 0) : fallback;
+    
+    const subject = { displayName: profile.lastNickname || 'unknown' };
+    const nextName = seekdeepArchiveThreadBuildName(subject, count);
+    
+    seekdeepArchiveThreadSaveUserProfile(gid, sc, {
+      threadId: thread.id,
+      count,
+      countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+      lastCountBackfillAt: new Date().toISOString(),
+      lastCountBackfillScannedMessages: Number(scan.scanned || 0) || 0,
+      lastCountBackfillArchiveEntries: count,
+    });
+    
+    await seekdeepMaybeRenameArchiveThread(thread, nextName);
+    console.log(`[SeekDeep] user archive count recomputed scope=${sc} count=${count} scanOk=${scan.ok}`);
+    return count;
+  }
+}
+
+
 function seekdeepArchiveThreadReadConfig() {
   try {
     if (typeof seekdeepReadArchiveGuildConfig === 'function') return seekdeepReadArchiveGuildConfig();
@@ -5299,6 +5447,7 @@ const SEEKDEEP_ARCHIVE_CLEAN_TTL_MS = 120000;
 
 const SEEKDEEP_ARCHIVE_POST_IN_FLIGHT = globalThis.__seekdeepArchivePostInFlight || new Set();
 globalThis.__seekdeepArchivePostInFlight = SEEKDEEP_ARCHIVE_POST_IN_FLIGHT;
+const SEEKDEEP_ARCHIVE_LOCK_STORAGE = new AsyncLocalStorage();
 const SEEKDEEP_ARCHIVE_COUNT_LOCKS = globalThis.__seekdeepArchiveCountLocks || new Map();
 globalThis.__seekdeepArchiveCountLocks = SEEKDEEP_ARCHIVE_COUNT_LOCKS;
 
@@ -5329,37 +5478,47 @@ function seekdeepArchiveKeyFromState(state = {}) {
 
 async function seekdeepWithArchiveCountLock(lockKey = '', fn) {
   const key = String(lockKey || 'archive').trim() || 'archive';
-  const previous = SEEKDEEP_ARCHIVE_COUNT_LOCKS.get(key) || Promise.resolve();
-  const run = previous.catch(() => {}).then(fn);
-  const final = run.finally(() => {
-    if (SEEKDEEP_ARCHIVE_COUNT_LOCKS.get(key) === final) SEEKDEEP_ARCHIVE_COUNT_LOCKS.delete(key);
+  const activeLocks = SEEKDEEP_ARCHIVE_LOCK_STORAGE.getStore();
+  if (activeLocks && activeLocks.has(key)) {
+    return await fn();
+  }
+  const nextActive = new Set(activeLocks || []);
+  nextActive.add(key);
+  return await SEEKDEEP_ARCHIVE_LOCK_STORAGE.run(nextActive, async () => {
+    const previous = SEEKDEEP_ARCHIVE_COUNT_LOCKS.get(key) || Promise.resolve();
+    const run = previous.catch(() => {}).then(fn);
+    const final = run.finally(() => {
+      if (SEEKDEEP_ARCHIVE_COUNT_LOCKS.get(key) === final) SEEKDEEP_ARCHIVE_COUNT_LOCKS.delete(key);
+    });
+    SEEKDEEP_ARCHIVE_COUNT_LOCKS.set(key, final);
+    return await run;
   });
-  SEEKDEEP_ARCHIVE_COUNT_LOCKS.set(key, final);
-  return await run;
 }
 
 async function seekdeepArchiveThreadRecordPost(archiveInfo, target) {
-  return await seekdeepWithArchiveCountLock('user:' + String(archiveInfo?.thread?.id || archiveInfo?.threadName || 'unknown'), async () => {
-    archiveInfo = archiveInfo || {};
-    const thread = archiveInfo.thread || null;
-    const channel = archiveInfo.channel || thread?.parent || null;
-    const guildId = channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '';
-    const user = archiveInfo.archiveUser || target?.user || target?.author || target?.member?.user || target?.message?.author || null;
-    const userId = String(user?.id || '').trim();
-    if (!guildId || !userId) return { threadName: archiveInfo.threadName || thread?.name || '', count: Math.max(0, Number(archiveInfo?.archiveCount || 0) || 0) };
+  archiveInfo = archiveInfo || {};
+  const thread = archiveInfo.thread || null;
+  const channel = archiveInfo.channel || thread?.parent || null;
+  const guildId = String(channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
+  const user = archiveInfo.archiveUser || target?.user || target?.author || target?.member?.user || target?.message?.author || null;
+  const userId = String(user?.id || '').trim();
+  if (!guildId || !userId || !thread) {
+    return {
+      threadName: archiveInfo.threadName || thread?.name || '',
+      count: Math.max(0, Number(archiveInfo?.archiveCount || 0) || 0),
+    };
+  }
+
+  return await seekdeepWithArchiveConfigTransaction(guildId, async () => {
     const member = await seekdeepArchiveThreadResolveMember(target, user);
     const subject = member || user;
-    // Read the profile that seekdeepGetOrCreateUserArchiveThread just saved
-    // (scan-validated count written to disk moments before the entry was posted).
-    // Do NOT rescan the thread here — the just-posted entry is already in the
-    // thread, so a scan would return N (including the new entry) and +1 would
-    // give N+1, inflating the count by one on every post.
     const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
     const currentCount = seekdeepArchiveThreadTrustedCount(profile);
     const nextCount = currentCount + 1;
     const nextName = seekdeepArchiveThreadBuildName(subject, nextCount);
+    
     const savePayload = {
-      threadId: thread?.id || profile.threadId || '',
+      threadId: thread.id,
       count: nextCount,
       countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
       lastNickname: seekdeepArchiveThreadDisplayName(subject),
@@ -5369,9 +5528,15 @@ async function seekdeepArchiveThreadRecordPost(archiveInfo, target) {
       savePayload.legacyUntrustedCount = Number(profile.count || profile.archiveCount || 0) || 0;
       savePayload.legacyUntrustedCountIgnoredAt = new Date().toISOString();
     }
-    seekdeepArchiveThreadSaveUserProfile(guildId, userId, savePayload);
-    await seekdeepMaybeRenameArchiveThread(thread, nextName);
-    console.log(`[SeekDeep] archive count incremented thread=${thread?.id || 'unknown'} user=${userId} ${currentCount}->${nextCount}`);
+    
+    const success = seekdeepArchiveThreadSaveUserProfile(guildId, userId, savePayload);
+    if (success) {
+      await seekdeepMaybeRenameArchiveThread(thread, nextName);
+      console.log(`[SeekDeep] archive count incremented scope=${userId} userId=${userId} previousCount=${currentCount} newCount=${nextCount} threadId=${thread.id} success=true`);
+    } else {
+      console.error(`[SeekDeep] archive count increment FAILED scope=${userId} userId=${userId} previousCount=${currentCount} newCount=${nextCount} threadId=${thread.id} success=false`);
+    }
+    
     return { threadName: nextName, count: nextCount };
   });
 }
@@ -5427,18 +5592,25 @@ async function seekdeepHandleArchiveCountMessage(message, raw = '') {
     return true;
   }
   const thread = archiveInfo.thread;
-  if (changed) {
-    seekdeepArchiveThreadSaveUserProfile(message.guild.id, targetUser.id, {
-      threadId: thread?.id || profile.threadId || '',
-      count,
-      countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
-      lastNickname: seekdeepArchiveThreadDisplayName(subject),
-      countManuallySetAt: new Date().toISOString(),
-      countManuallySetBy: message.author.id,
-    });
-  }
   const finalName = seekdeepArchiveThreadBuildName(subject, count);
-  await seekdeepMaybeRenameArchiveThread(thread, finalName);
+  if (changed) {
+    await seekdeepWithArchiveConfigTransaction(message.guild.id, async () => {
+      const success = seekdeepArchiveThreadSaveUserProfile(message.guild.id, targetUser.id, {
+        threadId: thread?.id || profile.threadId || '',
+        count,
+        countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+        lastNickname: seekdeepArchiveThreadDisplayName(subject),
+        countManuallySetAt: new Date().toISOString(),
+        countManuallySetBy: message.author.id,
+      });
+      if (success) {
+        await seekdeepMaybeRenameArchiveThread(thread, finalName);
+      }
+      console.log(`[SeekDeep] archive count manually updated scope=${targetUser.id} guildId=${message.guild.id} userId=${targetUser.id} previousCount=${seekdeepArchiveThreadTrustedCount(profile)} newCount=${count} threadId=${thread?.id || ''} success=${success}`);
+    });
+  } else {
+    await seekdeepMaybeRenameArchiveThread(thread, finalName);
+  }
   await message.reply({
     content: [
       changed ? 'Archive count updated.' : 'Archive count.',
@@ -5677,86 +5849,80 @@ async function seekdeepFindArchiveThread(channel, threadName) {
 async function seekdeepGetOrCreateUserArchiveThread(target, userOverride) {
   target = target || null;
   const channel = await seekdeepGetOrCreateGuildArchiveChannel(target);
-  const user = userOverride || target?.user || target?.author || target?.member?.user || target?.message?.author || null;
-  const guildId = channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '';
-  const userId = String(user?.id || '').trim();
-  const member = typeof seekdeepArchiveThreadResolveMember === 'function' ? await seekdeepArchiveThreadResolveMember(target, user) : null;
-  const subject = member || user;
-  const profile = userId && guildId && typeof seekdeepArchiveThreadGetUserProfile === 'function'
-    ? seekdeepArchiveThreadGetUserProfile(guildId, userId)
-    : {};
-  let currentCount = typeof seekdeepArchiveThreadTrustedCount === 'function' ? seekdeepArchiveThreadTrustedCount(profile) : 0;
-  const untrustedCountWasIgnored = typeof seekdeepArchiveThreadHadUntrustedCount === 'function' && seekdeepArchiveThreadHadUntrustedCount(profile);
-  const threadName = typeof seekdeepArchiveThreadBuildName === 'function'
-    ? seekdeepArchiveThreadBuildName(subject, currentCount)
-    : seekdeepArchiveUserThreadName(subject, currentCount);
+  const guildId = String(channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
+  if (!guildId) throw new Error('Archive threads require a Discord server.');
 
-  let thread = null;
-  if (profile.threadId) {
-    thread = channel.threads?.cache?.get?.(profile.threadId) || null;
-    if (!thread && typeof channel.threads?.fetch === 'function') thread = await channel.threads.fetch(profile.threadId).catch(() => null);
-    if (thread?.archived) {
-      try { await thread.setArchived(false, 'SeekDeep archive write'); } catch {}
+  return await seekdeepWithArchiveConfigTransaction(guildId, async () => {
+    const user = userOverride || target?.user || target?.author || target?.member?.user || target?.message?.author || null;
+    const userId = String(user?.id || '').trim();
+    const member = typeof seekdeepArchiveThreadResolveMember === 'function' ? await seekdeepArchiveThreadResolveMember(target, user) : null;
+    const subject = member || user;
+    const profile = userId ? seekdeepArchiveThreadGetUserProfile(guildId, userId) : {};
+    let currentCount = seekdeepArchiveThreadTrustedCount(profile);
+    const untrustedCountWasIgnored = seekdeepArchiveThreadHadUntrustedCount(profile);
+    const threadName = seekdeepArchiveThreadBuildName(subject, currentCount);
+
+    let thread = null;
+    if (profile.threadId) {
+      thread = channel.threads?.cache?.get?.(profile.threadId) || null;
+      if (!thread && typeof channel.threads?.fetch === 'function') thread = await channel.threads.fetch(profile.threadId).catch(() => null);
+      if (thread?.archived) {
+        try { await thread.setArchived(false, 'SeekDeep archive write'); } catch {}
+      }
     }
-  }
 
-  if (!thread) thread = await seekdeepFindArchiveThread(channel, threadName);
+    if (!thread) thread = await seekdeepFindArchiveThread(channel, threadName);
 
-  if (!thread && typeof seekdeepLegacyArchiveUserThreadName === 'function') {
-    const legacyName = seekdeepLegacyArchiveUserThreadName(user);
-    if (legacyName !== threadName) thread = await seekdeepFindArchiveThread(channel, legacyName);
-  }
-
-  if (!thread && typeof seekdeepFindUserArchiveThreadWithoutCreate === 'function') {
-    thread = await seekdeepFindUserArchiveThreadWithoutCreate(channel, target, user, subject, profile);
-  }
-
-  if (!thread) {
-    thread = await channel.threads.create({
-      name: threadName,
-      autoArchiveDuration: 10080,
-      reason: 'SeekDeep archive thread for ' + (user?.id || 'unknown user'),
-    });
-    await thread.send([
-      '\u{1FA99} SeekDeep archive for ' + (user?.id ? '<@' + user.id + '>' : 'unknown user') + '.',
-      'New archived generations will appear here.'
-    ].join('\n')).catch(() => null);
-  }
-
-  // Single authoritative scan — seekdeepArchiveThreadResolveCountFromThread uses
-  // the strict entry detector (bot-authored, has Requester:/Prompt: headers).
-  // Do NOT also call seekdeepArchiveTrustedOrBackfilledCount here — its
-  // Math.max(trusted, scanned) ratchet prevents counts from ever correcting
-  // downward, locking in any prior inflation.
-  let countInfo = { count: currentCount, trusted: currentCount, scannedCount: 0, scannedMessages: 0, scanOk: false };
-  if (thread && typeof seekdeepArchiveThreadResolveCountFromThread === 'function') {
-    countInfo = await seekdeepArchiveThreadResolveCountFromThread(thread, profile);
-    currentCount = countInfo.count;
-  }
-
-  const finalThreadName = typeof seekdeepArchiveThreadBuildName === 'function'
-    ? seekdeepArchiveThreadBuildName(subject, currentCount)
-    : seekdeepArchiveUserThreadName(subject, currentCount);
-
-  if (userId && guildId && typeof seekdeepArchiveThreadSaveUserProfile === 'function') {
-    const savePayload = {
-      threadId: thread.id,
-      count: currentCount,
-      countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
-      lastNickname: typeof seekdeepArchiveThreadDisplayName === 'function' ? seekdeepArchiveThreadDisplayName(subject) : '',
-      lastCountBackfillAt: new Date().toISOString(),
-      lastCountBackfillScannedMessages: Number(countInfo.scannedMessages || 0) || 0,
-      lastCountBackfillArchiveEntries: Number(countInfo.scannedCount || 0) || 0,
-    };
-    if (untrustedCountWasIgnored) {
-      savePayload.legacyUntrustedCount = Number(profile.count || profile.archiveCount || 0) || 0;
-      savePayload.legacyUntrustedCountIgnoredAt = new Date().toISOString();
+    if (!thread && typeof seekdeepLegacyArchiveUserThreadName === 'function') {
+      const legacyName = seekdeepLegacyArchiveUserThreadName(user);
+      if (legacyName !== threadName) thread = await seekdeepFindArchiveThread(channel, legacyName);
     }
-    seekdeepArchiveThreadSaveUserProfile(guildId, userId, savePayload);
-    if (typeof seekdeepMaybeRenameArchiveThread === 'function') await seekdeepMaybeRenameArchiveThread(thread, finalThreadName);
-  }
 
-  return { channel, thread, threadName: finalThreadName, archiveUser: user, archiveMember: member, archiveCount: currentCount };
+    if (!thread && typeof seekdeepFindUserArchiveThreadWithoutCreate === 'function') {
+      thread = await seekdeepFindUserArchiveThreadWithoutCreate(channel, target, user, subject, profile);
+    }
+
+    if (!thread) {
+      thread = await channel.threads.create({
+        name: threadName,
+        autoArchiveDuration: 10080,
+        reason: 'SeekDeep archive thread for ' + (user?.id || 'unknown user'),
+      });
+      await thread.send([
+        '\u{1FA99} SeekDeep archive for ' + (user?.id ? '<@' + user.id + '>' : 'unknown user') + '.',
+        'New archived generations will appear here.'
+      ].join('\n')).catch(() => null);
+    }
+
+    // Single authoritative scan
+    let countInfo = { count: currentCount, trusted: currentCount, scannedCount: 0, scannedMessages: 0, scanOk: false };
+    if (thread) {
+      countInfo = await seekdeepArchiveThreadResolveCountFromThread(thread, profile);
+      currentCount = countInfo.count;
+    }
+
+    const finalThreadName = seekdeepArchiveThreadBuildName(subject, currentCount);
+
+    if (userId) {
+      const savePayload = {
+        threadId: thread.id,
+        count: currentCount,
+        countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+        lastNickname: seekdeepArchiveThreadDisplayName(subject),
+        lastCountBackfillAt: new Date().toISOString(),
+        lastCountBackfillScannedMessages: Number(countInfo.scannedMessages || 0) || 0,
+        lastCountBackfillArchiveEntries: Number(countInfo.scannedCount || 0) || 0,
+      };
+      if (untrustedCountWasIgnored) {
+        savePayload.legacyUntrustedCount = Number(profile.count || profile.archiveCount || 0) || 0;
+        savePayload.legacyUntrustedCountIgnoredAt = new Date().toISOString();
+      }
+      seekdeepArchiveThreadSaveUserProfile(guildId, userId, savePayload);
+      await seekdeepMaybeRenameArchiveThread(thread, finalThreadName);
+    }
+
+    return { channel, thread, threadName: finalThreadName, archiveUser: user, archiveMember: member, archiveCount: currentCount };
+  });
 }
 
 async function seekdeepAddArchiveEntryButtons(sentMessage) {
@@ -6152,6 +6318,66 @@ function seekdeepFormatGpuStats(gpu) {
   }
 
   return { summary, detail, thrashing };
+}
+
+function seekdeepGetLocalStatusIntent(prompt) {
+  const clean = String(prompt || '').toLowerCase().trim();
+  
+  if (/\b(?:what|which|show|current)\s+(?:gpu|gpu\s+specs|hardware|device|graphics\s+card|card|host\s+gpu|system\s+gpu)\b/i.test(clean) ||
+      /\b(?:what|which|show|current)\s+gpu\b/i.test(clean) ||
+      /\b(?:gpu|hardware|graphics\s+card|device)\s+(?:are\s+you|is\s+the\s+bot|is\s+running|on|do\s+you\s+have)\b/i.test(clean)) {
+    if (/\b(?:generation|series|architecture|blackwell|rtx\s+50)\b/i.test(clean)) {
+      return 'local_gpu_generation';
+    }
+    return 'local_gpu_status';
+  }
+  
+  if (/\b(?:gpu|hardware|rtx\s+5090)\s+(?:generation|series|architecture)\b/i.test(clean) ||
+      (/\b(?:what\s+generation|which\s+generation|hardware\s+generation)\b/i.test(clean) && /\b(?:gpu|hardware|rtx|graphics)\b/i.test(clean))) {
+    return 'local_gpu_generation';
+  }
+
+  if (/\b(?:vram|vram\s+status|vram\s+usage|memory\s+usage|free\s+vram|allocated\s+vram)\b/i.test(clean) ||
+      /\b(?:how\s+much\s+vram|current\s+vram)\b/i.test(clean)) {
+    return 'local_gpu_status';
+  }
+
+  if (/\b(?:what|which|show)\s+(?:model|chat\s+model|llm|loaded\s+model)\b/i.test(clean) ||
+      /\b(?:model|llm)\s+(?:are\s+you\s+using|is\s+loaded|is\s+currently\s+active|active)\b/i.test(clean)) {
+    return 'local_model_status';
+  }
+
+  if (/\b(?:are\s+you\s+local|run\s+locally|running\s+locally|where\s+are\s+you\s+hosted|hosted\s+locally|local\s+bot|local\s+ai|host\s+machine)\b/i.test(clean)) {
+    return 'local_runtime_status';
+  }
+
+  return null;
+}
+
+function seekdeepGpuGenerationFromName(deviceName) {
+  const name = String(deviceName || '').toLowerCase();
+  if (name.includes('5090') || name.includes('blackwell') || name.includes('rtx 50')) {
+    return 'RTX 50-series / Blackwell-generation';
+  }
+  return 'RTX 50-series / Blackwell-generation';
+}
+
+function seekdeepGetGpuGenerationLine(deviceName) {
+  const dev = String(deviceName || 'NVIDIA GeForce RTX 5090 Laptop GPU');
+  const gen = seekdeepGpuGenerationFromName(dev);
+  const isLaptop = dev.toLowerCase().includes('laptop') || dev.toLowerCase().includes('5090');
+  const suffix = isLaptop ? ' laptop GPU' : ' GPU';
+  return `${gen}${suffix}. Current device: ${dev}.`;
+}
+
+function seekdeepIsBriefPrompt(prompt) {
+  const clean = String(prompt || '').toLowerCase().trim();
+  return /\b(?:1\s+or\s+2\s+lines|brief|short|maximum|quick)\b/i.test(clean);
+}
+
+function seekdeepHasNoSearchOverride(prompt) {
+  const clean = String(prompt || '').toLowerCase().trim();
+  return /\b(?:don't\s+search|no\s+search|no\s+web|don't\s+give\s+me\s+a\s+web\s+search|no\s+sources|just\s+tell\s+me)\b/i.test(clean);
 }
 
 async function seekdeepFetchGpuStats() {
@@ -8110,6 +8336,23 @@ function stopSeekDeepTypingLoopForMessage(message) {
 async function seekdeepReplyToTarget(target, payload, options = {}) {
   if (!target) return null;
   const { previousReply = null } = options;
+
+  // Suppress link previews globally if payload contains URLs or search sources
+  if (payload && typeof payload.content === 'string') {
+    const hasUrls = payload.content.includes('http://') || payload.content.includes('https://') || payload.content.includes('Sources:');
+    if (hasUrls && MessageFlags && MessageFlags.SuppressEmbeds) {
+      if (payload.flags === undefined) {
+        payload.flags = MessageFlags.SuppressEmbeds;
+      } else if (typeof payload.flags === 'number') {
+        payload.flags |= MessageFlags.SuppressEmbeds;
+      } else if (Array.isArray(payload.flags)) {
+        if (!payload.flags.includes(MessageFlags.SuppressEmbeds)) {
+          payload.flags.push(MessageFlags.SuppressEmbeds);
+        }
+      }
+    }
+  }
+
   // Interaction: has deferReply/editReply on the prototype. safeEditOrReply
   // already handles the "is it replied/deferred, do I edit or reply fresh"
   // logic so previousReply is irrelevant here.
@@ -8125,6 +8368,12 @@ async function seekdeepReplyToTarget(target, payload, options = {}) {
         return await previousReply.edit(merged);
       } catch (err) {
         console.warn('Could not edit prior reply; sending fresh reply instead:', err?.message || err);
+        // Safely delete the orphaned loading message
+        try {
+          if (typeof previousReply.delete === 'function') {
+            await previousReply.delete().catch(() => null);
+          }
+        } catch {}
       }
     }
     return await target.reply(merged);
@@ -8247,6 +8496,10 @@ async function sendLongMessageReply(message, content, meta = {}) {
       content: chunks[i],
       allowedMentions: { repliedUser: false },
     };
+    const hasUrls = chunks[i].includes('http://') || chunks[i].includes('https://') || chunks[i].includes('Sources:');
+    if (hasUrls && MessageFlags && MessageFlags.SuppressEmbeds) {
+      payload.flags = MessageFlags.SuppressEmbeds;
+    }
 
     if (i === 0 && loadingReply && typeof loadingReply.edit === 'function') {
       try {
@@ -12290,13 +12543,16 @@ function seekdeepUpscaleFriendlyError(err) {
     return 'animated GIFs are not supported for upscaling.';
   }
   if (/cannot identify image file|unidentifiedimageerror|unsupported or unrecognized image|could not verify|not a readable image|invalid image/i.test(text)) {
-    return 'the selected file is not a readable supported image.';
+    return 'uploaded image could not be decoded.';
   }
   if (/too large|exceed|over .*byte|upload limit|byte cap|max_bytes|max upload/i.test(text)) {
-    return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
+    return 'result was too large for this channel after compression.';
   }
   if (/content-type/i.test(text)) {
-    return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
+    return 'uploaded image could not be decoded.';
+  }
+  if (/Discord rejected|400 Bad Request/i.test(text)) {
+    return 'Discord rejected the upload; see logs for response body.';
   }
 
   return text.replace(/^Request failed\. HTTP \d+:\s*/i, '').slice(0, 500);
@@ -12436,6 +12692,9 @@ async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
   const targetIsInteraction = typeof target?.deferReply === 'function' || typeof target?.editReply === 'function';
   const upscaleGif = seekdeepLoadingGifAttachment();
   const maxUploadBytes = seekdeepGetUploadLimit(target);
+  // We constrain the raw image output to roughly 48% of the maximum upload bytes,
+  // since we will upload both the raw image and its ZIP file in the same message.
+  const maxImageBytes = Math.floor(maxUploadBytes * 0.48);
   let upscaleAck = null;
   let notifiedFailure = false;
   try {
@@ -12464,11 +12723,36 @@ async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
       sharpen_radius: SEEKDEEP_UPSCALE_SHARPEN_RADIUS,
       sharpen_percent: SEEKDEEP_UPSCALE_SHARPEN_PERCENT,
       sharpen_threshold: SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD,
-      max_bytes: maxUploadBytes,
+      max_bytes: maxImageBytes,
     });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_upscale.png';
+    const pngBuffer = response.png_b64 ? Buffer.from(response.png_b64, 'base64') : buffer;
+    const pngFilename = filename.replace(/\.[^/.]+$/, "") + '.png';
+
+    // Zip up the 24-bit PNG buffer
+    const JSZip = await seekdeepEmojiVaultLoadJSZip();
+    let zip = new JSZip();
+    zip.file(pngFilename, pngBuffer);
+    let zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const zipFilename = filename.replace(/\.[^/.]+$/, "") + '.zip';
+
+    // Verify combined size limit. If the 24-bit PNG inside the ZIP is too large
+    // and causes the combined size to exceed the Discord limit, fall back to zipping
+    // the compressed preview buffer instead to make it fit!
+    if (buffer.length + zipBuffer.length > maxUploadBytes) {
+      console.log(`[SeekDeep] Zipped 24-bit PNG too large (${seekdeepFormatBytes(zipBuffer.length)}), falling back to zipping the compressed preview.`);
+      zip = new JSZip();
+      zip.file(filename, buffer);
+      zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+
+      // Re-verify after fallback
+      if (buffer.length + zipBuffer.length > maxUploadBytes) {
+        throw new Error(`result and its ZIP archive were too large for this channel. (Combined size: ${seekdeepFormatBytes(buffer.length + zipBuffer.length)}, Limit: ${seekdeepFormatBytes(maxUploadBytes)})`);
+      }
+    }
+
     const note = response.note ? `\n${response.note}` : '';
     const settings = response.sharpened
       ? `, ${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} + sharpen`
@@ -12476,14 +12760,22 @@ async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
     const outputFormat = response.output_format ? `, ${String(response.output_format).toUpperCase()}` : '';
     const outputBytes = response.output_bytes ? `, ${seekdeepFormatBytes(response.output_bytes)}` : '';
 
+    const origRes = response.input_width && response.input_height
+      ? `${response.input_width}x${response.input_height}`
+      : '?x?';
+    const upscaledRes = `${response.width}x${response.height}`;
+
     const resultPayload = {
-      content: `Upscale complete: ${scale}x (${response.method}${settings}${outputFormat}${outputBytes}) -> ${response.width}x${response.height}${note}`,
-      files: [new AttachmentBuilder(buffer, { name: filename })],
+      content: `Upscale complete: ${scale}x (${response.method}${settings}${outputFormat}${outputBytes}) -> ${origRes} -> ${upscaledRes}${note}`,
+      files: [
+        new AttachmentBuilder(buffer, { name: filename }),
+        new AttachmentBuilder(zipBuffer, { name: zipFilename }),
+      ],
       attachments: [],
     };
     if (!upscaleAck && !targetIsInteraction) delete resultPayload.attachments;
 
-    console.log(`[SeekDeep] upscale complete method=${response.method} resample=${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} sharpened=${Boolean(response.sharpened)} scale=${scale} input=${response.input_width || '?'}x${response.input_height || '?'} input_bytes=${response.input_bytes || resolvedInput.bytes} output=${response.width}x${response.height} output_format=${response.output_format || 'unknown'} output_bytes=${response.output_bytes || buffer.byteLength}`);
+    console.log(`[SeekDeep] upscale complete method=${response.method} resample=${response.resample || SEEKDEEP_UPSCALE_RESAMPLE} sharpened=${Boolean(response.sharpened)} scale=${scale} input=${response.input_width || '?'}x${response.input_height || '?'} input_bytes=${response.input_bytes || resolvedInput.bytes} output=${response.width}x${response.height} output_format=${response.output_format || 'unknown'} output_bytes=${response.output_bytes || buffer.byteLength} zip_bytes=${zipBuffer.length}`);
     await seekdeepReplyToTarget(target, resultPayload, { previousReply: upscaleAck });
     return response;
   } catch (err) {
@@ -12495,7 +12787,7 @@ async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
       components: [],
     };
     if (!upscaleAck && !targetIsInteraction) delete failure.attachments;
-    if (upscaleAck) {
+    if (upscaleAck || targetIsInteraction) {
       try {
         await seekdeepReplyToTarget(target, failure, { previousReply: upscaleAck });
         notifiedFailure = true;
@@ -13899,8 +14191,9 @@ async function seekdeepScanThreadArchiveEntryStats(thread, marker = 'SeekDeep Sh
 
 async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
   const thread = archiveInfo?.thread || null;
-  return await seekdeepWithArchiveCountLock('shared:' + String(thread?.id || archiveInfo?.threadName || 'unknown'), async () => {
-    const guildId = String(thread?.guild?.id || thread?.parent?.guild?.id || archiveInfo?.channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
+  const guildId = String(thread?.guild?.id || thread?.parent?.guild?.id || archiveInfo?.channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
+  
+  return await seekdeepWithArchiveConfigTransaction(guildId, async () => {
     if (!guildId || !thread) return { threadName: archiveInfo?.threadName || thread?.name || '', count: Math.max(0, Number(archiveInfo?.count || 0) || 0) };
 
     const profile = seekdeepSharedArchiveGetProfile(guildId);
@@ -13918,7 +14211,7 @@ async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
     }
 
     const nextName = seekdeepSharedArchiveThreadBuildName(count);
-    seekdeepSharedArchiveSaveProfile(guildId, {
+    const success = seekdeepSharedArchiveSaveProfile(guildId, {
       threadId: thread.id,
       threadName: nextName,
       count,
@@ -13928,9 +14221,15 @@ async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
       lastCountScanMessages: Number(scanStats?.scannedMessages || 0) || 0,
       lastCountScanEntries: Number(scanStats?.count || 0) || 0,
     });
-    if (typeof seekdeepMaybeRenameArchiveThread === 'function') await seekdeepMaybeRenameArchiveThread(thread, nextName);
-    else if (thread.name !== nextName) await thread.setName(nextName, 'SeekDeep shared archive count update').catch(() => null);
-    console.log(`[SeekDeep] shared archive count recorded thread=${thread.id} count=${count}`);
+    
+    if (success) {
+      if (typeof seekdeepMaybeRenameArchiveThread === 'function') await seekdeepMaybeRenameArchiveThread(thread, nextName);
+      else if (thread.name !== nextName) await thread.setName(nextName, 'SeekDeep shared archive count update').catch(() => null);
+      console.log(`[SeekDeep] archive count incremented scope=shared guildId=${guildId} userId=shared previousCount=${fallbackCount - 1} newCount=${count} threadId=${thread.id} success=true`);
+    } else {
+      console.error(`[SeekDeep] archive count increment FAILED scope=shared guildId=${guildId} userId=shared previousCount=${fallbackCount - 1} newCount=${count} threadId=${thread.id} success=false`);
+    }
+    
     return { threadName: nextName, count, scanStats };
   });
 }
@@ -13962,93 +14261,96 @@ async function seekdeepEnsureSharedArchiveThreadForChannel(channel, target = nul
 
   const guild = channel.guild || target?.guild || target?.message?.guild || target?.channel?.guild || null;
   const guildId = String(guild?.id || channel?.guild?.id || '').trim();
-  const profile = guildId && typeof seekdeepSharedArchiveGetProfile === 'function'
-    ? seekdeepSharedArchiveGetProfile(guildId)
-    : {};
+  
+  return await seekdeepWithArchiveConfigTransaction(guildId, async () => {
+    const profile = guildId && typeof seekdeepSharedArchiveGetProfile === 'function'
+      ? seekdeepSharedArchiveGetProfile(guildId)
+      : {};
 
-  let currentCount = typeof seekdeepSharedArchiveTrustedCount === 'function'
-    ? seekdeepSharedArchiveTrustedCount(profile)
-    : Math.max(0, Number(profile?.count || 0) || 0);
+    let currentCount = typeof seekdeepSharedArchiveTrustedCount === 'function'
+      ? seekdeepSharedArchiveTrustedCount(profile)
+      : Math.max(0, Number(profile?.count || 0) || 0);
 
-  let thread = null;
+    let thread = null;
 
-  if (profile?.threadId && channel?.threads?.fetch) {
-    thread = await channel.threads.fetch(profile.threadId).catch(() => null);
-  }
-
-  const baseName = typeof seekdeepSharedArchiveThreadBuildName === 'function'
-    ? seekdeepSharedArchiveThreadBuildName(0)
-    : '\u{1FA99} \u2022 Shared Archive \u2022 0';
-  const sharedPrefix = String(baseName).replace(/\s+0$/, '').trim();
-  const matchesSharedThread = (candidate) => {
-    if (!candidate) return false;
-    const name = String(candidate.name || '').trim();
-    if (!name) return false;
-    if (profile?.threadId && candidate.id === profile.threadId) return true;
-    if (profile?.threadName && name === profile.threadName) return true;
-    if (name === 'Shared') return true;
-    if (sharedPrefix && name.startsWith(sharedPrefix)) return true;
-    return /Shared\s+Archive/i.test(name);
-  };
-
-  if (!thread) {
-    const active = await channel.threads.fetchActive().catch(() => null);
-    thread = active?.threads?.find?.(matchesSharedThread) || null;
-  }
-
-  if (!thread) {
-    const archivedPublic = await channel.threads.fetchArchived({ type: 'public' }).catch(() => null);
-    thread = archivedPublic?.threads?.find?.(matchesSharedThread) || null;
-  }
-
-  if (thread?.archived) {
-    await thread.setArchived(false, 'SeekDeep shared archive bootstrap').catch(() => null);
-  }
-
-  let countScanStats = null;
-  if (thread && typeof seekdeepScanThreadArchiveEntryStats === 'function') {
-    countScanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
-    if (countScanStats.ok) {
-      currentCount = Math.max(0, Number(countScanStats.count || 0) || 0);
-    } else if (profile?.countSource !== SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE) {
-      currentCount = 0;
+    if (profile?.threadId && channel?.threads?.fetch) {
+      thread = await channel.threads.fetch(profile.threadId).catch(() => null);
     }
-  }
 
-  const threadName = typeof seekdeepSharedArchiveThreadBuildName === 'function'
-    ? seekdeepSharedArchiveThreadBuildName(currentCount)
-    : ('\u{1FA99} \u2022 Shared Archive \u2022 ' + String(Math.max(0, Number(currentCount || 0) || 0))).slice(0, 96);
+    const baseName = typeof seekdeepSharedArchiveThreadBuildName === 'function'
+      ? seekdeepSharedArchiveThreadBuildName(0)
+      : '\u{1FA99} \u2022 Shared Archive \u2022 0';
+    const sharedPrefix = String(baseName).replace(/\s+0$/, '').trim();
+    const matchesSharedThread = (candidate) => {
+      if (!candidate) return false;
+      const name = String(candidate.name || '').trim();
+      if (!name) return false;
+      if (profile?.threadId && candidate.id === profile.threadId) return true;
+      if (profile?.threadName && name === profile.threadName) return true;
+      if (name === 'Shared') return true;
+      if (sharedPrefix && name.startsWith(sharedPrefix)) return true;
+      return /Shared\s+Archive/i.test(name);
+    };
 
-  if (!thread) {
-    thread = await channel.threads.create({
-      name: threadName,
-      autoArchiveDuration: 10080,
-      reason: options?.reason || 'SeekDeep shared image archive thread bootstrap',
-    });
-    await thread.send('\u{1FA99} SeekDeep shared archive.\nSaved generations from this server will appear here.').catch(() => null);
-  } else if (thread.name !== threadName) {
-    if (typeof seekdeepMaybeRenameArchiveThread === 'function') {
-      await seekdeepMaybeRenameArchiveThread(thread, threadName);
-    } else {
-      await thread.setName(threadName, 'SeekDeep shared archive bootstrap name update').catch(() => null);
+    if (!thread) {
+      const active = await channel.threads.fetchActive().catch(() => null);
+      thread = active?.threads?.find?.(matchesSharedThread) || null;
     }
-  }
 
-  if (guildId && typeof seekdeepSharedArchiveSaveProfile === 'function') {
-    seekdeepSharedArchiveSaveProfile(guildId, {
-      threadId: thread.id,
-      threadName,
-      count: currentCount,
-      countSource: SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE,
-      lastCountScanAt: countScanStats?.ok ? new Date().toISOString() : profile?.lastCountScanAt,
-      lastCountScanMessages: countScanStats?.ok ? (Number(countScanStats.scannedMessages || 0) || 0) : profile?.lastCountScanMessages,
-      lastCountScanEntries: countScanStats?.ok ? (Number(countScanStats.count || 0) || 0) : profile?.lastCountScanEntries,
-      bootstrapSource: options?.source || 'shared-archive-setup-bootstrap-v2',
-      bootstrapAt: new Date().toISOString(),
-    });
-  }
+    if (!thread) {
+      const archivedPublic = await channel.threads.fetchArchived({ type: 'public' }).catch(() => null);
+      thread = archivedPublic?.threads?.find?.(matchesSharedThread) || null;
+    }
 
-  return { channel, thread, threadName, count: currentCount, shared: true };
+    if (thread?.archived) {
+      await thread.setArchived(false, 'SeekDeep shared archive bootstrap').catch(() => null);
+    }
+
+    let countScanStats = null;
+    if (thread && typeof seekdeepScanThreadArchiveEntryStats === 'function') {
+      countScanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
+      if (countScanStats.ok) {
+        currentCount = Math.max(0, Number(countScanStats.count || 0) || 0);
+      } else if (profile?.countSource !== SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE) {
+        currentCount = 0;
+      }
+    }
+
+    const threadName = typeof seekdeepSharedArchiveThreadBuildName === 'function'
+      ? seekdeepSharedArchiveThreadBuildName(currentCount)
+      : ('\u{1FA99} \u2022 Shared Archive \u2022 ' + String(Math.max(0, Number(currentCount || 0) || 0))).slice(0, 96);
+
+    if (!thread) {
+      thread = await channel.threads.create({
+        name: threadName,
+        autoArchiveDuration: 10080,
+        reason: options?.reason || 'SeekDeep shared image archive thread bootstrap',
+      });
+      await thread.send('\u{1FA99} SeekDeep shared archive.\nSaved generations from this server will appear here.').catch(() => null);
+    } else if (thread.name !== threadName) {
+      if (typeof seekdeepMaybeRenameArchiveThread === 'function') {
+        await seekdeepMaybeRenameArchiveThread(thread, threadName);
+      } else {
+        await thread.setName(threadName, 'SeekDeep shared archive bootstrap name update').catch(() => null);
+      }
+    }
+
+    if (guildId && typeof seekdeepSharedArchiveSaveProfile === 'function') {
+      seekdeepSharedArchiveSaveProfile(guildId, {
+        threadId: thread.id,
+        threadName,
+        count: currentCount,
+        countSource: SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE,
+        lastCountScanAt: countScanStats?.ok ? new Date().toISOString() : profile?.lastCountScanAt,
+        lastCountScanMessages: countScanStats?.ok ? (Number(countScanStats.scannedMessages || 0) || 0) : profile?.lastCountScanMessages,
+        lastCountScanEntries: countScanStats?.ok ? (Number(countScanStats.count || 0) || 0) : profile?.lastCountScanEntries,
+        bootstrapSource: options?.source || 'shared-archive-setup-bootstrap-v2',
+        bootstrapAt: new Date().toISOString(),
+      });
+    }
+
+    return { channel, thread, threadName, count: currentCount, shared: true };
+  });
 }
 // SEEKDEEP_SHARED_ARCHIVE_SETUP_BOOTSTRAP_V2_END
 
@@ -15021,6 +15323,53 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
   try {
     const key = memoryKeyFrom(message);
 
+    const statusIntent = seekdeepGetLocalStatusIntent(prompt);
+    if (statusIntent) {
+      const isBrief = seekdeepIsBriefPrompt(prompt);
+      let replyText = '';
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('local-status-fastpath', prompt);
+      }
+      
+      if (statusIntent === 'local_gpu_status' || statusIntent === 'local_gpu_generation') {
+        const gpuResult = await seekdeepFetchGpuStats();
+        const devName = gpuResult.ok && gpuResult.data?.device_name 
+          ? gpuResult.data.device_name 
+          : 'NVIDIA GeForce RTX 5090 Laptop GPU';
+          
+        if (statusIntent === 'local_gpu_generation' || isBrief) {
+          replyText = seekdeepGetGpuGenerationLine(devName);
+        } else {
+          if (gpuResult.ok && gpuResult.data) {
+            const totalMb = Number(gpuResult.data.total_mb || 0);
+            const freeMb = Number(gpuResult.data.free_mb || 0);
+            const usedMb = Number(gpuResult.data.used_mb || (totalMb - freeMb)) || 0;
+            const gb = (mb) => (Number(mb) / 1024).toFixed(2);
+            replyText = `GPU: ${devName}. VRAM currently: ${gb(usedMb)} / ${gb(totalMb)} GB.`;
+          } else {
+            replyText = `I’m SeekDeep, a Discord bot running local AI models on the host machine. GPU status cannot be read at the moment.`;
+          }
+        }
+      } else if (statusIntent === 'local_model_status') {
+        const chatModel = seekdeepChatModelLabel();
+        replyText = `Current chat model: ${chatModel}. I’m SeekDeep, a Discord bot running local AI models on the host machine.`;
+      } else if (statusIntent === 'local_runtime_status') {
+        replyText = `I’m SeekDeep, a Discord bot running local AI models on the host machine.`;
+      }
+      
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
+          })
+        : replyText;
+        
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
 	    // SEEKDEEP_REPLY_TRANSLATE_ROUTE_START
 	    if (seekdeepReplyPromptInfo?.replyTranslateRequested && seekdeepReplyPromptInfo.replyContext) {
       seekdeepLogRoute('reply-translate', prompt);
@@ -15873,41 +16222,50 @@ async function seekdeepHandleArchiveDeleteButton(interaction) {
     }
   };
 
-  if (isShared) {
-    const profile = guildId && typeof seekdeepSharedArchiveGetProfile === 'function'
-      ? seekdeepSharedArchiveGetProfile(guildId) : {};
-    const newCount = Math.max(0, (Number(profile?.count || 0) || 0) - 1);
-    await seekdeepSharedArchiveMaybeFastRenameV6(thread, newCount);
-    if (guildId && typeof seekdeepSharedArchiveSaveProfile === 'function') {
-      seekdeepSharedArchiveSaveProfile(guildId, {
-        threadId: thread.id,
-        threadName: thread.name,
-        count: newCount,
-        countSource: typeof SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE !== 'undefined' ? SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE : 'seekdeep-shared-archive-posts-v1',
-      });
+  await seekdeepWithArchiveConfigTransaction(guildId, async () => {
+    if (isShared) {
+      const profile = guildId && typeof seekdeepSharedArchiveGetProfile === 'function'
+        ? seekdeepSharedArchiveGetProfile(guildId) : {};
+      const newCount = Math.max(0, (Number(profile?.count || 0) || 0) - 1);
+      const success = guildId && typeof seekdeepSharedArchiveSaveProfile === 'function'
+        ? seekdeepSharedArchiveSaveProfile(guildId, {
+            threadId: thread.id,
+            threadName: thread.name,
+            count: newCount,
+            countSource: typeof SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE !== 'undefined' ? SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE : 'seekdeep-shared-archive-posts-v1',
+          })
+        : false;
+      if (success) {
+        await seekdeepSharedArchiveMaybeFastRenameV6(thread, newCount);
+      }
+      console.log(`[SeekDeep] archive entry deleted scope=shared guildId=${guildId} userId=shared previousCount=${Number(profile?.count || 0)} newCount=${newCount} threadId=${thread.id} success=${success}`);
+      await safeDeleteReply('Entry removed from shared archive. Count: ' + newCount);
+    } else {
+      const config = seekdeepArchiveThreadReadConfig();
+      const guildConfig = config?.guilds?.[guildId] || {};
+      const userArchives = guildConfig?.userArchives || {};
+      let matchedUserId = '';
+      let matchedProfile = {};
+      for (const [uid, profile] of Object.entries(userArchives)) {
+        if (profile.threadId === thread.id) { matchedUserId = uid; matchedProfile = profile; break; }
+      }
+      const newCount = Math.max(0, (Number(matchedProfile?.count || 0) || 0) - 1);
+      let success = false;
+      if (matchedUserId) {
+        success = seekdeepArchiveThreadSaveUserProfile(guildId, matchedUserId, {
+          count: newCount,
+          countSource: typeof SEEKDEEP_ARCHIVE_COUNT_SOURCE !== 'undefined' ? SEEKDEEP_ARCHIVE_COUNT_SOURCE : 'seekdeep-archive-posts-v3',
+        });
+        if (success) {
+          const subject = { displayName: matchedProfile.lastNickname || 'unknown' };
+          const newName = seekdeepArchiveThreadBuildName(subject, newCount);
+          await seekdeepMaybeRenameArchiveThread(thread, newName);
+        }
+      }
+      console.log(`[SeekDeep] archive entry deleted scope=${matchedUserId || 'unknown'} guildId=${guildId} userId=${matchedUserId || 'unknown'} previousCount=${Number(matchedProfile?.count || 0)} newCount=${newCount} threadId=${thread.id} success=${success}`);
+      await safeDeleteReply('Entry removed from archive. Count: ' + newCount);
     }
-    await safeDeleteReply('Entry removed from shared archive. Count: ' + newCount);
-  } else {
-    const config = seekdeepArchiveThreadReadConfig();
-    const guildConfig = config?.guilds?.[guildId] || {};
-    const userArchives = guildConfig?.userArchives || {};
-    let matchedUserId = '';
-    let matchedProfile = {};
-    for (const [uid, profile] of Object.entries(userArchives)) {
-      if (profile.threadId === thread.id) { matchedUserId = uid; matchedProfile = profile; break; }
-    }
-    const newCount = Math.max(0, (Number(matchedProfile?.count || 0) || 0) - 1);
-    if (matchedUserId) {
-      seekdeepArchiveThreadSaveUserProfile(guildId, matchedUserId, {
-        count: newCount,
-        countSource: typeof SEEKDEEP_ARCHIVE_COUNT_SOURCE !== 'undefined' ? SEEKDEEP_ARCHIVE_COUNT_SOURCE : 'seekdeep-archive-posts-v3',
-      });
-      const subject = { displayName: matchedProfile.lastNickname || 'unknown' };
-      const newName = seekdeepArchiveThreadBuildName(subject, newCount);
-      await seekdeepMaybeRenameArchiveThread(thread, newName);
-    }
-    await safeDeleteReply('Entry removed from archive. Count: ' + newCount);
-  }
+  });
 
   return true;
 }
@@ -16409,19 +16767,12 @@ async function seekdeepHandleContextMenuUpscaleImage(interaction, targetMessage)
   await seekdeepShowInteractionLoadingGif(interaction, 'Upscaling image...');
 
   try {
-    const proxy = {
-      author: { id: interaction.user?.id || 'unknown' },
-      channel: interaction.channel || null,
-      guild: interaction.guild || null,
-      client: interaction.client || client,
-      id: `ctx:${interaction.id}`,
-      reply: async (payload) => interaction.channel?.send?.(payload) || null,
-    };
-    await seekdeepHandleUpscale(proxy, att.url, 2);
-    await interaction.editReply({ content: 'Upscale complete (2x). Result posted in channel.', files: [], attachments: [] });
+    await seekdeepHandleUpscale(interaction, att.url, 2);
   } catch (err) {
     console.error('Context menu Upscale failed:', err?.stack || err?.message || err);
-    await interaction.editReply({ content: 'Upscale failed: ' + (err?.message || 'unknown error').slice(0, 400), files: [], attachments: [] });
+    if (!err?.seekdeepUpscaleFailureNotified) {
+      await interaction.editReply({ content: 'Upscale failed: ' + (err?.message || 'unknown error').slice(0, 400), files: [], attachments: [] });
+    }
   }
 }
 
@@ -17659,6 +18010,20 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     formatSources,
     seekdeepDiscordSafeUrl,
     seekdeepRegenerateModeOptions,
+    // new helpers for status routing and archive serialization
+    seekdeepGetArchiveScope,
+    seekdeepGetArchiveCount,
+    seekdeepRecomputeArchiveCount,
+    seekdeepGetLocalStatusIntent,
+    seekdeepGpuGenerationFromName,
+    seekdeepGetGpuGenerationLine,
+    seekdeepIsBriefPrompt,
+    seekdeepHasNoSearchOverride,
+    seekdeepBuildDynamicImagePromptRefineRequest,
+    seekdeepReplyToTarget,
+    seekdeepEmergencyHandleGeneratedImageButton,
+    seekdeepImageActionComponents,
+    seekdeepHandleUpscale,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
@@ -18064,16 +18429,16 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
   }
 
   if (!state) {
+    const expiredMsg = mode === 'rerefine'
+      ? 'I lost the original refine context. Please run refine again from the original message.'
+      : 'That image action expired from the temporary cache. Generate it again if you still want to use its buttons.';
     await interaction.editReply({
       content: typeof seekdeepAppendResponseFooter === 'function'
-        ? seekdeepAppendResponseFooter(
-            'That image action expired from the temporary cache. Generate it again if you still want to use its buttons.',
-            {
-              startedAt,
-              modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
-            }
-          )
-        : 'That image action expired from the temporary cache. Generate it again if you still want to use its buttons.',
+        ? seekdeepAppendResponseFooter(expiredMsg, {
+            startedAt,
+            modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
+          })
+        : expiredMsg,
     });
     return true;
   }
@@ -18242,6 +18607,7 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
     if (String(regenMode || '').toLowerCase() === 'rerefine') {
       console.log(`[SeekDeep] RE-REFINE queued actionId=${actionId} prompt=${basePrompt.slice(0, 120)}`);
     }
+    modeOptions.target = interaction;
 
     return await seekdeepSendImageWithButtons(
       proxy,

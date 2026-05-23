@@ -144,6 +144,7 @@ _VRAM_ESTIMATE_DEFAULTS: dict[str, int] = {
     "chat:quality_text": 8000,
     "chat:reasoning_code": 9500,
     "chat:lightweight_chat": 3000,
+    "chat:refine_chat": 3000,
     # Vision / image pipelines (fp16)
     "vision": 6500,
     "image": 7000,
@@ -249,6 +250,7 @@ CHAT_ROLE_ENV = {
     "quality_text": "LOCAL_CHAT_QUALITY_MODEL_ID",
     "reasoning_code": "LOCAL_CHAT_REASONING_MODEL_ID",
     "lightweight_chat": "LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID",
+    "refine_chat": "LOCAL_CHAT_REFINE_MODEL_ID",
 }
 
 MODEL_AUTO_FALLBACK = os.getenv("MODEL_AUTO_FALLBACK", "true").lower() in {"1", "true", "yes", "on"}
@@ -322,11 +324,13 @@ def chat_role_map() -> dict[str, str]:
     quality_id = _env_str("LOCAL_CHAT_QUALITY_MODEL_ID") or fallback_id or default_id
     reasoning_id = _env_str("LOCAL_CHAT_REASONING_MODEL_ID") or quality_id or fallback_id or default_id
     lightweight_id = _env_str("LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID")
+    refine_id = _env_str("LOCAL_CHAT_REFINE_MODEL_ID") or lightweight_id or default_id
     mapping = {
         "default_chat": default_id,
         "fallback_chat": fallback_id,
         "quality_text": quality_id,
         "reasoning_code": reasoning_id,
+        "refine_chat": refine_id,
     }
     if lightweight_id:
         mapping["lightweight_chat"] = lightweight_id
@@ -1512,7 +1516,11 @@ def upscale(req: UpscaleRequest):
         raise HTTPException(status_code=400, detail="Animated images are not supported for upscaling.")
 
     try:
-        source_img = ImageOps.exif_transpose(opened_img).convert("RGB")
+        transposed = ImageOps.exif_transpose(opened_img)
+        if transposed.mode in {"RGBA", "LA"} or (transposed.mode == "P" and "transparency" in transposed.info):
+            source_img = transposed.convert("RGBA")
+        else:
+            source_img = transposed.convert("RGB")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not normalize image orientation: {exc}") from exc
 
@@ -1531,7 +1539,7 @@ def upscale(req: UpscaleRequest):
 
     def encode_image_bytes(img: Image.Image, fmt: str, **save_kwargs: Any) -> bytes:
         buf = io.BytesIO()
-        to_save = img.convert("RGB") if fmt.upper() in {"JPEG", "JPG", "WEBP"} else img
+        to_save = img.convert("RGB") if fmt.upper() in {"JPEG", "JPG"} else img
         to_save.save(buf, format=fmt, **save_kwargs)
         return buf.getvalue()
 
@@ -1591,8 +1599,10 @@ def upscale(req: UpscaleRequest):
         new_h = source_img.height * scale
         max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
         upscale_clamp_meta = {"clamped": False}
+        output_pixels = new_w * new_h
+        img_for_resize = source_img
         if output_pixels > int(max_pixels):
-            source_img, upscale_clamp_meta = seekdeep_fit_upscale_input_to_output_cap(
+            img_for_resize, upscale_clamp_meta = seekdeep_fit_upscale_input_to_output_cap(
                 source_img,
                 scale,
                 max_pixels,
@@ -1607,7 +1617,7 @@ def upscale(req: UpscaleRequest):
                 f"({upscale_clamp_meta['output_pixels']} pixels), "
                 f"cap={upscale_clamp_meta['max_output_pixels']}"
             )
-        img = source_img.resize((new_w, new_h), resample_filter)
+        img = img_for_resize.resize((new_w, new_h), resample_filter)
         sharpened = bool(req.sharpen and int(req.sharpen_percent) > 0)
         if sharpened:
             img = img.filter(ImageFilter.UnsharpMask(
@@ -1617,12 +1627,14 @@ def upscale(req: UpscaleRequest):
             ))
 
         selected = select_output_bytes(img)
+        png_bytes = encode_image_bytes(img, "PNG")
         ts = int(time.time())
         safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
         out_path = OUTPUT_DIR / safe_name
         out_path.write_bytes(selected["bytes"])
         result = {
             "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
+            "png_b64": base64.b64encode(png_bytes).decode("ascii"),
             "filename": safe_name,
             "path": str(out_path),
             "method": "lanczos",

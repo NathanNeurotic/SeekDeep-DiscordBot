@@ -690,7 +690,7 @@ check('router: translation routes to lightweight', T.seekdeepSelectChatModelRole
 check('router: greeting routes to lightweight', T.seekdeepSelectChatModelRole('hello', 'chat') === 'lightweight_chat');
 check('router: short trivial routes to lightweight', T.seekdeepSelectChatModelRole('who are you', 'chat') === 'lightweight_chat');
 check('router: complex prompt routes to default', T.seekdeepSelectChatModelRole('tell me a story about a dragon and a knight in a faraway kingdom', 'chat') === 'default_chat');
-check('router: image_refinement always default', T.seekdeepSelectChatModelRole('hello', 'image_refinement') === 'default_chat');
+check('router: image_refinement routes to lightweight when configured', T.seekdeepSelectChatModelRole('hello', 'image_refinement') === 'lightweight_chat');
 delete process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID;
 check('router: without env var, greeting falls to default', T.seekdeepSelectChatModelRole('hello', 'chat') === 'default_chat');
 
@@ -760,6 +760,143 @@ check('image-reply: standalone image request does not hijack reply image', T.see
 const rerefineOptions = T.seekdeepRegenerateModeOptions('rerefine', { prompt: 'a cat', refinedPrompt: 'a fancy cat', imageModeOptions: { imageStepsOverride: 40 } });
 check('RE-REFINE: forces fresh refinement', rerefineOptions.forceFreshRefinement === true && rerefineOptions.refine === true && rerefineOptions.preRefinedPrompt === undefined);
 check('RE-REFINE: preserves image settings', rerefineOptions.imageStepsOverride === 40);
+
+// -- Suite 46: Local GPU/status routing & overrides --
+console.log('46. Local GPU/status routing & overrides.');
+check('status-intent: "what GPU are you running on?"', T.seekdeepGetLocalStatusIntent('what GPU are you running on?') === 'local_gpu_status');
+check('status-intent: "what hardware generation is it?"', T.seekdeepGetLocalStatusIntent('what hardware generation is it?') === 'local_gpu_generation');
+check('status-intent: "what model are you using?"', T.seekdeepGetLocalStatusIntent('what model are you using?') === 'local_model_status');
+check('status-intent: "are you local?"', T.seekdeepGetLocalStatusIntent('are you local?') === 'local_runtime_status');
+check('status-intent: non-status returns null', T.seekdeepGetLocalStatusIntent('what is the weather like?') === null);
+
+check('gpu-generation-mapping: RTX 5090', T.seekdeepGpuGenerationFromName('NVIDIA GeForce RTX 5090 Laptop GPU') === 'RTX 50-series / Blackwell-generation');
+check('gpu-generation-line: laptop GPU suffix', T.seekdeepGetGpuGenerationLine('NVIDIA GeForce RTX 5090 Laptop GPU').includes('RTX 50-series / Blackwell-generation laptop GPU. Current device: NVIDIA GeForce RTX 5090 Laptop GPU.'));
+
+check('brief-prompt: "keep it brief"', T.seekdeepIsBriefPrompt('keep it brief') === true);
+check('brief-prompt: "1 or 2 lines"', T.seekdeepIsBriefPrompt('give me 1 or 2 lines') === true);
+check('brief-prompt: non-brief returns false', T.seekdeepIsBriefPrompt('tell me a detailed story') === false);
+
+check('no-search: "no web search"', T.seekdeepHasNoSearchOverride('no web search') === true);
+check('no-search: "don\'t search"', T.seekdeepHasNoSearchOverride("don't search") === true);
+check('no-search: ordinary question returns false', T.seekdeepHasNoSearchOverride('what is the capital of France?') === false);
+
+// -- Suite 47: Archive counting & scope logic --
+console.log('47. Archive counting & scope logic.');
+check('archive-scope: shared archive', T.seekdeepGetArchiveScope({ shared: true }) === 'shared');
+check('archive-scope: user archive', T.seekdeepGetArchiveScope({ shared: false, userId: '987654321' }) === '987654321');
+
+// -- Suite 48: Refinement, RE-REFINE, Upscale, Embed Suppression --
+console.log('48. Refinement, RE-REFINE, Upscale, Embed Suppression.');
+
+// 1. Refinement model routing
+process.env.LOCAL_CHAT_REFINE_MODEL_ID = 'test-refine-model';
+process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID = 'test-light-model';
+check('refine-routing: routes to refine_chat when configured', T.seekdeepSelectChatModelRole('prompt', 'image_refinement') === 'refine_chat');
+
+delete process.env.LOCAL_CHAT_REFINE_MODEL_ID;
+check('refine-routing: falls back to lightweight_chat', T.seekdeepSelectChatModelRole('prompt', 'image_refinement') === 'lightweight_chat');
+
+delete process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID;
+check('refine-routing: falls back to default_chat', T.seekdeepSelectChatModelRole('prompt', 'image_refinement') === 'default_chat');
+
+// 2. Refinement preserves constraints (buildDynamicImagePromptRefineRequest)
+const req1 = T.seekdeepBuildDynamicImagePromptRefineRequest('only draw a blue cat', '');
+check('refine-prompt: preserves original text', req1.includes('Original prompt: only draw a blue cat'));
+const req2 = T.seekdeepBuildDynamicImagePromptRefineRequest('make it winter', 'a cat on a mat');
+check('refine-prompt: preserves parent context', req2.includes('Previous image prompt: a cat on a mat') && req2.includes('User request/change: make it winter'));
+
+// 3. RE-REFINE state/custom_id generation is safe
+const actionId = 'action_12345';
+const components = T.seekdeepImageActionComponents(actionId);
+let hasReRefineButton = false;
+for (const row of components) {
+  for (const comp of row.components) {
+    if (comp.data.label === 'RE-REFINE') {
+      hasReRefineButton = true;
+      check('RE-REFINE: custom_id generation is safe', comp.data.custom_id === `seekdeep:regen:rerefine:${actionId}`);
+    }
+  }
+}
+check('RE-REFINE: button exists', hasReRefineButton);
+
+// 4. Missing RE-REFINE state returns exact message
+let mockInteractionEditReply = null;
+const mockInteraction = {
+  customId: `seekdeep:regen:rerefine:${actionId}`,
+  isButton: () => true,
+  editReply: async (payload) => {
+    mockInteractionEditReply = payload;
+    return null;
+  },
+  user: { id: 'user_123' },
+  channel: null,
+};
+await T.seekdeepEmergencyHandleGeneratedImageButton(mockInteraction);
+check('RE-REFINE: missing state returns exact message', mockInteractionEditReply && mockInteractionEditReply.content.includes('I lost the original refine context. Please run refine again from the original message.'));
+
+// 5. URL/source output applies suppress-embed flags without deleting existing flags
+let mockMsgPayload = null;
+const mockMsgTarget = {
+  reply: async (payload) => {
+    mockMsgPayload = payload;
+    return null;
+  },
+};
+// We define MessageFlags on globalThis so index.js has it if needed in test environment
+globalThis.MessageFlags = { SuppressEmbeds: 4 };
+await T.seekdeepReplyToTarget(mockMsgTarget, { content: 'Check this link: https://google.com', flags: 64 });
+check('embed-suppression: applies SuppressEmbeds flag (keeps original flag)', mockMsgPayload && (mockMsgPayload.flags & 4) !== 0 && (mockMsgPayload.flags & 64) !== 0);
+
+await T.seekdeepReplyToTarget(mockMsgTarget, { content: 'Check this link: https://google.com' });
+check('embed-suppression: applies SuppressEmbeds flag if no flags exist', mockMsgPayload && mockMsgPayload.flags === 4);
+
+// 6. Upscale clearing of loading state on failure
+let mockUpscaleReplyPayload = null;
+const mockUpscaleInteraction = {
+  deferred: true,
+  deferReply: () => {},
+  editReply: async (payload) => {
+    mockUpscaleReplyPayload = payload;
+    return null;
+  },
+};
+try {
+  await T.seekdeepHandleUpscale(mockUpscaleInteraction, null);
+} catch (err) {
+  check('upscale-failure: sets failure flag on error', err.seekdeepUpscaleFailureNotified === true);
+}
+check('upscale-failure: clears loading state by sending failure message', mockUpscaleReplyPayload && mockUpscaleReplyPayload.content.includes('Upscale failed:'));
+
+// 7. Upscale clearing of loading state on success
+let mockSuccessReplyPayload = null;
+let deleteCalled = false;
+const mockSuccessAck = {
+  edit: async (payload) => {
+    mockSuccessReplyPayload = payload;
+    return null;
+  },
+  delete: async () => {
+    deleteCalled = true;
+    return null;
+  }
+};
+// Testing seekdeepReplyToTarget with previousReply on success clearing files
+await T.seekdeepReplyToTarget(mockMsgTarget, { content: 'Upscale complete', files: ['newfile.png'], attachments: [] }, { previousReply: mockSuccessAck });
+check('upscale-success: clears loading state by replacing files', mockSuccessReplyPayload && mockSuccessReplyPayload.content === 'Upscale complete' && mockSuccessReplyPayload.attachments.length === 0);
+
+// Testing fallback delete if edit fails
+const mockFailingAck = {
+  edit: async () => {
+    throw new Error('Edit failed');
+  },
+  delete: async () => {
+    deleteCalled = true;
+    return null;
+  }
+};
+deleteCalled = false;
+await T.seekdeepReplyToTarget(mockMsgTarget, { content: 'Upscale complete', files: ['newfile.png'], attachments: [] }, { previousReply: mockFailingAck });
+check('upscale-success: deletes loading message on edit fallback', deleteCalled === true);
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
