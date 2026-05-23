@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Brand System</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .shell { max-width: 1280px; margin: 0 auto; padding: 56px 36px 120px; }
+  .section { margin-bottom: 80px; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
+  .section-head h2 { font-size: 36px; letter-spacing: -0.02em; }
+  .section-head .num { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); letter-spacing: 0.18em; }
+
+  /* logo lockups */
+  .lockup-grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 18px; }
+  .lockup-card { padding: 36px; border-radius: var(--r-lg); border: 1px solid var(--stroke); display: flex; align-items: center; justify-content: center; min-height: 260px; }
+  .lockup-card.bg-dark { background: var(--ink); }
+  .lockup-card.bg-mid  { background: linear-gradient(135deg, var(--abyss-3), var(--abyss-1)); }
+  .lockup-card.bg-light { background: var(--hull); color: var(--ink); }
+  .lockup-card .stack { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .lockup-card .row-lockup { display: flex; align-items: center; gap: 18px; }
+  .lockup-card img { width: 92px; height: 92px; }
+  .lockup-card.small img { width: 56px; height: 56px; }
+  .lockup-card .wordmark {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 36px;
+    letter-spacing: 0.02em;
+  }
+  .lockup-card.bg-light .wordmark em { font-style: normal; color: var(--cyan-2); }
+  .lockup-card.bg-dark .wordmark em, .lockup-card.bg-mid .wordmark em { font-style: normal; color: var(--cyan-1); }
+  .lockup-card .label {
+    position: absolute; top: 12px; left: 14px;
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--hull-3);
+  }
+  .lockup-card { position: relative; }
+
+  /* color */
+  .color-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+  .swatch {
+    aspect-ratio: 1;
+    border-radius: var(--r-md);
+    border: 1px solid var(--stroke);
+    padding: 14px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    position: relative;
+    overflow: hidden;
+  }
+  .swatch .name { font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .swatch .hex { opacity: 0.7; }
+  .swatch.light { color: var(--ink); }
+  .swatch.dark { color: var(--hull); }
+
+  /* type */
+  .type-row {
+    display: grid;
+    grid-template-columns: 220px 1fr auto;
+    gap: 24px;
+    align-items: baseline;
+    padding: 20px 0;
+    border-bottom: 1px dashed color-mix(in oklab, var(--cyan-1) 14%, transparent);
+  }
+  .type-row:last-child { border: none; }
+  .type-row .label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--hull-3); }
+  .type-row .spec { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); }
+
+  /* icons */
+  .icon-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; }
+  .icon {
+    aspect-ratio: 1;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-md);
+    display: grid; place-items: center;
+    background: rgba(2,6,15,0.5);
+    color: var(--cyan-1);
+  }
+  .icon svg { width: 38%; height: 38%; }
+  .icon .lbl { position: absolute; bottom: 6px; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; }
+  .icon-wrap { position: relative; }
+
+  /* motion */
+  .motion-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .motion-card { padding: 24px; border: 1px solid var(--stroke); border-radius: var(--r-lg); background: rgba(8,20,52,0.35); min-height: 200px; position: relative; overflow: hidden; }
+  .motion-card h4 { font-size: 18px; margin-bottom: 8px; }
+  .motion-card p { color: var(--hull-3); font-size: 12px; line-height: 1.5; margin: 0; }
+  .motion-card .demo {
+    position: absolute; right: 16px; top: 16px;
+    width: 70px; height: 70px;
+    border-radius: 50%;
+    border: 1px solid var(--cyan-1);
+    background: radial-gradient(circle, var(--cyan-1), transparent 70%);
+  }
+  .motion-card.bob .demo { animation: bob 3s ease-in-out infinite; }
+  .motion-card.pulse .demo { animation: pulse 2.4s ease-in-out infinite; }
+  .motion-card.spin .demo { animation: spin 8s linear infinite; border-style: dashed; background: none; }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(45,212,255,0.4); transform: scale(1); } 50% { box-shadow: 0 0 30px 12px rgba(45,212,255,0); transform: scale(1.08); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* voice */
+  .voice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .voice-card { padding: 24px; border: 1px solid var(--stroke); border-radius: var(--r-md); background: rgba(2,6,15,0.4); }
+  .voice-card h4 { font-size: 15px; color: var(--cyan-1); margin-bottom: 12px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; }
+  .voice-card .yes { color: var(--good); }
+  .voice-card .no { color: var(--bad); }
+  .voice-card ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--hull-2); line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;  animation-duration:24s; animation-delay:-3s;"></span>
+  <span class="cube sm" style="left:10%; animation-duration:38s; animation-delay:-8s;"></span>
+  <span style="left:14%; animation-duration:30s; animation-delay:-12s;"></span>
+  <span style="left:20%; animation-duration:18s; animation-delay:-6s;  width:3px; height:3px;"></span>
+  <span class="cube" style="left:28%; animation-duration:42s; animation-delay:-22s;"></span>
+  <span style="left:36%; animation-duration:34s; animation-delay:-18s;"></span>
+  <span class="cube sm" style="left:42%; animation-duration:36s; animation-delay:-5s;"></span>
+  <span style="left:48%; animation-duration:22s; animation-delay:-2s;  width:3px; height:3px;"></span>
+  <span class="cube big" style="left:54%; animation-duration:48s; animation-delay:-30s;"></span>
+  <span style="left:58%; animation-duration:28s; animation-delay:-9s;"></span>
+  <span class="cube" style="left:64%; animation-duration:40s; animation-delay:-14s;"></span>
+  <span style="left:67%; animation-duration:20s; animation-delay:-14s;"></span>
+  <span class="cube sm" style="left:73%; animation-duration:34s; animation-delay:-11s;"></span>
+  <span style="left:78%; animation-duration:32s; animation-delay:-7s;  width:4px; height:4px;"></span>
+  <span class="cube" style="left:84%; animation-duration:44s; animation-delay:-25s;"></span>
+  <span style="left:88%; animation-duration:26s; animation-delay:-21s;"></span>
+  <span class="cube sm" style="left:92%; animation-duration:36s; animation-delay:-16s;"></span>
+  <span style="left:95%; animation-duration:19s; animation-delay:-4s;  width:3px; height:3px;"></span>
+</div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.png" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">Hub</a>
+    <a href="brand.html" class="active">Brand</a>
+    <a href="landing.html">Landing</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat Client</a>
+  </div>
+  <div class="row"><span class="pill cyan"><span class="dot"></span>BRAND v1.0</span></div>
+</nav>
+
+<main class="shell">
+
+  <section style="margin-bottom: 80px;">
+    <div class="eyebrow">Brand system</div>
+    <h1 class="h-display" style="margin-top:12px;">A mark for things that<br/>live in the <em>dark</em>.</h1>
+    <p style="color:var(--hull-2); font-size:17px; max-width:64ch; margin-top:24px; line-height:1.6;">
+      SeekDeep's identity borrows from PlayStation 2 OSDSYS (the wavy translucent menu, ambient drift, soft geometric icons) and deep-ocean cyber (abyss blue, bioluminescent cyan, faceted hull whites). It should feel calm, observed, and slightly off — a watcher in the dark.
+    </p>
+  </section>
+
+  <!-- LOGO -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Logo &amp; lockups</h2>
+      <span class="num">01 / MARK</span>
+    </div>
+    <div class="lockup-grid">
+      <div class="lockup-card bg-dark">
+        <span class="label">PRIMARY · DARK</span>
+        <div class="stack">
+          <img src="assets/seekdeep-logo.png" alt="" />
+          <div class="wordmark">SEEK<em>DEEP</em></div>
+        </div>
+      </div>
+      <div class="lockup-card bg-mid small">
+        <span class="label">HORIZONTAL</span>
+        <div class="row-lockup">
+          <img src="assets/seekdeep-mark.png" alt="" />
+          <div class="wordmark" style="font-size:28px;">SEEK<em>DEEP</em></div>
+        </div>
+      </div>
+      <div class="lockup-card bg-light small">
+        <span class="label" style="color:#5a6b85;">REVERSED · LIGHT</span>
+        <div class="row-lockup">
+          <img src="assets/seekdeep-mark.png" alt="" />
+          <div class="wordmark" style="font-size:28px;">SEEK<em>DEEP</em></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-top: 18px;">
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center;"><img src="assets/seekdeep-mark.png" style="width:60%;" alt="" /></div>
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center; background: var(--cyan-1);"><img src="assets/seekdeep-mark.png" style="width:60%;" alt="" /></div>
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center;"><img src="assets/seekdeep-mark.png" style="width:38%;" alt="" /></div>
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">FAVICON 16</div>
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">APP TILE 256</div>
+      <div class="panel-flat" style="aspect-ratio: 1; display:grid; place-items:center; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">DISCORD AV</div>
+    </div>
+  </section>
+
+  <!-- COLOR -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Color · the abyss ramp</h2>
+      <span class="num">02 / TOKENS</span>
+    </div>
+    <div class="color-grid">
+      <div class="swatch dark" style="background:#000a1f;"><span class="name">Ink</span><span class="hex">#000A1F</span></div>
+      <div class="swatch dark" style="background:#02060f;"><span class="name">Abyss 0</span><span class="hex">#02060F</span></div>
+      <div class="swatch dark" style="background:#050b1c;"><span class="name">Abyss 1</span><span class="hex">#050B1C</span></div>
+      <div class="swatch dark" style="background:#081434;"><span class="name">Abyss 2</span><span class="hex">#081434</span></div>
+      <div class="swatch dark" style="background:#0d2152;"><span class="name">Abyss 3</span><span class="hex">#0D2152</span></div>
+      <div class="swatch dark" style="background:#14306b;"><span class="name">Abyss 4</span><span class="hex">#14306B</span></div>
+    </div>
+    <div class="color-grid" style="margin-top:14px;">
+      <div class="swatch light" style="background:#6df0ff;"><span class="name">Cyan 0</span><span class="hex">#6DF0FF</span></div>
+      <div class="swatch light" style="background:#2dd4ff;"><span class="name">Cyan 1 · accent</span><span class="hex">#2DD4FF</span></div>
+      <div class="swatch dark" style="background:#00a8e8;"><span class="name">Cyan 2</span><span class="hex">#00A8E8</span></div>
+      <div class="swatch dark" style="background:#007ab8;"><span class="name">Cyan 3</span><span class="hex">#007AB8</span></div>
+      <div class="swatch light" style="background:#f4f8ff;"><span class="name">Hull</span><span class="hex">#F4F8FF</span></div>
+      <div class="swatch light" style="background:#c7d6f0;"><span class="name">Hull 2</span><span class="hex">#C7D6F0</span></div>
+    </div>
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top:14px;">
+      <div class="swatch dark" style="background:#58e6a1; aspect-ratio: 2/1; color: var(--ink);"><span class="name">Good</span><span class="hex">#58E6A1</span></div>
+      <div class="swatch dark" style="background:#ffb84d; aspect-ratio: 2/1; color: var(--ink);"><span class="name">Warn</span><span class="hex">#FFB84D</span></div>
+      <div class="swatch dark" style="background:#ff6b6b; aspect-ratio: 2/1;"><span class="name">Bad</span><span class="hex">#FF6B6B</span></div>
+      <div class="swatch dark" style="background: linear-gradient(135deg, #2dd4ff, #007ab8); aspect-ratio: 2/1;"><span class="name">Accent gradient</span><span class="hex">cyan-1 → cyan-3</span></div>
+    </div>
+  </section>
+
+  <!-- TYPE -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Typography</h2>
+      <span class="num">03 / TYPE</span>
+    </div>
+    <div class="panel" style="padding: 28px 36px;">
+      <div class="type-row">
+        <span class="label">Display · Space Grotesk 500</span>
+        <span style="font-family: var(--font-display); font-weight:500; font-size:64px; letter-spacing:-0.03em; line-height:1;">Surface the abyss.</span>
+        <span class="spec">64 / 1.0 / -0.03em</span>
+      </div>
+      <div class="type-row">
+        <span class="label">H1 · Space Grotesk 500</span>
+        <span style="font-family: var(--font-display); font-weight:500; font-size:40px;">A watcher in the dark</span>
+        <span class="spec">40 / 1.05 / -0.02em</span>
+      </div>
+      <div class="type-row">
+        <span class="label">H2 · Space Grotesk 500</span>
+        <span style="font-family: var(--font-display); font-weight:500; font-size:24px;">Local-first, cloud-never</span>
+        <span class="spec">24 / 1.15</span>
+      </div>
+      <div class="type-row">
+        <span class="label">Body · Space Grotesk 400</span>
+        <span style="font-family: var(--font-display); font-size:16px; line-height:1.55;">SeekDeep runs Llama-3.1, Qwen-VL and SDXL on your own GPU. Every prompt, every image, every archive thread stays on the box that owns the silicon.</span>
+        <span class="spec">16 / 1.55</span>
+      </div>
+      <div class="type-row">
+        <span class="label">Eyebrow · JetBrains Mono</span>
+        <span class="eyebrow" style="font-size:13px;">System / Local / v10.15</span>
+        <span class="spec">13 · 0.18em · uppercase</span>
+      </div>
+      <div class="type-row">
+        <span class="label">Mono · JetBrains Mono</span>
+        <span class="mono" style="font-size:14px;">$ node index.js --persona neurotic</span>
+        <span class="spec">12-14 · code/logs</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ICONS -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Icon language</h2>
+      <span class="num">04 / GLYPHS</span>
+    </div>
+    <p class="muted" style="font-size:13px; max-width:60ch; margin-bottom:18px;">
+      Geometric, single-weight (1.5px) line glyphs with a single luminous fill point. Always cyan-1 against abyss. Use sparingly — restraint over completeness.
+    </p>
+    <div class="icon-grid">
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></div><span class="lbl">SEEK</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12s4-7 9-7 9 7 9 7-4 7-9 7-9-7-9-7z"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg></div><span class="lbl">EYE</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v18M4 8h16M4 16h16"/></svg></div><span class="lbl">GRID</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M7 3v3M17 3v3"/></svg></div><span class="lbl">LOGS</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.6-2.8l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.5-1.4L13 1h-2l-.6 2.9a7 7 0 0 0-2.5 1.4l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 1 .2 1.9.6 2.8l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.5 1.4L11 23h2l.6-2.9a7 7 0 0 0 2.5-1.4l2.3 1 2-3.4-2-1.5c.4-.9.6-1.8.6-2.8z"/></svg></div><span class="lbl">CONFIG</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/><circle cx="7" cy="7" r="0.5" fill="currentColor"/></svg></div><span class="lbl">WIN</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12l4 4 10-10"/></svg></div><span class="lbl">OK</span></div>
+      <div class="icon-wrap"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16v.5"/></svg></div><span class="lbl">WARN</span></div>
+    </div>
+  </section>
+
+  <!-- MOTION -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Motion principles</h2>
+      <span class="num">05 / MOTION</span>
+    </div>
+    <div class="motion-grid">
+      <div class="motion-card bob">
+        <div class="demo"></div>
+        <h4>Ambient bob</h4>
+        <p>Idle elements drift on a 6s cycle. Never harder than 12px. The dark is rocking us, not us moving.</p>
+      </div>
+      <div class="motion-card pulse">
+        <div class="demo"></div>
+        <h4>Bioluminescent pulse</h4>
+        <p>Active &amp; loading states pulse on a 2-3s cycle. Glow expands and softens. Never harsh, never blinking.</p>
+      </div>
+      <div class="motion-card spin">
+        <div class="demo"></div>
+        <h4>Tachyon rotation</h4>
+        <p>Background rings rotate at 60-120s/turn. Subliminal — you only notice if you stop to look.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- VOICE -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Voice</h2>
+      <span class="num">06 / TONE</span>
+    </div>
+    <div class="voice-grid">
+      <div class="voice-card">
+        <h4>Default persona</h4>
+        <ul>
+          <li><span class="yes">✓</span> Calm, observed, slightly clinical</li>
+          <li><span class="yes">✓</span> Direct sentence fragments are fine</li>
+          <li><span class="yes">✓</span> "Local-first" not "100% privacy guaranteed"</li>
+          <li><span class="no">✕</span> Hype words: revolutionary, magical, AI-powered</li>
+          <li><span class="no">✕</span> Exclamation points outside chaotic persona</li>
+        </ul>
+      </div>
+      <div class="voice-card">
+        <h4>Persona switches</h4>
+        <ul>
+          <li><span class="mono" style="color:var(--cyan-1)">neurotic</span> — second-guesses itself, asks back</li>
+          <li><span class="mono" style="color:var(--cyan-1)">unsettling</span> — too-knowing pauses, ellipses</li>
+          <li><span class="mono" style="color:var(--cyan-1)">clinical</span> — terse, numbered, footnoted</li>
+          <li><span class="mono" style="color:var(--cyan-1)">chaotic</span> — caps lock, tangents, energy</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>
