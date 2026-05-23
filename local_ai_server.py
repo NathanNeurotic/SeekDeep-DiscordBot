@@ -5,6 +5,7 @@ import gc
 import io
 import json
 import os
+import math
 import re
 import tempfile
 import time
@@ -17,6 +18,76 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
+
+
+
+# SEEKDEEP_UPSCALE_CLAMP_HELPER_V1
+def seekdeep_fit_upscale_input_to_output_cap(image, upscale_factor, max_output_pixels):
+    """
+    If image * upscale_factor would exceed max_output_pixels, shrink the input
+    before upscaling so the final output is the largest legal same-aspect result.
+
+    This changes oversized upscale requests from hard-fail HTTP 400 behavior into
+    clamp-to-max behavior.
+    """
+    src_w, src_h = image.size
+    upscale_factor = float(upscale_factor)
+
+    requested_w = int(round(src_w * upscale_factor))
+    requested_h = int(round(src_h * upscale_factor))
+    requested_pixels = requested_w * requested_h
+
+    if requested_pixels <= int(max_output_pixels):
+        return image, {
+            "clamped": False,
+            "source_width": src_w,
+            "source_height": src_h,
+            "requested_width": requested_w,
+            "requested_height": requested_h,
+            "requested_pixels": requested_pixels,
+            "output_width": requested_w,
+            "output_height": requested_h,
+            "output_pixels": requested_pixels,
+            "max_output_pixels": int(max_output_pixels),
+        }
+
+    max_output_pixels = int(max_output_pixels)
+    max_input_pixels = max_output_pixels / (upscale_factor * upscale_factor)
+    resize_ratio = math.sqrt(max_input_pixels / float(src_w * src_h))
+
+    fit_w = max(1, int(math.floor(src_w * resize_ratio)))
+    fit_h = max(1, int(math.floor(src_h * resize_ratio)))
+
+    while int(round(fit_w * upscale_factor)) * int(round(fit_h * upscale_factor)) > max_output_pixels:
+        if fit_w >= fit_h and fit_w > 1:
+            fit_w -= 1
+        elif fit_h > 1:
+            fit_h -= 1
+        else:
+            break
+
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    fitted = image.resize((fit_w, fit_h), resampling)
+
+    out_w = int(round(fit_w * upscale_factor))
+    out_h = int(round(fit_h * upscale_factor))
+    out_pixels = out_w * out_h
+
+    return fitted, {
+        "clamped": True,
+        "source_width": src_w,
+        "source_height": src_h,
+        "requested_width": requested_w,
+        "requested_height": requested_h,
+        "requested_pixels": requested_pixels,
+        "input_width_after_clamp": fit_w,
+        "input_height_after_clamp": fit_h,
+        "output_width": out_w,
+        "output_height": out_h,
+        "output_pixels": out_pixels,
+        "max_output_pixels": max_output_pixels,
+    }
+
 
 load_dotenv()
 
@@ -1519,12 +1590,23 @@ def upscale(req: UpscaleRequest):
         new_w = source_img.width * scale
         new_h = source_img.height * scale
         max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
-        if new_w * new_h > max_pixels:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Upscaled image would be {new_w}x{new_h} ({new_w * new_h} pixels), over SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS={max_pixels}.",
+        upscale_clamp_meta = {"clamped": False}
+        if output_pixels > int(max_pixels):
+            source_img, upscale_clamp_meta = seekdeep_fit_upscale_input_to_output_cap(
+                source_img,
+                scale,
+                max_pixels,
             )
-
+            new_w = upscale_clamp_meta["output_width"]
+            new_h = upscale_clamp_meta["output_height"]
+            print(
+                "[seekdeep] upscale output clamped: "
+                f"{upscale_clamp_meta['requested_width']}x{upscale_clamp_meta['requested_height']} "
+                f"({upscale_clamp_meta['requested_pixels']} pixels) -> "
+                f"{upscale_clamp_meta['output_width']}x{upscale_clamp_meta['output_height']} "
+                f"({upscale_clamp_meta['output_pixels']} pixels), "
+                f"cap={upscale_clamp_meta['max_output_pixels']}"
+            )
         img = source_img.resize((new_w, new_h), resample_filter)
         sharpened = bool(req.sharpen and int(req.sharpen_percent) > 0)
         if sharpened:
