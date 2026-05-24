@@ -1375,23 +1375,23 @@
         <div class="cp-grid">
           <div class="cp-panel">
             <div class="eyebrow" style="margin-bottom: 12px;">Role</div>
-            <div style="display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-size: 12px;">
-              <label style="padding: 8px 10px; border-radius: 4px; background: rgba(45,212,255,0.1); color: var(--cyan-1); border: 1px solid var(--cyan-1);"><input type="radio" name="role" checked style="margin-right: 8px;" />default_chat · 8B 4bit</label>
-              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" style="margin-right: 8px;" />quality_chat · Mistral-Nemo</label>
-              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" style="margin-right: 8px;" />reasoning · Phi-4</label>
-              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" style="margin-right: 8px;" />lightweight · Gemma 3n</label>
-              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" style="margin-right: 8px;" />fallback · Granite 3.3</label>
+            <div style="display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-size: 12px;" id="cpRoles">
+              <label style="padding: 8px 10px; border-radius: 4px; background: rgba(45,212,255,0.1); color: var(--cyan-1); border: 1px solid var(--cyan-1);"><input type="radio" name="role" value="default_chat" checked style="margin-right: 8px;" />default_chat · 8B 4bit</label>
+              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" value="quality_text" style="margin-right: 8px;" />quality_text · Mistral-Nemo</label>
+              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" value="reasoning_code" style="margin-right: 8px;" />reasoning_code · Phi-4</label>
+              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" value="lightweight_chat" style="margin-right: 8px;" />lightweight_chat · Gemma 3n</label>
+              <label style="padding: 8px 10px; border-radius: 4px;"><input type="radio" name="role" value="fallback_chat" style="margin-right: 8px;" />fallback_chat · Granite 3.3</label>
             </div>
 
             <div class="eyebrow" style="margin: 20px 0 12px;">Web search</div>
-            <div style="display: flex; gap: 4px;">
-              <span class="chip">off</span>
-              <span class="chip active">auto</span>
-              <span class="chip">always</span>
+            <div style="display: flex; gap: 4px;" id="cpWeb">
+              <span class="chip" data-web="off">off</span>
+              <span class="chip active" data-web="auto">auto</span>
+              <span class="chip" data-web="always">always</span>
             </div>
 
             <div class="eyebrow" style="margin: 20px 0 12px;">Persona</div>
-            <select class="mono" style="width: 100%;">
+            <select class="mono" id="cpPersona" style="width: 100%;">
               <option>clinical</option>
               <option>neurotic</option>
               <option>unsettling</option>
@@ -1400,38 +1400,15 @@
             </select>
 
             <div class="eyebrow" style="margin: 20px 0 12px;">Temperature</div>
-            <input type="range" min="0" max="10" value="7" style="width: 100%; accent-color: var(--cyan-1);" />
+            <input id="cpTemp" type="range" min="0" max="10" value="7" style="width: 100%; accent-color: var(--cyan-1);" />
             <div class="row" style="justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);"><span>0.0</span><span>0.7</span><span>1.0</span></div>
           </div>
 
           <div class="cp-panel" style="padding: 0; display: flex; flex-direction: column;">
-            <div class="cp-conv" style="flex: 1;">
-              <div class="cp-msg b">
-                <span class="meta">SYSTEM · CLINICAL</span>
-                You are SeekDeep. Answer in numbered, terse facts. Cite sources when web-routed. No filler.
-              </div>
-              <div class="cp-msg u">
-                what's the deepest part of the ocean and what lives there
-              </div>
-              <div class="cp-msg b">
-                <span class="meta">DEFAULT_CHAT · WEB AUTO · 1.4s</span>
-                1. Challenger Deep, Mariana Trench. ~10,935 m below sea level.<br/>
-                2. Inhabited fauna at depth: snailfish (Pseudoliparis swirei), amphipods (Hirondellea gigas), xenophyophores.<br/>
-                3. Pressure ~1,100 atm. No sunlight; bioluminescent strategies dominate.<br/>
-                <br/>
-                Sources: &lt;noaa.gov/...&gt; &lt;nature.com/...&gt;
-              </div>
-              <div class="cp-msg u">
-                generate me a picture of one of those snailfish
-              </div>
-              <div class="cp-msg b">
-                <span class="meta">DEFAULT_CHAT · ROUTING → IMAGE</span>
-                ▸ Detected image-gen intent. Switching to <span class="mono" style="color:var(--cyan-1);">image playground</span>. Subject: <span class="mono" style="color:var(--cyan-1);">snailfish (Pseudoliparis swirei) at 8000m, bioluminescent</span>. Open in Image Playground →
-              </div>
-            </div>
+            <div class="cp-conv" id="cpConv" style="flex: 1;"></div>
             <div class="cp-input">
-              <input placeholder="Message SeekDeep…  ( · web auto · clinical · default_chat )" />
-              <button class="btn btn-primary">Send</button>
+              <input id="cpInput" placeholder="Message SeekDeep…  ( · web auto · clinical · default_chat )" />
+              <button class="btn btn-primary" id="cpSendBtn">Send</button>
             </div>
           </div>
 
@@ -2083,7 +2060,115 @@ const SEEKDEEP_BASE = (function() {
     });
   }
 
-  // ===== Generic ripple/flash for un-wired buttons =====
+  // ===== Chat playground · live wiring (POST /chat) =====
+  // When the local AI server is reachable, send button hits SEEKDEEP_BASE + '/chat'
+  // with the active role / persona / web mode / temperature. Falls back to a mock
+  // reply when offline so the page still feels alive.
+  (function wireChatPlayground() {
+    const conv  = document.getElementById('cpConv');
+    const input = document.getElementById('cpInput');
+    const send  = document.getElementById('cpSendBtn');
+    if (!conv || !input || !send) return;
+
+    function appendMsg(role, html, meta) {
+      const el = document.createElement('div');
+      el.className = 'cp-msg ' + (role === 'user' ? 'u' : 'b');
+      if (meta) el.innerHTML = `<span class="meta">${meta}</span>${html}`;
+      else el.textContent = html;
+      conv.appendChild(el);
+      conv.scrollTop = conv.scrollHeight;
+      return el;
+    }
+
+    // Seed with a system message so the playground isn't empty
+    appendMsg('bot',
+      'You are SeekDeep. Answer in numbered, terse facts. Cite sources when web-routed. No filler.',
+      'SYSTEM · CLINICAL');
+
+    function getRole() {
+      const r = document.querySelector('#cpRoles input[name="role"]:checked');
+      return r ? r.value : 'default_chat';
+    }
+    function getWeb() {
+      const a = document.querySelector('#cpWeb .chip.active');
+      return a ? a.dataset.web : 'auto';
+    }
+    function getPersona() {
+      return (document.getElementById('cpPersona')?.value || 'clinical').replace(/ · default$/, '');
+    }
+    function getTemp() {
+      const v = parseFloat(document.getElementById('cpTemp')?.value || '7');
+      return Math.max(0, Math.min(1, v / 10));
+    }
+
+    // Active styling for role radios
+    document.querySelectorAll('#cpRoles label').forEach(lb => {
+      lb.addEventListener('click', () => {
+        document.querySelectorAll('#cpRoles label').forEach(x => {
+          x.style.background = ''; x.style.color = ''; x.style.border = '1px solid transparent';
+        });
+        lb.style.background = 'rgba(45,212,255,0.1)';
+        lb.style.color = 'var(--cyan-1)';
+        lb.style.border = '1px solid var(--cyan-1)';
+      });
+    });
+    // Web mode chips
+    document.querySelectorAll('#cpWeb .chip').forEach(c => {
+      c.addEventListener('click', () => {
+        document.querySelectorAll('#cpWeb .chip').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+      });
+    });
+
+    let sending = false;
+    async function doSend() {
+      const text = (input.value || '').trim();
+      if (!text || sending) return;
+      sending = true;
+      input.value = '';
+      const role    = getRole();
+      const web     = getWeb();
+      const persona = getPersona();
+      const temp    = getTemp();
+
+      appendMsg('user', text);
+      const pending = appendMsg('bot', '<span style="opacity:0.6;">…</span>',
+        `${role.toUpperCase()} · WEB ${web.toUpperCase()} · SENDING…`);
+
+      const t0 = performance.now();
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: text, role, temperature: temp,
+            web_search_mode: web, persona,
+            system_prompt: `You are SeekDeep. Persona: ${persona}.`,
+            max_new_tokens: 1024,
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const ms = Math.round(performance.now() - t0);
+        const reply = data.response || data.text || data.content || JSON.stringify(data);
+        pending.innerHTML = `<span class="meta">${role.toUpperCase()} · WEB ${web.toUpperCase()} · ${ms}MS · LIVE</span>${escapeHtml(reply).replace(/\n/g, '<br/>')}`;
+      } catch (e) {
+        const ms = Math.round(performance.now() - t0);
+        pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS · MOCK</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. Start the stack via <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.`;
+      } finally {
+        sending = false;
+      }
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    send.addEventListener('click', doSend);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    });
+  })();
   document.querySelectorAll('.btn, .btn-mini, .att-btn').forEach(btn => {
     if (btn.dataset.wired) return;
     btn.addEventListener('click', () => {
