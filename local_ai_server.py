@@ -369,6 +369,13 @@ if os.path.isdir(_GUI_DIR):
     app.mount("/gui", StaticFiles(directory=_GUI_DIR, html=True), name="gui")
     print(f"[SeekDeep] GUI mounted at /gui  ->  {_GUI_DIR}")
 
+# ===== SeekDeep GUI · backend endpoints (config / logs / launcher / data / model.warm) =====
+try:
+    from gui_endpoints import register_gui_endpoints
+    register_gui_endpoints(app, log_dir="logs", data_dir="data", env_path=".env")
+except Exception as _gui_err:
+    print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
+
 
 # ---------------------------------------------------------------------------
 # Stable helpers must be defined before any FastAPI route uses them.

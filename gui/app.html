@@ -824,13 +824,13 @@
             <span>MODEL</span><span>ROLE</span><span>QUANT</span><span>SIZE</span><span>STATE</span><span></span>
           </div>
 
-          <div class="model-row"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span><span class="role">default_chat</span><span>4bit</span><span>5.1 GB</span><span><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row"><span class="name">Lykon/dreamshaper-xl-1-0</span><span class="role">image</span><span>fp16</span><span>6.8 GB</span><span><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span><span class="role">vision</span><span>fp16</span><span>3.4 GB</span><span><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span><span class="role">quality_chat</span><span>4bit</span><span>7.2 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>WARM</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row"><span class="name">microsoft/phi-4</span><span class="role">reasoning_chat</span><span>4bit</span><span>9.1 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row"><span class="name">ibm-granite/granite-3.3-8b-instruct</span><span class="role">fallback_chat</span><span>4bit</span><span>4.9 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row"><span class="name">google/gemma-3n-E4B-it</span><span class="role">lightweight_chat</span><span>4bit</span><span>3.1 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
+          <div class="model-row" data-role="default_chat"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span><span class="role">default_chat</span><span>4bit</span><span>5.1 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
+          <div class="model-row" data-role="image"><span class="name">Lykon/dreamshaper-xl-1-0</span><span class="role">image</span><span>fp16</span><span>6.8 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
+          <div class="model-row" data-role="vision"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span><span class="role">vision</span><span>fp16</span><span>3.4 GB</span><span data-role-state><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
+          <div class="model-row" data-role="quality_chat"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span><span class="role">quality_chat</span><span>4bit</span><span>7.2 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>WARM</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
+          <div class="model-row" data-role="reasoning_chat"><span class="name">microsoft/phi-4</span><span class="role">reasoning_chat</span><span>4bit</span><span>9.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
+          <div class="model-row" data-role="fallback_chat"><span class="name">ibm-granite/granite-3.3-8b-instruct</span><span class="role">fallback_chat</span><span>4bit</span><span>4.9 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
+          <div class="model-row" data-role="lightweight_chat"><span class="name">google/gemma-3n-E4B-it</span><span class="role">lightweight_chat</span><span>4bit</span><span>3.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
           <div class="model-row"><span class="name">timbrooks/instruct-pix2pix</span><span class="role">pix2pix</span><span>fp16</span><span>2.6 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
           <div class="model-row"><span class="name">CIDAS/clipseg-rd64-refined</span><span class="role">inpaint mask</span><span>fp16</span><span>0.4 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
         </div>
@@ -1463,73 +1463,67 @@
           <div class="ip-controls">
             <div class="ip-field">
               <label>Prompt</label>
-              <textarea>a colossal squid silhouetted at 10,000m, bioluminescent dapples through deep ocean haze, cinematic, photoreal</textarea>
+              <textarea id="ipPrompt">a colossal squid silhouetted at 10,000m, bioluminescent dapples through deep ocean haze, cinematic, photoreal</textarea>
             </div>
             <div class="ip-field">
               <label>Negative</label>
-              <textarea style="min-height:50px;">blurry, low quality, watermark, signature</textarea>
+              <textarea id="ipNeg" style="min-height:50px;">blurry, low quality, watermark, signature</textarea>
             </div>
 
             <div class="ip-field">
               <label>Refinement</label>
-              <div style="display: flex; gap: 4px;">
-                <span class="chip">raw</span>
-                <span class="chip active">refined</span>
-                <span class="chip">both</span>
+              <div style="display: flex; gap: 4px;" id="ipRefine">
+                <span class="chip" data-refine="raw">raw</span>
+                <span class="chip active" data-refine="refined">refined</span>
+                <span class="chip" data-refine="both">both</span>
               </div>
             </div>
 
             <div class="ip-field">
               <label>Quality &amp; style</label>
               <div class="row" style="margin-bottom: 8px;">
-                <select class="mono" style="flex: 1;"><option>standard · 28 steps</option><option>low · 12</option><option>high · 40</option></select>
-                <select class="mono" style="flex: 1;"><option>cinematic</option><option>anime</option><option>photoreal</option><option>pixel</option><option>oil</option><option>cyberpunk</option><option>cottagecore</option><option>3d</option><option>sketch</option><option>watercolor</option></select>
+                <select id="ipQuality" class="mono" style="flex: 1;"><option value="28">standard · 28 steps</option><option value="12">low · 12</option><option value="40">high · 40</option></select>
+                <select id="ipStyle" class="mono" style="flex: 1;"><option>cinematic</option><option>anime</option><option>photoreal</option><option>pixel</option><option>oil</option><option>cyberpunk</option><option>cottagecore</option><option>3d</option><option>sketch</option><option>watercolor</option></select>
               </div>
             </div>
 
             <div class="ip-field">
               <label>Dimensions &amp; seed</label>
               <div class="row">
-                <input value="1024" class="mono" />
+                <input id="ipW" value="1024" class="mono" />
                 <span style="color:var(--hull-3);">×</span>
-                <input value="1024" class="mono" />
-                <input value="8842" class="mono" placeholder="seed" />
+                <input id="ipH" value="1024" class="mono" />
+                <input id="ipSeed" value="-1" class="mono" placeholder="seed (-1 = random)" />
               </div>
             </div>
 
             <div class="ip-field">
               <label>Guidance / steps</label>
               <div class="row">
-                <input value="7.0" class="mono" />
-                <input value="28" class="mono" />
+                <input id="ipGuid" value="7.0" class="mono" />
+                <input id="ipSteps" value="28" class="mono" />
               </div>
             </div>
 
-            <button class="btn btn-primary" style="justify-content:center;">▸ Generate</button>
-            <button class="btn btn-ghost" style="justify-content:center;">⟳ Regenerate · same seed</button>
+            <button id="ipGenBtn" class="btn btn-primary" style="justify-content:center;">▸ Generate</button>
+            <button id="ipRegenBtn" class="btn btn-ghost" style="justify-content:center;">⟳ Regenerate · same seed</button>
           </div>
 
           <div>
-            <div class="ip-canvas" style="background: linear-gradient(165deg, #050b1c, #14306b 40%, #0d2152 60%, #02060f); position: relative; border: 1px solid var(--stroke); overflow: hidden;">
-              <div class="ph" style="position: absolute; inset: 16px; display: grid; place-items: center;">[SDXL OUTPUT · 1024² · seed 8842]</div>
+            <div class="ip-canvas" id="ipCanvas" style="background: linear-gradient(165deg, #050b1c, #14306b 40%, #0d2152 60%, #02060f); position: relative; border: 1px solid var(--stroke); overflow: hidden;">
+              <div id="ipPlaceholder" class="ph" style="position: absolute; inset: 16px; display: grid; place-items: center;">[SDXL OUTPUT · 1024² · seed —]</div>
+              <img id="ipImage" style="display:none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;" alt="" />
               <div style="position: absolute; bottom: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center;">
-                <span class="pill cyan"><span class="dot"></span>STEP 14 / 28</span>
+                <span class="pill" id="ipStatus" style="padding: 3px 10px;"><span class="dot"></span>IDLE</span>
                 <div style="display: flex; gap: 6px;">
-                  <button class="btn-mini">⤓ Download</button>
+                  <button class="btn-mini" id="ipDownload">⤓ Download</button>
                   <button class="btn-mini">📂 Archive</button>
-                  <button class="btn-mini">⟳ Re-refine</button>
+                  <button class="btn-mini" id="ipReRefine">⟳ Re-refine</button>
                 </div>
               </div>
             </div>
 
-            <div class="ip-history">
-              <div class="thumb active" style="background: linear-gradient(135deg, #14306b, #2dd4ff40);"></div>
-              <div class="thumb" style="background: linear-gradient(165deg, #0d2152, #00a8e840);"></div>
-              <div class="thumb" style="background: linear-gradient(135deg, #050b1c, #6df0ff30);"></div>
-              <div class="thumb" style="background: linear-gradient(165deg, #02060f, #14306b);"></div>
-              <div class="thumb" style="background: linear-gradient(135deg, #081434, #2dd4ff30);"></div>
-              <div class="thumb" style="background: linear-gradient(165deg, #0d2152, #007ab8);"></div>
-            </div>
+            <div class="ip-history" id="ipHistory"></div>
           </div>
         </div>
       </section>
@@ -1906,9 +1900,23 @@ const SEEKDEEP_BASE = (function() {
         const bar = document.getElementById('gpuVramBar');
         if (bar) bar.style.width = Math.round((usedGB / totalGB) * 100) + '%';
       }
-      // Loaded model marker
-      const modelEl = document.querySelector('.lockup .wm');
-      // (don't overwrite the brand wordmark; just log on console for debugging)
+      // Models pane — mark loaded + pinned roles
+      const loaded = h.loaded;
+      const pinned = h.keep_resident || {};
+      document.querySelectorAll('.model-row[data-role]').forEach(row => {
+        const role = row.dataset.role;
+        const cell = row.querySelector('[data-role-state]');
+        if (!cell) return;
+        if (role === loaded) {
+          cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span>';
+        } else if (pinned[role]) {
+          cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>PINNED</span>';
+        } else if (role && role.endsWith('_chat')) {
+          cell.innerHTML = '<span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span>';
+        } else {
+          cell.innerHTML = '<span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span>';
+        }
+      });
       if (h.model) {
         document.title = 'SeekDeep — ' + h.model;
       }
@@ -1985,21 +1993,80 @@ const SEEKDEEP_BASE = (function() {
     el.addEventListener('input',  () => markDirty(el));
   });
 
-  // Save button — flash + clear all DIRTY → SAVED
-  document.getElementById('cfg-save')?.addEventListener('click', (e) => {
+  // Save button — POST /config with dirty values, fall back to local-only "saved" on offline
+  document.getElementById('cfg-save')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const dirtyRows = [...document.querySelectorAll('.config-row .save')]
+      .filter(s => s.textContent.includes('DIRTY'))
+      .map(s => s.closest('.config-row'));
+
+    // Collect updates: { ENV_KEY: value }
+    const updates = {};
+    dirtyRows.forEach(row => {
+      const keyEl = row.querySelector('.key');
+      if (!keyEl) return;
+      const key = keyEl.textContent.trim();
+      let val;
+      const input = row.querySelector('input, select');
+      if (input) {
+        val = input.value;
+      } else {
+        const tgl = row.querySelector('.toggle');
+        if (tgl) val = tgl.classList.contains('on') ? 'on' : 'off';
+      }
+      if (val !== undefined) updates[key] = val;
+    });
+
+    btn.disabled = true;
+    btn.innerHTML = '<span id="cfg-dirty-count">' + Object.keys(updates).length + '</span> saving…';
+
+    let liveOk = false, errMsg = '';
+    if (Object.keys(updates).length > 0) {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (r.ok) {
+          const data = await r.json().catch(() => ({}));
+          liveOk = data.ok !== false;
+        } else if (r.status === 404) {
+          errMsg = '/config endpoint missing — add it per INTEGRATION.md';
+        } else {
+          errMsg = 'server returned ' + r.status;
+        }
+      } catch (e) {
+        errMsg = 'server unreachable — saved locally only';
+      }
+    } else {
+      liveOk = true;
+    }
+
     document.querySelectorAll('.config-row .save').forEach(s => {
       s.textContent = 'SAVED';
       s.style.color = '';
     });
-    const counter = document.getElementById('cfg-dirty-count');
-    if (counter) counter.textContent = '0';
-    e.currentTarget.classList.add('btn-ghost');
-    e.currentTarget.innerHTML = '<span id="cfg-dirty-count">0</span> saved · clean';
+    btn.disabled = false;
+
+    if (liveOk) {
+      btn.classList.remove('btn-primary');
+      btn.classList.add('btn-ghost');
+      btn.innerHTML = '<span id="cfg-dirty-count">0</span> saved · clean · LIVE';
+    } else {
+      btn.classList.remove('btn-primary');
+      btn.classList.add('btn-ghost');
+      btn.innerHTML = '<span id="cfg-dirty-count">0</span> ' + (errMsg || 'mock save');
+      btn.style.color = 'var(--warn)';
+    }
+
     setTimeout(() => {
-      e.currentTarget.classList.remove('btn-ghost');
-      e.currentTarget.classList.add('btn-primary');
-      e.currentTarget.innerHTML = '<span id="cfg-dirty-count">0</span> pending · save';
-    }, 1200);
+      btn.classList.remove('btn-ghost');
+      btn.classList.add('btn-primary');
+      btn.style.color = '';
+      btn.innerHTML = '<span id="cfg-dirty-count">0</span> pending · save';
+    }, 2400);
   });
 
   // Config filter
@@ -2059,6 +2126,137 @@ const SEEKDEEP_BASE = (function() {
       launcherPane.querySelectorAll('.launcher-card .ctl button:first-child').forEach(b => b.click());
     });
   }
+
+  // ===== Image playground · live wiring (POST /image) =====
+  (function wireImagePlayground() {
+    const genBtn = document.getElementById('ipGenBtn');
+    const regenBtn = document.getElementById('ipRegenBtn');
+    const canvas = document.getElementById('ipCanvas');
+    if (!genBtn || !canvas) return;
+
+    const refs = {
+      prompt:  document.getElementById('ipPrompt'),
+      neg:     document.getElementById('ipNeg'),
+      w:       document.getElementById('ipW'),
+      h:       document.getElementById('ipH'),
+      seed:    document.getElementById('ipSeed'),
+      guid:    document.getElementById('ipGuid'),
+      steps:   document.getElementById('ipSteps'),
+      quality: document.getElementById('ipQuality'),
+      style:   document.getElementById('ipStyle'),
+      placeholder: document.getElementById('ipPlaceholder'),
+      image:   document.getElementById('ipImage'),
+      status:  document.getElementById('ipStatus'),
+      history: document.getElementById('ipHistory'),
+      download:document.getElementById('ipDownload'),
+    };
+
+    // Quality select drives the steps field
+    refs.quality?.addEventListener('change', e => { refs.steps.value = e.target.value; });
+
+    // Refinement chips
+    document.querySelectorAll('#ipRefine .chip').forEach(c => {
+      c.addEventListener('click', () => {
+        document.querySelectorAll('#ipRefine .chip').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+      });
+    });
+
+    function setStatus(text, cls) {
+      refs.status.className = 'pill ' + (cls || '') + ' ';
+      refs.status.style.padding = '3px 10px';
+      refs.status.innerHTML = `<span class="dot"></span>${text}`;
+    }
+
+    let lastSeed = null, lastImageUrl = null;
+
+    async function generate(useLastSeed) {
+      if (genBtn.disabled) return;
+      const prompt = (refs.prompt.value || '').trim();
+      if (!prompt) return;
+      const style = refs.style.value;
+      const fullPrompt = `${prompt}, ${style}`;
+      const seedInput = parseInt(refs.seed.value, 10);
+      const seed = useLastSeed && lastSeed != null
+        ? lastSeed
+        : (isNaN(seedInput) || seedInput < 0 ? Math.floor(Math.random() * 1_000_000) : seedInput);
+
+      const body = {
+        prompt: fullPrompt,
+        negative_prompt: refs.neg.value || '',
+        width:  parseInt(refs.w.value, 10)  || 1024,
+        height: parseInt(refs.h.value, 10)  || 1024,
+        steps:  parseInt(refs.steps.value, 10) || 28,
+        guidance_scale: parseFloat(refs.guid.value) || 7.0,
+        seed,
+      };
+
+      genBtn.disabled = true;
+      regenBtn.disabled = true;
+      setStatus(`GENERATING · SEED ${seed}`, 'warn');
+      refs.placeholder.style.display = 'grid';
+      refs.placeholder.textContent = `[GENERATING · ${body.width}×${body.height} · ${body.steps} steps · seed ${seed}]`;
+      refs.image.style.display = 'none';
+      const t0 = performance.now();
+
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(180000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const ct = r.headers.get('Content-Type') || '';
+        let url;
+        if (ct.startsWith('image/')) {
+          const blob = await r.blob();
+          url = URL.createObjectURL(blob);
+        } else {
+          const data = await r.json();
+          if (data.image_b64) url = `data:image/png;base64,${data.image_b64}`;
+          else if (data.url)  url = data.url;
+          else throw new Error('no image payload');
+          if (data.seed != null) lastSeed = data.seed;
+        }
+        lastSeed = seed;
+        lastImageUrl = url;
+        refs.image.src = url;
+        refs.image.style.display = 'block';
+        refs.placeholder.style.display = 'none';
+        const ms = Math.round(performance.now() - t0);
+        setStatus(`DONE · ${(ms/1000).toFixed(1)}s · SEED ${seed}`, 'on');
+
+        // Append to history
+        const thumb = document.createElement('div');
+        thumb.className = 'thumb';
+        thumb.style.backgroundImage = `url(${url})`;
+        thumb.style.backgroundSize = 'cover';
+        thumb.style.backgroundPosition = 'center';
+        thumb.title = `seed ${seed} · ${body.steps} steps`;
+        refs.history.prepend(thumb);
+        if (refs.history.children.length > 6) refs.history.lastChild.remove();
+      } catch (e) {
+        const ms = Math.round(performance.now() - t0);
+        setStatus(`OFFLINE · MOCK · ${(ms/1000).toFixed(1)}s`, 'bad');
+        refs.placeholder.style.display = 'grid';
+        refs.placeholder.textContent = `[OFFLINE — ${SEEKDEEP_BASE}/image unreachable · start the AI server]`;
+      } finally {
+        genBtn.disabled = false;
+        regenBtn.disabled = false;
+      }
+    }
+
+    genBtn.addEventListener('click', () => generate(false));
+    regenBtn.addEventListener('click', () => generate(true));
+    refs.download?.addEventListener('click', () => {
+      if (!lastImageUrl) return;
+      const a = document.createElement('a');
+      a.href = lastImageUrl;
+      a.download = `seekdeep-seed-${lastSeed || 'x'}.png`;
+      a.click();
+    });
+  })();
 
   // ===== Chat playground · live wiring (POST /chat) =====
   // When the local AI server is reachable, send button hits SEEKDEEP_BASE + '/chat'

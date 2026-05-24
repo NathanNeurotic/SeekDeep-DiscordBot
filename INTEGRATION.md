@@ -40,92 +40,40 @@ If you serve through `/gui/` (recommended), you don't need CORS at all.
 
 ## 3 · Write endpoints — what the Control Center wants
 
-The Control Center, Installer, and API Explorer currently treat these as mocks. Add them to `local_ai_server.py` to close the loop:
+The Control Center, Installer, and API Explorer expect a handful of write endpoints. We've packaged all of them as a single drop-in module: **`gui_endpoints.py`** at the repo root.
 
-### `POST /config` — save .env edits
+### One-line installation
 
-```python
-import os, json, re
-from fastapi import Body
-from pydantic import BaseModel
-
-class ConfigPatch(BaseModel):
-    updates: dict   # { "KEY": "value", ... }
-
-@app.post("/config")
-async def patch_env(patch: ConfigPatch):
-    """Merge a partial dict of env-var updates into the on-disk .env file."""
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if not os.path.isfile(env_path):
-        return {"ok": False, "error": ".env not found"}
-
-    with open(env_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    seen = set()
-    out = []
-    for line in lines:
-        m = re.match(r"^([A-Z_][A-Z0-9_]*)\s*=", line)
-        if m and m.group(1) in patch.updates:
-            key = m.group(1)
-            out.append(f"{key}={patch.updates[key]}\n")
-            seen.add(key)
-        else:
-            out.append(line)
-    # Append new keys
-    for k, v in patch.updates.items():
-        if k not in seen:
-            out.append(f"{k}={v}\n")
-
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(out)
-    return {"ok": True, "updated": list(patch.updates.keys())}
-```
-
-### `POST /model/warm` — preload a model
+Add these three lines to `local_ai_server.py` (after `app = FastAPI(...)`):
 
 ```python
-class WarmRequest(BaseModel):
-    role: str = "default_chat"   # default_chat | quality_text | reasoning_code | image | vision | ...
-
-@app.post("/model/warm")
-async def warm_model(req: WarmRequest):
-    """Force-load the given role's model into VRAM. Intended for the Control Center 'Warm' button."""
-    # plug into your existing role->model_id router + loader
-    try:
-        # e.g. load_chat_model(role=req.role) or load_image_pipeline() depending on role
-        return {"ok": True, "role": req.role, "loaded": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+from gui_endpoints import register_gui_endpoints
+register_gui_endpoints(app, log_dir="logs", data_dir="data", env_path=".env")
 ```
 
-### `POST /model/evict` — explicit unload
+Restart the server. Done. All of the following are now live:
 
-`/unload` already exists. The GUI sends an empty POST; no body needed. Optionally accept `{"role": "..."}` to evict a specific role.
+| Endpoint                              | What it powers                                                |
+|---------------------------------------|---------------------------------------------------------------|
+| `POST /config`                        | Bot Config pane Save button — atomic .env merge               |
+| `GET /logs/tail?lines=N&file=...`     | Logs Viewer pane                                              |
+| `GET /logs/stream`                    | Logs Viewer pane · SSE tail-f                                 |
+| `POST /launcher/{svc}/{action}`       | Launcher Start / Stop / Restart                               |
+| `GET /data/{file}.json`               | Stats / Auto-react rules / Archive config                     |
+| `POST /model/warm`                    | Models pane "Warm" button (wire to your loader; stub by default) |
 
-### `POST /launcher/restart` — re-spawn a service (advanced)
+### Safety notes baked in
 
-```python
-import subprocess, shlex
+- **`.env` merge** is atomic — writes to `.env.tmp` then `.replace()`s. Existing comments + ordering preserved.
+- **Log + data file reads** reject path traversal (`../`) and restrict to `.json` for `/data/`.
+- **Launcher** has a service whitelist (`ai-server` · `bot` · `searxng`) and action whitelist (`start` · `stop` · `restart` · `status`).
+- **`/model/warm`** ships as a stub — wire it to your existing model loader where commented.
 
-class ServiceAction(BaseModel):
-    service: str       # "ai-server" | "bot" | "searxng"
-    action: str = "restart"   # "start" | "stop" | "restart"
+### Security — please read
 
-@app.post("/launcher/{service}/{action}")
-async def launcher_control(service: str, action: str):
-    """Bridge to seekdeep_launcher.bat. Requires the bat process to be reachable from this server."""
-    # SAFETY: only allow whitelisted services
-    if service not in {"ai-server", "bot", "searxng"}:
-        return {"ok": False, "error": "unknown service"}
-    if action not in {"start", "stop", "restart"}:
-        return {"ok": False, "error": "unknown action"}
-    # Implementation depends on whether you run the launcher as a service,
-    # a docker-compose stack, or a parent process. Sketch only.
-    return {"ok": True, "service": service, "action": action, "todo": "wire to your process supervisor"}
-```
+These endpoints accept HTTP input that can write files and spawn child processes. **Bind the server to `127.0.0.1` only.** Do not expose port 7865 publicly without an authenticating reverse proxy in front.
 
-> **Heads-up:** The launcher-control endpoint lets HTTP callers start/stop processes. **Bind the server to `127.0.0.1` only**, and don't expose this port through Cloudflare / ngrok / etc. without auth.
+If you want stricter coupling: edit `gui_endpoints.py` to gate every endpoint behind a header check (`X-SeekDeep-Token`) read from `.env`.
 
 ## 4 · How the GUI auto-detects the deployment
 
