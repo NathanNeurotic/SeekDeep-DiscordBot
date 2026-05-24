@@ -10,6 +10,7 @@
     "test": "node smoke_test.mjs",
     "smoke": "node smoke_test.mjs",
     "preflight": "node scripts/preflight.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "setup:models": ".venv\\Scripts\\python.exe warmup_local_cache.py",
     "setup:chat-models": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only",
     "setup:models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --include-optional",

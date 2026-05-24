@@ -8249,54 +8249,129 @@ try {
 } catch {}
 
 client.once('clientReady', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  console.log('Chat provider: Local NVIDIA model server');
-  console.log(`Chat model: ${process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct'}`);
-  console.log('Image provider: Local NVIDIA model server');
-  console.log('Vision provider: Local model server');
-  console.log(`Web search provider: ${WEB_SEARCH_PROVIDER}`);
-  console.log('Message content mode: ON');
-
   try {
     await client.application.commands.set(commands);
-    console.log('Registered commands globally. They may take time to appear.');
   } catch (err) {
-    console.error('Command registration failed:', err);
+    console.error('[SeekDeep] Command registration failed:', err);
   }
 
-  // Probe the local AI server's /health on startup so a misconfigured .env or
-  // stale offline-mode is visible immediately instead of when chat first runs.
+  // Probe the local AI server's /health and /gpu on startup to consolidate in the health block
+  const probeTimeoutMs = Number(process.env.SEEKDEEP_STARTUP_HEALTH_TIMEOUT_MS || 4000);
+  let localAiHealth = 'offline';
+  let localAiGpu = 'offline';
+  let detectedGpu = 'none';
+  let hasCuda = 'no';
+  const warnings = [];
+
   try {
-    const probeTimeoutMs = Number(process.env.SEEKDEEP_STARTUP_HEALTH_TIMEOUT_MS || 4000);
     const controller = new AbortController();
     const probeTimer = setTimeout(() => controller.abort(), probeTimeoutMs);
-    let health = null;
     try {
       const res = await fetch(`${LOCAL_AI_BASE_URL}/health`, { signal: controller.signal });
-      health = await res.json().catch(() => null);
+      const health = await res.json().catch(() => null);
+      if (health && typeof health === 'object') {
+        localAiHealth = 'online';
+        detectedGpu = health.device || 'unknown';
+        hasCuda = health.cuda_available ? 'yes' : 'no';
+      } else {
+        localAiHealth = 'invalid response';
+      }
     } finally {
       clearTimeout(probeTimer);
     }
-    if (health && typeof health === 'object') {
-      console.log('[SeekDeep] local AI server reachable.');
-      console.log(`  device           : ${health.device || 'unknown'}  cuda=${health.cuda_available ? 'yes' : 'no'}`);
-      console.log(`  loaded_task      : ${health.loaded_task || 'none'}`);
-      console.log(`  loaded_chat_role : ${health.loaded_chat_role || 'none'} (${health.loaded_chat_model_id || 'none'})`);
-      console.log(`  chat_quant_mode  : ${health.chat_quant_mode || 'none'}  full-precision-roles=${(health.chat_quant_full_roles || []).join(',') || 'none'}`);
-      console.log(`  keep_mode        : ${health.keep_mode || 'unknown'}`);
-      console.log(`  offline_loading  : ${health.offline_model_loading ? 'YES (HF_LOCAL_FILES_ONLY=true)' : 'no (online allowed)'}`);
-      if (health.chat_roles && typeof health.chat_roles === 'object') {
-        console.log('  chat roles configured:');
-        for (const [role, modelId] of Object.entries(health.chat_roles)) {
-          console.log(`    ${role.padEnd(18, ' ')} -> ${modelId || '(unset)'}`);
+  } catch (err) {
+    localAiHealth = 'offline';
+    warnings.push(`Local AI server unreachable at ${LOCAL_AI_BASE_URL}`);
+  }
+
+  try {
+    const controller = new AbortController();
+    const probeTimer = setTimeout(() => controller.abort(), probeTimeoutMs);
+    try {
+      const res = await fetch(`${LOCAL_AI_BASE_URL}/gpu`, { signal: controller.signal });
+      const gpu = await res.json().catch(() => null);
+      if (gpu && typeof gpu === 'object') {
+        localAiGpu = 'online';
+        if (gpu.device_name) {
+          detectedGpu = gpu.device_name;
         }
       }
-    } else {
-      console.warn('[SeekDeep] local AI server reached but /health returned unparseable JSON.');
+    } finally {
+      clearTimeout(probeTimer);
     }
   } catch (err) {
-    console.warn(`[SeekDeep] local AI server /health probe failed (${err?.message || err}). The bot is up but chat/image/vision calls will fail until ${LOCAL_AI_BASE_URL} is reachable.`);
+    localAiGpu = 'offline';
   }
+
+  // Check if SearXNG is enabled and online
+  const webSearchEnabled = process.env.WEB_AUTO_SEARCH === 'true' || process.env.WEB_SEARCH_PROVIDER === 'searxng';
+  let searxngStatus = 'disabled';
+  if (webSearchEnabled) {
+    const searxngBaseUrlStr = process.env.SEARXNG_BASE_URL || 'http://127.0.0.1:8080';
+    try {
+      const controller = new AbortController();
+      const probeTimer = setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(searxngBaseUrlStr, { signal: controller.signal });
+        if (res.ok || res.status === 404 || res.status === 403 || res.status === 401) {
+          searxngStatus = 'online';
+        } else {
+          searxngStatus = `offline (status ${res.status})`;
+          warnings.push(`SearXNG returned error status ${res.status}`);
+        }
+      } finally {
+        clearTimeout(probeTimer);
+      }
+    } catch (err) {
+      searxngStatus = 'offline';
+      warnings.push(`SearXNG unreachable at ${searxngBaseUrlStr}`);
+    }
+  }
+
+  if (!process.env.DISCORD_TOKEN) warnings.push('DISCORD_TOKEN is missing in .env');
+  if (!process.env.DISCORD_CLIENT_ID) warnings.push('DISCORD_CLIENT_ID is missing in .env');
+
+  console.log('========================================================================');
+  console.log('                      SEEKDEEP SYSTEM HEALTH REPORT                     ');
+  console.log('========================================================================');
+  console.log('  [Discord Bot Gateway]');
+  console.log(`    Connection     : Logged in as ${client.user?.tag || 'unknown'}`);
+  console.log(`    Token          : ${process.env.DISCORD_TOKEN ? 'Present (masked)' : 'MISSING'}`);
+  console.log(`    Client ID      : ${process.env.DISCORD_CLIENT_ID ? 'Present (masked)' : 'MISSING'}`);
+  console.log('');
+  console.log('  [Local AI Endpoint]');
+  console.log(`    URL            : ${LOCAL_AI_BASE_URL}`);
+  console.log(`    Health API     : ${localAiHealth}`);
+  console.log(`    GPU API        : ${localAiGpu}`);
+  console.log(`    Detected GPU   : ${detectedGpu} (CUDA: ${hasCuda})`);
+  console.log('');
+  console.log('  [Configured Models]');
+  console.log(`    Chat Model     : ${process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct'}`);
+  console.log(`    Vision Model   : ${process.env.LOCAL_VISION_MODEL_ID || 'Qwen/Qwen2.5-VL-3B-Instruct'}`);
+  console.log(`    Image Model    : ${process.env.LOCAL_IMAGE_MODEL_ID || 'Lykon/dreamshaper-xl-1-0'}`);
+  console.log('');
+  console.log('  [Enabled Feature Flags]');
+  console.log(`    Image Editing  : img2img=${SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'ON' : 'off'}, instruct-pix2pix=${SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'ON' : 'off'}, inpaint=${SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'ON' : 'off'}`);
+  console.log(`    Upscaling      : upscale-real-esrgan=${SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'ON' : 'off'}`);
+  console.log(`    Utility Features: emoji-vault=${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}, force-react=${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}, tts-voice=${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'off'}`);
+  console.log(`    Web Search     : auto-search=${webSearchEnabled ? 'on' : 'off'} (status: ${searxngStatus})`);
+  console.log(`    Daily Digest   : ${process.env.SEEKDEEP_DAILY_DIGEST || 'off'}`);
+  console.log('');
+  console.log('  [System Paths & Cache]');
+  console.log(`    HF Cache Dir   : ${process.env.LOCAL_MODEL_CACHE_DIR || './models/huggingface'}`);
+  console.log('    Temp Dir       : ./temp');
+  console.log('    Logs Dir       : ./logs');
+  console.log('    Outputs Dir    : ./outputs');
+  console.log('');
+  console.log('  [Warnings Summary]');
+  if (warnings.length === 0) {
+    console.log('    - None');
+  } else {
+    for (const w of warnings) {
+      console.log(`    - WARN: ${w}`);
+    }
+  }
+  console.log('========================================================================');
 
   console.log('Ready. Use: /ask, /refine, /image, /vision, /status, /help, /regen, /recent, /changelog');
 
