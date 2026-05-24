@@ -77,109 +77,142 @@ If you want stricter coupling: edit `gui_endpoints.py` to gate every endpoint be
 
 ## 4 · Archive browser bot bridge
 
-The Archive browser in `app.html` reads its data from `data/archive-snapshots.json`. The bot is the only process that knows what's in each Discord archive thread — so the bot writes a snapshot of every archive, and the GUI reads that snapshot via the existing `GET /data/archive-snapshots.json` endpoint.
+The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.
 
-### Add this to `index.js`
+> The earlier draft of this section assumed conventions that don't match SeekDeep's `index.js` (it used `fs/promises`, `client.once('ready')`, and an in-memory `seekdeepArchiveConfig` variable). The block below is a drop-in that matches the file as it actually exists.
 
-Drop the following near your other persistence helpers (anywhere after the Discord client is ready):
+### 4.1 · Step-by-step walkthrough (hand this to anyone setting up the bridge)
+
+1. **Open** [`index.js`](index.js) in your editor.
+2. **Find the existing block** that starts with `// SEEKDEEP_ARCHIVE_CHANNEL_CONFIG_START` (around line 4978). This is where the bot's archive helpers already live.
+3. **Scroll down** to the matching `// SEEKDEEP_ARCHIVE_CHANNEL_CONFIG_END` line.
+4. **Paste the snippet below immediately after** that end marker. It uses the same conventions as the surrounding code (`fs` sync API, `writeJsonAtomic`, `seekdeepReadArchiveGuildConfig`, `client.once('clientReady', ...)`).
+5. **Save the file.**
+6. **(Optional) Toggle in `.env`:**
+   - `SEEKDEEP_ARCHIVE_BRIDGE=off` — disable the bridge entirely (default: on)
+   - `SEEKDEEP_ARCHIVE_BRIDGE_MINUTES=5` — cadence in minutes (default: 5, min 1)
+   - `SEEKDEEP_ARCHIVE_BRIDGE_ENTRIES=10` — entries fetched per thread (default: 10, max 100)
+   - `SEEKDEEP_ARCHIVE_BRIDGE_LOG=on` — log each snapshot write to console
+7. **Restart the bot** (`seekdeep_launcher.bat` option 8, or whichever path you normally use).
+8. **Verify**:
+   - After ~10 seconds you should see `data/archive-snapshots.json` appear (with `SEEKDEEP_ARCHIVE_BRIDGE_LOG=on`, a console line confirms it).
+   - Open `http://127.0.0.1:7865/gui/app.html`, click the **Archive** pane in the sidebar. You should see one tab per archive thread + a `SHARED · N` aggregate tab.
+
+### 4.2 · The snippet
 
 ```javascript
-// ===== Archive bot bridge =====
-// Writes data/archive-snapshots.json every 5 minutes so the GUI can render
-// the archive browser without needing Discord API access from the browser.
+// SEEKDEEP_ARCHIVE_BRIDGE_START
+// Writes data/archive-snapshots.json every few minutes so the GUI's
+// Control Center > Archive pane can render real thread contents.
+//
+// Uses the same conventions as the surrounding code: sync `fs`,
+// `writeJsonAtomic`, `seekdeepReadArchiveGuildConfig`, `client.once('clientReady', ...)`.
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
-const ARCHIVE_SNAPSHOT_PATH = path.join(process.cwd(), 'data', 'archive-snapshots.json');
+const SEEKDEEP_ARCHIVE_SNAPSHOT_PATH = path.join(__dirname, 'data', 'archive-snapshots.json');
 
 async function seekdeepWriteArchiveSnapshot() {
+  if (String(process.env.SEEKDEEP_ARCHIVE_BRIDGE || '').toLowerCase() === 'off') return;
   try {
-    const snapshots = { generated_at: new Date().toISOString(), guilds: [] };
+    const entriesPerThread = Math.max(1, Math.min(100,
+      Number(process.env.SEEKDEEP_ARCHIVE_BRIDGE_ENTRIES) || 10));
+    const config = seekdeepReadArchiveGuildConfig();
+    const snapshot = { generated_at: new Date().toISOString(), guilds: [] };
 
-    for (const [guildId, guild] of client.guilds.cache) {
-      // archive-guild-config.json holds { [guildId]: { archive_channel_id, threads: {...} } }
-      const cfg = seekdeepArchiveConfig?.[guildId];
-      if (!cfg) continue;
-
-      const archiveChannel = guild.channels.cache.get(cfg.archive_channel_id);
-      if (!archiveChannel) continue;
-
+    for (const [guildId, guildCfg] of Object.entries(config.guilds || {})) {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) continue;
       const guildEntry = { guild_id: guildId, guild_name: guild.name, threads: [] };
 
-      // Fetch the active threads in the archive channel
-      const threads = await archiveChannel.threads.fetchActive().catch(() => ({ threads: new Map() }));
-      for (const [, thread] of threads.threads) {
-        // Pull the last 10 entries per thread for the browser preview
-        const messages = await thread.messages.fetch({ limit: 10 }).catch(() => new Map());
+      // Pull thread IDs straight from the bot's own state instead of enumerating
+      // active threads in the archive channel (cheaper, and includes auto-archived
+      // threads Discord won't return from fetchActive()).
+      const knownThreads = [];
+      const sharedId = guildCfg.sharedArchive?.threadId;
+      if (sharedId) knownThreads.push({
+        thread_id: sharedId,
+        archive_key: 'shared',
+        count: Number(guildCfg.sharedArchive?.count) || 0,
+      });
+      for (const [userId, ua] of Object.entries(guildCfg.userArchives || {})) {
+        if (ua?.threadId) knownThreads.push({
+          thread_id: ua.threadId,
+          archive_key: userId,
+          count: Number(ua.count) || 0,
+        });
+      }
+
+      for (const meta of knownThreads) {
+        let thread;
+        try { thread = await guild.channels.fetch(meta.thread_id); }
+        catch { continue; }
+        if (!thread) continue;
+
         const entries = [];
-        for (const [, msg] of messages) {
-          const att = msg.attachments?.first();
-          if (!att) continue;
-          entries.push({
-            id: msg.id,
-            url: att.url,           // direct CDN link
-            thumb: att.proxyURL,    // smaller preview
-            prompt: (msg.content || '').slice(0, 240),
-            author_id: msg.author.id,
-            author_name: msg.author.username,
-            timestamp: msg.createdTimestamp,
-            size: att.size,
-            width: att.width,
-            height: att.height,
-          });
+        try {
+          const messages = await thread.messages.fetch({ limit: entriesPerThread });
+          for (const [, msg] of messages) {
+            const att = msg.attachments?.first();
+            if (!att) continue;
+            entries.push({
+              id: msg.id,
+              url: att.url,
+              thumb: att.proxyURL || att.url,
+              prompt: (msg.content || '').slice(0, 240),
+              author_id: msg.author?.id || null,
+              author_name: msg.author?.username || null,
+              timestamp: msg.createdTimestamp,
+              size: att.size,
+              width: att.width,
+              height: att.height,
+            });
+          }
+        } catch {
+          // continue with whatever we got
         }
 
         guildEntry.threads.push({
-          thread_id: thread.id,
+          thread_id: meta.thread_id,
           name: thread.name,
           owner: thread.ownerId || null,
-          archive_key: cfg.threads?.[thread.id]?.profile_user || null,
-          count: cfg.threads?.[thread.id]?.count ?? entries.length,
+          archive_key: meta.archive_key,
+          count: meta.count,
           entries,
         });
       }
-      snapshots.guilds.push(guildEntry);
+      snapshot.guilds.push(guildEntry);
     }
 
-    await fs.mkdir(path.dirname(ARCHIVE_SNAPSHOT_PATH), { recursive: true });
-    await fs.writeFile(ARCHIVE_SNAPSHOT_PATH, JSON.stringify(snapshots, null, 2));
-    if (process.env.SEEKDEEP_ARCHIVE_SNAPSHOT_LOG === 'on') {
-      console.log(`[SeekDeep] archive snapshot written  ${snapshots.guilds.length} guilds  ${ARCHIVE_SNAPSHOT_PATH}`);
+    writeJsonAtomic(SEEKDEEP_ARCHIVE_SNAPSHOT_PATH, snapshot);
+    if (String(process.env.SEEKDEEP_ARCHIVE_BRIDGE_LOG || '').toLowerCase() === 'on') {
+      console.log(`[SeekDeep] archive snapshot written  ${snapshot.guilds.length} guilds  ${SEEKDEEP_ARCHIVE_SNAPSHOT_PATH}`);
     }
   } catch (err) {
-    console.error('[SeekDeep] archive snapshot failed:', err.message);
+    console.warn('[SeekDeep] archive snapshot failed:', err?.message || err);
   }
 }
 
-// Run once at boot, then every 5 minutes.
-client.once('ready', () => {
-  setTimeout(seekdeepWriteArchiveSnapshot, 5_000);   // first run after 5s
-  setInterval(seekdeepWriteArchiveSnapshot, 5 * 60 * 1000);
+client.once('clientReady', () => {
+  if (String(process.env.SEEKDEEP_ARCHIVE_BRIDGE || '').toLowerCase() === 'off') return;
+  const minutes = Math.max(1, Number(process.env.SEEKDEEP_ARCHIVE_BRIDGE_MINUTES) || 5);
+  setTimeout(seekdeepWriteArchiveSnapshot, 10_000);                // first run after 10s
+  setInterval(seekdeepWriteArchiveSnapshot, minutes * 60 * 1000);  // then every N minutes
 });
+// SEEKDEEP_ARCHIVE_BRIDGE_END
 ```
 
-### How the GUI consumes it
+### 4.3 · How the GUI consumes it
 
-When the user clicks the Archive pane in the Control Center, the GUI hits `GET /data/archive-snapshots.json` (already wired via `gui_endpoints.py`) and renders the grid + per-thread tabs from the JSON. No browser-side Discord token, no auth gymnastics — same trust boundary as everything else in `data/`.
+The Archive pane's wiring (in `gui/app.html`) calls `GET /data/archive-snapshots.json`. The `/data/{file}` endpoint in `gui_endpoints.py` reads the file from `data/` and returns it as `{ ok, file, data }`. No per-route normalization is applied to `archive-snapshots.json` — the bridge's output shape is what the GUI expects natively.
 
-### Adjustments you might want
+### 4.4 · Removing the bridge
 
-- **Snapshot cadence** — change the `5 * 60 * 1000` interval. 5 min is a balance between freshness and Discord API rate limits.
-- **Entries per thread** — `messages.fetch({ limit: 10 })` is plenty for previews. Bump for richer browsing.
-- **Privacy** — set `SEEKDEEP_ARCHIVE_SNAPSHOT_LOG=off` (default) so the snapshot path doesn't appear in console output.
-- **Naming the function** — adjust `seekdeepArchiveConfig` to whatever variable holds your loaded `archive-guild-config.json` in memory.
+Either:
+- Delete the block between `SEEKDEEP_ARCHIVE_BRIDGE_START` and `SEEKDEEP_ARCHIVE_BRIDGE_END` markers in `index.js`, OR
+- Set `SEEKDEEP_ARCHIVE_BRIDGE=off` in `.env` and restart the bot (the snippet stays in place but no longer runs).
 
-### Hot-disable
+Stop the snapshot file from accumulating: `data/archive-snapshots.json` can be safely deleted; the GUI will show the empty state until the next snapshot.
 
-To shut the bridge off without code changes, gate the `setInterval` behind an env flag:
-
-```javascript
-if (process.env.SEEKDEEP_ARCHIVE_BRIDGE !== 'off') {
-  setInterval(seekdeepWriteArchiveSnapshot, 5 * 60 * 1000);
-}
-```
-
-## 4 · How the GUI auto-detects the deployment
+## 5 · How the GUI auto-detects the deployment
 
 Every wired page (`app.html`, `chat.html`, `api.html`, `installer.html`) now uses a smart `SEEKDEEP_BASE`:
 
@@ -198,7 +231,7 @@ const SEEKDEEP_BASE = (function() {
 - **Opened from `file://`** → falls back to `http://127.0.0.1:7865` and requires CORS middleware
 - **Future Tauri shell** → same origin, fully internal
 
-## 5 · Install script
+## 6 · Install script
 
 Run the one-shot installer from the repo root:
 
@@ -211,7 +244,7 @@ It:
 2. Patches `local_ai_server.py` if the static mount isn't already present
 3. Prints the next steps (restart the server, open the URL)
 
-## 6 · Per-surface verification
+## 7 · Per-surface verification
 
 After mounting, sanity-check each URL:
 
@@ -225,6 +258,6 @@ After mounting, sanity-check each URL:
 
 If any of them still show **MOCK** pills, hard-reload (Ctrl+F5) to bust the cached page.
 
-## 7 · Removing or updating
+## 8 · Removing or updating
 
 The GUI is a single self-contained folder. To remove it: `rm -rf gui/` and delete the 9-line mount block from `local_ai_server.py`. To update it: drop a newer version on top — there's no migration, no database, no state.

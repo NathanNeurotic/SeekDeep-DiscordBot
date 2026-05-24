@@ -32,7 +32,7 @@ import time
 import asyncio
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -54,8 +54,21 @@ class WarmRequest(BaseModel):
 ALLOWED_SERVICES = {"ai-server", "bot", "searxng"}
 ALLOWED_ACTIONS  = {"start", "stop", "restart", "status"}
 
-# Per-process state for the launcher endpoint.
+# Services we refuse to start/stop/restart from inside the AI server itself.
+# (Killing the AI server from within an AI-server HTTP request would terminate
+# the request handler; spawning a duplicate would just fail to bind port 7865.)
+SELF_HOSTED_SERVICES = {"ai-server"}
+
+# Per-process state for processes we spawned ourselves. External processes
+# (e.g. ones started by seekdeep_launcher.bat) are detected via PID files.
 _PROCESSES: dict[str, subprocess.Popen] = {}
+
+# PID-file locations written by seekdeep_launcher.bat
+_PID_FILE_NAMES = {
+    "ai-server": "local-ai.pid",
+    "bot":       "bot.pid",
+    # searxng has no PID file; we treat "missing PID file" as "unknown" for it
+}
 
 
 # ====================================================================
@@ -177,51 +190,250 @@ def _service_command(service: str) -> list[str] | None:
     return None
 
 
-def _is_running(service: str) -> bool:
+def _pid_alive(pid: int) -> bool:
+    """Return True if `pid` is a live process. Cross-platform best effort."""
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            # On Windows, sending signal 0 is not supported. Use OpenProcess via ctypes.
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            exit_code = ctypes.c_ulong()
+            still_active = ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code))
+            ctypes.windll.kernel32.CloseHandle(handle)
+            # STILL_ACTIVE = 259
+            return bool(still_active) and exit_code.value == 259
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+
+
+def _read_pid_file(log_dir: Path, service: str) -> int | None:
+    """Return PID from logs/<svc>.pid, or None if file is missing/invalid."""
+    name = _PID_FILE_NAMES.get(service)
+    if not name:
+        return None
+    pid_path = log_dir / name
+    if not pid_path.is_file():
+        return None
+    try:
+        return int(pid_path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _detect_running(service: str, log_dir: Path) -> tuple[str, int | None]:
+    """
+    Return (state, pid) by consulting both in-process state and PID file.
+    State is one of: "running", "not-running", "exited", "unknown".
+    """
+    # 1. In-process spawn we tracked
     proc = _PROCESSES.get(service)
-    return proc is not None and proc.poll() is None
+    if proc is not None:
+        rc = proc.poll()
+        if rc is None:
+            return "running", proc.pid
+        # Process we started has exited; fall through to PID-file check
+        # in case the user restarted via launcher.bat.
+
+    # 2. PID file written by launcher.bat
+    pid = _read_pid_file(log_dir, service)
+    if pid is not None:
+        return ("running" if _pid_alive(pid) else "not-running"), pid
+
+    # 3. No info — for services we don't track this way (e.g. searxng)
+    if service not in _PID_FILE_NAMES:
+        return "unknown", None
+    return "not-running", None
 
 
-def _start_service(service: str, cwd: Path) -> dict:
-    if _is_running(service):
-        return {"ok": True, "service": service, "state": "already-running",
-                "pid": _PROCESSES[service].pid}
+def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
+    if service in SELF_HOSTED_SERVICES:
+        raise HTTPException(409,
+            f"{service} is self-hosted; cannot start it from inside the AI server. "
+            f"Use seekdeep_launcher.bat instead.")
+    state, pid = _detect_running(service, log_dir)
+    if state == "running":
+        return {"ok": True, "service": service, "state": "already-running", "pid": pid}
     cmd = _service_command(service)
     if not cmd:
         raise HTTPException(400, f"no command mapping for service {service!r}")
+    # Route stdout/stderr to per-launch log files so failures aren't invisible.
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out_log = log_dir / f"{service}-{stamp}.gui.out.log"
+    err_log = log_dir / f"{service}-{stamp}.gui.err.log"
     try:
+        out_f = out_log.open("ab")
+        err_f = err_log.open("ab")
         proc = subprocess.Popen(
             cmd, cwd=str(cwd),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
+            stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
         _PROCESSES[service] = proc
-        return {"ok": True, "service": service, "state": "starting", "pid": proc.pid}
+        return {"ok": True, "service": service, "state": "starting",
+                "pid": proc.pid, "log": str(out_log.name)}
     except FileNotFoundError as e:
         raise HTTPException(500, f"failed to start {service}: {e}")
 
 
-def _stop_service(service: str) -> dict:
+def _stop_service(service: str, log_dir: Path) -> dict:
+    if service in SELF_HOSTED_SERVICES:
+        raise HTTPException(409,
+            f"{service} is self-hosted; refusing to stop it (it would kill this "
+            f"very request). Use seekdeep_launcher.bat instead.")
+    # 1. If we spawned it, terminate that.
     proc = _PROCESSES.get(service)
-    if proc is None or proc.poll() is not None:
-        return {"ok": True, "service": service, "state": "not-running"}
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    return {"ok": True, "service": service, "state": "stopped"}
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return {"ok": True, "service": service, "state": "stopped", "source": "in-process"}
+    # 2. Otherwise try to terminate the PID from the launcher's PID file.
+    pid = _read_pid_file(log_dir, service)
+    if pid is not None and _pid_alive(pid):
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               check=False, capture_output=True)
+            else:
+                os.kill(pid, 15)  # SIGTERM
+                for _ in range(10):
+                    time.sleep(0.5)
+                    if not _pid_alive(pid):
+                        break
+                else:
+                    os.kill(pid, 9)  # SIGKILL
+            return {"ok": True, "service": service, "state": "stopped",
+                    "source": "pid-file", "pid": pid}
+        except (OSError, PermissionError) as e:
+            raise HTTPException(500, f"failed to stop {service} (pid {pid}): {e}")
+    return {"ok": True, "service": service, "state": "not-running"}
 
 
-def _status_service(service: str) -> dict:
-    proc = _PROCESSES.get(service)
-    if proc is None:
-        return {"ok": True, "service": service, "state": "not-running"}
-    rc = proc.poll()
-    if rc is None:
-        return {"ok": True, "service": service, "state": "running", "pid": proc.pid}
-    return {"ok": True, "service": service, "state": "exited", "returncode": rc}
+def _status_service(service: str, log_dir: Path) -> dict:
+    state, pid = _detect_running(service, log_dir)
+    out: dict[str, Any] = {"ok": True, "service": service, "state": state}
+    if pid is not None:
+        out["pid"] = pid
+    return out
+
+
+# ====================================================================
+# DATA FILE NORMALIZERS
+# ====================================================================
+# The bot writes data/*.json files in its own per-guild schema. The GUI's
+# Control Center expects a flatter shape (top-level totals, flat rule arrays,
+# day-bucket time series). These normalizers translate so the GUI consumes
+# real data instead of falling back to mock visuals.
+
+def _normalize_server_stats(raw: Any) -> dict:
+    """
+    Bot schema  : {guilds:{<gid>:{totalChats,totalImages,totalVision,
+                                  users:{<uid>:{chats,images,vision}},
+                                  dayBuckets:{YYYY-MM-DD:{chats,images,vision}}}}}
+    GUI expects : {totals:{messages,images,vision},
+                   dayBuckets:{messages:[...]} (30-day series, newest last),
+                   top:[{name,count,id}] sorted desc by count}
+    """
+    if not isinstance(raw, dict):
+        return {"totals": {}, "dayBuckets": {}, "top": []}
+    guilds = raw.get("guilds") or {}
+
+    totals = {"messages": 0, "images": 0, "vision": 0}
+    day_agg: dict[str, dict[str, int]] = {}      # date -> {messages,images,vision}
+    user_agg: dict[str, dict[str, Any]] = {}     # uid  -> {id,name?,count}
+
+    for _gid, g in guilds.items():
+        if not isinstance(g, dict):
+            continue
+        totals["messages"] += int(g.get("totalChats") or 0)
+        totals["images"]   += int(g.get("totalImages") or 0)
+        totals["vision"]   += int(g.get("totalVision") or 0)
+
+        for date, bucket in (g.get("dayBuckets") or {}).items():
+            if not isinstance(bucket, dict):
+                continue
+            d = day_agg.setdefault(date, {"messages": 0, "images": 0, "vision": 0})
+            d["messages"] += int(bucket.get("chats") or 0)
+            d["images"]   += int(bucket.get("images") or 0)
+            d["vision"]   += int(bucket.get("vision") or 0)
+
+        for uid, u in (g.get("users") or {}).items():
+            if not isinstance(u, dict):
+                continue
+            entry = user_agg.setdefault(uid, {"id": uid, "count": 0})
+            entry["count"] += int(u.get("chats") or 0) + int(u.get("images") or 0) + int(u.get("vision") or 0)
+            # Best-effort display name (the bot may add one in future)
+            for key in ("name", "username", "displayName"):
+                if u.get(key):
+                    entry["name"] = u[key]
+                    break
+
+    # 30-day time series (newest last). If there are gaps, the GUI's bar
+    # chart just shows shorter columns; we don't insert zero-filler dates.
+    sorted_dates = sorted(day_agg.keys())[-30:]
+    day_buckets_flat = {
+        "messages": [day_agg[d]["messages"] for d in sorted_dates],
+        "images":   [day_agg[d]["images"]   for d in sorted_dates],
+        "vision":   [day_agg[d]["vision"]   for d in sorted_dates],
+        "dates":    sorted_dates,
+    }
+    top = sorted(user_agg.values(), key=lambda u: u.get("count", 0), reverse=True)[:25]
+
+    return {"totals": totals, "dayBuckets": day_buckets_flat, "top": top}
+
+
+def _normalize_auto_reactions(raw: Any) -> dict:
+    """
+    Bot schema  : {guilds:{<gid>:{rules:[{id,emoji,pattern,scope,target,enabled,...}],
+                                  builtins:{...}}}}
+    GUI expects : {rules:[{id,emoji,pattern,channel?,user?,enabled,hits}]}
+    """
+    if not isinstance(raw, dict):
+        return {"rules": []}
+    rules_out: list[dict[str, Any]] = []
+    for gid, g in (raw.get("guilds") or {}).items():
+        if not isinstance(g, dict):
+            continue
+        for rule in (g.get("rules") or []):
+            if not isinstance(rule, dict):
+                continue
+            scope = (rule.get("scope") or "").lower()
+            target = rule.get("target") or ""
+            flat = {
+                "id":      rule.get("id") or "",
+                "emoji":   rule.get("emoji") or "?",
+                "pattern": rule.get("pattern") or "",
+                "enabled": rule.get("enabled") is not False,
+                "hits":    int(rule.get("hits") or 0),
+                "guild":   gid,
+            }
+            if scope == "channel" and target:
+                flat["channel"] = str(target)
+            elif scope == "user" and target:
+                flat["user"] = str(target)
+            rules_out.append(flat)
+    return {"rules": rules_out}
+
+
+# Map known data files to their normalizer functions. Anything not listed
+# is returned to the GUI as-is (raw bot schema).
+_DATA_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
+    "server-stats.json":   _normalize_server_stats,
+    "auto-reactions.json": _normalize_auto_reactions,
+}
 
 
 # ====================================================================
@@ -234,12 +446,27 @@ def register_gui_endpoints(
     data_dir: str = "data",
     env_path: str = ".env",
     repo_root: str | None = None,
+    warmup_handlers: dict[str, Callable[..., Any]] | None = None,
 ) -> None:
-    """Attach every GUI-required endpoint to `app`. Idempotent."""
+    """
+    Attach every GUI-required endpoint to `app`. Idempotent.
+
+    warmup_handlers, if provided, maps the model class ("chat", "image",
+    "vision") to a callable that warms it. The chat handler is called with
+    a `role` kwarg; image/vision are called with no args. When omitted,
+    /model/warm returns a clearly-flagged stub response.
+    """
     root = Path(repo_root or os.path.dirname(os.path.abspath(__file__))).resolve()
     _log_dir = (root / log_dir).resolve()
     _data_dir = (root / data_dir).resolve()
     _env_path = (root / env_path).resolve()
+
+    def _is_inside(child: Path, parent: Path) -> bool:
+        try:
+            child.relative_to(parent)
+            return True
+        except ValueError:
+            return False
 
     # ----- POST /config -----
     @app.post("/config")
@@ -254,7 +481,7 @@ def register_gui_endpoints(
         path = (_log_dir / file).resolve() if file else _find_active_log(_log_dir)
         if path is None:
             return {"ok": False, "error": "no log file found"}
-        if not str(path).startswith(str(_log_dir)):
+        if not _is_inside(path, _log_dir):
             raise HTTPException(400, "path traversal blocked")
         lines = max(1, min(2000, int(lines)))
         return {
@@ -280,41 +507,69 @@ def register_gui_endpoints(
         if action not in ALLOWED_ACTIONS:
             raise HTTPException(400, f"unknown action · allowed: {sorted(ALLOWED_ACTIONS)}")
 
-        if action == "start":   return _start_service(service, root)
-        if action == "stop":    return _stop_service(service)
-        if action == "status":  return _status_service(service)
+        if action == "start":   return _start_service(service, root, _log_dir)
+        if action == "stop":    return _stop_service(service, _log_dir)
+        if action == "status":  return _status_service(service, _log_dir)
         if action == "restart":
-            _stop_service(service)
+            # Refuse restart for self-hosted services up-front rather than
+            # killing this very request handler half-way through.
+            if service in SELF_HOSTED_SERVICES:
+                raise HTTPException(409,
+                    f"{service} is self-hosted; refusing to restart it from inside the AI server. "
+                    f"Use seekdeep_launcher.bat instead.")
+            _stop_service(service, _log_dir)
             time.sleep(0.5)
-            return _start_service(service, root)
+            return _start_service(service, root, _log_dir)
 
     # ----- GET /data/{file} -----
     @app.get("/data/{file}")
     async def get_data_file(file: str):
         # Reject anything that escapes data_dir
         target = (_data_dir / file).resolve()
-        if not str(target).startswith(str(_data_dir)):
+        if not _is_inside(target, _data_dir):
             raise HTTPException(400, "path traversal blocked")
         if not target.is_file():
+            # Empty success so the GUI's normalized panes can show empty-state
+            # rather than reporting an error for files the bot hasn't written yet.
+            if file in _DATA_NORMALIZERS:
+                return {"ok": True, "file": file, "data": _DATA_NORMALIZERS[file]({}), "empty": True}
             raise HTTPException(404, f"{file} not found in {_data_dir}")
         # Only allow .json
         if target.suffix.lower() != ".json":
             raise HTTPException(400, "only .json files exposed")
         try:
             with target.open("r", encoding="utf-8") as f:
-                return {"ok": True, "file": target.name, "data": json.load(f)}
+                raw = json.load(f)
         except json.JSONDecodeError as e:
             return {"ok": False, "error": f"invalid json: {e}", "file": target.name}
+        normalizer = _DATA_NORMALIZERS.get(target.name)
+        data = normalizer(raw) if normalizer else raw
+        return {"ok": True, "file": target.name, "data": data, "normalized": bool(normalizer)}
 
     # ----- POST /model/warm -----
-    # NOTE: this is a stub. Wire it to your existing role->model loader.
     @app.post("/model/warm")
     async def post_model_warm(req: WarmRequest):
+        role = (req.role or "default_chat").strip().lower() or "default_chat"
+        if not warmup_handlers:
+            return {"ok": True, "role": role, "loaded": False, "stub": True,
+                    "note": "no warmup handlers wired; pass warmup_handlers=... to register_gui_endpoints"}
+        # Dispatch: image/vision are categorical; everything else is a chat role.
         try:
-            # === Wire to your existing model loader here ===
-            # e.g. from local_ai_server import _load_chat_model
-            # _load_chat_model(role=req.role)
-            return {"ok": True, "role": req.role, "loaded": True, "stub": True}
+            if role == "image":
+                handler = warmup_handlers.get("image")
+                if not handler: return {"ok": False, "role": role, "error": "no image handler"}
+                result = handler()
+            elif role == "vision":
+                handler = warmup_handlers.get("vision")
+                if not handler: return {"ok": False, "role": role, "error": "no vision handler"}
+                result = handler()
+            else:
+                handler = warmup_handlers.get("chat")
+                if not handler: return {"ok": False, "role": role, "error": "no chat handler"}
+                result = handler(role)
+            # Loaders return implementation-specific objects; just stringify a hint.
+            return {"ok": True, "role": role, "loaded": True,
+                    "result": str(result)[:200] if result is not None else None}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

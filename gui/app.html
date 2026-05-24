@@ -1518,16 +1518,11 @@
           </div>
         </div>
 
-        <div class="arch-tabs">
-          <span class="chip active">SHARED · 412</span>
-          <span class="chip">nautilus · 88</span>
-          <span class="chip">deepdiver · 64</span>
-          <span class="chip">abyssalbot · 41</span>
-          <span class="chip">k-ray · 27</span>
-          <span class="chip" style="color: var(--hull-3);">+ 8 more</span>
+        <div class="arch-tabs" id="archTabs">
+          <span class="chip active" data-thread="*">SHARED · —</span>
         </div>
 
-        <div class="arch-grid">
+        <div class="arch-grid" id="archGrid">
           <div class="arch-item" style="background: linear-gradient(165deg, #14306b, #2dd4ff30);">
             <div class="arch-meta"><div class="p">colossal squid · 10000m</div><div class="s">SEED 8842 · 1024² · 5h</div></div>
           </div>
@@ -1875,6 +1870,118 @@
     );
     onActive();
   })();
+
+  
+  // ===== Archive browser · live wiring (GET /data/archive-snapshots.json) =====
+  (function wireArchive() {
+    const tabs = document.getElementById('archTabs');
+    const grid = document.getElementById('archGrid');
+    if (!tabs || !grid) return;
+    let snapshot = null, activeThreadId = '*';
+
+    function tile(entry) {
+      const el = document.createElement('div');
+      el.className = 'arch-item';
+      if (entry.thumb || entry.url) {
+        el.style.backgroundImage = 'url(' + (entry.thumb || entry.url) + ')';
+        el.style.backgroundSize = 'cover';
+        el.style.backgroundPosition = 'center';
+      }
+      el.title = entry.prompt || '';
+      const ts = entry.timestamp ? new Date(entry.timestamp) : null;
+      const ago = ts ? humanAgo(ts) : '—';
+      const sub = (entry.width && entry.height) ? (entry.width + '×' + entry.height) : (entry.author_name || '');
+      el.innerHTML = '<div class="arch-meta"><div class="p">' + escapeHtml((entry.prompt||'').slice(0,40)) + '</div><div class="s">' + escapeHtml(sub) + ' · ' + escapeHtml(ago) + '</div></div>';
+      return el;
+    }
+    function humanAgo(d) {
+      const s = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s/60) + 'm';
+      if (s < 86400) return Math.floor(s/3600) + 'h';
+      return Math.floor(s/86400) + 'd';
+    }
+    function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    function render() {
+      if (!snapshot) return;
+      // Build tabs from all threads across all guilds
+      const allThreads = [];
+      (snapshot.guilds || []).forEach(g => {
+        (g.threads || []).forEach(t => allThreads.push({...t, guild_name: g.guild_name}));
+      });
+
+      tabs.innerHTML = '';
+      const shared = document.createElement('span');
+      shared.className = 'chip active';
+      shared.dataset.thread = '*';
+      const totalEntries = allThreads.reduce((s, t) => s + (t.entries?.length || 0), 0);
+      shared.textContent = 'SHARED · ' + totalEntries;
+      tabs.appendChild(shared);
+      allThreads.forEach(t => {
+        const c = document.createElement('span');
+        c.className = 'chip';
+        c.dataset.thread = t.thread_id;
+        c.textContent = (t.name || t.thread_id.slice(0,8)) + ' · ' + (t.count ?? t.entries?.length ?? 0);
+        tabs.appendChild(c);
+      });
+      tabs.querySelectorAll('.chip').forEach(c => {
+        c.addEventListener('click', () => {
+          tabs.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+          c.classList.add('active');
+          activeThreadId = c.dataset.thread || '*';
+          renderGrid(allThreads);
+        });
+      });
+      renderGrid(allThreads);
+    }
+    function renderGrid(allThreads) {
+      grid.innerHTML = '';
+      const entries = [];
+      if (activeThreadId === '*') {
+        allThreads.forEach(t => (t.entries || []).forEach(e => entries.push(e)));
+      } else {
+        const t = allThreads.find(t => t.thread_id === activeThreadId);
+        if (t) entries.push(...(t.entries || []));
+      }
+      // newest first
+      entries.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+      if (!entries.length) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px;">▸ no entries in this thread yet</div>';
+        return;
+      }
+      entries.slice(0, 30).forEach(e => grid.appendChild(tile(e)));
+    }
+
+    let loaded = false;
+    async function load() {
+      if (loaded) return;
+      loaded = true;
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/data/archive-snapshots.json', { signal: AbortSignal.timeout(3000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const wrap = await r.json();
+        snapshot = wrap.data || wrap;
+        render();
+      } catch (e) {
+        loaded = false;
+        // Leave mock visuals in place — page still looks alive
+      }
+    }
+    function onActive() {
+      const pane = document.querySelector('[data-pane="archive"]');
+      if (pane && pane.classList.contains('active')) load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="archive"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(onActive, 50))
+    );
+    onActive();
+  })();
+
+  // ===== Sidebar live badges (queue depth · persona reflected from /health if available) =====
+  // The LIVE poller already updates VRAM in the sidebar status panel. This adds a
+  // tiny extra: if /health exposes queue depth in future, we'll surface it here.
+  // Currently a no-op placeholder so the wiring is in place when the field appears.
 
   // ===== Model row buttons · live wiring (POST /model/warm and /unload) =====
   document.querySelectorAll('.model-row[data-role]').forEach(row => {

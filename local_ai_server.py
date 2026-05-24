@@ -372,7 +372,18 @@ if os.path.isdir(_GUI_DIR):
 # ===== SeekDeep GUI · backend endpoints (config / logs / launcher / data / model.warm) =====
 try:
     from gui_endpoints import register_gui_endpoints
-    register_gui_endpoints(app, log_dir="logs", data_dir="data", env_path=".env")
+    register_gui_endpoints(
+        app,
+        log_dir="logs", data_dir="data", env_path=".env",
+        # Wire /model/warm to the same loaders the /warmup/* routes use so the
+        # Control Center "Warm" buttons actually load the model instead of just
+        # flashing a fake success.
+        warmup_handlers={
+            "chat":   lambda role: load_chat_model(role),
+            "image":  lambda: load_image_pipe(),
+            "vision": lambda: load_vision_model(),
+        },
+    )
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
 
