@@ -1064,7 +1064,7 @@ async function seekdeepFetchWithLimits(url, options = {}) {
   };
 
   try {
-    const res = await fetch(url, { ...rest, signal: controller.signal });
+    const res = await (globalThis.fetch || fetch)(url, { ...rest, signal: controller.signal });
     if (!res.ok) {
       throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
     }
@@ -1776,7 +1776,7 @@ async function fetchJson(url, options = {}) {
     timer = setTimeout(() => controller.abort(), timeoutMs);
   }
   try {
-    const res = await fetch(url, rest);
+    const res = await (globalThis.fetch || fetch)(url, rest);
     const text = await res.text();
     let json;
     try {
@@ -3498,6 +3498,9 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
       dynamicRefinementAttempted: Boolean(promptInfo.dynamicRefinementAttempted),
       dynamicRefinementError: promptInfo.dynamicRefinementError || '',
       forceFreshRefinement: seekdeepImageOptions.forceFreshRefinement,
+      negative_prompt: finalNegative,
+      steps: stepsOverride > 0 ? Math.max(1, Math.min(50, stepsOverride)) : Number(process.env.IMAGE_STEPS || 28),
+      guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
     },
     width,
     height,
@@ -3627,6 +3630,16 @@ function seekdeepRememberTempImageState(state) {
     createdAt,
     expiresAt,
     mimeType: state?.mimeType || 'image/png',
+    negativePrompt: state?.negativePrompt || state?.imageModeOptions?.negativePrompt || '',
+    stylePreset: state?.stylePreset || state?.imageModeOptions?.style || '',
+    qualityPreset: state?.qualityPreset || state?.imageModeOptions?.quality || '',
+    steps: state?.steps || state?.imageModeOptions?.steps || 28,
+    guidance: state?.guidance || state?.imageModeOptions?.guidance || 7.0,
+    model: state?.model || 'unknown',
+    jobId: state?.jobId || '',
+    generationTime: state?.generationTime || '',
+    queueWait: state?.queueWait || 0,
+    refinementMode: state?.refinementMode || '',
   };
 
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
@@ -3638,6 +3651,68 @@ function seekdeepRememberTempImageState(state) {
 
   seekdeepTempImageStateIndex.set(id, liveState);
   return liveState;
+}
+
+function seekdeepGetLastTempImageState() {
+  if (seekdeepTempImageStateIndex.size > 0) {
+    let newest = null;
+    for (const state of seekdeepTempImageStateIndex.values()) {
+      if (!newest || state.createdAt > newest.createdAt) {
+        newest = state;
+      }
+    }
+    if (newest) return newest;
+  }
+
+  try {
+    const dir = SEEKDEEP_IMAGE_CACHE_DIR;
+    if (!fs.existsSync(dir)) return null;
+    const files = fs.readdirSync(dir);
+    let newestMeta = null;
+    let newestTime = 0;
+    for (const file of files) {
+      if (file.endsWith('.meta.json')) {
+        const fullPath = path.join(dir, file);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const meta = JSON.parse(content);
+          if (meta && meta.createdAt > newestTime) {
+            newestTime = meta.createdAt;
+            newestMeta = meta;
+          }
+        } catch {}
+      }
+    }
+    return newestMeta;
+  } catch (err) {
+    console.error('[SeekDeep] failed to read temp image cache directory:', err);
+  }
+  return null;
+}
+
+function seekdeepFormatPromptDebugReport(state) {
+  if (!state) {
+    return 'No recent generated image was found.';
+  }
+  const lines = [
+    `**Image Prompt Debugger**`,
+    `• **Original Prompt**: ${state.originalPrompt || state.prompt || 'unknown'}`,
+    `• **Cleaned Prompt**: ${state.prompt || 'unknown'}`,
+    `• **Refined Prompt**: ${state.refinedPrompt || 'unknown'}`,
+    `• **Negative Prompt**: ${state.negativePrompt || 'unknown'}`,
+    `• **Style Preset**: ${state.stylePreset || 'none'}`,
+    `• **Quality Preset**: ${state.qualityPreset || 'none'}`,
+    `• **Seed**: ${state.seed ?? 'unknown'}`,
+    `• **Dimensions**: ${state.width}x${state.height}`,
+    `• **Steps**: ${state.steps ?? 'unknown'}`,
+    `• **Guidance Scale**: ${state.guidance ?? 'unknown'}`,
+    `• **Model**: ${state.model || 'unknown'}`,
+    `• **Job ID**: ${state.jobId || 'unknown'}`,
+    `• **Generation Time**: ${state.generationTime ? state.generationTime + 's' : 'unknown'}`,
+    `• **Queue Wait**: ${state.queueWait ? state.queueWait + 's' : 'unknown'}`,
+    `• **Refinement Mode**: ${state.refinementMode || 'unknown'}`,
+  ];
+  return lines.join('\n');
 }
 
 function seekdeepDeleteTempImageState(id, meta = null) {
@@ -4459,6 +4534,16 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
         mimeType: 'image/png',
         createdAt: Date.now(),
         expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
+        negativePrompt: result.imageOptions?.negative_prompt || '',
+        stylePreset: seekdeepImageModeOptions?.style || '',
+        qualityPreset: seekdeepImageModeOptions?.quality || '',
+        steps: result.imageOptions?.steps || 28,
+        guidance: result.imageOptions?.guidance_scale || 7.0,
+        model: seekdeepImageModelLabel() || 'unknown',
+        jobId: runningJob.id,
+        generationTime: runningJob.startedAt ? ((Date.now() - runningJob.startedAt) / 1000).toFixed(2) : 'unknown',
+        queueWait: seekdeepImageQueueWaitSeconds(runningJob),
+        refinementMode: result.promptRefined ? (result.imageOptions?.dynamicRefinement ? 'dynamic' : 'static') : 'none',
       });
       // Remember this as the "last subject" so iterative followups like
       // "now make her wear a hat" can extend the prior prompt.
@@ -4713,6 +4798,16 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
         mimeType: 'image/png',
         createdAt: Date.now(),
         expiresAt: Date.now() + SEEKDEEP_IMAGE_CACHE_TTL_MS,
+        negativePrompt: result.imageOptions?.negative_prompt || '',
+        stylePreset: seekdeepImageModeOptions?.style || '',
+        qualityPreset: seekdeepImageModeOptions?.quality || '',
+        steps: result.imageOptions?.steps || 28,
+        guidance: result.imageOptions?.guidance_scale || 7.0,
+        model: seekdeepImageModelLabel() || 'unknown',
+        jobId: runningJob.id,
+        generationTime: runningJob.startedAt ? ((Date.now() - runningJob.startedAt) / 1000).toFixed(2) : 'unknown',
+        queueWait: seekdeepImageQueueWaitSeconds(runningJob),
+        refinementMode: result.promptRefined ? (result.imageOptions?.dynamicRefinement ? 'dynamic' : 'static') : 'none',
       });
 
       const content = seekdeepAppendResponseFooter([
@@ -12990,6 +13085,27 @@ function seekdeepInpaintQueryFromMessage(raw = '') {
   return String(m[1] || '').trim();
 }
 
+function seekdeepInpaintPreviewQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+(?:inpaint|mask)\s+preview(?:\s+(.+))?$/is);
+  if (!m) return null;
+  return String(m[1] || '').trim();
+}
+
+function seekdeepInpaintPreviewQueryFromStrippedPrompt(prompt = '') {
+  const m = String(prompt || '').match(/^\s*(?:inpaint|mask)\s+preview(?:\s+(.+))?$/is);
+  if (!m) return null;
+  return String(m[1] || '').trim();
+}
+
+function seekdeepPromptDebugQueryFromMessage(raw = '') {
+  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+prompt\s+debug(?:\s+last)?\s*$/i);
+  return m ? true : false;
+}
+
+function seekdeepPromptDebugQueryFromStrippedPrompt(prompt = '') {
+  return /^\s*prompt\s+debug(?:\s+last)?\s*$/i.test(prompt);
+}
+
 function seekdeepUpscaleQueryFromMessage(raw = '') {
   const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+upscale\b\s*(.*)?$/is);
   if (!m) return null;
@@ -13192,6 +13308,50 @@ async function seekdeepHandleInpaint(target, prompt, removeTarget, imageUrl) {
       content: `Inpaint complete: removed "${removeTarget}" — ${prompt.slice(0, 150)}`,
       files: [new AttachmentBuilder(buffer, { name: filename })],
     }, { previousReply: ack });
+  } finally {
+    seekdeepClearActivityStatus();
+  }
+}
+
+async function seekdeepHandleInpaintMaskPreview(target, removeTarget, imageUrl) {
+  seekdeepSetActivityStatus('Generating mask...');
+  const gif = seekdeepLoadingGifAttachment();
+  let ack = null;
+  try {
+    if (gif) {
+      try {
+        ack = await seekdeepReplyToTarget(target, { content: 'Generating mask preview with CLIPSeg...', files: [gif] });
+      } catch {}
+    }
+
+    const imageB64 = await seekdeepFetchImageAsBase64(imageUrl);
+    const response = await postLocal('/inpaint_mask_preview', {
+      remove_target: removeTarget || '',
+      image_b64: imageB64,
+      width: 1024,
+      height: 1024,
+    });
+
+    const buffer = Buffer.from(response.image_b64, 'base64');
+    const filename = response.filename || 'seekdeep_mask_preview.png';
+    await seekdeepReplyToTarget(target, {
+      content: `Mask preview complete for: "${removeTarget}"`,
+      files: [new AttachmentBuilder(buffer, { name: filename })],
+    }, { previousReply: ack });
+  } catch (err) {
+    console.error('[SeekDeep] inpaint mask preview failed:', err?.stack || err?.message || err, err?.responseJson || '');
+    const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.message ?? err;
+    let text;
+    try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+    text = String(text || 'unknown error');
+    
+    const failure = {
+      content: 'Mask preview failed: ' + text.slice(0, 500),
+      files: [],
+      attachments: [],
+      components: [],
+    };
+    await seekdeepReplyToTarget(target, failure, { previousReply: ack });
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -15686,6 +15846,36 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // prompt debug: "@SeekDeep prompt debug" / "@SeekDeep prompt debug last"
+    if (seekdeepPromptDebugQueryFromMessage(seekdeepArchiveOpenRawContent)) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('prompt-debug', '');
+      const lastState = seekdeepGetLastTempImageState();
+      const report = seekdeepFormatPromptDebugReport(lastState);
+      await message.reply({ content: report, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    // inpaint preview: "@SeekDeep [inpaint|mask] preview <target>"
+    const inpaintPreviewTarget = seekdeepInpaintPreviewQueryFromMessage(seekdeepArchiveOpenRawContent);
+    if (inpaintPreviewTarget !== null) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('inpaint-preview', `remove="${inpaintPreviewTarget}"`);
+      if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+        await message.reply({ content: 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      if (!inpaintPreviewTarget) {
+        await message.reply({ content: 'Tell me what to generate a mask for. Example: `@SeekDeep mask preview the wizard`', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        await message.reply({ content: 'Attach an image, reply to an image, or post after a recent SeekDeep image to generate a mask preview.', allowedMentions: { repliedUser: false } });
+      } else {
+        await seekdeepHandleInpaintMaskPreview(message, inpaintPreviewTarget, sourceImage.url);
+      }
+      return true;
+    }
+
     // inpaint: "@SeekDeep inpaint [target]" (attach image or reply to one)
     const inpaintTarget = seekdeepInpaintQueryFromMessage(seekdeepArchiveOpenRawContent);
     if (inpaintTarget !== null) {
@@ -16070,6 +16260,41 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
           })
         : replyText;
       await sendLongMessageReply(message, content);
+      return;
+    }
+
+    // prompt debug (addressed mention check)
+    if (seekdeepPromptDebugQueryFromStrippedPrompt(prompt)) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('prompt-debug', '');
+      const lastState = seekdeepGetLastTempImageState();
+      const report = seekdeepFormatPromptDebugReport(lastState);
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      await sendLongMessageReply(message, report);
+      return;
+    }
+
+    // mask/inpaint preview (addressed mention check)
+    const strippedInpaintPreviewTarget = seekdeepInpaintPreviewQueryFromStrippedPrompt(prompt);
+    if (strippedInpaintPreviewTarget !== null) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('inpaint-preview', `remove="${strippedInpaintPreviewTarget}"`);
+      if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
+        seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+        await sendLongMessageReply(message, 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.');
+        return;
+      }
+      if (!strippedInpaintPreviewTarget) {
+        seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+        await sendLongMessageReply(message, 'Tell me what to generate a mask for. Example: `@SeekDeep mask preview the wizard`');
+        return;
+      }
+      const sourceImage = await seekdeepResolveSourceImage(message);
+      if (!sourceImage) {
+        seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+        await sendLongMessageReply(message, 'Attach an image, reply to an image, or post after a recent SeekDeep image to generate a mask preview.');
+      } else {
+        seekdeepConsumeLoadingGif(message);
+        await seekdeepHandleInpaintMaskPreview(message, strippedInpaintPreviewTarget, sourceImage.url);
+      }
       return;
     }
 
@@ -18799,6 +19024,10 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepAppendGpuLogSample,
     seekdeepStartGpuLogging,
     seekdeepImageQueueStatusText,
+    seekdeepInpaintPreviewQueryFromMessage,
+    seekdeepPromptDebugQueryFromMessage,
+    seekdeepFormatPromptDebugReport,
+    seekdeepGetLastTempImageState,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

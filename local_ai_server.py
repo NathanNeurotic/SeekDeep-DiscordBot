@@ -716,6 +716,13 @@ class InpaintRequest(BaseModel):
     negative_prompt: str = ""
 
 
+class InpaintMaskPreviewRequest(BaseModel):
+    image_b64: str
+    remove_target: str = ""
+    width: int = Field(default=1024, ge=256, le=1536)
+    height: int = Field(default=1024, ge=256, le=1536)
+
+
 class InstructPix2PixRequest(BaseModel):
     instruction: str
     image_b64: str
@@ -750,7 +757,7 @@ class UpscaleRequest(BaseModel):
 import asyncio as _seekdeep_asyncio
 
 _SEEKDEEP_MODEL_REQUEST_LOCK = _seekdeep_asyncio.Lock()
-_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-pix2pix", "/inpaint", "/upscale", "/unload"}
+_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-pix2pix", "/inpaint", "/inpaint_mask_preview", "/upscale", "/unload"}
 
 @app.middleware("http")
 async def seekdeep_singleflight_middleware(request, call_next):
@@ -1517,6 +1524,49 @@ def img2img(req: Img2ImgRequest):
         "strength": float(req.strength),
         "seed": seed,
     }
+def check_realesrgan_available() -> tuple[bool, str]:
+    """
+    Checks if Real-ESRGAN dependencies and models are available.
+    Returns (is_available, error_message).
+    """
+    if os.getenv("SEEKDEEP_FEATURE_UPSCALE_REALESRGAN") != "on":
+        return False, "Real-ESRGAN feature flag (SEEKDEEP_FEATURE_UPSCALE_REALESRGAN) is not 'on'."
+    try:
+        import torch
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from realesrgan import RealESRGANer
+    except ImportError as e:
+        return False, f"Missing Python dependency for Real-ESRGAN: {e}"
+
+    realesrgan_dir = MODEL_CACHE_DIR / "realesrgan"
+    if not realesrgan_dir.exists():
+        return False, f"Real-ESRGAN model directory not found at {realesrgan_dir}"
+    
+    pth_files = list(realesrgan_dir.glob("*.pth"))
+    if not pth_files:
+        return False, f"No Real-ESRGAN model weights (.pth) found in {realesrgan_dir}"
+        
+    return True, ""
+
+
+def select_upscale_method(requested_method: str) -> tuple[str, bool, str]:
+    """
+    Resolves the upscale method based on availability and fallback config.
+    Returns (resolved_method, is_available, error_message).
+    """
+    method = str(requested_method or "").lower()
+    if method == "realesrgan":
+        is_avail, err_msg = check_realesrgan_available()
+        if is_avail:
+            return "realesrgan", True, ""
+        
+        fallback = str(os.getenv("SEEKDEEP_UPSCALE_REALESRGAN_FALLBACK") or "").lower()
+        if fallback == "lanczos":
+            return "lanczos", False, err_msg
+        else:
+            return "realesrgan", False, err_msg
+            
+    return "lanczos", True, ""
 
 
 @app.post("/upscale")
@@ -1684,18 +1734,116 @@ def upscale(req: UpscaleRequest):
             result["note"] = note
         return result
 
-    if req.method == "realesrgan":
-        # Placeholder — Real-ESRGAN requires a separate model download.
-        # Check if it's available; if not, fall back to Lanczos with a note.
-        realesrgan_path = MODEL_CACHE_DIR / "realesrgan"
-        if not realesrgan_path.exists():
-            return finish_pil_upscale("Real-ESRGAN model not installed; used Lanczos fallback.")
-        # Future: load Real-ESRGAN and run inference here
-        return JSONResponse(status_code=501, content={"error": "Real-ESRGAN is scaffolded but not yet implemented."})
+    resolved_method, is_avail, err_msg = select_upscale_method(req.method)
+    if resolved_method == "realesrgan":
+        if not is_avail:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "method": "realesrgan",
+                    "error": "Real-ESRGAN is enabled but dependencies/model are missing..."
+                }
+            )
+        try:
+            import numpy as np
+            from basicsr.archs.rrdbnet_arch import RRDBNet
+            from realesrgan import RealESRGANer
 
-    # Lanczos + a mild unsharp mask is the default: zero extra model download,
-    # fast enough for Discord, and visibly cleaner than a bare resize.
-    return finish_pil_upscale()
+            realesrgan_dir = MODEL_CACHE_DIR / "realesrgan"
+            pth_files = list(realesrgan_dir.glob("*.pth"))
+            model_path = None
+            for p in pth_files:
+                if f"x{scale}" in p.name.lower():
+                    model_path = p
+                    break
+            if not model_path:
+                model_path = pth_files[0]
+
+            num_block = 23
+            if "anime" in model_path.name.lower():
+                num_block = 6
+
+            model_scale = 4
+            if "x2" in model_path.name.lower():
+                model_scale = 2
+            elif "x3" in model_path.name.lower():
+                model_scale = 3
+            elif "x4" in model_path.name.lower():
+                model_scale = 4
+
+            model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=model_scale)
+            device = "cuda" if cuda_available() else "cpu"
+            upsampler = RealESRGANer(
+                scale=model_scale,
+                model_path=str(model_path),
+                model=model,
+                tile=0,
+                tile_pad=10,
+                pre_pad=0,
+                half=(device == "cuda"),
+                device=device
+            )
+
+            img_np = np.array(source_img)
+            if source_img.mode == "RGBA":
+                img_np = img_np[:, :, :3]
+            img_np = img_np[:, :, ::-1] # RGB to BGR
+
+            out_img, _ = upsampler.enhance(img_np, outscale=scale)
+            out_img = out_img[:, :, ::-1] # BGR to RGB
+            img = Image.fromarray(out_img)
+
+            # Apply sharpening if requested
+            sharpened = bool(req.sharpen and int(req.sharpen_percent) > 0)
+            if sharpened:
+                img = img.filter(ImageFilter.UnsharpMask(
+                    radius=float(req.sharpen_radius),
+                    percent=int(req.sharpen_percent),
+                    threshold=int(req.sharpen_threshold),
+                ))
+
+            selected = select_output_bytes(img)
+            png_bytes = encode_image_bytes(img, "PNG")
+            ts = int(time.time())
+            safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
+            out_path = OUTPUT_DIR / safe_name
+            out_path.write_bytes(selected["bytes"])
+            return {
+                "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
+                "png_b64": base64.b64encode(png_bytes).decode("ascii"),
+                "filename": safe_name,
+                "path": str(out_path),
+                "method": "realesrgan",
+                "resample": resample_name,
+                "sharpened": sharpened,
+                "sharpen_radius": float(req.sharpen_radius),
+                "sharpen_percent": int(req.sharpen_percent),
+                "sharpen_threshold": int(req.sharpen_threshold),
+                "scale": scale,
+                "width": int(selected["width"]),
+                "height": int(selected["height"]),
+                "input_width": input_width,
+                "input_height": input_height,
+                "input_bytes": input_bytes,
+                "output_format": selected["format"],
+                "output_bytes": len(selected["bytes"]),
+                "max_bytes": max_bytes,
+            }
+        except Exception as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "method": "realesrgan",
+                    "error": f"Real-ESRGAN is enabled but dependencies/model are missing: Failed to execute: {exc}"
+                }
+            )
+
+    note = ""
+    if req.method == "realesrgan" and not is_avail:
+        note = f"Real-ESRGAN fallback to Lanczos: {err_msg}"
+    return finish_pil_upscale(note)
 
 
 # ---------- InstructPix2Pix endpoint ----------
@@ -1893,6 +2041,51 @@ def inpaint_endpoint(req: InpaintRequest):
         "filename": safe_name,
         "path": str(out_path),
         "strength": float(req.strength),
+    }
+
+
+@app.post("/inpaint_mask_preview")
+def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
+    """
+    Generate and return only the CLIPSeg mask preview.
+    Does not run diffusion inpainting.
+    """
+    try:
+        source_bytes = b64_to_bytes(req.image_b64)
+        source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image/payload: {exc}")
+
+    width = int(req.width)
+    height = int(req.height)
+    if width % 8:
+        width = width - (width % 8)
+    if height % 8:
+        height = height - (height % 8)
+    source_img = source_img.resize((width, height), Image.LANCZOS)
+
+    remove_target = req.remove_target.strip()
+    if not remove_target:
+        raise HTTPException(status_code=400, detail="remove_target must not be empty for mask preview.")
+
+    try:
+        mask_img = generate_mask_clipseg(source_img, remove_target)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"CLIPSeg model/dependencies are unavailable: {exc}"
+        )
+
+    ts = int(time.time())
+    safe_name = f"seekdeep_mask_preview_{ts}.png"
+    out_path = OUTPUT_DIR / safe_name
+    mask_img.save(out_path)
+
+    return {
+        "image_b64": image_to_b64_png(mask_img),
+        "remove_target": remove_target,
+        "filename": safe_name,
+        "path": str(out_path),
     }
 
 
