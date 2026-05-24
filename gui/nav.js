@@ -650,26 +650,36 @@
       }
     } catch {}
   }
-  // Auto-trigger missing-required-keys modal on first load if config/status flags it
-  async function checkConfigStatus() {
+  // Explicit-only modal trigger. Callers (action handlers, user clicks)
+  // can invoke this when /config/status flags needs_setup. We deliberately
+  // do NOT auto-pop on every page load — the user finds that nagging.
+  //
+  // Surfaces can call it on demand, e.g.:
+  //   if ((await fetch('/config/status').then(r => r.json())).needs_setup) {
+  //     await window.SeekDeepPrompt.promptForMissing();
+  //   }
+  // or for a specific failure:
+  //   if (resp.status === 400 && resp.error === 'missing_keys') {
+  //     await window.SeekDeepPrompt.collect(resp.required_keys);
+  //   }
+  window.SeekDeepPrompt.promptForMissing = async function () {
     const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
     try {
       const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
-      if (!r.ok) return;
+      if (!r.ok) return null;
       const s = await r.json();
-      if (s.needs_setup && !sessionStorage.getItem('sd-setup-prompted')) {
-        sessionStorage.setItem('sd-setup-prompted', '1');
-        const fields = s.missing_required.map(m => ({
-          key: m.key, description: m.description, kind: m.kind, required: true, value: m.value || '',
-        }));
-        await window.SeekDeepPrompt.open(fields, {
-          label: '▸ SETUP REQUIRED',
-          title: 'SeekDeep needs a few values before it can run',
-          desc: 'These keys are missing or still placeholders in your <span style="color:var(--cyan-1, #2dd4ff);">.env</span>. Save them here and the bot will be ready.',
-        });
-      }
-    } catch {}
-  }
-  setTimeout(() => { checkGpuMode(); checkConfigStatus(); }, 400);
+      if (!s.needs_setup) return {};
+      const fields = s.missing_required.map(m => ({
+        key: m.key, description: m.description, kind: m.kind, required: true, value: m.value || '',
+      }));
+      return await window.SeekDeepPrompt.open(fields, {
+        label: '▸ SETUP REQUIRED',
+        title: 'SeekDeep needs a few values before it can run',
+        desc: 'These keys are missing or still placeholders in your <span style="color:var(--cyan-1, #2dd4ff);">.env</span>. Save them here and the bot will be ready.',
+      });
+    } catch { return null; }
+  };
+  // GPU banner is informational + non-blocking; safe to run on load + every 60s.
+  setTimeout(checkGpuMode, 400);
   setInterval(checkGpuMode, 60_000);
 })();
