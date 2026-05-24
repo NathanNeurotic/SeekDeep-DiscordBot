@@ -122,7 +122,30 @@ Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-cha
 - **GPU logging** -- optional background sampler, `SEEKDEEP_GPU_LOGGING=on`.
 - **VRAM budget table** -- document which model combinations fit a 24 GB card.
 - **Latin-script language detection** -- extend auto-translate to detect French, Spanish, etc.
-- **Inpaint mask preview** -- show CLIPSeg segmentation before running the fill.
+- **Inpaint mask preview** -- ✅ shipped in Phase C. Exposes mask preview bypass command to check CLIPSeg outputs.
+
+## Segmentation Roadmap: CLIPSeg to SAM/GroundingDINO
+
+### Current CLIPSeg Behavior & Features
+- **Model**: `CIDAS/clipseg-rd64-refined` (under 200MB, quick startup, fits within general VRAM budget).
+- **Function**: Takes a text query (e.g. "the wizard") and returns a low-resolution heatmap of pixel probabilities, which is resized and thresholded (> 0.3) into a binary mask.
+- **Feathering**: Extends mask bounds using `MaxFilter(21)` dilation and `GaussianBlur(8)` blur.
+
+### Limitations of Current CLIPSeg
+- **Spatial / Object Resolution**: Resolution is extremely low (64x64 internally), causing jagged boundaries or missing fine details (e.g., thin poles, fingers).
+- **Semantic Overlap**: Often struggles to segment one object when multiple similar ones overlap or are near each other.
+- **Scale Issues**: Very small objects or background elements fail to excite the text encoder, returning empty or incomplete masks.
+
+### Future Path: SAM & GroundingDINO Integration
+- **GroundingDINO**: A zero-shot object detector that will generate high-quality bounding boxes from text queries.
+- **Segment Anything Model (SAM)**: Uses GroundingDINO's bounding boxes as prompts to produce high-resolution, pixel-perfect instance segmentations.
+- **Expected Benefits**: Sharp, high-fidelity mask edges, distinct object separation, and robust detection of small/obscured objects.
+
+### Implementation Dependencies & Deferred Rationale
+- **Footprint**: SAM + GroundingDINO models are significantly larger (1.5GB to 3GB+ combined), adding heavy startup overhead.
+- **Dependencies**: Requires extra complex libraries (`torchvision`, `supervision`, or custom CUDA extensions) which complicate multi-platform installation (especially on Windows).
+- **VRAM Constraints**: Running SAM alongside SDXL, LLM chat, and vision models easily exceeds standard consumer GPU limits (e.g., 8-16 GB).
+- **Role of Mask Preview**: Exposing the mask preview helper command (`@SeekDeep mask preview <target>`) allows testing/debugging CLIPSeg boundaries locally before spending GPU cycles on full diffusion inpainting.
 
 ## Deferred
 

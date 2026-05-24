@@ -1265,8 +1265,138 @@ for (const { prompt, expectedRoute } of testRoutes) {
   check(`routing: "${prompt}" returns non-empty reply`, replyContent.length > 0);
 }
 
-globalThis.fetch = originalFetchSuite50;
+// Suite 51: Phase C Inpaint preview / prompt debug routing and formatting tests
+console.log('Running Suite 51: Phase C Inpaint preview & prompt debug tests...');
+
+// Command parsing tests
+check('inpaint preview parses correctly', T.seekdeepInpaintPreviewQueryFromMessage('@SeekDeep inpaint preview cat') === 'cat');
+check('mask preview parses correctly', T.seekdeepInpaintPreviewQueryFromMessage('@SeekDeep mask preview dog') === 'dog');
+check('prompt debug parses correctly', T.seekdeepPromptDebugQueryFromMessage('@SeekDeep prompt debug') === true);
+check('prompt debug last parses correctly', T.seekdeepPromptDebugQueryFromMessage('@SeekDeep prompt debug last') === true);
+check('invalid command does not parse as preview', T.seekdeepInpaintPreviewQueryFromMessage('@SeekDeep inpaint cat') === null);
+
+// Debug formatter tests
+check('debug format handles null', T.seekdeepFormatPromptDebugReport(null) === 'No recent generated image was found.');
+
+const testState = {
+  id: 'action_123',
+  prompt: 'cyberpunk cityscape',
+  originalPrompt: 'cyberpunk cityscape',
+  refinedPrompt: 'cyberpunk cityscape refined',
+  negativePrompt: 'blurry, low quality',
+  stylePreset: 'neon',
+  qualityPreset: 'high',
+  seed: 42,
+  width: 1024,
+  height: 1024,
+  steps: 28,
+  guidance: 7.0,
+  model: 'SDXL',
+  jobId: 'job_456',
+  generationTime: '5.20',
+  queueWait: 2,
+  refinementMode: 'dynamic',
+  binaryPath: 'C:\\Users\\natha\\SeekDeep-DiscordBot\\temp\\image-cache\\action_123.png',
+};
+
+const formattedReport = T.seekdeepFormatPromptDebugReport(testState);
+check('formatted report includes original prompt', formattedReport.includes('cyberpunk cityscape'));
+check('formatted report includes refined prompt', formattedReport.includes('cyberpunk cityscape refined'));
+check('formatted report includes seed', formattedReport.includes('42'));
+check('formatted report includes dimensions', formattedReport.includes('1024x1024'));
+check('formatted report includes steps', formattedReport.includes('28'));
+check('formatted report includes model', formattedReport.includes('SDXL'));
+check('formatted report includes job ID', formattedReport.includes('job_456'));
+check('formatted report does NOT expose private absolute path', !formattedReport.includes('temp\\image-cache') && !formattedReport.includes('C:\\Users\\natha'));
+
+// Routing tests
+const originalFetchSuite51 = globalThis.fetch;
+let lastFetchUrlSuite51 = '';
+let fetchBodySuite51 = null;
+
+globalThis.fetch = async (url, options) => {
+  lastFetchUrlSuite51 = String(url);
+  let parsedBody = null;
+  try {
+    parsedBody = options?.body ? JSON.parse(options.body) : null;
+  } catch {}
+  if (parsedBody) {
+    fetchBodySuite51 = parsedBody;
+  }
+  return {
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer, // PNG signature
+    json: async () => ({
+      ok: true,
+      image_b64: 'bW9jay1tYXNrLWJhc2U2NA==', // base64 for 'mock-mask-base64'
+      filename: 'seekdeep_mask_preview_123.png',
+      path: '/mock/path/seekdeep_mask_preview_123.png'
+    }),
+    text: async () => JSON.stringify({
+      ok: true,
+      image_b64: 'bW9jay1tYXNrLWJhc2U2NA==',
+      filename: 'seekdeep_mask_preview_123.png',
+      path: '/mock/path/seekdeep_mask_preview_123.png'
+    }),
+  };
+};
+
+const routeLogsPhaseC = [];
+globalThis.__seekdeepRouteSpy = (route, prompt) => {
+  routeLogsPhaseC.push({ route, prompt });
+};
+
+// Test 1: mask preview command routing
+let replyContentSuite51 = '';
+const mockMsg1 = makeMockMessage({ id: 'msg_mask_preview', content: '@SeekDeep mask preview cat', authorId: 'user_1' });
+// Set up attachments to resolve source image
+mockMsg1.attachments = new Map([
+  ['att1', { url: 'https://example.com/source.png', contentType: 'image/png', name: 'source.png', size: 1000 }]
+]);
+
+mockMsg1.reply = async (payload) => {
+  replyContentSuite51 = typeof payload === 'string' ? payload : payload.content;
+  return mockMsg1;
+};
+
+await T.seekdeepDispatchAddressedMessage(mockMsg1, {
+  prompt: 'mask preview cat',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+const loggedMaskPreview = routeLogsPhaseC.find(r => r.route === 'inpaint-preview');
+check('routing: mask preview triggers route inpaint-preview', !!loggedMaskPreview);
+check('routing: mask preview hits correct local endpoint', lastFetchUrlSuite51.endsWith('/inpaint_mask_preview'));
+check('routing: mask preview payload contains correct target', fetchBodySuite51?.remove_target === 'cat');
+
+// Test 2: prompt debug command routing
+let replyContentDebug = '';
+const mockMsg2 = makeMockMessage({ id: 'msg_prompt_debug', content: '@SeekDeep prompt debug', authorId: 'user_1' });
+mockMsg2.reply = async (payload) => {
+  replyContentDebug = typeof payload === 'string' ? payload : payload.content;
+  return mockMsg2;
+};
+
+// Seed a mock state into the temp image state map so the command returns a real report
+globalThis.__seekdeepTempImageStateIndex = globalThis.__seekdeepTempImageStateIndex || new Map();
+globalThis.__seekdeepTempImageStateIndex.set('action_123', testState);
+
+await T.seekdeepDispatchAddressedMessage(mockMsg2, {
+  prompt: 'prompt debug',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+const loggedPromptDebug = routeLogsPhaseC.find(r => r.route === 'prompt-debug');
+check('routing: prompt debug triggers route prompt-debug', !!loggedPromptDebug);
+check('routing: prompt debug returns report', replyContentDebug.includes('Image Prompt Debugger'));
+
+// Clean up
+globalThis.fetch = originalFetchSuite51;
 globalThis.__seekdeepRouteSpy = null;
+
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
