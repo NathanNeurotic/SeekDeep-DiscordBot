@@ -1192,6 +1192,82 @@ check('dispatcher: reply was sent successfully',
   replyCalled === true
 );
 
+// ---------------------------------------------------------------------------
+// Suite 50: Phase B Warmup, Unload, Reload, Queue status, GPU logging tests
+// ---------------------------------------------------------------------------
+console.log('\n50. Phase B: Warmup, Unload, Reload, Queue status, GPU logging.');
+
+check('gpu-logging: disabled by default', T.seekdeepGpuLoggingEnabled() === false);
+
+process.env.SEEKDEEP_GPU_LOGGING = 'on';
+check('gpu-logging: enabled via env', T.seekdeepGpuLoggingEnabled() === true);
+delete process.env.SEEKDEEP_GPU_LOGGING;
+
+check('gpu-logging-interval: default is 5s', T.seekdeepGpuLogIntervalSeconds() === 5);
+
+process.env.SEEKDEEP_GPU_LOG_INTERVAL_SECONDS = '10';
+check('gpu-logging-interval: custom 10s', T.seekdeepGpuLogIntervalSeconds() === 10);
+
+process.env.SEEKDEEP_GPU_LOG_INTERVAL_SECONDS = '-5';
+check('gpu-logging-interval: clamped to min 1s', T.seekdeepGpuLogIntervalSeconds() === 1);
+
+process.env.SEEKDEEP_GPU_LOG_INTERVAL_SECONDS = 'invalid';
+check('gpu-logging-interval: fallback on invalid input to 5s', T.seekdeepGpuLogIntervalSeconds() === 5);
+delete process.env.SEEKDEEP_GPU_LOG_INTERVAL_SECONDS;
+
+const testRoutes = [
+  { prompt: 'unload', expectedRoute: 'unload-models' },
+  { prompt: 'warmup', expectedRoute: 'warmup-all' },
+  { prompt: 'warmup chat', expectedRoute: 'warmup-chat' },
+  { prompt: 'warmup image', expectedRoute: 'warmup-image' },
+  { prompt: 'warmup vision', expectedRoute: 'warmup-vision' },
+  { prompt: 'reload chat', expectedRoute: 'reload-chat' },
+  { prompt: 'reload image', expectedRoute: 'reload-image' },
+  { prompt: 'reload vision', expectedRoute: 'reload-vision' },
+  { prompt: 'queue status', expectedRoute: 'queue-status' },
+  { prompt: 'queue clear', expectedRoute: 'queue-clear' },
+];
+
+const originalFetchSuite50 = globalThis.fetch;
+let lastFetchUrl = '';
+
+globalThis.fetch = async (url, options) => {
+  lastFetchUrl = String(url);
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, status: 'unloaded', model_id: 'mock-model-id' }),
+    text: async () => JSON.stringify({ ok: true, status: 'unloaded', model_id: 'mock-model-id' }),
+  };
+};
+
+const routeLogsPhaseB = [];
+globalThis.__seekdeepRouteSpy = (route, prompt) => {
+  routeLogsPhaseB.push({ route, prompt });
+};
+
+for (const { prompt, expectedRoute } of testRoutes) {
+  let replyContent = '';
+  const mockMsg = makeMockMessage({ id: `msg_${prompt.replace(' ', '_')}`, content: `@SeekDeep ${prompt}`, authorId: 'user_1' });
+  mockMsg.reply = async (payload) => {
+    replyContent = typeof payload === 'string' ? payload : payload.content;
+    return mockMsg;
+  };
+  
+  await T.seekdeepDispatchAddressedMessage(mockMsg, {
+    prompt,
+    seekdeepReplyPromptInfo: {},
+    seekdeepForceImageFromReplyContext: false
+  });
+  
+  const logged = routeLogsPhaseB.find(r => r.prompt === prompt);
+  check(`routing: "${prompt}" triggers route "${expectedRoute}"`, logged && logged.route === expectedRoute);
+  check(`routing: "${prompt}" returns non-empty reply`, replyContent.length > 0);
+}
+
+globalThis.fetch = originalFetchSuite50;
+globalThis.__seekdeepRouteSpy = null;
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
