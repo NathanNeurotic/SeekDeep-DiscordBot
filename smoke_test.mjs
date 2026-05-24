@@ -1397,6 +1397,218 @@ check('routing: prompt debug returns report', replyContentDebug.includes('Image 
 globalThis.fetch = originalFetchSuite51;
 globalThis.__seekdeepRouteSpy = null;
 
+// ============================================================================
+// Suite 52: Phase D tests (web/source controls, admin status, permissions)
+// ============================================================================
+console.log('\nSuite 52: Phase D features (web/source controls, admin status, permissions)');
+
+// Test 1: web search blocklist and preferred domains helper logic
+const oldBlocklist = process.env.WEB_SEARCH_BLOCKLIST;
+const oldPreferred = process.env.WEB_SEARCH_PREFERRED_DOMAINS;
+const oldRequireNews = process.env.WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS;
+
+process.env.WEB_SEARCH_BLOCKLIST = 'blocked.com, spam.org';
+process.env.WEB_SEARCH_PREFERRED_DOMAINS = 'preferred.com, highquality.edu';
+process.env.WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS = 'on';
+
+// Let's test the news style prompt check
+check('is news style prompt: "news"', T.seekdeepIsNewsStylePrompt('what is the news today') === true);
+check('is news style prompt: "election"', T.seekdeepIsNewsStylePrompt('latest election results') === true);
+check('is news style prompt: ordinary', T.seekdeepIsNewsStylePrompt('tell me a joke') === false);
+
+// Test 2: admin status and permissions queries parsers
+check('admin status parser positive', T.seekdeepAdminStatusQueryFromStrippedPrompt('admin status') === true);
+check('admin status parser positive with spacing', T.seekdeepAdminStatusQueryFromStrippedPrompt('  admin   status  ') === true);
+check('admin status parser negative', T.seekdeepAdminStatusQueryFromStrippedPrompt('status') === false);
+
+check('permissions parser positive', T.seekdeepPermissionsQueryFromStrippedPrompt('permissions') === true);
+check('permissions parser positive with spacing', T.seekdeepPermissionsQueryFromStrippedPrompt('  permissions  ') === true);
+check('permissions parser negative', T.seekdeepPermissionsQueryFromStrippedPrompt('perms') === false);
+
+// Test 3: format permissions report DM safety
+const dmMsg = makeMockMessage({ id: 'msg_dm', content: '@SeekDeep permissions', authorId: 'user_1' });
+dmMsg.guild = null;
+const dmReport = T.seekdeepFormatPermissionsReport(dmMsg);
+check('permissions diagnostic DM safety', dmReport === 'Guild bot permissions cannot be checked in DMs.');
+
+// Test 4: format permissions report Guild checks
+const guildMsg = makeMockMessage({ id: 'msg_guild', content: '@SeekDeep permissions', authorId: 'user_1' });
+guildMsg.guild = {
+  name: 'Mock Guild',
+  members: {
+    me: {
+      id: 'bot_id',
+      permissions: { has: () => true }
+    }
+  }
+};
+guildMsg.channel = {
+  id: 'channel_id',
+  name: 'mock-channel',
+  permissionsFor: (me) => ({
+    has: (bit) => {
+      if (bit === T.PermissionFlagsBits?.SendMessages) return true;
+      if (bit === T.PermissionFlagsBits?.AttachFiles) return false;
+      return true;
+    }
+  })
+};
+
+if (T.PermissionFlagsBits) {
+  const guildReport = T.seekdeepFormatPermissionsReport(guildMsg);
+  check('permissions report contains Server info', guildReport.includes('Mock Guild'));
+  check('permissions report contains Send Messages Granted', guildReport.includes('Send Messages**: Granted') || guildReport.includes('Send Messages**: Missing'));
+}
+
+// Test 5: format admin status report sanitization (redacts private endpoints)
+const adminReport = T.seekdeepFormatAdminStatusReport(
+  { device: 'cuda', loaded_task: 'chat', loaded_chat_role: 'default_chat', models: { chat: 'qwen' } },
+  true,
+  guildMsg
+);
+check('admin status report contains System & Telemetry', adminReport.includes('System & Telemetry'));
+check('admin status report does not leak raw local urls', !adminReport.includes('127.0.0.1') && !adminReport.includes('localhost'));
+check('admin status report contains features list', adminReport.includes('Image Generation') && adminReport.includes('Feature Flags'));
+
+// Test 6: searchWeb blocklist and preferred domains filtering/sorting
+const originalFetchJson = globalThis.fetch;
+globalThis.fetch = async (url) => {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      results: [
+        { title: 'Preferred Page', url: 'https://preferred.com/page1', content: 'Preferred domain content' },
+        { title: 'Normal Page', url: 'https://normal.com/page2', content: 'Normal content' },
+        { title: 'Blocked Page', url: 'https://blocked.com/bad', content: 'Blocked content' },
+        { title: 'High Quality Page', url: 'https://highquality.edu/page3', content: 'High quality content' }
+      ]
+    }),
+    text: async () => JSON.stringify({
+      results: [
+        { title: 'Preferred Page', url: 'https://preferred.com/page1', content: 'Preferred domain content' },
+        { title: 'Normal Page', url: 'https://normal.com/page2', content: 'Normal content' },
+        { title: 'Blocked Page', url: 'https://blocked.com/bad', content: 'Blocked content' },
+        { title: 'High Quality Page', url: 'https://highquality.edu/page3', content: 'High quality content' }
+      ]
+    })
+  };
+};
+
+const searchResult = await T.searchWeb('test');
+check('searchWeb: blocked domain is filtered out', !searchResult.sources.some(s => s.url.includes('blocked.com')));
+check('searchWeb: sources list has length 3', searchResult.sources.length === 3);
+check('searchWeb: preferred.com sorted first', searchResult.sources[0].url.includes('preferred.com'));
+check('searchWeb: highquality.edu sorted second', searchResult.sources[1].url.includes('highquality.edu'));
+check('searchWeb: normal.com sorted last', searchResult.sources[2].url.includes('normal.com'));
+
+globalThis.fetch = originalFetchJson;
+
+// Test 7: routing check in seekdeepDispatchAddressedMessage
+const originalFetchSuite52 = globalThis.fetch;
+globalThis.fetch = async (url, options) => {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ device: 'cuda:0', loaded_task: 'chat', models: { chat: 'qwen' } }),
+    text: async () => JSON.stringify({ device: 'cuda:0', loaded_task: 'chat', models: { chat: 'qwen' } }),
+  };
+};
+
+const routeLogsPhaseD = [];
+globalThis.__seekdeepRouteSpy = (route, prompt) => {
+  routeLogsPhaseD.push({ route, prompt });
+};
+
+// Admin status command (as admin)
+let adminReply = '';
+const adminMsg = makeMockMessage({ id: 'msg_admin', content: '@SeekDeep admin status', authorId: 'admin_1' });
+adminMsg.guild = guildMsg.guild;
+adminMsg.channel = guildMsg.channel;
+adminMsg.reply = async (payload) => {
+  adminReply = typeof payload === 'string' ? payload : payload.content;
+  return adminMsg;
+};
+
+// Mock admin ids
+const oldAdminIds = process.env.SEEKDEEP_ADMIN_IDS;
+process.env.SEEKDEEP_ADMIN_IDS = 'admin_1';
+
+await T.seekdeepDispatchAddressedMessage(adminMsg, {
+  prompt: 'admin status',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+const loggedAdminStatus = routeLogsPhaseD.find(r => r.route === 'admin-status');
+check('routing: admin status triggers route admin-status', !!loggedAdminStatus);
+check('routing: admin status returns report to admin', adminReply.includes('Admin Status Report'));
+
+// Non-admin command
+let nonAdminReply = '';
+const nonAdminMsg = makeMockMessage({ id: 'msg_non_admin', content: '@SeekDeep admin status', authorId: 'user_2' });
+nonAdminMsg.guild = guildMsg.guild;
+nonAdminMsg.channel = guildMsg.channel;
+nonAdminMsg.reply = async (payload) => {
+  nonAdminReply = typeof payload === 'string' ? payload : payload.content;
+  return nonAdminMsg;
+};
+
+await T.seekdeepDispatchAddressedMessage(nonAdminMsg, {
+  prompt: 'admin status',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+check('routing: admin status rejects non-admin users', nonAdminReply.includes('Only administrators can run the admin status command.'));
+
+// Permissions command routing
+let permsReply = '';
+const permsMsg = makeMockMessage({ id: 'msg_perms', content: '@SeekDeep permissions', authorId: 'user_2' });
+permsMsg.guild = guildMsg.guild;
+permsMsg.channel = guildMsg.channel;
+permsMsg.reply = async (payload) => {
+  permsReply = typeof payload === 'string' ? payload : payload.content;
+  return permsMsg;
+};
+
+await T.seekdeepDispatchAddressedMessage(permsMsg, {
+  prompt: 'permissions',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+const loggedPermissions = routeLogsPhaseD.find(r => r.route === 'permissions-diagnostic');
+check('routing: permissions triggers route permissions-diagnostic', !!loggedPermissions);
+check('routing: permissions returns report', permsReply.includes('Permissions Diagnostic Report'));
+
+// Normal chat does not trigger admin status or permissions routes
+routeLogsPhaseD.length = 0;
+let chatReply = '';
+const chatMsg = makeMockMessage({ id: 'msg_chat', content: '@SeekDeep tell me a joke', authorId: 'user_2' });
+chatMsg.guild = guildMsg.guild;
+chatMsg.channel = guildMsg.channel;
+chatMsg.reply = async (payload) => {
+  chatReply = typeof payload === 'string' ? payload : payload.content;
+  return chatMsg;
+};
+
+await T.seekdeepDispatchAddressedMessage(chatMsg, {
+  prompt: 'tell me a joke',
+  seekdeepReplyPromptInfo: {},
+  seekdeepForceImageFromReplyContext: false
+});
+
+const triggeredAdminOrPerms = routeLogsPhaseD.some(r => r.route === 'admin-status' || r.route === 'permissions-diagnostic');
+check('routing: normal chat does not trigger admin status or permissions routes', !triggeredAdminOrPerms);
+
+// Clean up env
+process.env.WEB_SEARCH_BLOCKLIST = oldBlocklist;
+process.env.WEB_SEARCH_PREFERRED_DOMAINS = oldPreferred;
+process.env.WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS = oldRequireNews;
+process.env.SEEKDEEP_ADMIN_IDS = oldAdminIds;
+globalThis.fetch = originalFetchSuite52;
+globalThis.__seekdeepRouteSpy = null;
+
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);

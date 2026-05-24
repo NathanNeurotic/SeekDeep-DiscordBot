@@ -366,6 +366,10 @@ function seekdeepIsChannelAllowed(channelId = '') {
 const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || 'http://127.0.0.1:8080';
 const WEB_SEARCH_PROVIDER = (process.env.WEB_SEARCH_PROVIDER || 'searxng').toLowerCase();
 const WEB_APPEND_SOURCES = (process.env.WEB_APPEND_SOURCES || 'true').toLowerCase() !== 'false';
+const WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS = (() => {
+  const val = String(process.env.WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS || 'on').toLowerCase().trim();
+  return val === 'on' || val === 'true' || val === '1';
+})();
 const MAX_DISCORD_CHARS = Number(process.env.MAX_DISCORD_CHARS || 1900);
 
 // SEEKDEEP_EPHEMERAL_FLAGS_START
@@ -1834,6 +1838,15 @@ async function postLocal(pathname, body, options = {}) {
   }
 }
 
+function seekdeepIsNewsStylePrompt(prompt) {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  const newsKeywords = [
+    'news', 'current', 'latest', 'today', 'yesterday', 'election', 'politics', 
+    'weather', 'stock', 'market', 'announced', 'released', 'recent', 'newest'
+  ];
+  return newsKeywords.some(kw => p.includes(kw));
+}
+
 async function searchWeb(query) {
   if (WEB_SEARCH_PROVIDER !== 'searxng') {
     return { context: '', sources: [] };
@@ -1845,19 +1858,39 @@ async function searchWeb(query) {
 
   const json = await fetchJson(url.toString(), { timeoutMs: 10000 });
   const rawResults = Array.isArray(json.results) ? json.results : [];
-  const results = rawResults.filter((r) => {
+
+  const blocklist = String(process.env.WEB_SEARCH_BLOCKLIST || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const preferred = String(process.env.WEB_SEARCH_PREFERRED_DOMAINS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+  let filteredResults = rawResults.filter((r) => {
     const title = String(r?.title || '').toLowerCase();
-    const url = String(r?.url || '').toLowerCase();
+    const urlStr = String(r?.url || '').toLowerCase();
     const snippet = String(r?.content || r?.snippet || '').toLowerCase();
 
-    if (!title && !url && !snippet) return false;
-    if (url.includes('google.com/recaptcha') || title.includes('recaptcha')) return false;
-    if (title.includes('search anything') && url.includes('google.')) return false;
-    if (url.includes('securedrop.org') && !query.toLowerCase().includes('securedrop')) return false;
+    if (!title && !urlStr && !snippet) return false;
+    if (urlStr.includes('google.com/recaptcha') || title.includes('recaptcha')) return false;
+    if (title.includes('search anything') && urlStr.includes('google.')) return false;
+    if (urlStr.includes('securedrop.org') && !query.toLowerCase().includes('securedrop')) return false;
     if (title.includes('newsarchive') && !query.toLowerCase().includes('newsarchive')) return false;
 
+    // Blocklist domain filter
+    if (blocklist.some(domain => urlStr.includes(domain))) return false;
+
     return true;
-  }).slice(0, Math.max(3, Math.min(20, Number(process.env.MAX_WEB_RESULTS || 10))));
+  });
+
+  // Preferred domains sorting boost (float to top)
+  if (preferred.length > 0) {
+    filteredResults.sort((a, b) => {
+      const urlA = String(a?.url || '').toLowerCase();
+      const urlB = String(b?.url || '').toLowerCase();
+      const aPref = preferred.some(domain => urlA.includes(domain)) ? 1 : 0;
+      const bPref = preferred.some(domain => urlB.includes(domain)) ? 1 : 0;
+      return bPref - aPref;
+    });
+  }
+
+  const results = filteredResults.slice(0, Math.max(3, Math.min(20, Number(process.env.MAX_WEB_RESULTS || 10))));
 
   const sources = results.map((r, i) => ({
     index: i + 1,
@@ -1876,8 +1909,8 @@ async function searchWeb(query) {
   return { context, sources };
 }
 
-function formatSources(sources) {
-  if (!sources?.length || !WEB_APPEND_SOURCES) return '';
+function formatSources(sources, force = false) {
+  if (!sources?.length || (!WEB_APPEND_SOURCES && !force)) return '';
   const lines = sources.slice(0, 5).map((s) => {
     const title = seekdeepClipForDiscord ? seekdeepClipForDiscord(s.title || 'Untitled', 180) : String(s.title || 'Untitled').slice(0, 180);
     const url = seekdeepDiscordSafeUrl(s.url || '');
@@ -2322,7 +2355,8 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
       answer = 'I hit a generation loop and discarded it. Ask again with tighter wording and I should behave.';
     }
 
-    return `${answer}${formatSources(sources)}`;
+    const forceSources = useWeb && WEB_SEARCH_REQUIRE_SOURCES_FOR_NEWS && seekdeepIsNewsStylePrompt(cleanPrompt);
+    return `${answer}${formatSources(sources, forceSources)}`;
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -6671,6 +6705,176 @@ function seekdeepGpuGenerationFromName(deviceName) {
     return 'GTX 10-series / Pascal-generation';
   }
   return 'unknown GPU generation';
+}
+
+function seekdeepAdminStatusQueryFromStrippedPrompt(prompt = '') {
+  return /^\s*admin\s+status\s*$/i.test(prompt);
+}
+
+function seekdeepPermissionsQueryFromStrippedPrompt(prompt = '') {
+  return /^\s*permissions\s*$/i.test(prompt);
+}
+
+function seekdeepFormatAdminStatusReport(health, online, message) {
+  const guildId = message.guild?.id;
+  const config = typeof seekdeepArchiveThreadReadConfig === 'function' ? seekdeepArchiveThreadReadConfig() : null;
+  const archiveChannelId = guildId && config?.guilds?.[guildId]?.archiveChannelId;
+  const archiveChannelText = archiveChannelId ? `<#${archiveChannelId}>` : 'None';
+
+  const guildConfig = guildId && config?.guilds?.[guildId];
+  const sharedThreadId = guildConfig?.sharedArchiveThreadId;
+  const sharedThreadText = sharedThreadId ? `<#${sharedThreadId}>` : 'None';
+  const sharedCount = guildConfig?.sharedArchiveCount !== undefined ? guildConfig.sharedArchiveCount : 0;
+  const userArchivesCount = guildConfig?.userArchives ? Object.keys(guildConfig.userArchives).length : 0;
+
+  const allowedChannelsText = SEEKDEEP_ALLOWED_CHANNELS.size > 0 
+    ? Array.from(SEEKDEEP_ALLOWED_CHANNELS).map(id => `<#${id}>`).join(', ') 
+    : 'All channels allowed (allowlist empty)';
+
+  const blockedChannelsText = SEEKDEEP_BLOCKED_CHANNELS.size > 0
+    ? Array.from(SEEKDEEP_BLOCKED_CHANNELS).map(id => `<#${id}>`).join(', ')
+    : 'None';
+
+  const pending = seekdeepImageQueueState.pending || [];
+  const active = seekdeepImageQueueState.active;
+  const queueSummary = `Active=${active ? '1' : '0'}, Pending=${pending.length}, Completed=${seekdeepImageQueueState.completed || 0}, Failed=${seekdeepImageQueueState.failed || 0}`;
+
+  const gpuLoggingStatus = `${seekdeepGpuLoggingEnabled() ? 'Enabled' : 'Disabled'} (Interval: ${seekdeepGpuLogIntervalSeconds()}s)`;
+
+  const flags = [
+    `• **Image Generation (img2img)**: ${SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'ON' : 'OFF'}`,
+    `• **InstructPix2Pix**: ${SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'ON' : 'OFF'}`,
+    `• **Inpainting**: ${SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'ON' : 'OFF'}`,
+    `• **Upscale (Real-ESRGAN)**: ${SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'ON' : 'OFF'}`,
+    `• **NSFW Gate**: ${SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'ON' : 'OFF'}`,
+    `• **TTS Voice**: ${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'OFF'}`,
+    `• **Emoji Vault**: ${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'OFF'}`,
+    `• **Force React**: ${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'OFF'}`,
+  ].join('\n');
+
+  const warnings = [];
+  if (!online) {
+    warnings.push('⚠️ **WARNING: Local AI server is offline/unreachable.**');
+  }
+  if (guildId && !archiveChannelId) {
+    warnings.push('⚠️ **WARNING: No archive channel configured.** Run `@SeekDeep archive setup here` first.');
+  }
+
+  const lines = [
+    `**SeekDeep Admin Status Report**`,
+    `----------------------------------------`,
+    `**System & Telemetry**`,
+    `• **Local AI Server**: ${online ? 'Online' : 'Offline'} (${LOCAL_AI_BASE_URL})`,
+    `• **GPU Logging**: ${gpuLoggingStatus}`,
+    `• **Recent Errors Count**: ${SEEKDEEP_RECENT_ERRORS.length}`,
+    `• **Image Queue**: ${queueSummary}`,
+    `----------------------------------------`,
+    `**Configuration & Context**`,
+    `• **Allowed Channels**: ${allowedChannelsText}`,
+    `• **Blocked Channels**: ${blockedChannelsText}`,
+    `• **Archive Channel**: ${archiveChannelText}`,
+    `• **Shared Archive Thread**: ${sharedThreadText} (Count: ${sharedCount})`,
+    `• **User Archives Count**: ${userArchivesCount}`,
+    `• **Memory Mode**: ${seekdeepMemoryMode()}`,
+    `• **Memory Scope**: ${seekdeepMemoryScope()}`,
+    `----------------------------------------`,
+    `**Feature Flags**`,
+    flags,
+  ];
+
+  if (online && health) {
+    lines.push(
+      `----------------------------------------`,
+      `**Loaded Models & Tasks**`,
+      `• **Device**: ${health.device || 'unknown'}`,
+      `• **Loaded Task**: ${health.loaded_task || 'none'}`,
+      `• **Loaded Chat Role**: ${health.loaded_chat_role || 'none'}`,
+      `• **Loaded Model ID**: ${health.loaded_chat_model_id || 'none'}`,
+      `• **Active Models**:`,
+      `  - Chat: ${health.models?.chat || 'none'}`,
+      `  - Image: ${health.models?.image || 'none'}`,
+      `  - Vision: ${health.models?.vision || 'none'}`
+    );
+  }
+
+  if (warnings.length > 0) {
+    lines.push(
+      `----------------------------------------`,
+      `**Active Warnings**`,
+      ...warnings
+    );
+  }
+
+  const report = lines.join('\n');
+  return seekdeepRedactStatusConnectionInfo(report);
+}
+
+function seekdeepFormatPermissionsReport(message) {
+  if (!message.guild) {
+    return 'Guild bot permissions cannot be checked in DMs.';
+  }
+
+  const me = message.guild.members.me;
+  if (!me) {
+    return 'Error: Could not resolve bot member context in this server.';
+  }
+
+  const perms = message.channel.permissionsFor(me);
+  if (!perms) {
+    return 'Error: Could not read permissions in this channel (permission query returned null).';
+  }
+
+  const lines = [
+    `**SeekDeep Permissions Diagnostic Report**`,
+    `• **Channel**: <#${message.channel.id}> (${message.channel.name})`,
+    `• **Server**: ${message.guild.name}`,
+    `----------------------------------------`,
+  ];
+
+  const checks = [
+    { name: 'Send Messages', flag: 'SendMessages' },
+    { name: 'Attach Files', flag: 'AttachFiles' },
+    { name: 'Embed Links', flag: 'EmbedLinks' },
+    { name: 'Add Reactions', flag: 'AddReactions' },
+    { name: 'Create Public Threads', flag: 'CreatePublicThreads' },
+    { name: 'Send Messages in Threads', flag: 'SendMessagesInThreads' },
+    { name: 'Manage Threads', flag: 'ManageThreads', warnOnly: true },
+    { name: 'Use External Emojis', flag: 'UseExternalEmojis' },
+    { name: 'Use External Stickers', flag: 'UseExternalStickers' },
+  ];
+
+  if (SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED) {
+    checks.push({ name: 'Manage Expressions/Emojis', flag: 'ManageExpressions' });
+  }
+
+  for (const check of checks) {
+    let bit = PermissionFlagsBits[check.flag];
+    if (bit === undefined && check.flag === 'ManageExpressions') {
+      bit = PermissionFlagsBits.ManageEmojisAndStickers;
+    }
+
+    if (bit === undefined) {
+      lines.push(`⚪ **${check.name}**: Unavailable (bit not defined in this library version)`);
+      continue;
+    }
+
+    let hasPerm = false;
+    try {
+      hasPerm = perms.has(bit);
+    } catch {}
+
+    if (hasPerm) {
+      lines.push(`✅ **${check.name}**: Granted`);
+    } else {
+      if (check.warnOnly) {
+        lines.push(`⚠️ **${check.name}**: Missing (optional, warn only)`);
+      } else {
+        lines.push(`❌ **${check.name}**: Missing (required)`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function seekdeepGetGpuGenerationLine(deviceName) {
@@ -16263,6 +16467,46 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       return;
     }
 
+    // admin status (addressed mention check)
+    if (seekdeepAdminStatusQueryFromStrippedPrompt(prompt)) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('admin-status', '');
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      const isAdmin = seekdeepIsAdminSource(message);
+      if (!isAdmin) {
+        await sendLongMessageReply(message, 'Only administrators can run the admin status command.');
+        return;
+      }
+      
+      let health = null;
+      let online = false;
+      try {
+        const controller = new AbortController();
+        const timeoutMs = 2500;
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          health = await fetchJson(`${LOCAL_AI_BASE_URL}/health`, { signal: controller.signal });
+          online = !!health;
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        // offline
+      }
+      
+      const report = seekdeepFormatAdminStatusReport(health, online, message);
+      await sendLongMessageReply(message, report);
+      return;
+    }
+
+    // permissions (addressed mention check)
+    if (seekdeepPermissionsQueryFromStrippedPrompt(prompt)) {
+      if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('permissions-diagnostic', '');
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      const report = seekdeepFormatPermissionsReport(message);
+      await sendLongMessageReply(message, report);
+      return;
+    }
+
     // prompt debug (addressed mention check)
     if (seekdeepPromptDebugQueryFromStrippedPrompt(prompt)) {
       if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('prompt-debug', '');
@@ -19015,6 +19259,7 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepHasExplicitImageRequest,
     isNaturalImagePrompt,
     shouldAutoSearch,
+    searchWeb,
     buildSystem,
     seekdeepDispatchAddressedMessage,
     seekdeepGetTrivialLocalReply,
@@ -19028,6 +19273,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepPromptDebugQueryFromMessage,
     seekdeepFormatPromptDebugReport,
     seekdeepGetLastTempImageState,
+    // Phase D test hooks
+    seekdeepAdminStatusQueryFromStrippedPrompt,
+    seekdeepPermissionsQueryFromStrippedPrompt,
+    seekdeepFormatAdminStatusReport,
+    seekdeepFormatPermissionsReport,
+    seekdeepIsNewsStylePrompt,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
