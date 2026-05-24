@@ -845,6 +845,33 @@ def unload_endpoint():
     return {"ok": True, "status": "unloaded"}
 
 
+@app.post("/warmup/chat")
+def warmup_chat_endpoint():
+    try:
+        role, model_id = load_chat_model("default_chat")
+        return {"ok": True, "status": "warmed_up", "task": "chat", "role": role, "model_id": model_id}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "task": "chat"})
+
+
+@app.post("/warmup/image")
+def warmup_image_endpoint():
+    try:
+        load_image_pipe()
+        return {"ok": True, "status": "warmed_up", "task": "image", "model_id": IMAGE_MODEL_ID}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "task": "image"})
+
+
+@app.post("/warmup/vision")
+def warmup_vision_endpoint():
+    try:
+        load_vision_model()
+        return {"ok": True, "status": "warmed_up", "task": "vision", "model_id": VISION_MODEL_ID}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "task": "vision"})
+
+
 @app.get("/gpu")
 def gpu_endpoint():
     """Focused GPU stats endpoint. Lighter than /health; safe to poll

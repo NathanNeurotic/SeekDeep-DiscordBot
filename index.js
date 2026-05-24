@@ -6395,6 +6395,107 @@ function seekdeepFormatGpuStats(gpu) {
   return { summary, detail, thrashing };
 }
 
+// v10.34: Optional GPU logging under logs/gpu-YYYY-MM-DD.csv
+function seekdeepGpuLoggingEnabled() {
+  return String(process.env.SEEKDEEP_GPU_LOGGING || 'off').toLowerCase() === 'on';
+}
+
+function seekdeepGpuLogIntervalSeconds() {
+  const val = Number(process.env.SEEKDEEP_GPU_LOG_INTERVAL_SECONDS || 5);
+  return Math.max(1, isNaN(val) ? 5 : val);
+}
+
+function seekdeepAppendGpuLogSample(gpu) {
+  try {
+    const logDir = path.join(__dirname, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const today = new Date().toISOString().split('T')[0];
+    const logFile = path.join(logDir, `gpu-${today}.csv`);
+    
+    const headers = [
+      'timestamp',
+      'device_name',
+      'used_mb',
+      'free_mb',
+      'total_mb',
+      'allocated_mb',
+      'reserved_mb',
+      'used_pct',
+      'reserved_pct',
+      'loaded_task',
+      'loaded_chat_role',
+      'loaded_chat_model_id'
+    ];
+    
+    const isNew = !fs.existsSync(logFile);
+    
+    const timestamp = new Date().toISOString();
+    const deviceName = gpu.device_name || '';
+    const usedMb = gpu.used_mb ?? '';
+    const freeMb = gpu.free_mb ?? '';
+    const totalMb = gpu.total_mb ?? '';
+    const allocatedMb = gpu.allocated_mb ?? '';
+    const reservedMb = gpu.reserved_mb ?? '';
+    const usedPct = gpu.used_pct ?? '';
+    const reservedPct = gpu.reserved_pct ?? '';
+    const loadedTask = gpu.loaded_task ?? '';
+    const loadedChatRole = gpu.loaded_chat_role ?? '';
+    const loadedChatModelId = gpu.loaded_chat_model_id ?? '';
+
+    const escapeCsv = (val) => {
+      const s = String(val);
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const row = [
+      escapeCsv(timestamp),
+      escapeCsv(deviceName),
+      escapeCsv(usedMb),
+      escapeCsv(freeMb),
+      escapeCsv(totalMb),
+      escapeCsv(allocatedMb),
+      escapeCsv(reservedMb),
+      escapeCsv(usedPct),
+      escapeCsv(reservedPct),
+      escapeCsv(loadedTask),
+      escapeCsv(loadedChatRole),
+      escapeCsv(loadedChatModelId)
+    ].join(',');
+
+    const fileContent = (isNew ? headers.join(',') + '\n' : '') + row + '\n';
+    fs.appendFileSync(logFile, fileContent, 'utf8');
+  } catch (err) {
+    console.warn('[SeekDeep] Failed to write GPU log sample:', err?.message || err);
+  }
+}
+
+function seekdeepStartGpuLogging() {
+  if (!seekdeepGpuLoggingEnabled()) {
+    return;
+  }
+  const intervalSec = seekdeepGpuLogIntervalSeconds();
+  console.log(`[SeekDeep] Background GPU logging started (interval: ${intervalSec}s).`);
+  
+  setInterval(async () => {
+    try {
+      const res = await fetch(`${LOCAL_AI_BASE_URL}/gpu`);
+      if (res.ok) {
+        const gpu = await res.json().catch(() => null);
+        if (gpu && typeof gpu === 'object') {
+          seekdeepAppendGpuLogSample(gpu);
+        }
+      }
+    } catch (err) {
+      // Quietly swallow server offline errors during background logs
+    }
+  }, intervalSec * 1000).unref?.();
+}
+
 function seekdeepGetLocalStatusIntent(prompt) {
   const clean = String(prompt || '').toLowerCase().trim();
   
@@ -8381,6 +8482,9 @@ client.once('clientReady', async () => {
   // Start the rotating fun-status display.
   seekdeepStartStatusRotation();
   console.log(`[SeekDeep] status rotation started (${SEEKDEEP_STATUS_BANK.length} statuses, every ${SEEKDEEP_STATUS_INTERVAL_MS / 60000} min).`);
+  
+  // Start the background GPU logger.
+  seekdeepStartGpuLogging();
 });
 
 process.on('unhandledRejection', (err) => {
@@ -15798,6 +15902,177 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       return;
     }
 
+    // Phase B commands: warmup, unload, reload, queue status, queue clear
+    const lowerPrompt = prompt.toLowerCase().trim();
+    if (lowerPrompt === 'unload') {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      let replyText = '';
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('unload-models', prompt);
+      }
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      try {
+        const res = await postLocal('/unload', {}, { timeoutMs: 30000 });
+        if (res && res.status === 'unloaded') {
+          replyText = 'Successfully unloaded all models from GPU VRAM.';
+        } else {
+          replyText = 'Local AI server did not report successful unloading.';
+        }
+      } catch (err) {
+        replyText = `Failed to unload models: ${err.message || err}`;
+      }
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : replyText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (lowerPrompt === 'warmup' || lowerPrompt.startsWith('warmup ')) {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      const target = lowerPrompt.slice(6).trim();
+      let replyText = '';
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute(`warmup-${target || 'all'}`, prompt);
+      }
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      try {
+        if (!target || target === 'chat') {
+          const res = await postLocal('/warmup/chat', {}, { timeoutMs: 120000 });
+          replyText = `Chat model warmed up successfully. Loaded: ${res.model_id || 'default chat'}`;
+        } else if (target === 'image') {
+          const res = await postLocal('/warmup/image', {}, { timeoutMs: 120000 });
+          replyText = `Image pipeline warmed up successfully. Loaded: ${res.model_id || 'default image'}`;
+        } else if (target === 'vision') {
+          const res = await postLocal('/warmup/vision', {}, { timeoutMs: 120000 });
+          replyText = `Vision model warmed up successfully. Loaded: ${res.model_id || 'default vision'}`;
+        } else {
+          replyText = `Unknown warmup target: "${target}". Choose from: chat, image, vision.`;
+        }
+      } catch (err) {
+        if (err?.status === 404) {
+          replyText = `Warmup endpoint for "${target || 'chat'}" is not available on the local AI server.`;
+        } else {
+          replyText = `Warmup failed for "${target || 'chat'}": ${err.message || err}`;
+        }
+      }
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : replyText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (lowerPrompt.startsWith('reload ')) {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      const target = lowerPrompt.slice(6).trim();
+      let replyText = '';
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute(`reload-${target}`, prompt);
+      }
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      try {
+        if (target === 'chat' || target === 'image' || target === 'vision') {
+          await postLocal('/unload', {}, { timeoutMs: 30000 }).catch(() => {});
+          const res = await postLocal(`/warmup/${target}`, {}, { timeoutMs: 120000 });
+          replyText = `${target.charAt(0).toUpperCase() + target.slice(1)} model reloaded successfully. Loaded: ${res.model_id || 'default'}`;
+        } else {
+          replyText = `Unknown reload target: "${target}". Choose from: chat, image, vision.`;
+        }
+      } catch (err) {
+        if (err?.status === 404) {
+          replyText = `Reload/warmup endpoint for "${target}" is not available on the local AI server.`;
+        } else {
+          replyText = `Reload failed for "${target}": ${err.message || err}`;
+        }
+      }
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : replyText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (lowerPrompt === 'reload') {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      const replyText = 'Please specify a target to reload: chat, image, or vision.';
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : replyText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (lowerPrompt === 'queue status') {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('queue-status', prompt);
+      }
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      const statusText = seekdeepImageQueueStatusText();
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(statusText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : statusText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
+    if (lowerPrompt === 'queue clear') {
+      const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('queue-clear', prompt);
+      }
+      seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+      
+      const isAdmin = (() => {
+        try {
+          const authorId = message.author?.id;
+          if (!authorId) return false;
+          const ids = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : null;
+          return ids ? ids.has(String(authorId)) : false;
+        } catch { return false; }
+      })();
+
+      let replyText = '';
+      if (!isAdmin) {
+        replyText = 'Only administrators can clear the image generation queue.';
+      } else {
+        const clearedCount = seekdeepImageQueueState.pending.length;
+        for (const entry of seekdeepImageQueueState.pending) {
+          try {
+            entry.reject(new Error('Job cleared from queue by administrator.'));
+          } catch {}
+        }
+        seekdeepImageQueueState.pending = [];
+        replyText = `Successfully cleared **${clearedCount}** pending jobs from the image queue.`;
+      }
+
+      const content = typeof seekdeepAppendResponseFooter === 'function'
+        ? seekdeepAppendResponseFooter(replyText, {
+            startedAt,
+            modelUsed: seekdeepNoModelLabel(),
+          })
+        : replyText;
+      await sendLongMessageReply(message, content);
+      return;
+    }
+
     // PRE-ROUTE SAFETY GATE: If the message is a contextual follow-up, the prior turn was NOT image-related,
     // and there is no explicit visual request, force bypass image routing and go directly to conversational chat.
     const isContextualFollowup = typeof seekdeepLooksLikeContextualTextFollowup === 'function' && seekdeepLooksLikeContextualTextFollowup(prompt);
@@ -18518,6 +18793,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     buildSystem,
     seekdeepDispatchAddressedMessage,
     seekdeepGetTrivialLocalReply,
+    // Phase B test hooks
+    seekdeepGpuLoggingEnabled,
+    seekdeepGpuLogIntervalSeconds,
+    seekdeepAppendGpuLogSample,
+    seekdeepStartGpuLogging,
+    seekdeepImageQueueStatusText,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
