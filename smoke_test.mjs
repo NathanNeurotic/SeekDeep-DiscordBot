@@ -14,6 +14,15 @@
 // see process.env at their evaluation time.
 process.env.SEEKDEEP_TEST_MODE = '1';
 
+// Feature flags read at module-load time. Suite 51 exercises the mask preview
+// routing path, which is gated by SEEKDEEP_FEATURE_INPAINT. Without this flag
+// the dispatcher short-circuits with a "not enabled" reply and never reaches
+// the /inpaint_mask_preview endpoint, so the URL/payload checks would fail
+// regardless of the routing logic itself.
+if (!process.env.SEEKDEEP_FEATURE_INPAINT) {
+  process.env.SEEKDEEP_FEATURE_INPAINT = 'on';
+}
+
 import { spawnSync } from 'node:child_process';
 
 let pass = 0;
