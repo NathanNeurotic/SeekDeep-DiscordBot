@@ -1609,6 +1609,145 @@ process.env.SEEKDEEP_ADMIN_IDS = oldAdminIds;
 globalThis.fetch = originalFetchSuite52;
 globalThis.__seekdeepRouteSpy = null;
 
+// ============================================================================
+// Suite 53: Recovery patch - Qwen <think> strip, image routing guard,
+// pending-image queue plan, BigInt-safe JSON, context-menu hardening
+// ============================================================================
+console.log('\nSuite 53: Recovery patch (think strip, routing, queue plan, BigInt JSON)');
+
+// 53.1 - stripQwenThinkingBlocks
+check('strip <think>...</think> simple',
+  T.stripQwenThinkingBlocks('<think>secret</think>final') === 'final');
+check('strip <thinking>...</thinking> via cleanupAssistantReply',
+  T.cleanupAssistantReply('<thinking>secret</thinking>Answer') === 'Answer');
+check('strip <think> handles uppercase / mixed',
+  T.stripQwenThinkingBlocks('<THINK>plan</THINK>visible') === 'visible');
+check('strip <think> handles unclosed leak (streaming cutoff)',
+  T.stripQwenThinkingBlocks('Visible part. <think>still planning when token budget ran out')
+    === 'Visible part.');
+check('strip <thinking> handles unclosed leak',
+  T.stripQwenThinkingBlocks('Hello. <thinking>tail leak') === 'Hello.');
+check('strip loose </think> tag',
+  T.stripQwenThinkingBlocks('answer</think>') === 'answer');
+check('cleanupAssistantReply preserves normal answer',
+  T.cleanupAssistantReply('Hello world') === 'Hello world');
+
+// 53.2 - seekdeepIsGenericImageFollowupPrompt new phrases
+check('generic followup: "make an image from that prompt"',
+  T.seekdeepIsGenericImageFollowupPrompt('make an image from that prompt') === true);
+check('generic followup: "no, make an image from that prompt please"',
+  T.seekdeepIsGenericImageFollowupPrompt('no, make an image from that prompt please') === true);
+check('generic followup: "make an image from that"',
+  T.seekdeepIsGenericImageFollowupPrompt('make an image from that') === true);
+check('generic followup: "use that prompt please"',
+  T.seekdeepIsGenericImageFollowupPrompt('use that prompt please') === true);
+check('generic followup: "use this prompt"',
+  T.seekdeepIsGenericImageFollowupPrompt('use this prompt') === true);
+check('generic followup: "take that idea and make an image"',
+  T.seekdeepIsGenericImageFollowupPrompt('take that idea and make an image') === true);
+check('generic followup: "turn that into an image"',
+  T.seekdeepIsGenericImageFollowupPrompt('turn that into an image') === true);
+check('generic followup: "make it into a picture"',
+  T.seekdeepIsGenericImageFollowupPrompt('make it into a picture') === true);
+check('generic followup: "draw it instead"',
+  T.seekdeepIsGenericImageFollowupPrompt('draw it instead') === true);
+
+// 53.3 - text-work guard must keep tutorial requests out of image routing
+const tutorialPrompt = 'make a tutorial step by step super noob friendly';
+check('generic followup: tutorial prompt is NOT a generic image followup',
+  T.seekdeepIsGenericImageFollowupPrompt(tutorialPrompt) === false);
+check('routing: tutorial stays as chat (seekdeepShouldStayChatInsteadOfImage)',
+  T.seekdeepShouldStayChatInsteadOfImage(tutorialPrompt) === true);
+check('routing: tutorial does NOT look like visual request',
+  T.seekdeepLooksLikeVisualRequest(tutorialPrompt) === false);
+
+// 53.4 - seekdeepJsonStringifySafe handles BigInt without throwing
+let bigStr = '';
+let bigThrew = false;
+try {
+  bigStr = T.seekdeepJsonStringifySafe({ id: 123n, nested: { snowflake: 999999999999999999n } });
+} catch (err) {
+  bigThrew = true;
+}
+check('seekdeepJsonStringifySafe: does not throw on BigInt', bigThrew === false);
+check('seekdeepJsonStringifySafe: serializes BigInt to "123"', /"id":\s*"123"/.test(bigStr));
+check('seekdeepJsonStringifySafe: nested BigInt also stringified', /"snowflake":\s*"999999999999999999"/.test(bigStr));
+check('seekdeepJsonStringifySafe: still serializes plain values',
+  T.seekdeepJsonStringifySafe({ a: 1, b: 'x' }) === '{"a":1,"b":"x"}');
+
+// 53.5 - seekdeepPendingImageQueuePlan
+const planBothFromBoth = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: true, wantsRefined: true },
+  'do both versions',
+);
+check('queue plan: pending=both + prompt "do both versions" -> both',
+  planBothFromBoth.wantsBoth === true && planBothFromBoth.wantsOriginal === true && planBothFromBoth.wantsRefined === true);
+check('queue plan: ackText for both', /Queued both/.test(planBothFromBoth.ackText));
+
+const planBothDefault = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: true, wantsRefined: true },
+  'a red apple on a wooden table',
+);
+check('queue plan: pending=both + prompt without explicit both -> single safe default (not both)',
+  planBothDefault.wantsBoth === false);
+check('queue plan: safe default queues refined (not both)',
+  planBothDefault.wantsRefined === true && planBothDefault.wantsOriginal === false);
+check('queue plan: ackText for refined-only is NOT "Queued both"',
+  !/Queued both/.test(planBothDefault.ackText));
+
+const planOriginalOnly = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: true, wantsRefined: false },
+  'a red apple',
+);
+check('queue plan: pending=original-only -> original only',
+  planOriginalOnly.wantsOriginal === true && planOriginalOnly.wantsRefined === false && planOriginalOnly.wantsBoth === false);
+
+const planRefinedOnly = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: false, wantsRefined: true },
+  'a red apple',
+);
+check('queue plan: pending=refined-only -> refined only',
+  planRefinedOnly.wantsRefined === true && planRefinedOnly.wantsOriginal === false && planRefinedOnly.wantsBoth === false);
+
+const planOverrideBoth = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: true, wantsRefined: false },
+  'queue both',
+);
+check('queue plan: explicit "queue both" upgrades pending=original-only to both',
+  planOverrideBoth.wantsBoth === true);
+
+const planOverrideOriginalOnly = T.seekdeepPendingImageQueuePlan(
+  { wantsOriginal: true, wantsRefined: true },
+  'just the original',
+);
+check('queue plan: explicit "just the original" downgrades pending=both to original only',
+  planOverrideOriginalOnly.wantsOriginal === true && planOverrideOriginalOnly.wantsRefined === false);
+
+const planEmpty = T.seekdeepPendingImageQueuePlan(null, '');
+check('queue plan: null pending falls back to refined default (no throw)',
+  planEmpty.wantsRefined === true && planEmpty.wantsBoth === false);
+
+// 53.6 - context-menu Generate Image: status-message rejection
+check('context menu reject: "Queued: original"',
+  T.seekdeepContextGenerateImageLooksLikeStatusMessage('Queued: original (no refinement)') === true);
+check('context menu reject: "Generated: ..."',
+  T.seekdeepContextGenerateImageLooksLikeStatusMessage('Generated: a cat in a garden') === true);
+check('context menu reject: "Image generation failed: ..."',
+  T.seekdeepContextGenerateImageLooksLikeStatusMessage('Image generation failed: timeout') === true);
+check('context menu reject: "Job ID: imgq_..."',
+  T.seekdeepContextGenerateImageLooksLikeStatusMessage('Job ID: imgq_abc123') === true);
+check('context menu accept: real user message',
+  T.seekdeepContextGenerateImageLooksLikeStatusMessage('a cat in a garden') === false);
+
+// 53.7 - context-menu prompt-line extractor
+check('context menu prompt extract: "Prompt: a cat"',
+  T.seekdeepContextMenuExtractPromptLine('Prompt: a cat\nSize: 1024x1024') === 'a cat');
+check('context menu prompt extract: "Refined prompt: ..." (case-insensitive)',
+  T.seekdeepContextMenuExtractPromptLine('Refined prompt: a detailed cat in a sunlit garden')
+    === 'a detailed cat in a sunlit garden');
+check('context menu prompt extract: missing prompt line returns empty',
+  T.seekdeepContextMenuExtractPromptLine('Some other text') === '');
+
 
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);

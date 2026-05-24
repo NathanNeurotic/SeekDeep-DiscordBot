@@ -29,6 +29,22 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// SEEKDEEP_JSON_BIGINT_SAFE_START
+// BigInt-safe JSON.stringify replacement. Discord.js v14 returns 64-bit IDs as
+// strings, but some response bodies / channel diagnostics / interaction
+// metadata can still surface raw BigInts, which throw "Do not know how to
+// serialize a BigInt" when passed to plain JSON.stringify. Use this anywhere
+// a value may transitively touch Discord objects, error payloads, manifests,
+// or queue/cache state.
+function seekdeepJsonStringifySafe(value, space) {
+  return JSON.stringify(
+    value,
+    (_key, v) => (typeof v === 'bigint' ? v.toString() : v),
+    space,
+  );
+}
+// SEEKDEEP_JSON_BIGINT_SAFE_END
+
 // SEEKDEEP_FILE_LOGGING_START
 // Mirror console.{log,warn,error} to a daily log file under logs/ so debugging
 // across sessions doesn't depend on scrollback. Opt out by setting
@@ -60,7 +76,7 @@ const __dirname = path.dirname(__filename);
         const ts = new Date().toISOString();
         const text = args.map((a) => {
           if (typeof a === 'string') return a;
-          try { return JSON.stringify(a); } catch { return String(a); }
+          try { return seekdeepJsonStringifySafe(a); } catch { return String(a); }
         }).join(' ');
         stream.write(`[${ts}] [${level}] ${redact(text)}\n`);
       } catch {}
@@ -174,7 +190,7 @@ function seekdeepCaptureRecentError(level, args) {
     const ts = new Date().toISOString();
     const raw = (args || []).map((a) => {
       if (typeof a === 'string') return a;
-      try { return JSON.stringify(a); } catch { return String(a); }
+      try { return seekdeepJsonStringifySafe(a); } catch { return String(a); }
     }).join(' ').slice(0, 600);
     const msg = seekdeepRedactErrorMsg(raw);
     SEEKDEEP_RECENT_ERRORS.unshift({ ts, level, msg });
@@ -1097,7 +1113,7 @@ function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = filePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, seekdeepJsonStringifySafe(data, 2) + '\n', 'utf8');
   fs.renameSync(tmp, filePath);
 }
 
@@ -1792,7 +1808,7 @@ async function fetchJson(url, options = {}) {
       const detail = json?.detail ?? json?.error ?? json?.message ?? json?.raw ?? `${res.status} ${res.statusText}`;
       let detailText;
       try {
-        detailText = typeof detail === 'string' ? detail : JSON.stringify(detail);
+        detailText = typeof detail === 'string' ? detail : seekdeepJsonStringifySafe(detail);
       } catch {
         detailText = String(detail);
       }
@@ -1825,7 +1841,7 @@ async function postLocal(pathname, body, options = {}) {
     return await fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: seekdeepJsonStringifySafe(body),
       signal: controller?.signal,
     });
   } catch (err) {
@@ -3676,7 +3692,7 @@ function seekdeepRememberTempImageState(state) {
     refinementMode: state?.refinementMode || '',
   };
 
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  fs.writeFileSync(metaPath, seekdeepJsonStringifySafe(meta, 2), 'utf8');
 
   const liveState = {
     ...meta,
@@ -8211,6 +8227,59 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
   return true;
 }
 
+// Pure decision helper: given a pending state and the user's reply prompt,
+// decide whether to queue Original, Refined, or both. Factored out so the
+// V2 follow-up handler can be unit-tested without Discord plumbing.
+function seekdeepPendingImageQueuePlan(pending = {}, prompt = '') {
+  const safePending = pending && typeof pending === 'object' ? pending : {};
+  const pendingWantsOriginal = safePending.wantsOriginal !== false;
+  const pendingWantsRefined = safePending.wantsRefined !== false;
+  const pendingWantsBoth = pendingWantsOriginal && pendingWantsRefined;
+
+  const p = String(prompt || '').toLowerCase().trim();
+  const explicitBothPhrase = /\b(?:do\s+both|make\s+both|queue\s+both|both\s+versions?|both\s+(?:original\s+and\s+refined|refined\s+and\s+original)|original\s+and\s+refined|refined\s+and\s+original|both\s+please|both\s+of\s+them|all\s+(?:of\s+)?them)\b/i.test(p)
+    || /^both\b/i.test(p);
+  const explicitOriginalOnly = /\b(?:just|only)\s+(?:the\s+)?original\b/i.test(p) || /\boriginal\s+only\b/i.test(p);
+  const explicitRefinedOnly = /\b(?:just|only)\s+(?:the\s+)?refined\b/i.test(p) || /\brefined\s+only\b/i.test(p);
+
+  let wantsOriginal;
+  let wantsRefined;
+
+  if (explicitBothPhrase) {
+    wantsOriginal = true;
+    wantsRefined = true;
+  } else if (explicitOriginalOnly) {
+    wantsOriginal = true;
+    wantsRefined = false;
+  } else if (explicitRefinedOnly) {
+    wantsOriginal = false;
+    wantsRefined = true;
+  } else if (pendingWantsBoth) {
+    // Pending state says "both", but the prompt did not ask for both explicitly.
+    // Pick the safe default: refined only, which matches how a single ad-hoc
+    // image request behaves elsewhere in the bot. Do not spam both.
+    wantsOriginal = false;
+    wantsRefined = true;
+  } else {
+    wantsOriginal = pendingWantsOriginal && !pendingWantsRefined;
+    wantsRefined = pendingWantsRefined;
+    if (!wantsOriginal && !wantsRefined) wantsRefined = true;
+  }
+
+  const wantsBoth = Boolean(wantsOriginal && wantsRefined);
+
+  let ackText;
+  if (wantsBoth) {
+    ackText = 'Queued both:\n- Original\n- Refined';
+  } else if (wantsRefined) {
+    ackText = 'Queued: refined';
+  } else {
+    ackText = 'Queued: original (no refinement)';
+  }
+
+  return { wantsOriginal, wantsRefined, wantsBoth, ackText };
+}
+
 async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', key = '') {
   const pending = seekdeepConsumePendingImageSubjectRequestV2(message, prompt);
   if (!pending?.prompt) return false;
@@ -8224,14 +8293,16 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
   }
 
+  const plan = seekdeepPendingImageQueuePlan(pending, prompt);
+
   const footerOptions = {
     startedAt: typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now(),
     modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
   };
 
   const ack = typeof seekdeepAppendResponseFooter === 'function'
-    ? seekdeepAppendResponseFooter('Queued both:\n- Original\n- Refined', footerOptions)
-    : 'Queued both:\n- Original\n- Refined';
+    ? seekdeepAppendResponseFooter(plan.ackText, footerOptions)
+    : plan.ackText;
 
   await message.reply({
     content: ack,
@@ -8243,22 +8314,31 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
     throw new Error('seekdeepSendImageWithButtons is not available for pending image subject follow-up.');
   }
 
-  try {
-    await seekdeepSendImageWithButtons(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
-      refine: false,
-      ground: pending.ground !== false,
-      cleanPrompt: pending.prompt,
-      skipCooldown: true,
-      silentAck: true,
-    });
+  const width = pending.width || 1024;
+  const height = pending.height || 1024;
+  const seed = pending.seed ?? null;
+  const ground = pending.ground !== false;
 
-    await seekdeepSendImageWithButtons(message, pending.prompt, pending.width || 1024, pending.height || 1024, pending.seed ?? null, {
-      refine: true,
-      ground: pending.ground !== false,
-      cleanPrompt: pending.prompt,
-      skipCooldown: true,
-      silentAck: true,
-    });
+  try {
+    if (plan.wantsOriginal) {
+      await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
+        refine: false,
+        ground,
+        cleanPrompt: pending.prompt,
+        skipCooldown: true,
+        silentAck: true,
+      });
+    }
+
+    if (plan.wantsRefined) {
+      await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
+        refine: true,
+        ground,
+        cleanPrompt: pending.prompt,
+        skipCooldown: true,
+        silentAck: true,
+      });
+    }
   } finally {
     seekdeepStopTypingSafelyForMessage(message);
   }
@@ -8978,17 +9058,20 @@ async function seekdeepReplyToTarget(target, payload, options = {}) {
 
 
 // SEEKDEEP_QWEN_THINK_STRIP_START
-function stripQwenThinkingBlocks(value) {
+function stripQwenThinkingBlocks(value = '') {
   let text = String(value ?? '');
 
-  // Remove complete Qwen3 thinking blocks.
+  // Remove complete Qwen3 / Ollama thinking blocks.
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  text = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '');
 
   // If the model was cut off while still thinking, discard that leaked section.
   text = text.replace(/<think>[\s\S]*$/i, '');
+  text = text.replace(/<thinking>[\s\S]*$/i, '');
 
-  // Remove loose closing tags.
-  text = text.replace(/<\/think>/gi, '');
+  // Remove loose opening/closing tags.
+  text = text.replace(/<\/?think>/gi, '');
+  text = text.replace(/<\/?thinking>/gi, '');
 
   return text.trim();
 }
@@ -9544,6 +9627,38 @@ function seekdeepIsGenericImageFollowupPrompt(prompt = '') {
   // Pronoun-only references ("draw him", "draw her", "make her", "image of him", "picture of them").
   if (/^(generate|create|make|draw|paint|sketch|illustrate|render|show)(\s+me)?\s+(an?\s+(?:image|picture|pic|portrait|drawing|illustration)\s+of\s+)?(him|her|them|that|this|it|us|those|these)\b\s*[.!?]*$/i.test(p)) return true;
   if (/^(?:an?\s+)?(image|picture|pic|portrait|drawing|illustration|render)\s+of\s+(him|her|them|that|this|it|us|those|these)\b\s*[.!?]*$/i.test(p)) return true;
+
+  // Referential prompt-correction phrases:
+  //   "no, make an image from that prompt please"
+  //   "make an image from that prompt"
+  //   "make an image from that"
+  //   "use that prompt please"
+  //   "use this prompt"
+  //   "take that idea and make an image"
+  //   "turn that into an image"
+  //   "make it into a picture"
+  //   "draw it instead"
+  const referentialNo = /^(?:no\s*,?\s+|nah\s*,?\s+|actually\s*,?\s+|wait\s*,?\s+)?/i;
+  const trailingPolite = /(?:\s*[,.!?]*\s*(?:please|pls|plz|thanks|thx|ty))?\s*[.!?]*$/i;
+  const refPatterns = [
+    // make/generate/create an image from that/this (prompt/idea/text)
+    /^(?:make|generate|create|render|draw|paint|sketch|illustrate|do|produce|give\s+me)\s+(?:me\s+)?(?:an?|the)?\s*(?:image|picture|pic|photo|art|artwork|drawing|illustration|render|painting|sketch|poster)\s+(?:from|of|out\s+of|based\s+on|using)\s+(?:that|this|it)(?:\s+(?:prompt|idea|text|description|caption|line|sentence|paragraph))?/i,
+    // "use that/this prompt"
+    /^use\s+(?:that|this|the)\s+(?:prompt|idea|text|description|caption|line|sentence|paragraph)/i,
+    // "take that idea and make an image"
+    /^(?:take|grab|use)\s+(?:that|this|it)\s+(?:idea|prompt|text|description)?\s*(?:and\s+)?(?:make|generate|create|render|draw|paint|illustrate|turn\s+(?:that|this|it)\s+into)\s+/i,
+    // "turn that into an image / picture"
+    /^(?:turn|convert|transform|make)\s+(?:that|this|it)\s+into\s+(?:an?|the)?\s*(?:image|picture|pic|photo|art|artwork|drawing|illustration|render|painting|poster|visual)/i,
+    // "make it into a picture"
+    /^make\s+(?:that|this|it)\s+(?:into\s+)?(?:an?|the)?\s*(?:image|picture|pic|photo|art|artwork|drawing|illustration|render|painting|poster|visual)/i,
+    // "draw it instead", "render it instead", "paint that instead"
+    /^(?:draw|paint|sketch|render|illustrate|generate|create|make)\s+(?:that|this|it)\s+(?:instead|as\s+(?:an?|the)\s+(?:image|picture|pic|photo|art))/i,
+  ];
+  const stripped = p.replace(referentialNo, '').replace(trailingPolite, '').trim();
+  for (const re of refPatterns) {
+    if (re.test(stripped) || re.test(p)) return true;
+  }
+
   return false;
 }
 
@@ -9922,16 +10037,15 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-pending-subject', pending.prompt);
   if (typeof remember === 'function' && key) remember(key, 'user', `[pending-image-subject] ${pending.prompt}`);
 
-  const wantsOriginal = Boolean(pending.wantsOriginal);
-  const wantsRefined = Boolean(pending.wantsRefined);
+  const plan = seekdeepPendingImageQueuePlan(pending, prompt);
   const width = pending.width || 1024;
   const height = pending.height || 1024;
   const seed = pending.seed ?? null;
   const ground = pending.ground !== false;
 
-  if (wantsOriginal && wantsRefined) {
+  if (plan.wantsBoth) {
     await message.reply({
-      content: seekdeepAppendResponseFooter('Queued both:\n- Original\n- Refined', {
+      content: seekdeepAppendResponseFooter(plan.ackText, {
         startedAt: seekdeepNowMs(),
         modelUsed: seekdeepNoModelLabel(),
       }),
@@ -9963,7 +10077,7 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
   }
 
   await seekdeepSendImageWithButtons(message, pending.prompt, width, height, seed, {
-    refine: !wantsOriginal,
+    refine: plan.wantsRefined,
     ground,
     cleanPrompt: pending.prompt,
   });
@@ -13366,7 +13480,7 @@ function seekdeepFormatBytes(bytes = 0) {
 function seekdeepUpscaleFriendlyError(err) {
   const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.responseBody?.detail ?? err?.responseBody?.error ?? err?.responseText ?? err?.message ?? err;
   let text;
-  try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+  try { text = typeof detail === 'string' ? detail : seekdeepJsonStringifySafe(detail); } catch { text = String(detail); }
   text = String(text || 'unknown error');
 
   if (/animated\s+gifs?\s+are\s+not\s+supported/i.test(text)) {
@@ -13546,7 +13660,7 @@ async function seekdeepHandleInpaintMaskPreview(target, removeTarget, imageUrl) 
     console.error('[SeekDeep] inpaint mask preview failed:', err?.stack || err?.message || err, err?.responseJson || '');
     const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.message ?? err;
     let text;
-    try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+    try { text = typeof detail === 'string' ? detail : seekdeepJsonStringifySafe(detail); } catch { text = String(detail); }
     text = String(text || 'unknown error');
     
     const failure = {
@@ -14327,7 +14441,7 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
 
   // reactrule export
   if (/^export\s*$/i.test(subcommand)) {
-    const blob = JSON.stringify({ rules: bucket.rules, builtins: bucket.builtins }, null, 2);
+    const blob = seekdeepJsonStringifySafe({ rules: bucket.rules, builtins: bucket.builtins }, 2);
     const buf = Buffer.from(blob, 'utf8');
     await message.reply({
       content: `Reaction rules export (${bucket.rules.length} custom rules + builtins).`,
@@ -14487,12 +14601,12 @@ async function seekdeepEmojiVaultBuildZip(emojis, { guildName = 'server', maxByt
   await Promise.all(workers);
 
   // Manifest inside the ZIP so the import flow can read it directly.
-  folder.file('manifest.json', JSON.stringify({
+  folder.file('manifest.json', seekdeepJsonStringifySafe({
     guildName,
     exportedAt: new Date().toISOString(),
     count: emojis.length,
     emojis: emojis.map((e) => ({ id: e.id, name: e.name, animated: !!e.animated })),
-  }, null, 2));
+  }, 2));
 
   const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
   if (buf.length > maxBytes) {
@@ -14603,7 +14717,7 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
         url: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`,
       })),
     };
-    const jsonBuf = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+    const jsonBuf = Buffer.from(seekdeepJsonStringifySafe(manifest, 2), 'utf8');
     try {
       await thread.send({
         content: 'Emoji vault data:',
@@ -17724,10 +17838,108 @@ async function seekdeepHandleContextMenuInspect(interaction, targetMessage) {
   await interaction.editReply({ content: '```\n' + body + '\n```' });
 }
 
+// Short-lived guard against double-clicks on the "Generate Image from this"
+// context menu entry. Discord can fire the same interaction twice (rapid
+// double-click, or accidental click on a stale ephemeral). Same user +
+// same target message within the TTL is treated as a no-op so we don't
+// silently queue the same prompt twice and burn the GPU on a duplicate.
+const SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD = globalThis.__seekdeepContextGenerateImageGuard || new Map();
+globalThis.__seekdeepContextGenerateImageGuard = SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD;
+const SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD_MS = Math.max(2000, Number(process.env.SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD_MS || 8000));
+
+function seekdeepContextGenerateImageGuardKey(userId, messageId) {
+  return String(userId || 'unknown') + ':' + String(messageId || 'unknown');
+}
+
+function seekdeepClaimContextGenerateImageSlot(userId, messageId) {
+  const now = Date.now();
+  for (const [k, ts] of SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD.entries()) {
+    if (Number(ts) + SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD_MS < now) {
+      SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD.delete(k);
+    }
+  }
+  const key = seekdeepContextGenerateImageGuardKey(userId, messageId);
+  if (SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD.has(key)) return false;
+  SEEKDEEP_CONTEXT_GENERATE_IMAGE_GUARD.set(key, now);
+  return true;
+}
+
+// Status/error/queue-marker prefixes from the bot's own messages. If the user
+// right-clicks one of these by mistake (or the click is ambiguous), we refuse
+// rather than feed a status line into image generation.
+const SEEKDEEP_CONTEXT_GENERATE_IMAGE_REJECT_PREFIXES = [
+  'Queued:',
+  'Queued both',
+  'Generated:',
+  'Image generation failed:',
+  'Image generation timed out',
+  'Time to Generate:',
+  'Model Used:',
+  'Queue Wait:',
+  'Job ID:',
+  'Refinement:',
+  'Fallback used:',
+  'Size:',
+  'Mask preview complete',
+  'Mask preview failed:',
+  'Inpaint complete:',
+  'img2img complete',
+  'InstructPix2Pix edit',
+];
+
+function seekdeepContextGenerateImageLooksLikeStatusMessage(text = '') {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return false;
+  for (const prefix of SEEKDEEP_CONTEXT_GENERATE_IMAGE_REJECT_PREFIXES) {
+    if (trimmed.toLowerCase().startsWith(prefix.toLowerCase())) return true;
+  }
+  return false;
+}
+
+// "Prompt: ..." / "Refined prompt: ..." extractor used after the existing
+// generated-image / edit-result extractors. Lets the context-menu route pull
+// a real prompt out of a bot-formatted line without picking up the rest of
+// the status footer.
+function seekdeepContextMenuExtractPromptLine(text = '') {
+  const raw = String(text || '').replace(/\r\n/g, '\n');
+  const refined = raw.match(/^\s*Refined\s+Prompt:\s*(.+)$/im);
+  if (refined?.[1]) return normalizeUserText(refined[1]);
+  const plain = raw.match(/^\s*Prompt:\s*(.+)$/im);
+  if (plain?.[1]) return normalizeUserText(plain[1]);
+  return '';
+}
+
 async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const rawPrompt = seekdeepExtractContextMenuPromptText(targetMessage);
+  const userId = interaction.user?.id || 'unknown';
+  const targetId = targetMessage?.id || interaction.targetId || 'unknown';
+
+  if (!seekdeepClaimContextGenerateImageSlot(userId, targetId)) {
+    await interaction.editReply({
+      content: 'Already queued that message a moment ago - ignoring this duplicate click.',
+    });
+    return;
+  }
+
+  const rawContent = String(targetMessage?.content || '').trim();
+
+  // Reject obvious bot status/error/queue messages so right-clicking a queue
+  // ack like "Queued: original" or a failure footer never gets re-queued.
+  if (seekdeepContextGenerateImageLooksLikeStatusMessage(rawContent)) {
+    const promptLine = seekdeepContextMenuExtractPromptLine(rawContent);
+    if (!promptLine) {
+      await interaction.editReply({
+        content: 'That looks like one of my status/error messages, not an image prompt. Pick a message with the real prompt text.',
+      });
+      return;
+    }
+  }
+
+  let rawPrompt = seekdeepContextMenuExtractPromptLine(rawContent);
+  if (!rawPrompt) {
+    rawPrompt = seekdeepExtractContextMenuPromptText(targetMessage);
+  }
   if (!rawPrompt) {
     await interaction.editReply({
       content: 'That message has no text I can use as an image prompt (only attachments/embeds). Pick a message with text.',
@@ -17736,8 +17948,14 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
   }
 
   const prompt = rawPrompt.slice(0, 500).replace(/[,;:\s]+$/g, '').trim();
+  if (!prompt) {
+    await interaction.editReply({
+      content: 'That message has no usable prompt text after cleanup. Pick a message with the real prompt.',
+    });
+    return;
+  }
 
-  // Right-click is an intentional user action — do NOT block on frustration
+  // Right-click is an intentional user action - do NOT block on frustration
   // heuristics. If the user picked this message on purpose, send it through.
 
   if (typeof seekdeepLogRoute === 'function') {
@@ -17748,19 +17966,27 @@ async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage
     content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 400),
   });
 
-  // Build a proxy message so we can reuse seekdeepSendImageWithButtons exactly
-  // like the regular natural-language path. The proxy replies into the original channel.
+  // Build a minimal proxy with plain string IDs only - do NOT pass the live
+  // Discord channel/guild/client objects through to helpers that may try to
+  // JSON.stringify them (BigInt snowflakes can throw). The .reply() method
+  // is the only Discord surface seekdeepSendImageWithButtons actually needs.
+  const channelId = interaction.channel?.id ? String(interaction.channel.id) : '';
+  const guildId = interaction.guild?.id ? String(interaction.guild.id) : '';
+  const proxyChannel = interaction.channel && typeof interaction.channel.send === 'function'
+    ? {
+        id: channelId,
+        send: (payload) => interaction.channel.send(payload),
+      }
+    : null;
   const proxy = {
-    author: { id: interaction.user?.id || 'unknown' },
-    channel: interaction.channel || null,
-    guild: interaction.guild || null,
+    author: { id: String(userId) },
+    channel: proxyChannel,
+    guild: guildId ? { id: guildId } : null,
     client: interaction.client || client,
-    id: `ctx:${interaction.id}`,
+    id: 'ctx:' + String(interaction.id || ''),
     content: prompt,
     reply: async (payload) => {
-      if (interaction.channel && typeof interaction.channel.send === 'function') {
-        return await interaction.channel.send(payload);
-      }
+      if (proxyChannel) return await proxyChannel.send(payload);
       return null;
     },
   };
@@ -19279,6 +19505,16 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepFormatAdminStatusReport,
     seekdeepFormatPermissionsReport,
     seekdeepIsNewsStylePrompt,
+    // Recovery batch: routing/think/queue/BigInt safety
+    stripQwenThinkingBlocks,
+    cleanupAssistantReply,
+    seekdeepIsGenericImageFollowupPrompt,
+    seekdeepShouldStayChatInsteadOfImage,
+    seekdeepLooksLikeVisualRequest,
+    seekdeepJsonStringifySafe,
+    seekdeepPendingImageQueuePlan,
+    seekdeepContextGenerateImageLooksLikeStatusMessage,
+    seekdeepContextMenuExtractPromptLine,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
