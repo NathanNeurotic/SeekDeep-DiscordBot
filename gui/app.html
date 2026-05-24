@@ -621,7 +621,7 @@
         </div>
 
         <div class="launcher-grid">
-          <div class="launcher-card up">
+          <div class="launcher-card up" data-svc="searxng">
             <div>
               <div class="pid">PID 14882 · :8080</div>
               <h4>SearXNG</h4>
@@ -636,7 +636,7 @@
               </div>
             </div>
           </div>
-          <div class="launcher-card up">
+          <div class="launcher-card up" data-svc="ai-server">
             <div>
               <div class="pid">PID 14883 · :7865</div>
               <h4>Local AI Server</h4>
@@ -651,7 +651,7 @@
               </div>
             </div>
           </div>
-          <div class="launcher-card up">
+          <div class="launcher-card up" data-svc="bot">
             <div>
               <div class="pid">PID 14884 · gateway</div>
               <h4>SeekDeep Bot</h4>
@@ -1332,30 +1332,7 @@
         </div>
 
         <div class="logs-wrap" id="logs-wrap">
-          <div class="log-line"><span class="ts">14:21:08</span><span class="lvl info">INFO</span><span class="src">bot</span><span class="msg">@SeekDeep mention from <span class="hl">nautilus</span> · routing → default_chat</span></div>
-          <div class="log-line"><span class="ts">14:21:08</span><span class="lvl dbg">DBG</span><span class="src">bot</span><span class="msg">memory.scope=user · entries=12 · chars=4218</span></div>
-          <div class="log-line"><span class="ts">14:21:09</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">chat: Llama-3.1-8B · 4bit · prompt=2814 tok</span></div>
-          <div class="log-line"><span class="ts">14:21:11</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">chat done · 1.2s · 184 tok/s</span></div>
-          <div class="log-line"><span class="ts">14:21:11</span><span class="lvl info">INFO</span><span class="src">bot</span><span class="msg">reply sent · 1.4s e2e</span></div>
-          <div class="log-line"><span class="ts">14:21:24</span><span class="lvl warn">WARN</span><span class="src">vram</span><span class="msg">vision idle for <span class="hl">14m</span> · eligible for eviction (3.4 GB)</span></div>
-          <div class="log-line"><span class="ts">14:21:30</span><span class="lvl info">INFO</span><span class="src">image</span><span class="msg">queue+ · seed=8842 · steps=28 · 1024² · style=cinematic</span></div>
-          <div class="log-line"><span class="ts">14:21:32</span><span class="lvl info">INFO</span><span class="src">image</span><span class="msg">refining prompt via default_chat…</span></div>
-          <div class="log-line"><span class="ts">14:21:34</span><span class="lvl dbg">DBG</span><span class="src">image</span><span class="msg">refined prompt: <span class="hl">"a colossal squid silhouetted at 10000m, bioluminescent dapples…"</span></span></div>
-          <div class="log-line"><span class="ts">14:21:35</span><span class="lvl warn">WARN</span><span class="src">vram</span><span class="msg">evicting <span class="hl">vision</span> to make room for sdxl (need 6.8 GB · free 5.4 GB)</span></div>
-          <div class="log-line"><span class="ts">14:21:36</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">model unload: vision · freed 3.4 GB</span></div>
-          <div class="log-line"><span class="ts">14:21:38</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">sdxl resident · scheduler=dpmsolver++ · guidance=7.0</span></div>
-          <div class="log-line"><span class="ts">14:21:54</span><span class="lvl info">INFO</span><span class="src">image</span><span class="msg">step 14/28 · 1.1s/it</span></div>
-          <div class="log-line"><span class="ts">14:22:12</span><span class="lvl info">INFO</span><span class="src">image</span><span class="msg">done · 31s total · 1.2 MB png · archived to channel</span></div>
-          <div class="log-line"><span class="ts">14:22:18</span><span class="lvl err">ERR</span><span class="src">searxng</span><span class="msg">connection refused · upstream <span class="hl">duckduckgo.com</span> · retry 1/3</span></div>
-          <div class="log-line"><span class="ts">14:22:21</span><span class="lvl info">INFO</span><span class="src">searxng</span><span class="msg">retry succeeded on <span class="hl">brave</span> upstream</span></div>
-          <div class="log-line"><span class="ts">14:22:34</span><span class="lvl info">INFO</span><span class="src">bot</span><span class="msg">archive thread <span class="hl">"nautilus · archive"</span> created (#14)</span></div>
-          <div class="log-line"><span class="ts">14:22:58</span><span class="lvl info">INFO</span><span class="src">bot</span><span class="msg">/persona set channel=clinical by admin <span class="hl">182394…</span></span></div>
-          <div class="log-line"><span class="ts">14:23:02</span><span class="lvl err">ERR</span><span class="src">bot</span><span class="msg">discord.api · 429 rate limit · backing off <span class="hl">800ms</span></span></div>
-          <div class="log-line"><span class="ts">14:23:11</span><span class="lvl warn">WARN</span><span class="src">queue</span><span class="msg">image queue depth: 3 · est wait 90s</span></div>
-          <div class="log-line"><span class="ts">14:23:24</span><span class="lvl info">INFO</span><span class="src">react</span><span class="msg">applied rule <span class="hl">whenever_link → 🔗</span> to msg #182…</span></div>
-          <div class="log-line"><span class="ts">14:23:48</span><span class="lvl dbg">DBG</span><span class="src">bot</span><span class="msg">heartbeat ack 47ms</span></div>
-          <div class="log-line"><span class="ts">14:24:02</span><span class="lvl info">INFO</span><span class="src">vision</span><span class="msg">Qwen2.5-VL describing 1 attachment from <span class="hl">deepdiver</span></span></div>
-          <div class="log-line"><span class="ts">14:24:09</span><span class="lvl info">INFO</span><span class="src">vision</span><span class="msg">done · 1.8s · 86 tok</span></div>
+          <div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ loading from /logs/tail…</div>
         </div>
       </section>
 
@@ -2095,25 +2072,82 @@ const SEEKDEEP_BASE = (function() {
     });
   });
 
-  // ===== Launcher: start/stop interactivity =====
-  document.querySelectorAll('.launcher-card').forEach(card => {
+  // ===== Launcher: live wiring (POST /launcher/{svc}/{action}) =====
+  document.querySelectorAll('.launcher-card[data-svc]').forEach(card => {
+    const svc = card.dataset.svc;
     const btns = card.querySelectorAll('.ctl button');
     const pill = card.querySelector('.pill');
-    const stopBtn = btns[btns.length - 1];
     const restartBtn = btns[0];
+    const stopBtn    = btns[1];
+
+    function setPill(state) {
+      if (!pill) return;
+      pill.classList.remove('on', 'bad', 'warn');
+      if (state === 'running')      { pill.classList.add('on');   pill.innerHTML = '<span class="dot"></span>HEALTHY'; }
+      else if (state === 'starting'){ pill.classList.add('warn'); pill.innerHTML = '<span class="dot"></span>STARTING'; }
+      else if (state === 'stopped' || state === 'not-running' || state === 'exited') {
+        pill.classList.add('bad'); pill.innerHTML = '<span class="dot"></span>STOPPED';
+      } else { pill.innerHTML = '<span class="dot"></span>' + (state || '').toUpperCase(); }
+    }
+    function setCardUp(up) {
+      card.classList.toggle('up', up);
+      card.classList.toggle('down', !up);
+      if (stopBtn) {
+        stopBtn.textContent = up ? 'Stop' : 'Start';
+        stopBtn.style.color = up ? 'var(--bad)' : 'var(--good)';
+      }
+    }
+    async function action(act) {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/launcher/' + svc + '/' + act, {
+          method: 'POST', signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const state = data.state || 'unknown';
+        setPill(state);
+        setCardUp(state === 'running' || state === 'starting' || state === 'already-running');
+      } catch (e) {
+        // Local fallback for offline / 404
+        setPill('LOCAL-MOCK');
+        setCardUp(act === 'start' || act === 'restart');
+      }
+    }
+
+    if (restartBtn) restartBtn.addEventListener('click', () => action('restart'));
     if (stopBtn) stopBtn.addEventListener('click', () => {
-      card.classList.remove('up'); card.classList.add('down');
-      if (pill) { pill.classList.remove('on'); pill.classList.add('bad'); pill.innerHTML = '<span class="dot"></span>STOPPED'; }
-      stopBtn.textContent = 'Start';
-      stopBtn.style.color = 'var(--good)';
-    });
-    if (restartBtn) restartBtn.addEventListener('click', () => {
-      card.classList.remove('down'); card.classList.add('up');
-      if (pill) { pill.classList.remove('bad'); pill.classList.add('on'); pill.innerHTML = '<span class="dot"></span>HEALTHY'; }
-      const sb = card.querySelectorAll('.ctl button')[1];
-      if (sb) { sb.textContent = 'Stop'; sb.style.color = 'var(--bad)'; }
+      const up = card.classList.contains('up');
+      action(up ? 'stop' : 'start');
     });
   });
+
+  // Initial status sweep so the cards reflect reality on load
+  (async () => {
+    for (const card of document.querySelectorAll('.launcher-card[data-svc]')) {
+      const svc = card.dataset.svc;
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/launcher/' + svc + '/status', {
+          method: 'POST', signal: AbortSignal.timeout(2000),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const pill = card.querySelector('.pill');
+          const stopBtn = card.querySelectorAll('.ctl button')[1];
+          if (data.state === 'running') {
+            pill.classList.remove('bad'); pill.classList.add('on');
+            pill.innerHTML = '<span class="dot"></span>HEALTHY';
+            card.classList.remove('down'); card.classList.add('up');
+            if (stopBtn) { stopBtn.textContent = 'Stop'; stopBtn.style.color = 'var(--bad)'; }
+          } else if (data.state === 'not-running' || data.state === 'exited') {
+            pill.classList.remove('on'); pill.classList.add('bad');
+            pill.innerHTML = '<span class="dot"></span>STOPPED';
+            card.classList.remove('up'); card.classList.add('down');
+            if (stopBtn) { stopBtn.textContent = 'Start'; stopBtn.style.color = 'var(--good)'; }
+          }
+        }
+      } catch {} // offline → leave the visual default
+    }
+  })();
 
   // Launch all / Stop all
   const launcherPane = document.querySelector('[data-pane="launcher"]');
@@ -2256,6 +2290,85 @@ const SEEKDEEP_BASE = (function() {
       a.download = `seekdeep-seed-${lastSeed || 'x'}.png`;
       a.click();
     });
+  })();
+
+  // ===== Logs viewer: live wiring (GET /logs/tail + /logs/stream SSE) =====
+  (function wireLogsViewer() {
+    const wrap = document.getElementById('logs-wrap');
+    if (!wrap) return;
+
+    const LOG_LINE_RE = /^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*\[?(INFO|WARN|ERR|ERROR|DBG|DEBUG)?\]?\s*\[?(\w+[-\w]*)?\]?\s*[:|]?\s*(.*)$/i;
+
+    function renderLine(raw) {
+      const m = LOG_LINE_RE.exec(raw) || [null,'','','',raw];
+      const lvl = (m[2] || '').toLowerCase().replace('error','err').replace('debug','dbg');
+      const lvlCls = ['info','warn','err','dbg'].includes(lvl) ? lvl : 'info';
+      const ts  = m[1] || '';
+      const src = m[3] || '';
+      const msg = (m[4] || raw).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.innerHTML = `<span class="ts">${ts}</span><span class="lvl ${lvlCls}">${(lvl||'log').toUpperCase()}</span><span class="src">${src}</span><span class="msg">${msg}</span>`;
+      return el;
+    }
+    function clear() { wrap.innerHTML = ''; }
+    function append(line) {
+      wrap.appendChild(renderLine(line));
+      while (wrap.children.length > 1500) wrap.removeChild(wrap.firstChild);
+      wrap.scrollTop = wrap.scrollHeight;
+    }
+    function fail(msg) {
+      clear();
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.style.gridTemplateColumns = '1fr';
+      el.style.padding = '14px';
+      el.style.color = 'var(--warn)';
+      el.style.fontStyle = 'italic';
+      el.textContent = '▸ ' + msg;
+      wrap.appendChild(el);
+    }
+
+    let sse = null;
+    let loaded = false;
+    async function loadInitial() {
+      if (loaded) return;
+      loaded = true;
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/logs/tail?lines=200', {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (!data.ok && !Array.isArray(data.lines)) throw new Error(data.error || 'no lines');
+        clear();
+        (data.lines || []).forEach(append);
+        startStream();
+      } catch (e) {
+        loaded = false;
+        const msg = String(e.message || e);
+        if (msg.includes('404')) fail('/logs/tail endpoint missing — add gui_endpoints.py per INTEGRATION.md');
+        else fail('logs unavailable · ' + msg);
+      }
+    }
+    function startStream() {
+      try {
+        sse = new EventSource(SEEKDEEP_BASE + '/logs/stream');
+        sse.onmessage = (e) => {
+          try { const line = JSON.parse(e.data); if (typeof line === 'string') append(line); } catch {}
+        };
+        sse.onerror = () => { sse?.close(); sse = null; };
+      } catch {}
+    }
+
+    function onLogsActive() {
+      const pane = document.querySelector('[data-pane="logs"]');
+      if (pane && pane.classList.contains('active')) loadInitial();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="logs"]').forEach(a => {
+      a.addEventListener('click', () => setTimeout(onLogsActive, 50));
+    });
+    onLogsActive();
   })();
 
   // ===== Chat playground · live wiring (POST /chat) =====
