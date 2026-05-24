@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Pitch deck</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow: hidden; height: 100vh; background: #000; }
+  .deck { position: fixed; inset: 0; display: grid; place-items: center; }
+
+  /* ===== Slide system: 16:9 stage ===== */
+  .stage { width: 1920px; height: 1080px; position: relative; overflow: hidden; transform-origin: center center; background: var(--ink); }
+  .stage::before { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 64px 64px, linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 64px 64px, linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%); }
+  .stage::after { content: ""; position: absolute; inset: 40px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 36px no-repeat; filter: drop-shadow(0 0 8px rgba(109,240,255,0.6)); }
+
+  /* Slides */
+  .slide { position: absolute; inset: 0; padding: 100px 120px; display: none; flex-direction: column; }
+  .slide.active { display: flex; }
+  .slide .num { position: absolute; top: 60px; left: 120px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.24em; color: var(--cyan-1); text-transform: uppercase; }
+  .slide .num em { font-style: normal; color: var(--hull-3); }
+  .slide .meta { position: absolute; top: 60px; right: 120px; font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; }
+  .slide .meta em { font-style: normal; color: var(--cyan-1); }
+  .slide .foot { position: absolute; bottom: 60px; left: 120px; right: 120px; display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; }
+  .slide .foot em { font-style: normal; color: var(--cyan-1); }
+
+  /* TYPE */
+  .h-mega { font-size: 180px; line-height: 0.9; letter-spacing: -0.04em; font-weight: 500; }
+  .h-mega em { font-style: normal; background: linear-gradient(180deg, var(--cyan-0), var(--cyan-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .h-big { font-size: 96px; line-height: 0.95; letter-spacing: -0.03em; font-weight: 500; }
+  .h-big em { font-style: normal; color: var(--cyan-1); }
+  .h-sub { font-size: 36px; line-height: 1.2; letter-spacing: -0.01em; color: var(--hull-2); font-weight: 400; max-width: 24ch; }
+  .h-eye { font-family: var(--font-mono); font-size: 16px; letter-spacing: 0.24em; color: var(--cyan-1); text-transform: uppercase; }
+
+  /* ===== Slide-specific layouts ===== */
+  /* S1 — Title */
+  .s-title { justify-content: center; align-items: center; text-align: center; }
+  .s-title .mark-ring { width: 360px; height: 360px; position: relative; display: grid; place-items: center; margin-bottom: 40px; }
+  .s-title .mark-ring img { width: 240px; height: 240px; border-radius: 50%; box-shadow: 0 0 100px rgba(45,212,255,0.5); }
+  .s-title .mark-ring .ring { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(109,240,255,0.25); }
+  .s-title .mark-ring .ring.r1 { animation: spin 30s linear infinite; border-style: dashed; }
+  .s-title .mark-ring .ring.r2 { inset: 30px; animation: spin 60s linear infinite reverse; opacity: 0.6; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .s-title .h-mega { margin-bottom: 28px; }
+  .s-title .tagline { font-size: 28px; color: var(--hull-3); font-family: var(--font-mono); letter-spacing: 0.16em; text-transform: uppercase; }
+  .s-title .tagline em { font-style: normal; color: var(--cyan-1); }
+
+  /* S2 — Problem */
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; margin-top: 60px; }
+  .row3 .pain { padding: 36px 30px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.30); border-radius: var(--r-md); }
+  .row3 .pain .lbl { font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.2em; color: var(--bad); margin-bottom: 12px; text-transform: uppercase; }
+  .row3 .pain h3 { font-size: 38px; letter-spacing: -0.02em; margin-bottom: 12px; }
+  .row3 .pain p { font-size: 18px; line-height: 1.5; color: var(--hull-3); }
+
+  /* S3 — Solution */
+  .pillar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 80px; }
+  .pillar { padding: 40px 32px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.40); border-radius: var(--r-md); position: relative; overflow: hidden; }
+  .pillar::before { content: ""; position: absolute; top: -1px; left: 24px; right: 24px; height: 1px; background: linear-gradient(90deg, transparent, var(--cyan-1), transparent); filter: drop-shadow(0 0 4px var(--cyan-0)); }
+  .pillar .n { font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.24em; color: var(--cyan-1); }
+  .pillar h3 { font-size: 44px; letter-spacing: -0.02em; margin: 16px 0; }
+  .pillar p { font-size: 20px; line-height: 1.5; color: var(--hull-2); }
+
+  /* S4 — Stats / Why local */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+  .stat-mega { font-size: 220px; line-height: 1; letter-spacing: -0.04em; color: var(--cyan-1); text-shadow: 0 0 60px rgba(45,212,255,0.4); }
+  .stat-mega small { font-size: 60px; color: var(--hull-3); margin-left: 12px; }
+  .stat-list { display: flex; flex-direction: column; gap: 24px; }
+  .stat-list .row { display: grid; grid-template-columns: 120px 1fr; gap: 24px; align-items: baseline; }
+  .stat-list .row .n { font-family: var(--font-mono); font-size: 42px; color: var(--cyan-1); letter-spacing: -0.02em; }
+  .stat-list .row .l { font-size: 22px; color: var(--hull-2); line-height: 1.4; }
+
+  /* S5 — Architecture diagram (simplified) */
+  .arch-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 60px; align-items: center; }
+  .arch-box { padding: 24px 20px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.35); border-radius: var(--r-md); text-align: center; }
+  .arch-box .layer { font-family: var(--font-mono); font-size: 14px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; }
+  .arch-box .name { font-size: 28px; margin-top: 8px; letter-spacing: -0.01em; }
+  .arch-box .port { font-family: var(--font-mono); font-size: 16px; color: var(--hull-3); margin-top: 6px; letter-spacing: 0.1em; }
+  .arrow { font-family: var(--font-mono); font-size: 40px; color: var(--cyan-1); text-align: center; }
+
+  /* S6 — Models VRAM table */
+  table.model-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 24px; margin-top: 40px; }
+  table.model-table th { text-align: left; padding: 18px 20px; color: var(--hull-3); letter-spacing: 0.16em; text-transform: uppercase; font-size: 16px; border-bottom: 2px solid var(--cyan-1); font-weight: 500; }
+  table.model-table td { padding: 22px 20px; border-bottom: 1px dashed rgba(45,212,255,0.20); color: var(--hull); }
+  table.model-table td.role { color: var(--cyan-1); }
+  table.model-table td.size { color: var(--good); }
+
+  /* S7 — Surface inventory */
+  .surface-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 60px; }
+  .surface-card { padding: 22px 20px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.30); border-radius: var(--r-md); position: relative; overflow: hidden; }
+  .surface-card .num { font-family: var(--font-mono); font-size: 16px; letter-spacing: 0.2em; color: var(--cyan-1); }
+  .surface-card .name { font-size: 28px; margin-top: 8px; letter-spacing: -0.01em; }
+  .surface-card .desc { font-size: 16px; color: var(--hull-3); margin-top: 6px; font-family: var(--font-mono); }
+
+  /* S8 — Roadmap */
+  .road { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 50px; }
+  .road .col h3 { font-size: 36px; margin-bottom: 18px; letter-spacing: -0.02em; }
+  .road .col h3 em { font-style: normal; }
+  .road .col h3.shipped em { color: var(--good); }
+  .road .col h3.next em { color: var(--cyan-1); }
+  .road ul { list-style: none; padding: 0; margin: 0; }
+  .road ul li { padding: 14px 20px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.20); border-left: 3px solid currentColor; border-radius: var(--r-sm); margin-bottom: 8px; font-size: 20px; color: var(--hull-2); }
+  .road .col.shipped ul li { border-left-color: var(--good); }
+  .road .col.next    ul li { border-left-color: var(--cyan-1); }
+
+  /* S9 — Close */
+  .s-close { justify-content: center; align-items: center; text-align: center; }
+  .s-close .cta-row { display: flex; gap: 32px; margin-top: 60px; }
+  .s-close .cta { padding: 24px 40px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.40); border-radius: var(--r-md); }
+  .s-close .cta .lbl { font-family: var(--font-mono); font-size: 16px; letter-spacing: 0.2em; color: var(--cyan-1); text-transform: uppercase; }
+  .s-close .cta .v { font-size: 32px; margin-top: 8px; color: var(--hull); }
+
+  /* Controls */
+  .deck-ctrl { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; gap: 8px; align-items: center; background: rgba(2,6,15,0.85); border: 1px solid rgba(45,212,255,0.30); padding: 8px 14px; border-radius: 999px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; backdrop-filter: blur(10px); }
+  .deck-ctrl button { background: transparent; border: 1px solid rgba(45,212,255,0.30); color: var(--cyan-1); font-family: inherit; font-size: 11px; padding: 4px 10px; border-radius: var(--r-sm); cursor: pointer; }
+  .deck-ctrl button:hover { background: rgba(45,212,255,0.10); }
+  .deck-ctrl .slidenum em { color: var(--cyan-1); font-style: normal; }
+</style>
+</head>
+<body>
+<div class="deck">
+  <div class="stage" id="stage">
+
+    <!-- 01 TITLE -->
+    <section class="slide active s-title" data-i="0">
+      <div class="num">01 <em>/ 09</em></div>
+      <div class="meta">SEEK<em>DEEP</em> · v10.35</div>
+      <div class="mark-ring">
+        <div class="ring r1"></div>
+        <div class="ring r2"></div>
+        <img src="assets/seekdeep-mark.png" alt="" />
+      </div>
+      <h1 class="h-mega">Surface the<br/><em>abyss.</em></h1>
+      <div class="tagline">A <em>local-first</em> Discord bot · nothing leaves the box</div>
+      <div class="foot"><span>NATHANNEUROTIC / SEEKDEEP-DISCORDBOT</span><span><em>2026</em></span></div>
+    </section>
+
+    <!-- 02 PROBLEM -->
+    <section class="slide" data-i="1">
+      <div class="num">02 <em>/ 09</em></div>
+      <div class="meta">THE PROBLEM</div>
+      <div class="h-eye">▸ EVERY OTHER DISCORD AI BOT</div>
+      <h2 class="h-big" style="margin-top: 20px;">Your prompts <em>leave the room.</em></h2>
+      <div class="row3">
+        <div class="pain">
+          <div class="lbl">PROBLEM 01</div>
+          <h3>Cloud-only</h3>
+          <p>Every message hits OpenAI, Anthropic, or some third-party API. Your conversation is now their training data — or their incident log.</p>
+        </div>
+        <div class="pain">
+          <div class="lbl">PROBLEM 02</div>
+          <h3>Pay per token</h3>
+          <p>Heavy users hit rate limits, hit billing walls, or get throttled when usage spikes. The bot's silent when you need it most.</p>
+        </div>
+        <div class="pain">
+          <div class="lbl">PROBLEM 03</div>
+          <h3>One model fits none</h3>
+          <p>The same GPT call handles chat, code, image prompts, vision — even though no single model is best at all four.</p>
+        </div>
+      </div>
+      <div class="foot"><span>WHY SEEKDEEP</span><span>02</span></div>
+    </section>
+
+    <!-- 03 SOLUTION -->
+    <section class="slide" data-i="2">
+      <div class="num">03 <em>/ 09</em></div>
+      <div class="meta">THE SOLUTION</div>
+      <div class="h-eye">▸ THREE PILLARS</div>
+      <h2 class="h-big" style="margin-top: 20px;">Run it <em>on your GPU.</em></h2>
+      <div class="pillar-grid">
+        <div class="pillar">
+          <div class="n">PILLAR 01</div>
+          <h3>Local</h3>
+          <p>Llama-3.1, Qwen-VL, SDXL all run on your card. Zero outbound API calls. Chat, image, archive, search history — all on the box that owns the silicon.</p>
+        </div>
+        <div class="pillar">
+          <div class="n">PILLAR 02</div>
+          <h3>Routed</h3>
+          <p>5 chat roles — default, quality, reasoning, fallback, lightweight. The router picks the right model for the task. Translation goes to Gemma-3n. Code goes to Phi-4.</p>
+        </div>
+        <div class="pillar">
+          <div class="n">PILLAR 03</div>
+          <h3>Aware</h3>
+          <p>Task-LRU swaps models in and out of VRAM as needed. Thrashing warnings before OOM. <span class="mono" style="color:var(--cyan-1);">/gpu watch</span> shows it live.</p>
+        </div>
+      </div>
+      <div class="foot"><span>SEEKDEEP / DESIGN PRINCIPLES</span><span>03</span></div>
+    </section>
+
+    <!-- 04 STATS -->
+    <section class="slide" data-i="3">
+      <div class="num">04 <em>/ 09</em></div>
+      <div class="meta">THE NUMBERS</div>
+      <div class="h-eye">▸ ON A 24 GB GPU</div>
+      <div class="grid-2" style="margin-top: 60px;">
+        <div>
+          <div class="stat-mega">0<small>outbound</small></div>
+          <p style="font-size: 24px; color: var(--hull-3); margin-top: 20px; font-family: var(--font-mono); letter-spacing: 0.06em;">API calls. Ever.</p>
+        </div>
+        <div class="stat-list">
+          <div class="row"><span class="n">5</span><span class="l">chat model roles · task-LRU swapped</span></div>
+          <div class="row"><span class="n">8</span><span class="l">image edit pipelines · SDXL + InstructPix2Pix + inpaint + upscale</span></div>
+          <div class="row"><span class="n">10</span><span class="l">image style presets · 3 quality tiers</span></div>
+          <div class="row"><span class="n">274</span><span class="l">smoke tests · <span class="mono" style="color:var(--cyan-1);">npm run preflight</span> in 1s</span></div>
+          <div class="row"><span class="n">35</span><span class="l">releases since v10.0 · v10.35 is current</span></div>
+        </div>
+      </div>
+      <div class="foot"><span>HARD NUMBERS</span><span>04</span></div>
+    </section>
+
+    <!-- 05 ARCHITECTURE -->
+    <section class="slide" data-i="4">
+      <div class="num">05 <em>/ 09</em></div>
+      <div class="meta">ARCHITECTURE</div>
+      <div class="h-eye">▸ THREE PROCESSES</div>
+      <h2 class="h-big" style="margin-top: 20px;">Simple by <em>construction.</em></h2>
+      <div class="arch-row" style="margin-top: 100px;">
+        <div class="arch-box">
+          <div class="layer">EXTERNAL</div>
+          <div class="name">Discord</div>
+          <div class="port">WebSocket gateway</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="arch-box">
+          <div class="layer">NODE BOT</div>
+          <div class="name">index.js</div>
+          <div class="port">869 KB · ESM · v20+</div>
+        </div>
+      </div>
+      <div class="arch-row" style="margin-top: 40px;">
+        <div class="arch-box">
+          <div class="layer">PYTHON</div>
+          <div class="name">local_ai_server.py</div>
+          <div class="port">FastAPI · :7865 · task-LRU</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="arch-box">
+          <div class="layer">DOCKER</div>
+          <div class="name">SearXNG</div>
+          <div class="port">privacy metasearch · :8080</div>
+        </div>
+      </div>
+      <div class="foot"><span>STACK · LOCAL</span><span>05</span></div>
+    </section>
+
+    <!-- 06 MODELS -->
+    <section class="slide" data-i="5">
+      <div class="num">06 <em>/ 09</em></div>
+      <div class="meta">MODELS · 24 GB BUDGET</div>
+      <h2 class="h-big">VRAM <em>math.</em></h2>
+      <table class="model-table">
+        <thead><tr><th>ROLE</th><th>MODEL</th><th>QUANT</th><th>VRAM</th></tr></thead>
+        <tbody>
+          <tr><td class="role">default_chat</td><td>Llama-3.1-8B-Instruct</td><td>4bit · NF4</td><td class="size">5.1 GB</td></tr>
+          <tr><td class="role">quality_text</td><td>Mistral-Nemo-Instruct-2407</td><td>4bit</td><td class="size">7.2 GB</td></tr>
+          <tr><td class="role">reasoning_code</td><td>microsoft/phi-4</td><td>4bit</td><td class="size">9.1 GB</td></tr>
+          <tr><td class="role">lightweight_chat</td><td>gemma-3n-E4B-it</td><td>4bit</td><td class="size">3.1 GB</td></tr>
+          <tr><td class="role">image</td><td>Dreamshaper-XL</td><td>fp16</td><td class="size">6.8 GB</td></tr>
+          <tr><td class="role">vision</td><td>Qwen2.5-VL-3B-Instruct</td><td>fp16</td><td class="size">3.4 GB</td></tr>
+        </tbody>
+      </table>
+      <p style="font-family: var(--font-mono); font-size: 18px; color: var(--hull-3); letter-spacing: 0.08em; margin-top: 24px;">▸ task-LRU keeps just one chat model resident · pin via <span style="color:var(--cyan-1);">LOCAL_*_KEEP_RESIDENT=on</span></p>
+      <div class="foot"><span>VRAM</span><span>06</span></div>
+    </section>
+
+    <!-- 07 SURFACES -->
+    <section class="slide" data-i="6">
+      <div class="num">07 <em>/ 09</em></div>
+      <div class="meta">THE GUI</div>
+      <div class="h-eye">▸ 13 SURFACES · ONE VISUAL SYSTEM</div>
+      <h2 class="h-big" style="margin-top: 20px;">Designed <em>top to bottom.</em></h2>
+      <div class="surface-grid">
+        <div class="surface-card"><div class="num">01</div><div class="name">Hub</div><div class="desc">project entry</div></div>
+        <div class="surface-card"><div class="num">02</div><div class="name">Brand</div><div class="desc">design system</div></div>
+        <div class="surface-card"><div class="num">03</div><div class="name">Landing</div><div class="desc">marketing page</div></div>
+        <div class="surface-card"><div class="num">04</div><div class="name">Control</div><div class="desc">10 modules · wired</div></div>
+        <div class="surface-card"><div class="num">05</div><div class="name">Chat</div><div class="desc">in-GUI client</div></div>
+        <div class="surface-card"><div class="num">06</div><div class="name">Installer</div><div class="desc">9-step wizard</div></div>
+        <div class="surface-card"><div class="num">07</div><div class="name">Docs</div><div class="desc">109 commands</div></div>
+        <div class="surface-card"><div class="num">08</div><div class="name">Roadmap</div><div class="desc">PLANNED.md</div></div>
+        <div class="surface-card"><div class="num">09</div><div class="name">API</div><div class="desc">live + mock</div></div>
+        <div class="surface-card"><div class="num">10</div><div class="name">Arch</div><div class="desc">system map</div></div>
+        <div class="surface-card"><div class="num">11</div><div class="name">Boot</div><div class="desc">splash anim</div></div>
+        <div class="surface-card"><div class="num">12</div><div class="name">Mobile</div><div class="desc">phone mocks</div></div>
+        <div class="surface-card"><div class="num">13</div><div class="name">Memory</div><div class="desc">roadmap preview</div></div>
+        <div class="surface-card"><div class="num">14</div><div class="name">Tour</div><div class="desc">guided onboarding</div></div>
+        <div class="surface-card"><div class="num">15</div><div class="name">Changelog</div><div class="desc">v10.x history</div></div>
+        <div class="surface-card"><div class="num">16</div><div class="name">Pitch</div><div class="desc">this deck</div></div>
+      </div>
+      <div class="foot"><span>SURFACES</span><span>07</span></div>
+    </section>
+
+    <!-- 08 ROADMAP -->
+    <section class="slide" data-i="7">
+      <div class="num">08 <em>/ 09</em></div>
+      <div class="meta">ROADMAP</div>
+      <h2 class="h-big">Where it's <em>headed.</em></h2>
+      <div class="road">
+        <div class="col shipped">
+          <h3 class="shipped">RECENTLY <em>SHIPPED</em></h3>
+          <ul>
+            <li>v10.35 · archive integrity, image reply intent classifier</li>
+            <li>v10.34 · 13-fix audit · 274 smoke tests pass</li>
+            <li>v10.31 · InstructPix2Pix + CLIPSeg inpainting</li>
+            <li>v10.25 · img2img + upscale</li>
+            <li>v10.12 · live GPU/VRAM monitoring</li>
+          </ul>
+        </div>
+        <div class="col next">
+          <h3 class="next">UP <em>NEXT</em></h3>
+          <ul>
+            <li>Real-ESRGAN upscaler · scaffolded</li>
+            <li>TTS voice channel · Piper / XTTS</li>
+            <li>Persistent memory · per-user/channel JSON</li>
+            <li>SAM + GroundingDINO segmentation</li>
+            <li>NSFW gate · CLIP-based classifier</li>
+          </ul>
+        </div>
+      </div>
+      <div class="foot"><span>PLANNED.md</span><span>08</span></div>
+    </section>
+
+    <!-- 09 CLOSE -->
+    <section class="slide s-close" data-i="8">
+      <div class="num">09 <em>/ 09</em></div>
+      <div class="meta">CLOSE</div>
+      <h2 class="h-mega">Run it. <em>Own it.</em></h2>
+      <p style="font-size: 32px; color: var(--hull-3); margin-top: 28px; font-family: var(--font-mono); letter-spacing: 0.08em;">▸ MIT licensed · Windows-first · 6-minute install</p>
+      <div class="cta-row">
+        <div class="cta">
+          <div class="lbl">REPO</div>
+          <div class="v">github.com/NathanNeurotic/SeekDeep-DiscordBot</div>
+        </div>
+        <div class="cta">
+          <div class="lbl">VERSION</div>
+          <div class="v">v10.35</div>
+        </div>
+        <div class="cta">
+          <div class="lbl">STATUS</div>
+          <div class="v" style="color: var(--good);">● HEALTHY</div>
+        </div>
+      </div>
+      <div class="foot"><span>NATHANNEUROTIC / 2026</span><span><em>END</em></span></div>
+    </section>
+
+  </div>
+</div>
+
+<div class="deck-ctrl">
+  <button id="prev">← PREV</button>
+  <span class="slidenum"><em id="curIdx">1</em> / <span id="totIdx">9</span></span>
+  <button id="next">NEXT →</button>
+</div>
+
+<script>
+const slides = document.querySelectorAll('.slide');
+const tot = slides.length;
+let idx = 0;
+document.getElementById('totIdx').textContent = tot;
+
+function show(i) {
+  idx = Math.max(0, Math.min(tot - 1, i));
+  slides.forEach((s, j) => s.classList.toggle('active', j === idx));
+  document.getElementById('curIdx').textContent = idx + 1;
+}
+
+document.getElementById('prev').addEventListener('click', () => show(idx - 1));
+document.getElementById('next').addEventListener('click', () => show(idx + 1));
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); show(idx + 1); }
+  else if (e.key === 'ArrowLeft') { show(idx - 1); }
+  else if (e.key === 'Home') show(0);
+  else if (e.key === 'End') show(tot - 1);
+});
+
+// Scale stage to fit viewport
+function fit() {
+  const stage = document.getElementById('stage');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / 1920, vh / 1080);
+  stage.style.transform = `scale(${scale})`;
+}
+fit();
+window.addEventListener('resize', fit);
+</script>
+</body>
+</html>

@@ -362,6 +362,13 @@ def _log_vram(label: str) -> None:
 
 app = FastAPI(title="SeekDeep Local AI Server", version="10.0.0-fresh-rebuild")
 
+# ===== SeekDeep GUI · static mount =====
+from fastapi.staticfiles import StaticFiles
+_GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
+if os.path.isdir(_GUI_DIR):
+    app.mount("/gui", StaticFiles(directory=_GUI_DIR, html=True), name="gui")
+    print(f"[SeekDeep] GUI mounted at /gui  ->  {_GUI_DIR}")
+
 
 # ---------------------------------------------------------------------------
 # Stable helpers must be defined before any FastAPI route uses them.

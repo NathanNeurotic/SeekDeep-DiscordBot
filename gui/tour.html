@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Guided Tour</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow: hidden; height: 100vh; }
+  .stage { position: fixed; inset: 0; display: grid; place-items: center; }
+
+  /* Background mock — abstracted control center silhouette */
+  .bg-mock { position: absolute; inset: 60px; border-radius: var(--r-md); border: 1px solid rgba(45,212,255,0.15); display: grid; grid-template-columns: 200px 1fr; opacity: 0.4; pointer-events: none; }
+  .bg-mock .sb { background: rgba(2,6,15,0.6); border-right: 1px solid rgba(45,212,255,0.12); padding: 20px 14px; }
+  .bg-mock .sb .item { padding: 8px 10px; margin: 4px 0; height: 30px; background: rgba(45,212,255,0.04); border-radius: var(--r-sm); }
+  .bg-mock .main { padding: 24px; display: grid; grid-template-rows: 50px 1fr; gap: 14px; }
+  .bg-mock .main .h { height: 50px; background: rgba(45,212,255,0.04); border-radius: var(--r-sm); }
+  .bg-mock .main .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .bg-mock .main .cell { height: 80px; background: rgba(45,212,255,0.05); border: 1px solid rgba(45,212,255,0.10); border-radius: var(--r-sm); }
+
+  /* Backdrop dim */
+  .backdrop { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 0%, rgba(2,6,15,0.6) 50%, rgba(2,6,15,0.85) 100%); z-index: 1; }
+
+  /* Spotlight cutout */
+  .spot { position: absolute; z-index: 2; border: 2px solid var(--cyan-1); border-radius: var(--r-md); box-shadow: 0 0 0 99999px rgba(2,6,15,0.78), 0 0 30px rgba(45,212,255,0.5), inset 0 0 30px rgba(45,212,255,0.10); transition: top 0.45s cubic-bezier(0.4,0,0.2,1), left 0.45s cubic-bezier(0.4,0,0.2,1), width 0.45s cubic-bezier(0.4,0,0.2,1), height 0.45s cubic-bezier(0.4,0,0.2,1); }
+  .spot::before, .spot::after { content: ""; position: absolute; }
+  .spot::before { top: -1px; left: -1px; width: 20px; height: 20px; border-top: 3px solid var(--cyan-0); border-left: 3px solid var(--cyan-0); box-shadow: -2px -2px 8px rgba(45,212,255,0.5); }
+  .spot::after  { bottom: -1px; right: -1px; width: 20px; height: 20px; border-bottom: 3px solid var(--cyan-0); border-right: 3px solid var(--cyan-0); box-shadow: 2px 2px 8px rgba(45,212,255,0.5); }
+
+  /* Tour card */
+  .tour-card { position: absolute; z-index: 3; width: 380px; max-width: calc(100vw - 80px); padding: 22px 24px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.45); border-radius: var(--r-md); box-shadow: 0 30px 80px rgba(0,0,0,0.7), 0 0 40px rgba(45,212,255,0.25); transition: top 0.45s cubic-bezier(0.4,0,0.2,1), left 0.45s cubic-bezier(0.4,0,0.2,1); }
+  .tour-card::before { content: ""; position: absolute; inset: 6px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 12px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 12px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 12px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 12px no-repeat; filter: drop-shadow(0 0 4px rgba(109,240,255,0.6)); }
+
+  .tour-step { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: var(--cyan-1); text-transform: uppercase; margin-bottom: 6px; }
+  .tour-step em { font-style: normal; color: var(--hull); }
+  .tour-title { font-size: 20px; letter-spacing: -0.01em; margin-bottom: 8px; }
+  .tour-body { color: var(--hull-2); font-size: 13px; line-height: 1.6; }
+  .tour-body .mono { color: var(--cyan-1); }
+  .tour-tip { margin-top: 12px; padding: 10px 12px; background: rgba(45,212,255,0.05); border-left: 2px solid var(--cyan-1); font-family: var(--font-mono); font-size: 11px; color: var(--cyan-1); letter-spacing: 0.06em; }
+
+  .tour-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(45,212,255,0.15); }
+  .tour-dots { display: flex; gap: 6px; }
+  .tour-dots i { width: 7px; height: 7px; border-radius: 50%; background: rgba(45,212,255,0.20); cursor: pointer; transition: background 0.15s; }
+  .tour-dots i.on { background: var(--cyan-1); box-shadow: 0 0 6px var(--cyan-0); width: 20px; border-radius: 4px; }
+
+  .tour-nav button { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; padding: 6px 12px; cursor: pointer; border-radius: var(--r-sm); }
+  .btn-prev { background: transparent; border: 1px solid rgba(45,212,255,0.30); color: var(--cyan-1); }
+  .btn-prev:hover { background: rgba(45,212,255,0.08); }
+  .btn-prev:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-next { background: linear-gradient(180deg, var(--cyan-1), var(--cyan-2)); border: 1px solid rgba(109,240,255,0.65); color: var(--ink); font-weight: 700; box-shadow: 0 0 14px rgba(45,212,255,0.3); }
+  .btn-next:hover { box-shadow: 0 0 24px rgba(45,212,255,0.5); }
+  .btn-skip { position: absolute; top: 24px; right: 28px; z-index: 4; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--hull-3); background: transparent; border: 1px solid rgba(45,212,255,0.18); padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; }
+  .btn-skip:hover { color: var(--cyan-1); border-color: var(--cyan-1); }
+
+  /* Hide-on-mobile */
+  @media (max-width: 800px) {
+    .bg-mock { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;animation-duration:24s;animation-delay:-3s"></span>
+  <span class="cube" style="left:28%;animation-duration:42s;animation-delay:-22s"></span>
+  <span style="left:48%;animation-duration:22s;animation-delay:-2s;width:2px;height:2px"></span>
+  <span class="cube big" style="left:54%;animation-duration:48s;animation-delay:-30s"></span>
+  <span style="left:84%;animation-duration:44s;animation-delay:-25s" class="cube"></span>
+</div>
+
+<div class="stage">
+  <div class="bg-mock">
+    <div class="sb">
+      <div class="item" id="m-sb-1"></div>
+      <div class="item" id="m-sb-2"></div>
+      <div class="item" id="m-sb-3"></div>
+      <div class="item" id="m-sb-4"></div>
+      <div class="item" id="m-sb-5"></div>
+    </div>
+    <div class="main">
+      <div class="h" id="m-head"></div>
+      <div class="grid">
+        <div class="cell" id="m-c1"></div>
+        <div class="cell" id="m-c2"></div>
+        <div class="cell" id="m-c3"></div>
+        <div class="cell" id="m-c4"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="backdrop"></div>
+  <button class="btn-skip" id="skipBtn">✕ Skip tour</button>
+
+  <div class="spot" id="spot"></div>
+  <div class="tour-card" id="card">
+    <div class="tour-step">STEP <em id="stepNum">1</em> / 7</div>
+    <div class="tour-title" id="title">Welcome to SeekDeep</div>
+    <div class="tour-body" id="body">SeekDeep runs Llama-3.1, Qwen-VL, and SDXL entirely on your machine. This quick tour walks you through the five core surfaces.</div>
+    <div class="tour-tip" id="tip" style="display:none;"></div>
+    <div class="tour-nav">
+      <button class="btn-prev" id="prevBtn">← Prev</button>
+      <div class="tour-dots" id="dots"></div>
+      <button class="btn-next" id="nextBtn">Next →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STEPS = [
+  {
+    title: 'Welcome to SeekDeep',
+    body: 'SeekDeep is a local-first Discord bot. Nothing leaves your machine — Llama, SDXL, Qwen-VL all run on your GPU. This 7-step tour walks you through the GUI surfaces.',
+    tip: '▸ Press <strong>↵</strong> or <strong>→</strong> to advance · <strong>Esc</strong> to skip.',
+    target: null,
+  },
+  {
+    title: 'Launcher · the rail',
+    body: 'The left rail in the Control Center holds 10 modules: launcher, GPU monitor, model manager, config, logs, chat playground, image playground, archive browser, auto-react rules, server stats.',
+    target: 'm-sb-1',
+  },
+  {
+    title: 'GPU & VRAM · live',
+    body: 'Click GPU on the rail to see live VRAM stats. The page polls <span class="mono">/health</span> every 5 seconds — when the local AI server is running, the title-bar pill flips from <span class="mono">MOCK</span> to <span class="mono">LIVE</span>.',
+    target: 'm-sb-2',
+  },
+  {
+    title: 'Model manager',
+    body: 'Browse, warm, pin, evict, or quantize models. Task-LRU swaps the resident chat model on demand; pinning keeps one in VRAM across task switches.',
+    target: 'm-sb-3',
+  },
+  {
+    title: 'Bot config · grouped',
+    body: '10 collapsible sections cover Discord, models, VRAM, memory, image, chat generation, feature flags, personas, web search, and admin. Dirty values flash amber and a counter shows pending changes.',
+    target: 'm-sb-4',
+  },
+  {
+    title: 'Live logs',
+    body: 'Tail <span class="mono">logs/seekdeep-YYYY-MM-DD.log</span> live with filters for INFO / WARN / ERROR and source tags (bot / ai-server / searxng / image / vision).',
+    target: 'm-sb-5',
+  },
+  {
+    title: 'You\'re ready',
+    body: 'That\'s the lay of the land. The installer wizard, docs page, roadmap, API explorer, and architecture map all live in the top-nav. Have fun in the abyss.',
+    tip: '▸ Open <span class="mono">index.html</span> to land on the hub.',
+    target: null,
+  },
+];
+
+let idx = 0;
+const card = document.getElementById('card');
+const spot = document.getElementById('spot');
+const dotsEl = document.getElementById('dots');
+
+// Build dots
+STEPS.forEach((_, i) => {
+  const d = document.createElement('i');
+  d.addEventListener('click', () => go(i));
+  dotsEl.appendChild(d);
+});
+
+function go(i) {
+  if (i < 0 || i >= STEPS.length) return;
+  idx = i;
+  const s = STEPS[i];
+  document.getElementById('stepNum').textContent = i + 1;
+  document.getElementById('title').textContent = s.title;
+  document.getElementById('body').innerHTML = s.body;
+  const tipEl = document.getElementById('tip');
+  if (s.tip) { tipEl.style.display = ''; tipEl.innerHTML = s.tip; }
+  else tipEl.style.display = 'none';
+
+  // Dots
+  document.querySelectorAll('.tour-dots i').forEach((d, j) => d.classList.toggle('on', j === i));
+
+  // Position spotlight
+  if (s.target) {
+    const t = document.getElementById(s.target);
+    if (t) {
+      const r = t.getBoundingClientRect();
+      spot.style.opacity = '1';
+      spot.style.top = (r.top - 6) + 'px';
+      spot.style.left = (r.left - 6) + 'px';
+      spot.style.width = (r.width + 12) + 'px';
+      spot.style.height = (r.height + 12) + 'px';
+      // Position card to the right of the spotlight
+      const cardX = r.right + 24;
+      const cardY = Math.max(80, r.top - 40);
+      card.style.left = Math.min(window.innerWidth - 410, cardX) + 'px';
+      card.style.top = cardY + 'px';
+      card.style.transform = 'none';
+    }
+  } else {
+    spot.style.opacity = '0';
+    spot.style.top = '50%'; spot.style.left = '50%';
+    spot.style.width = '0px'; spot.style.height = '0px';
+    // Center the card
+    card.style.left = '50%'; card.style.top = '50%';
+    card.style.transform = 'translate(-50%, -50%)';
+  }
+
+  // Update buttons
+  document.getElementById('prevBtn').disabled = i === 0;
+  document.getElementById('nextBtn').textContent = (i === STEPS.length - 1) ? '✓ Finish' : 'Next →';
+}
+
+document.getElementById('nextBtn').addEventListener('click', () => {
+  if (idx === STEPS.length - 1) finish();
+  else go(idx + 1);
+});
+document.getElementById('prevBtn').addEventListener('click', () => go(idx - 1));
+document.getElementById('skipBtn').addEventListener('click', finish);
+
+function finish() {
+  document.body.style.transition = 'opacity 0.4s ease';
+  document.body.style.opacity = '0';
+  setTimeout(() => { window.location.href = 'index.html'; }, 380);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    document.getElementById('nextBtn').click();
+  } else if (e.key === 'ArrowLeft') {
+    document.getElementById('prevBtn').click();
+  } else if (e.key === 'Escape') {
+    finish();
+  }
+});
+
+// Start
+go(0);
+window.addEventListener('resize', () => go(idx));
+</script>
+</body>
+</html>

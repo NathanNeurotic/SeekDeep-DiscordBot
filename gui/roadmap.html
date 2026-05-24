@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Roadmap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow: hidden; }
+  .app-wrap { height: 100vh; padding: 24px; display: grid; place-items: center; }
+
+  .win {
+    width: 100%; max-width: 1500px;
+    height: calc(100vh - 48px);
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    border-radius: var(--r-md);
+    overflow: hidden;
+    border: 1px solid rgba(45,212,255,0.25);
+    background:
+      linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      inset 0 -1px 0 rgba(0,0,0,0.5),
+      inset 0 0 0 1px rgba(0,0,0,0.35),
+      inset 0 0 60px rgba(45,212,255,0.04),
+      0 50px 120px rgba(0,0,0,0.8),
+      0 0 100px rgba(45,212,255,0.10);
+    position: relative;
+  }
+  .win::before {
+    content: ""; position: absolute;
+    inset: 10px;
+    pointer-events: none;
+    background:
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 22px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 22px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 22px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 1px 22px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 22px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 1px 22px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 22px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 22px no-repeat;
+    filter: drop-shadow(0 0 6px rgba(109,240,255,0.55));
+    z-index: 0;
+  }
+  .win > * { position: relative; z-index: 1; }
+
+  .win-titlebar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: 0 16px;
+    background: linear-gradient(180deg, rgba(20,48,107,0.95), rgba(8,20,52,0.95));
+    border-bottom: 1px solid var(--stroke);
+  }
+  .win-titlebar .left { display: flex; align-items: center; gap: 12px; }
+  .win-titlebar .left img { width: 22px; height: 22px; }
+  .win-titlebar .title {
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.16em; color: var(--hull-2);
+    text-transform: uppercase;
+  }
+  .win-titlebar .title em { font-style: normal; color: var(--cyan-1); }
+  .win-titlebar .right { justify-self: end; display: flex; gap: 4px; }
+  .win-titlebar .right a {
+    display: flex; align-items: center; padding: 0 10px; height: 26px;
+    color: var(--hull-3); font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.14em; text-decoration: none;
+    border-radius: var(--r-sm);
+  }
+  .win-titlebar .right a:hover { color: var(--cyan-1); background: rgba(45,212,255,0.08); }
+
+  /* Main */
+  .main { overflow-y: auto; padding: 24px 32px 40px; min-width: 0; }
+
+  /* Hero */
+  .roadmap-hero {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--stroke);
+  }
+  .roadmap-hero h1 {
+    font-size: 32px; letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .roadmap-hero .sub {
+    color: var(--hull-3); font-family: var(--font-mono);
+    font-size: 12px; letter-spacing: 0.06em;
+  }
+  .roadmap-hero .meta {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--hull-3); letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+  .roadmap-hero .meta em { font-style: normal; color: var(--cyan-1); }
+
+  /* Stat bar */
+  .stat-bar {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin: 20px 0;
+  }
+  .stat-tile {
+    padding: 14px 18px;
+    background: linear-gradient(180deg, var(--substrate-2), var(--substrate));
+    border: 1px solid rgba(45,212,255,0.22);
+    border-radius: var(--r-md);
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-tile::before {
+    content: ""; position: absolute;
+    inset: 4px;
+    pointer-events: none;
+    background:
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 10px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 10px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 10px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 10px no-repeat;
+    filter: drop-shadow(0 0 3px rgba(109,240,255,0.5));
+    opacity: 0.6;
+  }
+  .stat-tile .lbl {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; color: var(--hull-3);
+    text-transform: uppercase;
+  }
+  .stat-tile .val {
+    font-size: 32px; font-weight: 500;
+    margin-top: 4px; letter-spacing: -0.02em;
+  }
+  .stat-tile.shipped .val { color: var(--good); }
+  .stat-tile.flight .val { color: var(--cyan-1); }
+  .stat-tile.parked .val { color: var(--warn); }
+  .stat-tile.wont .val { color: var(--hull-3); }
+  .stat-tile.total .val { color: var(--hull); }
+  .stat-tile .delta {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--hull-3); margin-top: 2px;
+  }
+
+  /* Filters */
+  .filters {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin: 0 0 24px;
+  }
+  .filter-label {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; color: var(--hull-3);
+    text-transform: uppercase;
+    padding: 6px 4px;
+    align-self: center;
+  }
+  .filter-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: var(--r-sm);
+    border: 1px solid rgba(45,212,255,0.22);
+    background: linear-gradient(180deg, var(--substrate-2), var(--substrate));
+    color: var(--hull-2);
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.10em;
+    cursor: pointer; user-select: none;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .filter-chip:hover { color: var(--cyan-1); border-color: var(--cyan-1); }
+  .filter-chip.active {
+    background: linear-gradient(180deg, var(--cyan-1) 0%, var(--cyan-2) 100%);
+    border-color: rgba(109,240,255,0.65);
+    color: var(--ink);
+    font-weight: 600;
+    box-shadow: 0 0 14px rgba(45,212,255,0.35);
+  }
+
+  /* Phase section */
+  .phase {
+    margin-bottom: 32px;
+    scroll-margin-top: 16px;
+  }
+  .phase-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--stroke);
+    margin-bottom: 14px;
+  }
+  .phase-head h2 {
+    font-size: 22px; letter-spacing: -0.01em;
+    margin: 0; display: flex; gap: 12px; align-items: baseline;
+  }
+  .phase-head h2 .dot {
+    width: 10px; height: 10px;
+    display: inline-block;
+    border-radius: 50%;
+    box-shadow: 0 0 8px currentColor;
+  }
+  .phase-head h2.shipped .dot { background: var(--good); color: var(--good); }
+  .phase-head h2.flight  .dot { background: var(--cyan-1); color: var(--cyan-1); }
+  .phase-head h2.parked  .dot { background: var(--warn); color: var(--warn); }
+  .phase-head h2.wont    .dot { background: var(--hull-3); color: var(--hull-3); }
+  .phase-head .meta {
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--hull-3);
+  }
+  .phase-head .meta em { font-style: normal; color: var(--cyan-1); }
+  .phase-note {
+    color: var(--hull-3);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0 0 14px;
+    max-width: 76ch;
+  }
+  .phase-note .mono { color: var(--cyan-1); }
+
+  /* Item grid */
+  .item-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 10px;
+  }
+  .item {
+    position: relative;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, var(--substrate-2), var(--substrate));
+    border: 1px solid rgba(45,212,255,0.22);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .item:hover { border-color: var(--cyan-1); }
+  .item::before {
+    content: ""; position: absolute;
+    inset: 4px;
+    pointer-events: none;
+    background:
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 10px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 10px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 10px 1px no-repeat,
+      linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 10px no-repeat;
+    filter: drop-shadow(0 0 3px rgba(109,240,255,0.5));
+    opacity: 0.5;
+  }
+  .item:hover::before { opacity: 1; }
+  .item-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .item-title {
+    font-size: 14px; font-weight: 500;
+    color: var(--hull);
+    letter-spacing: -0.01em;
+    flex: 1;
+  }
+  .item-badges { display: flex; gap: 4px; flex-shrink: 0; }
+  .badge {
+    font-family: var(--font-mono); font-size: 9px;
+    letter-spacing: 0.14em;
+    padding: 2px 7px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+    background: rgba(0,0,0,0.3);
+  }
+  .badge.s-shipped { color: var(--good); }
+  .badge.s-flight  { color: var(--cyan-1); }
+  .badge.s-parked  { color: var(--warn); }
+  .badge.s-wont    { color: var(--hull-3); }
+
+  .badge.c-image      { color: #c47bff; }
+  .badge.c-router     { color: var(--cyan-1); }
+  .badge.c-perf       { color: var(--good); }
+  .badge.c-features   { color: var(--warn); }
+  .badge.c-memory     { color: var(--cyan-2); }
+  .badge.c-vision     { color: var(--cyan-1); }
+  .badge.c-qol        { color: var(--hull-3); }
+
+  .item-desc {
+    color: var(--hull-2);
+    font-size: 12px;
+    line-height: 1.55;
+    font-family: var(--font-display);
+  }
+  .item-desc .mono { color: var(--cyan-1); font-family: var(--font-mono); }
+  .item-version {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--cyan-1); letter-spacing: 0.14em;
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(45,212,255,0.18);
+  }
+
+  /* Long-form roadmap callout */
+  .longform {
+    margin-top: 18px;
+    padding: 18px 22px;
+    background:
+      linear-gradient(180deg, rgba(45,212,255,0.04), rgba(8,20,52,0.55));
+    border: 1px solid rgba(45,212,255,0.30);
+    border-left: 3px solid var(--cyan-1);
+    border-radius: var(--r-md);
+  }
+  .longform h4 {
+    font-size: 14px; margin-bottom: 8px;
+    color: var(--cyan-1);
+    font-family: var(--font-mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .longform p {
+    color: var(--hull-2);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0 0 10px;
+  }
+  .longform p:last-child { margin-bottom: 0; }
+  .longform .mono { color: var(--cyan-1); }
+
+  .longform .grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .longform .grid-2 .col {
+    padding: 12px 14px;
+    background: rgba(2,6,15,0.4);
+    border: 1px solid rgba(45,212,255,0.16);
+    border-radius: var(--r-sm);
+  }
+  .longform .grid-2 .col h5 {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; color: var(--cyan-1);
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+  .longform .grid-2 .col p {
+    font-size: 12px; margin: 0;
+  }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;animation-duration:24s;animation-delay:-3s"></span>
+  <span class="cube sm" style="left:10%;animation-duration:38s;animation-delay:-8s"></span>
+  <span style="left:14%;animation-duration:30s;animation-delay:-12s"></span>
+  <span class="cube" style="left:28%;animation-duration:42s;animation-delay:-22s"></span>
+  <span style="left:48%;animation-duration:22s;animation-delay:-2s;width:2px;height:2px"></span>
+  <span class="cube big" style="left:54%;animation-duration:48s;animation-delay:-30s"></span>
+  <span style="left:67%;animation-duration:20s;animation-delay:-14s"></span>
+  <span class="cube" style="left:84%;animation-duration:44s;animation-delay:-25s"></span>
+  <span style="left:95%;animation-duration:19s;animation-delay:-4s;width:2px;height:2px"></span>
+</div>
+
+<div class="app-wrap">
+  <div class="win">
+
+    <div class="win-titlebar">
+      <div class="left">
+        <img src="assets/seekdeep-mark.png" alt="" />
+        <span class="title">SEEK<em>DEEP</em> · ROADMAP · v10.35<span class="cur"></span></span>
+      </div>
+      <div></div>
+      <div class="right">
+        <a href="index.html">↩ HUB</a>
+        <a href="installer.html">⚙ INSTALLER</a>
+        <a href="docs.html">▤ DOCS</a>
+        <a href="app.html">⌘ CONTROL CENTER</a>
+      </div>
+    </div>
+
+    <main class="main">
+
+      <div class="roadmap-hero">
+        <h1 class="live">Roadmap</h1>
+        <div class="sub">▸ what shipped, what's next, what's parked, what we won't ship</div>
+        <div class="meta">SOURCE · <em>PLANNED.md</em> · LAST AUDIT 2026-05-19</div>
+      </div>
+
+      <div class="stat-bar" id="statBar">
+        <!-- populated by JS -->
+      </div>
+
+      <div class="filters">
+        <span class="filter-label">STATUS</span>
+        <span class="filter-chip active" data-filter="all">All</span>
+        <span class="filter-chip" data-filter="shipped">Shipped</span>
+        <span class="filter-chip" data-filter="flight">In flight</span>
+        <span class="filter-chip" data-filter="parked">Parked</span>
+        <span class="filter-chip" data-filter="wont">Won't do</span>
+      </div>
+
+      <div id="phases"></div>
+
+      <!-- LONG-FORM ROADMAP NOTES -->
+      <section class="phase" id="phase-segmentation">
+        <div class="phase-head">
+          <h2 class="flight"><span class="dot"></span>Segmentation roadmap</h2>
+          <span class="meta">▸ CLIPSeg → SAM + GroundingDINO</span>
+        </div>
+        <p class="phase-note">SeekDeep's inpaint pipeline currently uses CLIPSeg (under 200 MB, fast startup, fits in a general VRAM budget). It works but has hard limits on resolution, semantic overlap, and small-object detection. A future upgrade path lifts segmentation quality dramatically — but adds 1.5-3 GB+ of models and complex install deps.</p>
+
+        <div class="longform">
+          <h4>▸ Current behavior · CLIPSeg</h4>
+          <p>Model: <span class="mono">CIDAS/clipseg-rd64-refined</span>. Takes a text query (e.g. "the wizard") and returns a low-resolution heatmap of pixel probabilities. The heatmap is upscaled and thresholded (&gt; 0.3) into a binary mask. Mask bounds extend via <span class="mono">MaxFilter(21)</span> dilation and <span class="mono">GaussianBlur(8)</span> feathering.</p>
+
+          <div class="grid-2">
+            <div class="col">
+              <h5>Limitations</h5>
+              <p>Internal resolution is 64×64 — jagged edges, missing thin features (fingers, poles). Often segments multiple similar objects together. Very small objects fail to excite the text encoder and return empty masks.</p>
+            </div>
+            <div class="col">
+              <h5>Future · SAM + GroundingDINO</h5>
+              <p><strong>GroundingDINO</strong> generates high-quality bounding boxes from text. <strong>Segment Anything Model (SAM)</strong> uses those boxes as prompts to produce pixel-perfect instance masks. Expected: sharp edges, distinct objects, robust small-object detection.</p>
+            </div>
+          </div>
+
+          <p style="margin-top: 12px;"><span class="mono">▸ DEFERRED RATIONALE</span> — SAM + GroundingDINO combined add 1.5-3 GB+ of models, complex dependency chains (<span class="mono">torchvision</span>, <span class="mono">supervision</span>, custom CUDA extensions), and routinely exceed consumer GPU VRAM when running alongside SDXL + chat + vision. Mask preview (<span class="mono">@SeekDeep mask preview &lt;target&gt;</span>) is a stepping stone — debug CLIPSeg locally before spending diffusion cycles.</p>
+        </div>
+      </section>
+
+      <section class="phase" id="phase-memory">
+        <div class="phase-head">
+          <h2 class="parked"><span class="dot"></span>Persistent memory roadmap</h2>
+          <span class="meta">▸ rolling → on-disk JSON · privacy-first</span>
+        </div>
+        <p class="phase-note">SeekDeep's conversation memory is in-RAM only — restarts wipe it. The proposed persistence layer adds <span class="mono">data/user-memories.json</span> + <span class="mono">data/channel-memories.json</span> with atomic writes, opt-in/out, export/clear commands, and 25-fact/10KB caps.</p>
+
+        <div class="longform">
+          <h4>▸ Why this is parked</h4>
+          <p>Persistent memory looks small from outside, but injecting facts into the prompt requires <strong>semantic search</strong> (local vector store) or <strong>summarization</strong> to decide when to include them. Randomly stuffing long lists burns context window tokens and degrades small-model attention.</p>
+
+          <div class="grid-2">
+            <div class="col">
+              <h5>API · proposed</h5>
+              <p><span class="mono">@SeekDeep remember &lt;fact&gt;</span><br/>
+                 <span class="mono">@SeekDeep forget &lt;topic&gt;</span><br/>
+                 <span class="mono">@SeekDeep memory export</span><br/>
+                 <span class="mono">@SeekDeep memory clear</span><br/>
+                 <span class="mono">@SeekDeep memory feature off</span> (admin)</p>
+            </div>
+            <div class="col">
+              <h5>Privacy guardrails</h5>
+              <p>Per-server disable switch lives in <span class="mono">persona-overrides.json</span>. Per-user opt-out for individual privacy. Bounded storage: 25 facts max or 10 KB per profile, oldest-first LRU pruning.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+// ===========================================================
+// ROADMAP DATA — lifted from PLANNED.md (audit 2026-05-19)
+// ===========================================================
+const PHASES = [
+  {
+    id: 'sprint-fixes',
+    title: 'v10.34 sprint — confirmed bug fixes',
+    status: 'shipped',
+    meta: '5 bugs · 274 smoke tests',
+    note: 'Confirmed bugs from live testing on 2026-05-19. All shipped and verified by the smoke suite.',
+    items: [
+      { title: 'Persona modal crash', desc: 'Label shortened from 52 → 25 chars (<span class="mono">"Persona name (or reset)"</span>) to satisfy Discord\'s 45-char limit.', cat: 'features', version: 'v10.34' },
+      { title: 'Deprecated <span class="mono">ephemeral: true</span>', desc: 'All 11 occurrences migrated to <span class="mono">flags: MessageFlags.Ephemeral</span>.', cat: 'qol', version: 'v10.34' },
+      { title: 'Shared archive button 77s-637s latency', desc: 'Removed O(n) full thread scan from the shared archive button path. Now trusts the JSON profile fast count. Verification scans reserved for <span class="mono">archive status</span>.', cat: 'perf', version: 'v10.34' },
+      { title: 'Archive delete button <span class="mono">50027</span> error', desc: 'Removed full thread scan from delete path. Decrements profile count atomically. Final <span class="mono">editReply</span> wrapped in try/catch with fallback to <span class="mono">channel.send</span>.', cat: 'perf', version: 'v10.34' },
+      { title: 'Inpaint prompt extraction', desc: 'Now extracts removal target ("the small houses") instead of generic fill prompt. Combines target+scene when scene is non-generic.', cat: 'image', version: 'v10.34' },
+    ]
+  },
+  {
+    id: 'image-quality',
+    title: 'Image pipeline quality',
+    status: 'shipped',
+    meta: '5 pipelines tuned',
+    note: 'Audited all 5 image pipelines on 2026-05-19. Default parameters are what Node sends (not just the Python fallbacks).',
+    items: [
+      { title: 'Inpainting quality improvements', desc: 'CLIPSeg mask threshold 0.4 → 0.3, <span class="mono">MaxFilter(21)</span> dilation, <span class="mono">GaussianBlur(8)</span> feathering. Inpaint params: strength 0.95, guidance 5.0, steps 30, negative prompt now sent.', cat: 'image', version: 'v10.31+' },
+      { title: 'Pix2Pix image_guidance_scale', desc: 'Now adaptive: heavy edits (scene/style) get 1.2, light edits (brightness/color) get 2.0, default 1.5. Was hardcoded at 1.0.', cat: 'image', version: 'v10.34' },
+      { title: 'img2img guidance_scale', desc: 'Changed from <span class="mono">IMAGE_GUIDANCE_SCALE</span> (txt2img\'s 7.0) to <span class="mono">IMAGE_IMG2IMG_GUIDANCE_SCALE</span> (default 5.0).', cat: 'image', version: 'v10.34' },
+      { title: 'Context menu img2img auto-routing', desc: 'Instruction-like prompts auto-route to pix2pix (modifications) or inpaint (removals) when features are enabled.', cat: 'image', version: 'v10.34' },
+      { title: 'Adaptive strength · scene/environment tier', desc: 'Added 0.80 tier for scene keywords. Generic "make it" bumped 0.65 → 0.70.', cat: 'image', version: 'v10.34' },
+    ]
+  },
+  {
+    id: 'router-perf',
+    title: 'Model router + performance',
+    status: 'shipped',
+    meta: '2 items · live',
+    note: 'The model router now actively routes lightweight tasks (translations, greetings) to gemma-3n. Thread renames debounced to prevent API spam.',
+    items: [
+      { title: '<span class="mono">lightweight_chat</span> routing', desc: 'Router routes to <span class="mono">lightweight_chat</span> (gemma-3n-E4B-it) for translation tasks, greetings, short trivial prompts. Only activates when <span class="mono">LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID</span> is set.', cat: 'router', version: 'v10.34' },
+      { title: 'Thread rename debounce', desc: '<span class="mono">seekdeepMaybeRenameArchiveThread</span> tracks last rename time per thread with 30-second cooldown. Rapid archive clicks no longer queue rename API calls.', cat: 'perf', version: 'v10.34' },
+    ]
+  },
+  {
+    id: 'next-up',
+    title: 'Next up',
+    status: 'flight',
+    meta: '2 priorities',
+    note: "What's actively on the radar — scaffolded but waiting on model downloads or external lifts.",
+    items: [
+      { title: 'Real-ESRGAN model download', desc: 'Scaffolded in v10.25 — needs user approval for the model cache addition. Right-click "Upscale 2x" already gated behind <span class="mono">SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on</span>.', cat: 'image' },
+      { title: 'TTS voice channel', desc: 'Biggest remaining lift. Piper or XTTS — voice connection, model setup, per-channel opt-in. Gated behind <span class="mono">SEEKDEEP_FEATURE_TTS_VOICE=on</span>.', cat: 'features' },
+    ]
+  },
+  {
+    id: 'optional',
+    title: 'Optional features (scaffolded, off by default)',
+    status: 'parked',
+    meta: '2 flags',
+    note: 'Behaviour gated behind <span class="mono">SEEKDEEP_FEATURE_*</span> flags. Default off; flip to <span class="mono">on</span> in <span class="mono">.env</span> + restart to enable.',
+    items: [
+      { title: 'SEEKDEEP_FEATURE_NSFW_GATE', desc: 'CLIP-based NSFW scorer on generated images. Needs model, scoring step, thresholds, <span class="mono">.env</span> knobs for refuse-vs-spoiler-wrap.', cat: 'features' },
+      { title: 'SEEKDEEP_FEATURE_TTS_VOICE', desc: 'Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-channel opt-in.', cat: 'features' },
+    ]
+  },
+  {
+    id: 'qol',
+    title: 'Quality-of-life wishlist',
+    status: 'parked',
+    meta: '3 items',
+    note: 'Small ergonomics that aren\'t blocking anyone right now but would smooth specific workflows.',
+    items: [
+      { title: 'GPU logging', desc: 'Optional background sampler controlled by <span class="mono">SEEKDEEP_GPU_LOGGING=on</span>. Mirrors <span class="mono">/gpu</span> snapshots to <span class="mono">logs/seekdeep-vram.log</span> at a configurable cadence.', cat: 'qol' },
+      { title: 'VRAM budget table', desc: 'Document which model combinations fit a 24 GB card — chat + image + vision sizes at 4bit/fp16 with task-LRU swap math.', cat: 'qol' },
+      { title: 'Latin-script language detection', desc: 'Extend the auto-translate channel to detect French, Spanish, Portuguese, etc. — not just non-Latin scripts. Needs a small detector model or langid heuristic.', cat: 'qol' },
+    ]
+  },
+  {
+    id: 'deferred',
+    title: 'Deferred',
+    status: 'parked',
+    meta: '2 items',
+    note: 'Things worth doing only if another consumer of the same logic appears, or only after manual migration tooling exists.',
+    items: [
+      { title: '<span class="mono">shouldAutoSearch</span> refactor', desc: 'Only worth doing if a second consumer needs the same lists. Currently scoped to web routing only.', cat: 'qol' },
+      { title: '<span class="mono">seekdeepLegacyArchiveUserThreadName</span> migration', desc: 'Needs a one-time migration tool to rename pre-v10 archive threads. Backwards-compat shim is intentional.', cat: 'qol' },
+    ]
+  },
+  {
+    id: 'wont',
+    title: "Won't do",
+    status: 'wont',
+    meta: '3 items',
+    note: 'Explicit non-goals — features from demonbot we skipped, and refactors that no longer pay off.',
+    items: [
+      { title: 'Quote Cards (from demonbot)', desc: 'Explicitly skipped during the v10.3 demonbot-inspired feature pass.', cat: 'features' },
+      { title: 'Game Lookup (from demonbot)', desc: 'Explicitly skipped during the v10.3 demonbot-inspired feature pass.', cat: 'features' },
+      { title: 'Further <span class="mono">messageCreate</span> handler extraction', desc: 'Remaining 112 lines in the handler ARE orchestration. Splitting further would just trade clarity for indirection.', cat: 'qol' },
+    ]
+  },
+];
+
+// ===========================================================
+// STATS
+// ===========================================================
+const stats = { shipped: 0, flight: 0, parked: 0, wont: 0, total: 0 };
+PHASES.forEach(p => {
+  stats[p.status] += p.items.length;
+  stats.total += p.items.length;
+});
+const statBar = document.getElementById('statBar');
+statBar.innerHTML = `
+  <div class="stat-tile shipped"><div class="lbl">SHIPPED</div><div class="val">${stats.shipped}</div><div class="delta">v10.34 wave + earlier</div></div>
+  <div class="stat-tile flight"><div class="lbl">IN FLIGHT</div><div class="val">${stats.flight}</div><div class="delta">scaffolded · awaiting</div></div>
+  <div class="stat-tile parked"><div class="lbl">PARKED</div><div class="val">${stats.parked}</div><div class="delta">scoped · deferred</div></div>
+  <div class="stat-tile wont"><div class="lbl">WON'T DO</div><div class="val">${stats.wont}</div><div class="delta">non-goals</div></div>
+  <div class="stat-tile total"><div class="lbl">ROADMAP TOTAL</div><div class="val">${stats.total}</div><div class="delta">PLANNED.md items</div></div>
+`;
+
+// ===========================================================
+// RENDER PHASES
+// ===========================================================
+const phasesEl = document.getElementById('phases');
+const statusLabels = { shipped: 'SHIPPED', flight: 'IN FLIGHT', parked: 'PARKED', wont: "WON'T DO" };
+
+PHASES.forEach(phase => {
+  const sec = document.createElement('section');
+  sec.className = 'phase';
+  sec.id = 'phase-' + phase.id;
+  sec.dataset.status = phase.status;
+  sec.innerHTML = `
+    <div class="phase-head">
+      <h2 class="${phase.status}"><span class="dot"></span>${phase.title}</h2>
+      <span class="meta">▸ <em>${phase.items.length}</em> · ${phase.meta}</span>
+    </div>
+    ${phase.note ? `<p class="phase-note">${phase.note}</p>` : ''}
+    <div class="item-grid"></div>
+  `;
+  const grid = sec.querySelector('.item-grid');
+  phase.items.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'item';
+    card.dataset.status = phase.status;
+    card.innerHTML = `
+      <div class="item-head">
+        <div class="item-title">${item.title}</div>
+        <div class="item-badges">
+          <span class="badge c-${item.cat}">${item.cat}</span>
+          <span class="badge s-${phase.status}">${statusLabels[phase.status]}</span>
+        </div>
+      </div>
+      <div class="item-desc">${item.desc}</div>
+      ${item.version ? `<div class="item-version">▸ ${item.version}</div>` : ''}
+    `;
+    grid.appendChild(card);
+  });
+  phasesEl.appendChild(sec);
+});
+
+// ===========================================================
+// FILTER
+// ===========================================================
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    const f = chip.dataset.filter;
+    document.querySelectorAll('.phase').forEach(sec => {
+      const status = sec.dataset.status;
+      if (!status) { sec.style.display = (f === 'all') ? '' : 'none'; return; }
+      sec.style.display = (f === 'all' || status === f) ? '' : 'none';
+    });
+    document.querySelectorAll('#phase-segmentation, #phase-memory').forEach(sec => {
+      const status = sec.querySelector('.phase-head h2').className.replace(/[^a-z]/g, '');
+      sec.style.display = (f === 'all' || status === f) ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>

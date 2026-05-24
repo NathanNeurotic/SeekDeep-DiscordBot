@@ -1,0 +1,716 @@
+/* SeekDeep — shared visual system
+   PS2 OSDSYS abyss + deep-ocean cyber
+   ------------------------------------------------------------------ */
+:root {
+  --abyss-0: #02060f;
+  --abyss-1: #050b1c;
+  --abyss-2: #081434;
+  --abyss-3: #0d2152;
+  --abyss-4: #14306b;
+  --ink:     #000a1f;
+  --hull:    #f4f8ff;
+  --hull-2:  #c7d6f0;
+  --hull-3:  #7d92b8;
+  --cyan-0:  #6df0ff;
+  --cyan-1:  #2dd4ff;
+  --cyan-2:  #00a8e8;
+  --cyan-3:  #007ab8;
+  --cyan-glow: 0 0 24px rgba(45, 212, 255, 0.45);
+  --warn:    #ffb84d;
+  --bad:     #ff6b6b;
+  --good:    #58e6a1;
+
+  --panel:   color-mix(in oklab, var(--abyss-2) 70%, transparent);
+  --panel-hi: color-mix(in oklab, var(--abyss-3) 65%, transparent);
+  --stroke:  color-mix(in oklab, var(--cyan-1) 22%, transparent);
+  --stroke-hi: color-mix(in oklab, var(--cyan-1) 55%, transparent);
+
+  --font-display: "Space Grotesk", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --r-sm: 0px;
+  --r-md: 2px;
+  --r-lg: 2px;
+  --r-xl: 3px;
+
+  /* circuit-trace stroke */
+  --trace: rgba(45,212,255,0.32);
+  --trace-hi: rgba(109,240,255,0.7);
+  --substrate: #06121f;
+  --substrate-2: #0a1a30;
+}
+
+/* SeekDeep mark — always render circular wherever it appears */
+img[src*="seekdeep-mark"] {
+  border-radius: 50%;
+  background: transparent;
+  box-shadow:
+    inset 0 0 0 1px rgba(109, 240, 255, 0.18),
+    0 0 14px rgba(45, 212, 255, 0.2);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-display);
+  color: var(--hull);
+  background: var(--ink);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: 0.01em;
+}
+
+/* ===== Abyss background — animated PS2 ripple + currents ===== */
+.abyss {
+  position: fixed; inset: 0; z-index: -3;
+  background:
+    radial-gradient(120% 80% at 50% 110%, rgba(0,120,180,0.45), transparent 70%),
+    radial-gradient(80% 60% at 20% 0%, rgba(20,48,107,0.7), transparent 60%),
+    radial-gradient(60% 50% at 90% 20%, rgba(13,33,82,0.8), transparent 70%),
+    linear-gradient(180deg, #02060f 0%, #050b1c 40%, #02060f 100%);
+}
+.abyss::before {
+  /* concentric ripples from below — PS2 OSDSYS signature wave */
+  content: ""; position: absolute; inset: -40%;
+  background:
+    repeating-radial-gradient(circle at 50% 120%,
+      transparent 0 60px,
+      rgba(45,212,255,0.06) 60px 62px,
+      transparent 62px 120px);
+  animation: abyssPulse 18s ease-in-out infinite;
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
+.abyss::after {
+  /* horizontal current — slow drift */
+  content: ""; position: absolute; inset: 0;
+  background:
+    repeating-linear-gradient(180deg, transparent 0 3px, rgba(255,255,255,0.012) 3px 4px),
+    repeating-linear-gradient(8deg,
+      transparent 0 220px,
+      rgba(109,240,255,0.018) 220px 224px,
+      transparent 224px 440px);
+  animation: current 60s linear infinite;
+  pointer-events: none;
+}
+@keyframes abyssPulse {
+  0%, 100% { transform: scale(1) translateY(0); opacity: 0.6; }
+  50%      { transform: scale(1.08) translateY(-2%); opacity: 0.95; }
+}
+@keyframes current {
+  0% { background-position: 0 0, 0 0; }
+  100% { background-position: 0 0, 600px 0; }
+}
+
+/* God rays — vertical light shafts from above */
+.rays {
+  position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  overflow: hidden;
+}
+.rays::before, .rays::after {
+  content: ""; position: absolute;
+  top: -10%; bottom: -20%;
+  background:
+    linear-gradient(180deg,
+      transparent 0%,
+      rgba(109,240,255,0.06) 18%,
+      rgba(45,212,255,0.03) 60%,
+      transparent 100%);
+  width: 200px;
+  filter: blur(28px);
+  mix-blend-mode: screen;
+  transform-origin: top center;
+  animation: rayDrift 24s ease-in-out infinite alternate;
+}
+.rays::before { left: 18%; transform: rotate(-6deg); animation-delay: 0s; }
+.rays::after  { left: 62%; transform: rotate(4deg);  animation-delay: -12s; width: 260px; }
+@keyframes rayDrift {
+  0%, 100% { transform: rotate(-6deg) translateX(0); opacity: 0.7; }
+  50%      { transform: rotate(-2deg) translateX(40px); opacity: 1; }
+}
+
+/* drifting particles layer — cubes + bubbles */
+.bubbles {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  overflow: hidden;
+  perspective: 1200px;
+}
+.bubbles span {
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255,255,255,0.85), rgba(109,240,255,0.4) 40%, rgba(45,212,255,0.1) 70%, transparent 100%);
+  box-shadow: 0 0 10px rgba(109,240,255,0.6);
+  opacity: 0.55;
+  animation: drift linear infinite;
+}
+/* cube variants — declared via a class so we can mix bubbles + cubes */
+.bubbles span.cube {
+  width: 14px; height: 14px;
+  border-radius: 2px;
+  background:
+    linear-gradient(135deg,
+      rgba(255,255,255,0.12) 0%,
+      rgba(109,240,255,0.18) 50%,
+      rgba(0,120,180,0.08) 100%);
+  border: 1px solid rgba(109,240,255,0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.08),
+    inset -2px -2px 0 rgba(0,0,0,0.3),
+    inset 2px 2px 0 rgba(255,255,255,0.12),
+    0 0 12px rgba(45,212,255,0.35);
+  animation: tumble linear infinite;
+  opacity: 0.45;
+}
+.bubbles span.cube.big { width: 22px; height: 22px; }
+.bubbles span.cube.sm  { width: 9px;  height: 9px; }
+
+@keyframes drift {
+  0%   { transform: translateY(110vh) scale(0.6); opacity: 0; }
+  10%  { opacity: 0.65; }
+  90%  { opacity: 0.4; }
+  100% { transform: translateY(-10vh) scale(1.1); opacity: 0; }
+}
+@keyframes tumble {
+  0%   { transform: translateY(110vh) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.7); opacity: 0; }
+  10%  { opacity: 0.55; }
+  90%  { opacity: 0.4; }
+  100% { transform: translateY(-10vh) rotateX(540deg) rotateY(360deg) rotateZ(180deg) scale(1.1); opacity: 0; }
+}
+
+/* ===== Panel system — circuit board / IC package + smoked glass ===== */
+.panel,
+.panel-flat,
+.card-mini {
+  position: relative;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(45,212,255,0.22);
+  background:
+    /* faint silkscreen grid */
+    linear-gradient(rgba(45,212,255,0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, rgba(45,212,255,0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    /* top sheen (subtle, no horizon line) */
+    linear-gradient(180deg,
+      rgba(255,255,255,0.05) 0%,
+      rgba(255,255,255,0.015) 28%,
+      transparent 60%),
+    /* bottom cyan caustic */
+    linear-gradient(0deg,
+      rgba(0,168,232,0.10) 0%,
+      transparent 35%),
+    /* smoked-glass substrate */
+    linear-gradient(180deg, rgba(10,26,48,0.78) 0%, rgba(6,18,31,0.85) 100%);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.45),
+    inset 0 0 0 1px rgba(0,0,0,0.35),
+    inset 0 0 28px rgba(45,212,255,0.04),
+    0 14px 32px rgba(0,0,0,0.55),
+    0 0 0 1px rgba(45,212,255,0.08);
+  overflow: hidden;
+}
+
+/* Corner brackets — top-left + bottom-right L-marks (asymmetric, more distinguished) */
+.panel::before,
+.panel-flat::before,
+.card-mini::before {
+  content: ""; position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 14px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 14px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 14px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 14px no-repeat;
+  filter: drop-shadow(0 0 4px rgba(109,240,255,0.7));
+  z-index: 1;
+}
+
+/* Animated edge trace along top */
+.panel::after,
+.panel-flat::after,
+.card-mini::after {
+  content: ""; position: absolute;
+  top: -1px; left: 24px; right: 24px;
+  height: 1px;
+  background:
+    linear-gradient(90deg,
+      transparent 0,
+      var(--trace) 12%,
+      var(--trace-hi) 50%,
+      var(--trace) 88%,
+      transparent 100%);
+  filter: drop-shadow(0 0 3px var(--trace-hi));
+  pointer-events: none;
+  animation: traceFlow 5s ease-in-out infinite;
+  z-index: 1;
+}
+@keyframes traceFlow {
+  0%, 100% { opacity: 0.65; }
+  50%      { opacity: 1; }
+}
+
+.panel > *,
+.panel-flat > *,
+.card-mini > * { position: relative; z-index: 2; }
+
+/* ===== Glass mixin — circuit + smoked glass for all custom card surfaces ===== */
+.launcher-card,
+.svc-card,
+.chart-wrap,
+.bot-card,
+.cp-panel,
+.cfg-section,
+.logs-wrap,
+.arch-item,
+.persona-card,
+.tile,
+.lockup-card,
+.motion-card,
+.value,
+.card,
+.feature-card,
+.step,
+.voice-card {
+  position: relative !important;
+  border-radius: var(--r-md) !important;
+  border: 1px solid rgba(45,212,255,0.22) !important;
+  background:
+    linear-gradient(rgba(45,212,255,0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, rgba(45,212,255,0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(180deg,
+      rgba(255,255,255,0.05) 0%,
+      rgba(255,255,255,0.015) 28%,
+      transparent 60%),
+    linear-gradient(0deg,
+      rgba(0,168,232,0.08) 0%,
+      transparent 35%),
+    linear-gradient(180deg, rgba(10,26,48,0.78) 0%, rgba(6,18,31,0.85) 100%) !important;
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.45),
+    inset 0 0 0 1px rgba(0,0,0,0.35),
+    inset 0 0 28px rgba(45,212,255,0.04),
+    0 14px 32px rgba(0,0,0,0.55),
+    0 0 0 1px rgba(45,212,255,0.08) !important;
+  overflow: hidden;
+}
+
+.launcher-card::before,
+.svc-card::before,
+.chart-wrap::before,
+.bot-card::before,
+.cp-panel::before,
+.cfg-section::before,
+.logs-wrap::before,
+.arch-item::before,
+.persona-card::before,
+.tile::before,
+.lockup-card::before,
+.motion-card::before,
+.value::before,
+.card::before,
+.feature-card::before,
+.step::before,
+.voice-card::before {
+  content: ""; position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 12px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 12px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 12px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 12px no-repeat;
+  filter: drop-shadow(0 0 4px rgba(109,240,255,0.6));
+  z-index: 1;
+}
+
+.launcher-card::after,
+.svc-card::after,
+.chart-wrap::after,
+.cp-panel::after,
+.cfg-section::after,
+.tile::after,
+.value::after,
+.persona-card::after,
+.card::after,
+.bot-card::after {
+  content: ""; position: absolute;
+  top: -1px; left: 24px; right: 24px;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0, var(--trace) 12%,
+    var(--trace-hi) 50%, var(--trace) 88%, transparent 100%);
+  filter: drop-shadow(0 0 3px var(--trace-hi));
+  pointer-events: none;
+  animation: traceFlow 5s ease-in-out infinite;
+  z-index: 1;
+}
+
+.launcher-card > *, .svc-card > *, .chart-wrap > *, .bot-card > *,
+.cp-panel > *, .cfg-section > *, .logs-wrap > *, .arch-item > *,
+.persona-card > *, .tile > *, .lockup-card > *, .motion-card > *,
+.value > *, .card > *, .feature-card > *, .step > *, .voice-card > * {
+  position: relative; z-index: 2;
+}
+
+/* Chat messages — chip packages */
+.cp-msg.b {
+  background: linear-gradient(180deg, var(--substrate-2), var(--substrate)) !important;
+  border: 1px solid rgba(45,212,255,0.20) !important;
+  border-radius: var(--r-md) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    0 6px 16px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(45,212,255,0.06) !important;
+}
+.cp-msg.u {
+  background:
+    linear-gradient(180deg, var(--cyan-1) 0%, var(--cyan-2) 100%) !important;
+  border: 1px solid rgba(109,240,255,0.55) !important;
+  border-radius: var(--r-md) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.45),
+    inset 0 -1px 0 rgba(0,80,120,0.5),
+    0 4px 12px rgba(45,212,255,0.4),
+    0 0 16px rgba(45,212,255,0.25) !important;
+}
+
+/* ===== Type ramp ===== */
+.eyebrow {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+  color: var(--cyan-1);
+  opacity: 0.9;
+}
+.h-display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(40px, 6vw, 96px);
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.h-display em {
+  font-style: normal;
+  background: linear-gradient(180deg, var(--cyan-0), var(--cyan-2));
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 40px rgba(45,212,255,0.4);
+}
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.01em; margin: 0; }
+.mono { font-family: var(--font-mono); }
+
+/* ===== Buttons — IC switch / key-cap ===== */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(45,212,255,0.30);
+  background:
+    linear-gradient(rgba(45,212,255,0.04) 1px, transparent 1px) 0 0 / 14px 14px,
+    linear-gradient(90deg, rgba(45,212,255,0.04) 1px, transparent 1px) 0 0 / 14px 14px,
+    linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%);
+  color: var(--hull);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  text-decoration: none;
+  position: relative;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    inset 0 0 0 1px rgba(0,0,0,0.3),
+    0 2px 6px rgba(0,0,0,0.45);
+}
+.btn::before {
+  content: ""; position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 8px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 8px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 8px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 8px no-repeat;
+  filter: drop-shadow(0 0 2px rgba(109,240,255,0.6));
+  opacity: 0.65;
+}
+.btn:hover {
+  border-color: var(--cyan-1);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    inset 0 0 0 1px rgba(45,212,255,0.35),
+    inset 0 0 18px rgba(45,212,255,0.18),
+    0 2px 8px rgba(45,212,255,0.25),
+    0 0 16px rgba(45,212,255,0.18);
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: linear-gradient(180deg, var(--cyan-1) 0%, var(--cyan-2) 100%);
+  border-color: rgba(109,240,255,0.65);
+  color: #001525;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.45),
+    inset 0 -1px 0 rgba(0,80,120,0.45),
+    inset 0 0 0 1px rgba(255,255,255,0.20),
+    0 2px 8px rgba(45,212,255,0.4),
+    0 0 22px rgba(45,212,255,0.4);
+}
+.btn-primary::before { opacity: 0; }
+.btn-primary:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.65),
+    inset 0 -1px 0 rgba(0,80,120,0.55),
+    inset 0 0 0 1px rgba(255,255,255,0.30),
+    0 4px 14px rgba(45,212,255,0.55),
+    0 0 36px rgba(45,212,255,0.5);
+}
+.btn-ghost {
+  background:
+    linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 14px 14px,
+    linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 14px 14px,
+    transparent;
+  border-color: rgba(109,240,255,0.22);
+}
+
+/* ===== Logo lockup ===== */
+.lockup { display: inline-flex; align-items: center; gap: 12px; }
+.lockup img { width: 36px; height: 36px; border-radius: 8px; }
+.lockup .wm {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: 0.04em;
+}
+.lockup .wm em {
+  font-style: normal;
+  color: var(--cyan-1);
+}
+
+/* ===== Window chrome (original — not Windows 11) ===== */
+.window {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(13,33,82,0.55), rgba(5,11,28,0.85));
+  border: 1px solid var(--stroke);
+  box-shadow:
+    0 50px 120px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    0 0 80px rgba(45,212,255,0.06);
+}
+.titlebar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 44px;
+  padding: 0 14px;
+  background: linear-gradient(180deg, rgba(20,48,107,0.85), rgba(8,20,52,0.85));
+  border-bottom: 1px solid var(--stroke);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hull-3);
+}
+.titlebar .traffic { display: flex; gap: 8px; align-items: center; }
+.titlebar .traffic i {
+  width: 12px; height: 12px; border-radius: 3px;
+  display: inline-block;
+  background: var(--abyss-3);
+  border: 1px solid var(--stroke);
+}
+.titlebar .traffic i.min { background: linear-gradient(180deg, #1a4a8a, #0d2152); }
+.titlebar .traffic i.max { background: linear-gradient(180deg, #0d2152, #14306b); }
+.titlebar .traffic i.close { background: linear-gradient(180deg, var(--cyan-1), var(--cyan-3)); }
+.titlebar .title { justify-self: center; }
+.titlebar .right { justify-self: end; display: flex; gap: 16px; opacity: 0.7; }
+
+/* ===== Forms — recessed copper trace ===== */
+input, textarea, select {
+  background: linear-gradient(180deg, #02080f 0%, #04101a 100%);
+  border: 1px solid rgba(45,212,255,0.22);
+  color: var(--hull);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.18s;
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.55),
+    inset 0 0 0 1px rgba(0,0,0,0.3);
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--cyan-1);
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.55),
+    inset 0 0 0 1px rgba(45,212,255,0.4),
+    inset 0 0 12px rgba(45,212,255,0.15),
+    0 0 0 2px rgba(45,212,255,0.18);
+}
+input.mono, textarea.mono { font-family: var(--font-mono); font-size: 12px; }
+
+/* ===== Status pills — silkscreen tag ===== */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(45,212,255,0.30);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  background: linear-gradient(180deg, var(--substrate-2), var(--substrate));
+  color: var(--hull-2);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    0 1px 2px rgba(0,0,0,0.45);
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--hull-3); box-shadow: 0 0 6px currentColor; }
+.pill.on .dot { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.pill.warn .dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+.pill.bad .dot { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.pill.cyan .dot { background: var(--cyan-1); box-shadow: 0 0 8px var(--cyan-0); }
+
+/* ===== Scanline cyan rule ===== */
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan-1), transparent);
+  opacity: 0.4;
+  margin: 24px 0;
+}
+
+/* ===== Top nav (shared across pages) ===== */
+.topnav {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 36px;
+  background: linear-gradient(180deg, rgba(2,6,15,0.85), rgba(2,6,15,0.4));
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 14%, transparent);
+}
+.topnav .links { display: flex; gap: 28px; }
+.topnav .links a {
+  color: var(--hull-2);
+  text-decoration: none;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 0.2s;
+}
+.topnav .links a:hover { color: var(--cyan-1); }
+.topnav .links a.active { color: var(--cyan-1); }
+.topnav .links a.active::after {
+  content: ""; display: block; height: 1px;
+  background: var(--cyan-1); margin-top: 4px;
+  box-shadow: 0 0 6px var(--cyan-0);
+}
+
+/* ===== Utility ===== */
+.glow-text { text-shadow: 0 0 18px rgba(45,212,255,0.45); }
+.row { display: flex; gap: 12px; align-items: center; }
+.col { display: flex; flex-direction: column; gap: 12px; }
+.muted { color: var(--hull-3); }
+.tiny { font-size: 11px; }
+.center { text-align: center; }
+
+/* ===== Image placeholder ===== */
+.ph {
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(45,212,255,0.04) 0 10px,
+      transparent 10px 20px),
+    rgba(2,6,15,0.55);
+  border: 1px dashed var(--stroke);
+  border-radius: var(--r-md);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--hull-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  text-align: center;
+  padding: 16px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: rgba(2,6,15,0.6); }
+::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--cyan-1) 25%, transparent); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--cyan-2); }
+
+/* Selection */
+::selection { background: var(--cyan-1); color: var(--ink); }
+
+/* ===== Blinking caret · terminal cursor (thin) ===== */
+.caret::after,
+.eyebrow::after,
+h1.live::after,
+h2.live::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.85em;
+  background: var(--cyan-1);
+  margin-left: 5px;
+  box-shadow: 0 0 6px var(--cyan-0);
+  animation: blink 1s steps(2, end) infinite;
+  vertical-align: -0.08em;
+}
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* Standalone caret span */
+.cur {
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  background: var(--cyan-1);
+  box-shadow: 0 0 6px var(--cyan-0);
+  margin-left: 4px;
+  vertical-align: -0.08em;
+  animation: blink 1s steps(2, end) infinite;
+}
+
+/* Live status dot — slow pulse */
+.live-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 10px var(--good);
+  margin-right: 6px;
+  animation: livePulse 1.6s ease-in-out infinite;
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* Pin contact dots — small circuit endpoints on corners */
+.pin-dot {
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--cyan-1);
+  box-shadow: 0 0 6px var(--cyan-0);
+}

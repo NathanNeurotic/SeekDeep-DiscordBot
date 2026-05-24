@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SEEKDEEP — booting…</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow: hidden; height: 100vh; }
+
+  .boot-stage {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    grid-template-rows: 1fr auto auto 1fr;
+    grid-template-columns: 1fr 600px 1fr;
+    grid-template-areas:
+      ".  .     ."
+      ".  mark  ."
+      ".  log   ."
+      ".  .     .";
+    gap: 18px;
+    padding: 60px;
+  }
+
+  /* Logo / mark */
+  .mark-area {
+    grid-area: mark;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    opacity: 0;
+    animation: markIn 0.8s ease-out 0.2s forwards;
+  }
+  @keyframes markIn {
+    from { opacity: 0; transform: translateY(-20px) scale(0.95); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .mark-area .ringset {
+    position: relative;
+    width: 200px; height: 200px;
+    display: grid; place-items: center;
+  }
+  .mark-area .ringset img {
+    width: 130px; height: 130px;
+    border-radius: 50%;
+    box-shadow:
+      inset 0 0 0 1px rgba(109,240,255,0.25),
+      0 0 60px rgba(45,212,255,0.45);
+    animation: markBob 5s ease-in-out infinite;
+  }
+  @keyframes markBob {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50%      { transform: translateY(-8px) rotate(1deg); }
+  }
+  .mark-area .ringset .r {
+    position: absolute;
+    border: 1px solid rgba(109,240,255,0.18);
+    border-radius: 50%;
+  }
+  .mark-area .ringset .r1 { inset: 0; border-style: dashed; animation: spin 12s linear infinite; }
+  .mark-area .ringset .r2 { inset: 14px; animation: spin 24s linear infinite reverse; }
+  .mark-area .ringset .r3 { inset: 28px; border-color: rgba(109,240,255,0.32); animation: spin 8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tick marks at cardinal points */
+  .mark-area .ringset .tick {
+    position: absolute;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--cyan-1);
+    letter-spacing: 0.2em;
+    opacity: 0.6;
+  }
+  .mark-area .ringset .tick.n { top: -8px;   left: 50%; transform: translateX(-50%); }
+  .mark-area .ringset .tick.s { bottom: -8px; left: 50%; transform: translateX(-50%); }
+  .mark-area .ringset .tick.w { left: -22px; top: 50%; transform: translateY(-50%); }
+  .mark-area .ringset .tick.e { right: -22px; top: 50%; transform: translateY(-50%); }
+
+  .wordmark {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 44px;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 32px rgba(45,212,255,0.45);
+  }
+  .wordmark em {
+    font-style: normal;
+    background: linear-gradient(180deg, var(--cyan-0), var(--cyan-2));
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .wordmark .cur {
+    display: inline-block;
+    width: 3px; height: 0.95em;
+    background: var(--cyan-1);
+    box-shadow: 0 0 8px var(--cyan-0);
+    margin-left: 8px;
+    vertical-align: -0.08em;
+    animation: blink 1s steps(2, end) infinite;
+  }
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    50.01%, 100% { opacity: 0; }
+  }
+
+  .version-line {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.32em;
+    color: var(--hull-3);
+    text-transform: uppercase;
+  }
+  .version-line em { font-style: normal; color: var(--cyan-1); }
+
+  /* Boot log */
+  .boot-log {
+    grid-area: log;
+    width: 100%;
+    background: rgba(0,4,12,0.7);
+    border: 1px solid rgba(45,212,255,0.22);
+    border-radius: var(--r-md);
+    padding: 16px 22px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--hull-2);
+    position: relative;
+    opacity: 0;
+    animation: logIn 0.4s ease-out 0.6s forwards;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      inset 0 -1px 0 rgba(0,0,0,0.45),
+      0 12px 40px rgba(0,0,0,0.6);
+  }
+  @keyframes logIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .boot-log::before {
+    content: ""; position: absolute;
+    inset: 6px;
+    pointer-events: none;
+    background:
+      linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 14px 1px no-repeat,
+      linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 1px 14px no-repeat,
+      linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 14px 1px no-repeat,
+      linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 1px 14px no-repeat;
+    filter: drop-shadow(0 0 4px rgba(109,240,255,0.6));
+  }
+
+  .boot-log .lh {
+    display: flex; justify-content: space-between;
+    font-size: 10px; letter-spacing: 0.18em;
+    color: var(--hull-3);
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--stroke);
+    text-transform: uppercase;
+  }
+  .boot-log .lh em { color: var(--cyan-1); font-style: normal; }
+
+  .boot-line {
+    display: grid;
+    grid-template-columns: 90px 100px 1fr 80px;
+    gap: 14px;
+    align-items: center;
+    opacity: 0;
+    transform: translateX(-6px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  .boot-line.in {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .boot-line .ts { color: var(--hull-3); }
+  .boot-line .src { color: var(--cyan-2); letter-spacing: 0.06em; }
+  .boot-line .msg { color: var(--hull); }
+  .boot-line .msg .hl { color: var(--cyan-1); }
+  .boot-line .res {
+    text-align: right;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .boot-line.ok .res  { color: var(--good); }
+  .boot-line.warn .res{ color: var(--warn); }
+  .boot-line.busy .res{ color: var(--cyan-1); }
+
+  /* Progress bar */
+  .progress-shell {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed rgba(45,212,255,0.18);
+  }
+  .progress-bar {
+    height: 6px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(45,212,255,0.20);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-bar i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0));
+    box-shadow: 0 0 14px var(--cyan-0);
+    transition: width 0.4s ease;
+  }
+  .progress-meta {
+    display: flex; justify-content: space-between;
+    margin-top: 6px;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--hull-3);
+    text-transform: uppercase;
+  }
+  .progress-meta em {
+    color: var(--cyan-1);
+    font-style: normal;
+  }
+
+  .skip-hint {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    color: var(--hull-3);
+    text-transform: uppercase;
+    opacity: 0;
+    animation: hintIn 0.4s ease 0.8s forwards;
+    text-align: center;
+  }
+  @keyframes hintIn { from { opacity: 0; } to { opacity: 0.7; } }
+
+  .skip-hint kbd {
+    display: inline-block;
+    padding: 2px 7px;
+    margin: 0 4px;
+    font-family: var(--font-mono); font-size: 9px;
+    color: var(--cyan-1);
+    background: rgba(0,4,12,0.7);
+    border: 1px solid rgba(45,212,255,0.30);
+    border-radius: 3px;
+    letter-spacing: 0.06em;
+  }
+
+  /* Final flash + transition */
+  body.complete .boot-stage {
+    animation: complete 0.6s ease-in forwards;
+  }
+  @keyframes complete {
+    0%   { filter: brightness(1); }
+    50%  { filter: brightness(2) saturate(1.5); }
+    100% { filter: brightness(0); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;animation-duration:24s;animation-delay:-3s"></span>
+  <span class="cube sm" style="left:10%;animation-duration:38s;animation-delay:-8s"></span>
+  <span style="left:14%;animation-duration:30s;animation-delay:-12s"></span>
+  <span class="cube" style="left:28%;animation-duration:42s;animation-delay:-22s"></span>
+  <span style="left:48%;animation-duration:22s;animation-delay:-2s;width:2px;height:2px"></span>
+  <span class="cube big" style="left:54%;animation-duration:48s;animation-delay:-30s"></span>
+  <span style="left:67%;animation-duration:20s;animation-delay:-14s"></span>
+  <span class="cube" style="left:84%;animation-duration:44s;animation-delay:-25s"></span>
+  <span style="left:95%;animation-duration:19s;animation-delay:-4s;width:2px;height:2px"></span>
+</div>
+
+<div class="boot-stage">
+  <div class="mark-area">
+    <div class="ringset">
+      <div class="r r1"></div>
+      <div class="r r2"></div>
+      <div class="r r3"></div>
+      <span class="tick n">N · 000</span>
+      <span class="tick s">S · 180</span>
+      <span class="tick w">W · 270</span>
+      <span class="tick e">E · 090</span>
+      <img src="assets/seekdeep-mark.png" alt="" />
+    </div>
+    <div class="wordmark">SEEK<em>DEEP</em><span class="cur"></span></div>
+    <div class="version-line">v<em>10.35</em> · LOCAL · STANDALONE</div>
+  </div>
+
+  <div class="boot-log">
+    <div class="lh"><span>BOOT · <em>local stack initialization</em></span><span><em id="bootClock">00:00:00.000</em></span></div>
+    <div id="bootLines"></div>
+
+    <div class="progress-shell">
+      <div class="progress-bar"><i id="progBar"></i></div>
+      <div class="progress-meta"><span><em id="progLabel">INITIALIZING…</em></span><span id="progPct">0%</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="skip-hint">
+  Press <kbd>↵</kbd> <kbd>SPACE</kbd> or <kbd>ESC</kbd> to skip
+</div>
+
+<script>
+const STEPS = [
+  { src: 'launcher',   msg: 'seekdeep_launcher.bat &middot; option <span class="hl">8</span> (clean start)', res: 'OK',    cls: 'ok' },
+  { src: 'env',        msg: 'load <span class="hl">.env</span> &middot; redact tokens before logging',       res: 'OK',    cls: 'ok' },
+  { src: 'docker',     msg: 'docker compose up <span class="hl">searxng</span>',                              res: 'OK',    cls: 'ok' },
+  { src: 'searxng',    msg: 'listen <span class="hl">127.0.0.1:8080</span>',                                  res: 'UP',    cls: 'ok' },
+  { src: 'python',     msg: 'spawn <span class="hl">local_ai_server.py</span> &middot; uvicorn',              res: 'BOOT',  cls: 'busy' },
+  { src: 'cuda',       msg: 'detect <span class="hl">RTX 4090</span> &middot; 24 GB VRAM &middot; CUDA 12.4', res: 'OK',    cls: 'ok' },
+  { src: 'model-load', msg: 'load <span class="hl">Llama-3.1-8B-Instruct</span> &middot; 4bit NF4',           res: 'WARM',  cls: 'busy' },
+  { src: 'fastapi',    msg: 'listen <span class="hl">127.0.0.1:7865</span> &middot; uvicorn ready',           res: 'UP',    cls: 'ok' },
+  { src: 'node',       msg: 'spawn <span class="hl">index.js</span> &middot; node 20+',                       res: 'BOOT',  cls: 'busy' },
+  { src: 'discord',    msg: 'wss connect &middot; gateway intent <span class="hl">guildMessages</span>',      res: 'OK',    cls: 'ok' },
+  { src: 'discord',    msg: 'logged in as <span class="hl">SeekDeep#4242</span> &middot; 3 guilds',           res: 'READY', cls: 'ok' },
+  { src: 'router',     msg: '5 chat roles registered &middot; default &rarr; <span class="hl">Llama-3.1-8B</span>', res: 'OK', cls: 'ok' },
+  { src: 'vram',       msg: 'budget <span class="hl">5.1 / 24 GB</span> &middot; <span class="hl">19 GB</span> headroom', res: 'OK', cls: 'ok' },
+  { src: 'stack',      msg: '<span class="hl">all upstreams reachable</span> &middot; smoke test pass',       res: 'READY', cls: 'ok' },
+];
+
+const linesEl = document.getElementById('bootLines');
+const progBar = document.getElementById('progBar');
+const progPct = document.getElementById('progPct');
+const progLabel = document.getElementById('progLabel');
+const clockEl = document.getElementById('bootClock');
+
+const BOOT_START = performance.now();
+function tick() {
+  const t = (performance.now() - BOOT_START) / 1000;
+  const mm = Math.floor(t / 60);
+  const ss = Math.floor(t % 60);
+  const ms = Math.floor((t * 1000) % 1000);
+  clockEl.textContent =
+    String(mm).padStart(2,'0') + ':' +
+    String(ss).padStart(2,'0') + '.' +
+    String(ms).padStart(3,'0');
+}
+const clockInterval = setInterval(tick, 33);
+
+let stepIndex = 0;
+let done = false;
+
+function ts() {
+  const t = (performance.now() - BOOT_START) / 1000;
+  return t.toFixed(3).padStart(6,'0') + 's';
+}
+
+function addStep(step) {
+  const row = document.createElement('div');
+  row.className = 'boot-line ' + (step.cls || '');
+  row.innerHTML = `
+    <span class="ts">${ts()}</span>
+    <span class="src">[${step.src}]</span>
+    <span class="msg">${step.msg}</span>
+    <span class="res">${step.res}</span>
+  `;
+  linesEl.appendChild(row);
+  // trigger fade-in
+  requestAnimationFrame(() => row.classList.add('in'));
+  // update progress
+  const pct = Math.round(((stepIndex + 1) / STEPS.length) * 100);
+  progBar.style.width = pct + '%';
+  progPct.textContent = pct + '%';
+  progLabel.textContent = step.src.toUpperCase() + ' · ' + step.res;
+}
+
+function nextStep() {
+  if (stepIndex >= STEPS.length) {
+    finish();
+    return;
+  }
+  addStep(STEPS[stepIndex]);
+  stepIndex++;
+  // Variable per-step delay (180-380ms) so it doesn't feel mechanical
+  const delay = 180 + Math.random() * 200;
+  setTimeout(nextStep, delay);
+}
+
+function finish() {
+  if (done) return;
+  done = true;
+  progLabel.textContent = 'STACK READY · SURFACING…';
+  setTimeout(() => {
+    document.body.classList.add('complete');
+    setTimeout(() => {
+      window.location.href = 'index.html';
+    }, 600);
+  }, 500);
+}
+
+// Start after the logo animation has had a beat
+setTimeout(nextStep, 700);
+
+// Skip
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+    done = true;
+    clearInterval(clockInterval);
+    window.location.href = 'index.html';
+  }
+});
+document.addEventListener('click', () => {
+  if (done) return;
+  // Click anywhere to skip
+  done = true;
+  clearInterval(clockInterval);
+  window.location.href = 'index.html';
+});
+</script>
+</body>
+</html>

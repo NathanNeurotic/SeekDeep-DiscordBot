@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Mobile</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow-y: auto; min-height: 100vh; }
+  .topbar { position: sticky; top: 0; z-index: 10; padding: 14px 24px; background: linear-gradient(180deg, rgba(2,6,15,0.95), rgba(2,6,15,0.6)); backdrop-filter: blur(14px); border-bottom: 1px solid rgba(45,212,255,0.18); display: flex; justify-content: space-between; align-items: center; }
+  .topbar .lockup { display: flex; align-items: center; gap: 12px; }
+  .topbar .lockup img { width: 26px; height: 26px; }
+  .topbar .lockup .wm { font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: 0.04em; }
+  .topbar .lockup .wm em { font-style: normal; color: var(--cyan-1); }
+  .topbar .links { display: flex; gap: 16px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+  .topbar .links a { color: var(--hull-3); text-decoration: none; }
+  .topbar .links a:hover { color: var(--cyan-1); }
+
+  .hero { padding: 56px 36px 24px; text-align: center; }
+  .hero h1 { font-size: 44px; letter-spacing: -0.03em; margin-bottom: 8px; }
+  .hero h1 em { font-style: normal; color: var(--cyan-1); }
+  .hero .sub { color: var(--hull-3); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em; max-width: 56ch; margin: 0 auto; line-height: 1.6; }
+
+  .deck { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 32px; padding: 32px 36px 80px; max-width: 1500px; margin: 0 auto; justify-items: center; }
+
+  /* Phone frame */
+  .phone { width: 380px; max-width: 100%; background: #000; border-radius: 44px; padding: 12px 12px; border: 1px solid #1a2a40; box-shadow: inset 0 0 0 2px #0b1422, 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(45,212,255,0.08); position: relative; }
+  .phone .notch { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); width: 100px; height: 28px; background: #000; border-radius: 14px; z-index: 5; }
+  .phone .screen { border-radius: 32px; overflow: hidden; aspect-ratio: 9/19.5; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); display: grid; grid-template-rows: 38px 1fr; position: relative; }
+  .phone .statusbar { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; padding: 12px 24px 6px; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--hull); }
+  .phone .statusbar .center { text-align: center; }
+  .phone .statusbar .right { display: flex; gap: 4px; font-size: 9px; align-items: center; }
+  .phone .label { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.18em; text-align: center; margin-top: 14px; text-transform: uppercase; }
+  .phone .label em { font-style: normal; color: var(--cyan-1); }
+
+  /* Phone screen content variants */
+  .scr { padding: 8px 14px 14px; overflow: hidden; position: relative; }
+  .scr::before { content: ""; position: absolute; inset: 6px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 10px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 10px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 10px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 10px no-repeat; filter: drop-shadow(0 0 3px rgba(109,240,255,0.5)); }
+
+  /* Chat phone */
+  .scr-chat { display: grid; grid-template-rows: auto 1fr auto; gap: 8px; padding: 8px 12px 12px; }
+  .scr-chat .head { display: grid; grid-template-columns: 32px 1fr 24px; gap: 10px; align-items: center; padding: 4px 6px; }
+  .scr-chat .head .av { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, var(--cyan-3), var(--abyss-3)); border: 1px solid rgba(45,212,255,0.4); padding: 3px; }
+  .scr-chat .head .av img { width: 100%; }
+  .scr-chat .head .name { font-size: 14px; font-weight: 600; color: var(--cyan-1); }
+  .scr-chat .head .topic { font-size: 10px; color: var(--hull-3); font-family: var(--font-mono); }
+  .scr-chat .msgs { overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+  .msg-m { padding: 8px 10px; border-radius: var(--r-md); font-size: 11.5px; line-height: 1.4; max-width: 80%; }
+  .msg-m.u { align-self: flex-end; background: linear-gradient(180deg, var(--cyan-1), var(--cyan-2)); color: var(--ink); }
+  .msg-m.b { align-self: flex-start; background: rgba(8,20,52,0.7); border: 1px solid rgba(45,212,255,0.25); }
+  .msg-m .meta { display: block; font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.14em; opacity: 0.7; margin-bottom: 2px; text-transform: uppercase; }
+  .scr-chat .composer { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px; background: rgba(2,6,15,0.5); border: 1px solid rgba(45,212,255,0.20); border-radius: 999px; }
+  .scr-chat .composer input { border-radius: 999px; padding: 6px 14px; font-size: 12px; background: rgba(0,0,0,0.4); border: none; box-shadow: none; }
+  .scr-chat .composer .send { background: var(--cyan-1); color: var(--ink); border: none; border-radius: 999px; padding: 0 14px; font-size: 11px; font-weight: 600; cursor: pointer; }
+
+  /* Control center phone */
+  .scr-cc { display: flex; flex-direction: column; gap: 10px; padding: 8px 12px 12px; overflow: hidden; }
+  .scr-cc .title-row { display: flex; align-items: baseline; justify-content: space-between; }
+  .scr-cc .title-row h3 { font-size: 18px; letter-spacing: -0.01em; }
+  .scr-cc .title-row .live { font-family: var(--font-mono); font-size: 9px; padding: 2px 8px; border: 1px solid var(--good); color: var(--good); border-radius: 999px; letter-spacing: 0.14em; }
+  .scr-cc .tile { padding: 10px 12px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); }
+  .scr-cc .tile .lbl { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; }
+  .scr-cc .tile .v { font-size: 22px; color: var(--cyan-1); margin-top: 4px; letter-spacing: -0.02em; }
+  .scr-cc .tile.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .scr-cc .barbox { height: 6px; background: rgba(0,0,0,0.5); border: 1px solid rgba(45,212,255,0.15); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .scr-cc .barbox i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0)); box-shadow: 0 0 8px var(--cyan-0); }
+  .scr-cc .tab-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--stroke); font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em; text-align: center; color: var(--hull-3); text-transform: uppercase; }
+  .scr-cc .tab-bar .t { padding: 8px 2px; border-radius: var(--r-sm); }
+  .scr-cc .tab-bar .t.on { background: rgba(45,212,255,0.10); color: var(--cyan-1); border: 1px solid rgba(45,212,255,0.30); }
+
+  /* Hub phone */
+  .scr-hub { padding: 16px 12px 12px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .scr-hub .ring { display: grid; place-items: center; padding: 12px 0; }
+  .scr-hub .ring img { width: 80px; height: 80px; border-radius: 50%; box-shadow: 0 0 36px rgba(45,212,255,0.4); }
+  .scr-hub .wm { text-align: center; font-family: var(--font-display); font-weight: 600; font-size: 22px; letter-spacing: 0.04em; }
+  .scr-hub .wm em { font-style: normal; color: var(--cyan-1); }
+  .scr-hub .tagline { text-align: center; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.14em; text-transform: uppercase; }
+  .scr-hub .quick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .scr-hub .quick a { display: block; padding: 12px 10px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); text-decoration: none; color: var(--hull); font-family: var(--font-mono); font-size: 11px; }
+  .scr-hub .quick a .num { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em; color: var(--cyan-1); display: block; margin-bottom: 2px; }
+  .scr-hub .status-strip { display: flex; gap: 6px; padding: 8px; background: rgba(0,4,12,0.5); border: 1px solid rgba(45,212,255,0.15); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; align-items: center; }
+  .scr-hub .status-strip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); }
+
+  .note { max-width: 800px; margin: 0 auto 40px; padding: 16px 22px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); color: var(--hull-2); font-size: 13px; line-height: 1.6; }
+  .note .mono { color: var(--cyan-1); }
+</style>
+</head>
+<body>
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;animation-duration:24s;animation-delay:-3s"></span>
+  <span class="cube sm" style="left:10%;animation-duration:38s;animation-delay:-8s"></span>
+  <span class="cube" style="left:28%;animation-duration:42s;animation-delay:-22s"></span>
+  <span style="left:48%;animation-duration:22s;animation-delay:-2s;width:2px;height:2px"></span>
+  <span class="cube big" style="left:84%;animation-duration:48s;animation-delay:-30s"></span>
+</div>
+
+<div class="topbar">
+  <div class="lockup"><img src="assets/seekdeep-mark.png" alt="" /><span class="wm">SEEK<em>DEEP</em></span></div>
+  <div class="links"><a href="index.html">↩ HUB</a><a href="app.html">⌘ CONTROL CENTER</a><a href="chat.html">▸ CHAT</a></div>
+</div>
+
+<div class="hero">
+  <h1>Mobile · <em>responsive mocks</em></h1>
+  <p class="sub">▸ what the chat client, control center, and hub look like at phone widths</p>
+</div>
+
+<div class="note">
+  <span style="color:var(--cyan-1); font-family: var(--font-mono); font-size:11px; letter-spacing:0.16em;">▸ STATUS</span>&nbsp;
+  These are visual mockups. The desktop pages (<span class="mono">app.html</span>, <span class="mono">chat.html</span>) currently render fixed-size — a real mobile build would tap the same APIs (<span class="mono">/health</span>, <span class="mono">/gpu</span>, <span class="mono">/chat</span>) but lean on a bottom tab bar instead of the sidebar, and use Discord's existing app for the actual chat surface. Use this as the design target if you want to bundle a companion PWA.
+</div>
+
+<div class="deck">
+
+  <!-- HUB PHONE -->
+  <div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="center">SeekDeep</span>
+          <span class="right">5G ▮▮▮▮ 100%</span>
+        </div>
+        <div class="scr scr-hub">
+          <div class="ring"><img src="assets/seekdeep-mark.png" alt="" /></div>
+          <div class="wm">SEEK<em>DEEP</em></div>
+          <div class="tagline">v10.35 · local · standalone</div>
+          <div class="status-strip"><span class="dot"></span><span>STACK HEALTHY · 14.2 / 24 GB · QUEUE 0</span></div>
+          <div class="quick">
+            <a><span class="num">01</span>Control Center</a>
+            <a><span class="num">02</span>Chat Client</a>
+            <a><span class="num">03</span>Installer</a>
+            <a><span class="num">04</span>Docs</a>
+            <a><span class="num">05</span>Roadmap</a>
+            <a><span class="num">06</span>API</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="label">HUB · <em>375 × 812</em></div>
+  </div>
+
+  <!-- CHAT PHONE -->
+  <div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="statusbar">
+          <span>9:42</span>
+          <span class="center">#abyss-talk</span>
+          <span class="right">5G ▮▮▮▮ 99%</span>
+        </div>
+        <div class="scr scr-chat">
+          <div class="head">
+            <div class="av"><img src="assets/seekdeep-mark.png" alt="" /></div>
+            <div>
+              <div class="name">#abyss-talk</div>
+              <div class="topic">cryptids · deep ocean</div>
+            </div>
+            <div style="color: var(--hull-3); text-align: center; font-size: 20px;">⋯</div>
+          </div>
+          <div class="msgs">
+            <div class="msg-m u">@SeekDeep show me a colossal squid at 10000m</div>
+            <div class="msg-m b"><span class="meta">SEEKDEEP · QUEUED · 28s</span>Original / Refined / Both?</div>
+            <div class="msg-m b"><span class="meta">SEEKDEEP · DONE · 31s</span>Here's the refined render. 🐙</div>
+            <div class="msg-m u">make it black and white</div>
+            <div class="msg-m b"><span class="meta">IMG2IMG · 0.62</span>Iterative tweak detected.</div>
+          </div>
+          <div class="composer">
+            <input placeholder="message #abyss-talk…" />
+            <button class="send">▸</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="label">CHAT · <em>375 × 812</em></div>
+  </div>
+
+  <!-- CONTROL CENTER PHONE -->
+  <div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="statusbar">
+          <span>9:43</span>
+          <span class="center">Control · GPU</span>
+          <span class="right">5G ▮▮▮▮ 98%</span>
+        </div>
+        <div class="scr scr-cc">
+          <div class="title-row"><h3>GPU / VRAM</h3><span class="live">● LIVE</span></div>
+          <div class="tile">
+            <div class="lbl">VRAM USED</div>
+            <div class="v">14.2 <span style="font-size: 12px; color: var(--hull-3);">/ 24 GB</span></div>
+            <div class="barbox"><i style="width: 59%"></i></div>
+          </div>
+          <div class="tile row2">
+            <div><div class="lbl">UTIL</div><div class="v" style="font-size:18px;">72%</div></div>
+            <div><div class="lbl">TEMP</div><div class="v" style="font-size:18px;">68°C</div></div>
+          </div>
+          <div class="tile">
+            <div class="lbl">RESIDENT · default_chat</div>
+            <div style="font-size: 11px; color: var(--hull); margin-top: 4px;">Llama-3.1-8B · 4bit · 5.1 GB</div>
+          </div>
+          <div class="tile">
+            <div class="lbl">QUEUE</div>
+            <div style="font-size: 11px; color: var(--hull); margin-top: 4px;">0 jobs · idle</div>
+          </div>
+          <div class="tab-bar">
+            <div class="t">Launch</div>
+            <div class="t on">GPU</div>
+            <div class="t">Logs</div>
+            <div class="t">Cfg</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="label">CONTROL CENTER · <em>375 × 812</em></div>
+  </div>
+
+</div>
+</body>
+</html>
