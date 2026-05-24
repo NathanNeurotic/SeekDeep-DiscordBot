@@ -147,6 +147,37 @@ Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-cha
 - **VRAM Constraints**: Running SAM alongside SDXL, LLM chat, and vision models easily exceeds standard consumer GPU limits (e.g., 8-16 GB).
 - **Role of Mask Preview**: Exposing the mask preview helper command (`@SeekDeep mask preview <target>`) allows testing/debugging CLIPSeg boundaries locally before spending GPU cycles on full diffusion inpainting.
 
+## Persistent Memory Roadmap
+
+### 1. Current State: Rolling Memory
+Currently, SeekDeep utilizes in-memory rolling buffers (`getRecentContext`, `remember`) which maintain conversational state in RAM per-channel/thread. When the bot restarts, or after active contexts expire from memory, this state is lost.
+
+### 2. Proposed Persistence: Per-User and Per-Channel JSON
+To support long-term context retention across restarts, we propose a JSON-based file persistence layer:
+- **Scope**: User-specific memories (e.g., preference overrides, user profile notes) stored in `data/user-memories.json` and channel-specific memories (e.g., context summaries, pinned facts) in `data/channel-memories.json`.
+- **Atomic Operations**: Read-on-demand with atomic writes to guarantee file integrity, matching the patterns in `auto-reactions.json` and `prompt-templates.json`.
+
+### 3. Privacy Controls & Opt-Outs
+- **Per-Server Disable Switch**: Server admins can completely disable memory storage for their guild using `@SeekDeep memory feature off` (stored in `persona-overrides.json`).
+- **Privacy Controls**: Opt-in/opt-out configuration for individual users so they can request SeekDeep not to record any long-term memories about them.
+
+### 4. Memory Administration Commands
+- **Remember/Forget**: Users can instruct the bot to store or purge facts explicitly:
+  - `@SeekDeep remember that I prefer Python over JavaScript`
+  - `@SeekDeep forget my coding preferences`
+- **Export/Clear**: Commands to inspect and wipe all recorded data:
+  - `@SeekDeep memory export` (returns a JSON file of stored data for that user).
+  - `@SeekDeep memory clear` (wipes all personal data).
+
+### 5. Retention Limits & Optimization
+- **Limits**: Stored memories will be capped at a maximum of 25 facts per user/channel, or 10 KB per profile, to prevent unbounded file growth.
+- **Pruning**: Least-recently-used (LRU) entries or oldest timestamps will be pruned automatically when limits are reached.
+
+### 6. Why Deferred
+- **Context Injection Cost**: Persisting memories requires semantic search (e.g., local vector store/embeddings) or model-based summarization to decide when to inject memories into the LLM system prompt.
+- **Model Attention Spans**: Randomly injecting long lists of facts burns context window tokens and degrades attention/performance on lightweight models (Gemma-2B/3B).
+- **Scope Isolation**: Deferred to a future release to keep Phase D focused on admin telemetry, permission diagnostics, and search safety controls.
+
 ## Deferred
 
 - **`shouldAutoSearch` refactor** -- only worth doing if a second consumer needs the same lists.
