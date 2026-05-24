@@ -69,11 +69,26 @@ Restart the server. Done. All of the following are now live:
 - **Launcher** has a service whitelist (`ai-server` · `bot` · `searxng`) and action whitelist (`start` · `stop` · `restart` · `status`).
 - **`/model/warm`** ships as a stub — wire it to your existing model loader where commented.
 
-### Security — please read
+### Security — token auth is on by default
 
-These endpoints accept HTTP input that can write files and spawn child processes. **Bind the server to `127.0.0.1` only.** Do not expose port 7865 publicly without an authenticating reverse proxy in front.
+The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm`) require the `X-SeekDeep-Token` header. Read endpoints (`/health`, `/gpu`, `/data/*`, `/logs/*`, `/config/status`) stay open so the GUI can render without the token.
 
-If you want stricter coupling: edit `gui_endpoints.py` to gate every endpoint behind a header check (`X-SeekDeep-Token`) read from `.env`.
+**Bootstrap:**
+
+- On first server boot, `gui_endpoints.py` checks `.env` for `SEEKDEEP_GUI_TOKEN`. If absent, it generates a 32-byte url-safe token and appends it to `.env`. You'll see `[SeekDeep] generated new SEEKDEEP_GUI_TOKEN; persisted to <path>` in the startup log.
+- The GUI's `gui/nav.js` monkey-patches `window.fetch` so every same-origin POST automatically carries the header. Designer-shipped HTMLs (`app.html`, `chat.html` etc.) don't need to know about auth — they just call `fetch()` and the header appears.
+- `nav.js` fetches the token via `GET /token`, which only answers loopback callers (anyone proxying port 7865 from outside the box gets 403 on `/token` even if they can read everything else).
+
+**Operations:**
+
+| Action | How |
+|---|---|
+| Rotate the token | Edit `SEEKDEEP_GUI_TOKEN` in `.env`. The server re-reads on every request, so no restart needed; tell browsers to Ctrl+F5 |
+| Disable for trusted local dev | Set `SEEKDEEP_GUI_TOKEN_DISABLED=1` in `.env` and restart. `[SeekDeep] auth DISABLED` will appear in the boot log |
+| Call from `curl` | `curl -H "X-SeekDeep-Token: $(grep ^SEEKDEEP_GUI_TOKEN= .env \| cut -d= -f2-)" -X POST http://127.0.0.1:7865/config -d ...` |
+| Recover from a wiped `.env` token | Restart the server — it'll regenerate |
+
+**Still bind to `127.0.0.1`.** The token narrows the threat model but doesn't replace network isolation. If you expose port 7865 through ngrok / cloudflared / a port-forward, the token leaks via the tunnel like any response body.
 
 ## 4 · Archive browser bot bridge
 

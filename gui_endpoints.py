@@ -29,11 +29,12 @@ import os
 import re
 import json
 import time
+import secrets
 import asyncio
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -69,6 +70,64 @@ _PID_FILE_NAMES = {
     "bot":       "bot.pid",
     # searxng has no PID file; we treat "missing PID file" as "unknown" for it
 }
+
+# Loopback IPs that may fetch GET /token. Anything else gets 403.
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+# ====================================================================
+# TOKEN AUTH
+# ====================================================================
+# The three write endpoints (/config, /launcher/*, /model/warm) can rewrite
+# .env and spawn / kill processes. Without auth, anything that can reach
+# port 7865 -- including code running on the same box, browser extensions,
+# or callers via a proxy you forgot was up -- can wipe your bot.
+#
+# Model: a single shared token, generated on first server boot and stored
+# in .env as SEEKDEEP_GUI_TOKEN. The GUI fetches it via GET /token (which
+# only answers loopback callers) and includes it as X-SeekDeep-Token on
+# every write request. Read endpoints (/health, /gpu, /data/*, /logs/*,
+# /config/status) stay open so the page can render without the token.
+#
+# To rotate: edit .env, restart the server. To disable for trusted local
+# dev only: set SEEKDEEP_GUI_TOKEN_DISABLED=1 in .env.
+
+_TOKEN_HEADER = "X-SeekDeep-Token"
+_TOKEN_ENV_KEY = "SEEKDEEP_GUI_TOKEN"
+_TOKEN_DISABLE_KEY = "SEEKDEEP_GUI_TOKEN_DISABLED"
+
+
+def _ensure_gui_token(env_path: Path) -> tuple[str, bool]:
+    """
+    Return (token, was_generated). If SEEKDEEP_GUI_TOKEN is already in .env,
+    return it as-is. Otherwise generate a fresh urlsafe token, append it to
+    .env (preserving existing content), and return it with was_generated=True
+    so callers can log the action.
+    """
+    env_kv: dict[str, str] = {}
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = _ENV_LINE_RE.match(line)
+            if m:
+                env_kv[m.group(1)] = line.split("=", 1)[1].strip().strip('"').strip("'")
+    existing = env_kv.get(_TOKEN_ENV_KEY, "").strip()
+    if existing:
+        return existing, False
+    token = secrets.token_urlsafe(32)
+    block = (
+        "\n"
+        "# --- SeekDeep GUI token (auto-generated; rotate by replacing the value + restarting) ---\n"
+        f"{_TOKEN_ENV_KEY}={token}\n"
+    )
+    if env_path.is_file():
+        text = env_path.read_text(encoding="utf-8")
+        if not text.endswith("\n"):
+            text += "\n"
+        env_path.write_text(text + block, encoding="utf-8")
+    else:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.write_text(block.lstrip("\n"), encoding="utf-8")
+    return token, True
 
 
 # ====================================================================
@@ -468,8 +527,55 @@ def register_gui_endpoints(
         except ValueError:
             return False
 
+    # ----- Token bootstrap -----
+    # Generate SEEKDEEP_GUI_TOKEN if it isn't already in .env so first-time
+    # users don't have to do anything manual. Read it fresh from .env on
+    # every request so a manual rotation (edit .env, do NOT need to restart
+    # the server) takes effect immediately for subsequent calls.
+    _token_disabled = os.environ.get(_TOKEN_DISABLE_KEY, "").strip().lower() in {"1", "true", "yes", "on"}
+    _initial_token, _token_was_generated = _ensure_gui_token(_env_path)
+    if _token_was_generated:
+        print(f"[SeekDeep] generated new {_TOKEN_ENV_KEY}; persisted to {_env_path}")
+    if _token_disabled:
+        print(f"[SeekDeep] auth DISABLED ({_TOKEN_DISABLE_KEY} is set) - GUI write endpoints are unprotected")
+
+    def _current_token() -> str:
+        # Re-read .env so rotations don't require a server restart.
+        env_kv: dict[str, str] = {}
+        if _env_path.is_file():
+            for line in _env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = _ENV_LINE_RE.match(line)
+                if m:
+                    env_kv[m.group(1)] = line.split("=", 1)[1].strip().strip('"').strip("'")
+        return env_kv.get(_TOKEN_ENV_KEY, _initial_token).strip()
+
+    async def _require_gui_token(request: Request):
+        """FastAPI dependency: 401 unless X-SeekDeep-Token matches .env value."""
+        if _token_disabled:
+            return
+        header_val = request.headers.get(_TOKEN_HEADER) or request.headers.get(_TOKEN_HEADER.lower())
+        expected = _current_token()
+        if not expected:
+            # Token file got wiped between boots; fail closed.
+            raise HTTPException(503, f"{_TOKEN_ENV_KEY} not configured; restart server to regenerate")
+        if not header_val or not secrets.compare_digest(header_val, expected):
+            raise HTTPException(401,
+                f"missing or invalid {_TOKEN_HEADER}; GUI fetches the token from GET /token, "
+                f"or you can read it from .env and pass it manually")
+
+    # ----- GET /token -----
+    # Returns the GUI token but only to loopback callers. If someone exposes
+    # port 7865 via ngrok / cloudflared / a reverse proxy, the remote callers
+    # will hit 403 here while local browser tabs still work.
+    @app.get("/token")
+    async def get_token(request: Request):
+        host = (request.client.host if request.client else "") or ""
+        if host not in _LOOPBACK_HOSTS:
+            raise HTTPException(403, f"GET /token is loopback-only; refused for client {host!r}")
+        return {"token": _current_token(), "header": _TOKEN_HEADER, "disabled": _token_disabled}
+
     # ----- POST /config -----
-    @app.post("/config")
+    @app.post("/config", dependencies=[Depends(_require_gui_token)])
     async def post_config(patch: ConfigPatch):
         if not patch.updates:
             return {"ok": True, "updated": []}
@@ -500,7 +606,7 @@ def register_gui_endpoints(
         return StreamingResponse(_stream_log(path), media_type="text/event-stream")
 
     # ----- POST /launcher/{service}/{action} -----
-    @app.post("/launcher/{service}/{action}")
+    @app.post("/launcher/{service}/{action}", dependencies=[Depends(_require_gui_token)])
     async def post_launcher(service: str, action: str):
         if service not in ALLOWED_SERVICES:
             raise HTTPException(400, f"unknown service · allowed: {sorted(ALLOWED_SERVICES)}")
@@ -547,7 +653,7 @@ def register_gui_endpoints(
         return {"ok": True, "file": target.name, "data": data, "normalized": bool(normalizer)}
 
     # ----- POST /model/warm -----
-    @app.post("/model/warm")
+    @app.post("/model/warm", dependencies=[Depends(_require_gui_token)])
     async def post_model_warm(req: WarmRequest):
         role = (req.role or "default_chat").strip().lower() or "default_chat"
         if not warmup_handlers:

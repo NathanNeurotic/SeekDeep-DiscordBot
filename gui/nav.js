@@ -1,9 +1,99 @@
 /* SeekDeep universal nav — auto-injects a floating "jump anywhere" palette
    on every page that includes this script. Keyboard: Ctrl/Cmd + K, Esc to close.
-   Inject pattern: <script src="nav.js" defer></script> just before </body>. */
+   Inject pattern: <script src="nav.js" defer></script> just before </body>.
+
+   Also: monkey-patches window.fetch to attach the X-SeekDeep-Token header on
+   POST requests to the local server. Token is fetched once from GET /token
+   (loopback-only) and cached. GET requests are not affected. Cross-origin
+   POSTs are not affected. See MAINTAINER.md for the auth model. */
 (function () {
   'use strict';
   if (document.getElementById('sd-nav-root')) return;
+
+  // ===== Token auth: auto-inject X-SeekDeep-Token on POSTs to our server =====
+  // Done as a fetch monkey-patch so designer-shipped HTMLs (app.html, chat.html
+  // etc) don't need to know about auth — they just call fetch() and the header
+  // appears. Keeps the auth concern out of the design surfaces.
+  (function installTokenInterceptor() {
+    const TOKEN_HEADER = 'X-SeekDeep-Token';
+    const origFetch = window.fetch.bind(window);
+    function getBase() {
+      return (location.protocol === 'http:' || location.protocol === 'https:')
+        ? location.origin : 'http://127.0.0.1:7865';
+    }
+    let cached = null;          // '' = tried and got nothing; null = not tried yet
+    let inflight = null;        // promise of in-flight /token fetch
+    async function fetchToken() {
+      if (cached !== null) return cached;
+      if (inflight) return inflight;
+      inflight = (async () => {
+        try {
+          const r = await origFetch(getBase() + '/token', { cache: 'no-store' });
+          if (r.ok) {
+            const j = await r.json();
+            if (j && j.disabled) { cached = ''; return ''; }
+            cached = (j && j.token) ? String(j.token) : '';
+            return cached;
+          }
+        } catch (_) { /* server unreachable; cache empty */ }
+        cached = '';
+        return '';
+      })();
+      const t = await inflight;
+      inflight = null;
+      return t;
+    }
+    // Expose a small surface for callers that want to force-refresh after a
+    // 401 (e.g. user rotated the token mid-session by editing .env).
+    window.SeekDeepAuth = {
+      header: TOKEN_HEADER,
+      get: fetchToken,
+      reset: () => { cached = null; },
+    };
+    // Warm the cache on load so the first POST doesn't pay the round-trip.
+    fetchToken();
+
+    function urlString(input) {
+      if (typeof input === 'string') return input;
+      if (input && typeof input.url === 'string') return input.url;
+      try { return String(input); } catch { return ''; }
+    }
+    function isOurServer(url) {
+      // Relative paths (root or otherwise) are always same-origin.
+      if (!/^https?:/i.test(url)) return true;
+      return url.indexOf(getBase()) === 0;
+    }
+    function ensureHeader(headers, name, value) {
+      if (headers instanceof Headers) {
+        if (!headers.has(name)) headers.set(name, value);
+        return headers;
+      }
+      if (Array.isArray(headers)) {
+        const lname = name.toLowerCase();
+        if (!headers.some(h => Array.isArray(h) && String(h[0]).toLowerCase() === lname)) {
+          headers.push([name, value]);
+        }
+        return headers;
+      }
+      headers = headers || {};
+      // Check both casings in case caller used lowercase
+      const has = Object.keys(headers).some(k => k.toLowerCase() === name.toLowerCase());
+      if (!has) headers[name] = value;
+      return headers;
+    }
+    window.fetch = async function patchedFetch(input, init) {
+      init = init || {};
+      const method = (init.method || (input && input.method) || 'GET').toUpperCase();
+      const url = urlString(input);
+      if (method === 'POST' && url && isOurServer(url)) {
+        const tok = await fetchToken();
+        if (tok) {
+          init.headers = ensureHeader(init.headers, TOKEN_HEADER, tok);
+        }
+      }
+      return origFetch(input, init);
+    };
+  })();
 
   const PAGES = [
     { id: 'index',        title: 'Hub',                 path: 'index.html',        glyph: '⌂', meta: '01 · home' },
