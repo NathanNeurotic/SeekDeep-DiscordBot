@@ -1590,7 +1590,7 @@
             <span>EMOJI</span><span>PATTERN</span><span>SCOPE</span><span>HITS</span><span>STATE</span><span></span>
           </div>
 
-          <div class="rule-row"><span class="emo">🔗</span><span class="pattern">/(https?|ftp):\/\/[^\s]+/</span><span class="scope">any channel · any user</span><span>1,184</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div id="reactRulesList"><div class="rule-row"><span class="emo">🔗</span><span class="pattern">/(https?|ftp):\/\/[^\s]+/</span><span class="scope">any channel · any user</span><span>1,184</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
 
           <div class="rule-row"><span class="emo">🐙</span><span class="pattern">octopus|squid|kraken</span><span class="scope">#abyss-talk</span><span>412</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
 
@@ -1608,7 +1608,7 @@
 
           <div class="rule-row"><span class="emo">📸</span><span class="pattern">/\.(png|jpe?g|webp)$/i</span><span class="scope">any channel</span><span>1,012</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
 
-          <div class="rule-row"><span class="emo">🌊</span><span class="pattern">seekdeep|abyss|deep</span><span class="scope">any channel</span><span>814</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🌊</span><span class="pattern">seekdeep|abyss|deep</span><span class="scope">any channel</span><span>814</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div></div>
         </div>
 
         <div class="rule"></div>
@@ -1637,22 +1637,22 @@
         <div class="cards-4" style="margin-bottom: 18px;">
           <div class="card-mini">
             <div class="lbl">Total messages</div>
-            <div class="val">12,488</div>
+            <div class="val" id="statTotalMessages">12,488</div>
             <div class="delta">↑ 18% vs last 30d</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Images generated</div>
-            <div class="val cyan">1,844</div>
+            <div class="val cyan" id="statTotalImages">1,844</div>
             <div class="delta">↑ 24%</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Vision queries</div>
-            <div class="val">412</div>
+            <div class="val" id="statTotalVision">412</div>
             <div class="delta">↑ 9%</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Active members</div>
-            <div class="val">28 <span style="font-size: 16px; color: var(--hull-3);">/ 42</span></div>
+            <div class="val" id="statTotalActive">28 <span style="font-size: 16px; color: var(--hull-3);">/ 42</span></div>
             <div class="delta bad">↓ 3</div>
           </div>
         </div>
@@ -1660,7 +1660,7 @@
         <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 18px;">
           <div class="chart-wrap">
             <h3>Activity · last 30 days</h3>
-            <div class="bars-chart">
+            <div class="bars-chart" id="statsBars">
               <div class="col" style="height: 18%"></div>
               <div class="col" style="height: 26%"></div>
               <div class="col" style="height: 32%"></div>
@@ -1695,8 +1695,7 @@
             <div class="bars-labels"><span>04-23</span><span>05-01</span><span>05-08</span><span>05-15</span><span>05-23</span></div>
           </div>
 
-          <div class="chart-wrap">
-            <h3>Top contributors</h3>
+          <div class="chart-wrap"><h3>Top contributors</h3><div id="statsLeaderboard">
             <div class="lb-row"><span class="rk">01</span><span class="av">N</span><span>nautilus</span><span class="count">3,184</span><span class="pct">25%</span></div>
             <div class="lb-row"><span class="rk">02</span><span class="av">D</span><span>deepdiver</span><span class="count">2,022</span><span class="pct">16%</span></div>
             <div class="lb-row"><span class="rk">03</span><span class="av">A</span><span>abyssalbot</span><span class="count">1,488</span><span class="pct">12%</span></div>
@@ -1704,6 +1703,7 @@
             <div class="lb-row"><span class="rk">05</span><span class="av">L</span><span>lanternjaw</span><span class="count">988</span><span class="pct">8%</span></div>
             <div class="lb-row"><span class="rk">06</span><span class="av">M</span><span>marianmariner</span><span class="count">714</span><span class="pct">6%</span></div>
             <div class="lb-row"><span class="rk">07</span><span class="av">P</span><span>pelagic</span><span class="count">622</span><span class="pct">5%</span></div>
+            </div>
           </div>
         </div>
 
@@ -1757,6 +1757,171 @@
   </footer>
 </div>
 </div>
+
+</script>
+
+<script>
+  // ===== Server stats · live wiring (GET /data/server-stats.json) =====
+  (function wireStats() {
+    const bars = document.getElementById('statsBars');
+    const lb = document.getElementById('statsLeaderboard');
+    if (!bars || !lb) return;
+    let loaded = false;
+    async function load() {
+      if (loaded) return;
+      loaded = true;
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/data/server-stats.json', { signal: AbortSignal.timeout(3000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const wrap = await r.json();
+        const data = wrap.data || wrap;
+        // Totals
+        const setTxt = (id, v) => { const e = document.getElementById(id); if (e && v != null) e.textContent = (typeof v === 'number') ? v.toLocaleString() : v; };
+        setTxt('statTotalMessages', data.totals?.messages ?? data.messages);
+        setTxt('statTotalImages',   data.totals?.images ?? data.images);
+        setTxt('statTotalVision',   data.totals?.vision ?? data.vision);
+        // 30-day bars: prefer day_buckets.messages, fall back to images
+        const dayBuckets = data.day_buckets || data.dayBuckets || {};
+        const series = dayBuckets.messages || dayBuckets.chats || dayBuckets.images || [];
+        if (series.length) {
+          const max = Math.max(...series, 1);
+          bars.innerHTML = '';
+          series.slice(-30).forEach(v => {
+            const col = document.createElement('div');
+            col.className = 'col';
+            col.style.height = Math.round((v / max) * 100) + '%';
+            col.title = String(v);
+            bars.appendChild(col);
+          });
+        }
+        // Leaderboard
+        const top = data.top || data.topContributors || data.users || [];
+        if (Array.isArray(top) && top.length) {
+          lb.innerHTML = '';
+          const total = top.reduce((s, u) => s + (u.count || 0), 0) || 1;
+          top.slice(0, 10).forEach((u, i) => {
+            const row = document.createElement('div');
+            row.className = 'lb-row';
+            const initial = (u.name || u.username || '?').charAt(0).toUpperCase();
+            const pct = Math.round(((u.count || 0) / total) * 100);
+            row.innerHTML =
+              '<span class="rk">' + String(i+1).padStart(2,'0') + '</span>' +
+              '<span class="av">' + initial + '</span>' +
+              '<span>' + (u.name || u.username || u.id) + '</span>' +
+              '<span class="count">' + (u.count || 0).toLocaleString() + '</span>' +
+              '<span class="pct">' + pct + '%</span>';
+            lb.appendChild(row);
+          });
+        }
+      } catch (e) {
+        loaded = false;
+        // Soft fail — leave the mock visuals so the page still looks alive
+      }
+    }
+    function onActive() {
+      const pane = document.querySelector('[data-pane="stats"]');
+      if (pane && pane.classList.contains('active')) load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="stats"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(onActive, 50))
+    );
+    onActive();
+  })();
+
+  // ===== Auto-react rules · live wiring (GET /data/auto-reactions.json) =====
+  (function wireReactRules() {
+    const list = document.getElementById('reactRulesList');
+    if (!list) return;
+    let loaded = false;
+    async function load() {
+      if (loaded) return;
+      loaded = true;
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/data/auto-reactions.json', { signal: AbortSignal.timeout(3000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const wrap = await r.json();
+        const data = wrap.data || wrap;
+        const rules = data.rules || (Array.isArray(data) ? data : []);
+        if (!rules.length) {
+          list.innerHTML = '<div style="padding:20px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--hull-3); letter-spacing:0.06em;">▸ no rules defined · use <span style="color:var(--cyan-1);">@SeekDeep reactrule add</span> to create one</div>';
+          return;
+        }
+        list.innerHTML = '';
+        rules.forEach(rule => {
+          const row = document.createElement('div');
+          row.className = 'rule-row';
+          const scope = rule.channel ? '#' + rule.channel : (rule.user ? 'user: ' + rule.user : 'any channel');
+          const enabled = rule.enabled !== false;
+          row.innerHTML =
+            '<span class="emo">' + (rule.emoji || '?') + '</span>' +
+            '<span class="pattern">' + escapeHtml(rule.pattern || '') + '</span>' +
+            '<span class="scope">' + escapeHtml(scope) + '</span>' +
+            '<span>' + ((rule.hits || 0).toLocaleString()) + '</span>' +
+            '<span><div class="toggle' + (enabled ? ' on' : '') + '" data-rule-id="' + escapeHtml(rule.id || '') + '"></div></span>' +
+            '<div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div>';
+          list.appendChild(row);
+        });
+      } catch (e) {
+        loaded = false;
+      }
+    }
+    function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function onActive() {
+      const pane = document.querySelector('[data-pane="reacts"]');
+      if (pane && pane.classList.contains('active')) load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="reacts"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(onActive, 50))
+    );
+    onActive();
+  })();
+
+  // ===== Model row buttons · live wiring (POST /model/warm and /unload) =====
+  document.querySelectorAll('.model-row[data-role]').forEach(row => {
+    const role = row.dataset.role;
+    const actions = row.querySelectorAll('.actions .btn-mini');
+    actions.forEach(btn => {
+      const txt = btn.textContent.trim().toUpperCase();
+      btn.addEventListener('click', async () => {
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⋯ ' + orig.replace(/^[^A-Z]+/, '');
+        try {
+          let url, body;
+          if (txt.includes('WARM') || txt.includes('PIN')) {
+            url = SEEKDEEP_BASE + '/model/warm';
+            body = JSON.stringify({ role });
+          } else if (txt.includes('EVICT') || txt.includes('UNLOAD')) {
+            url = SEEKDEEP_BASE + '/unload';
+            body = JSON.stringify({ role });
+          } else {
+            // DEL or unknown — no backend wire for delete; fall through to flash only
+            setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 600);
+            return;
+          }
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body, signal: AbortSignal.timeout(30000),
+          });
+          if (r.ok) {
+            btn.textContent = '✓ ' + orig;
+            // Trigger a /health refresh so the resident pill updates
+            if (typeof LIVE !== 'undefined' && LIVE.probe) LIVE.probe();
+          } else if (r.status === 404) {
+            btn.textContent = '✕ missing';
+          } else {
+            btn.textContent = '✕ ' + r.status;
+          }
+        } catch (e) {
+          btn.textContent = '✕ offline';
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 1800);
+        }
+      });
+    });
+  });
+</script>
 
 <!-- React + Babel for tweaks panel only -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>

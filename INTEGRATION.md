@@ -75,6 +75,110 @@ These endpoints accept HTTP input that can write files and spawn child processes
 
 If you want stricter coupling: edit `gui_endpoints.py` to gate every endpoint behind a header check (`X-SeekDeep-Token`) read from `.env`.
 
+## 4 · Archive browser bot bridge
+
+The Archive browser in `app.html` reads its data from `data/archive-snapshots.json`. The bot is the only process that knows what's in each Discord archive thread — so the bot writes a snapshot of every archive, and the GUI reads that snapshot via the existing `GET /data/archive-snapshots.json` endpoint.
+
+### Add this to `index.js`
+
+Drop the following near your other persistence helpers (anywhere after the Discord client is ready):
+
+```javascript
+// ===== Archive bot bridge =====
+// Writes data/archive-snapshots.json every 5 minutes so the GUI can render
+// the archive browser without needing Discord API access from the browser.
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+const ARCHIVE_SNAPSHOT_PATH = path.join(process.cwd(), 'data', 'archive-snapshots.json');
+
+async function seekdeepWriteArchiveSnapshot() {
+  try {
+    const snapshots = { generated_at: new Date().toISOString(), guilds: [] };
+
+    for (const [guildId, guild] of client.guilds.cache) {
+      // archive-guild-config.json holds { [guildId]: { archive_channel_id, threads: {...} } }
+      const cfg = seekdeepArchiveConfig?.[guildId];
+      if (!cfg) continue;
+
+      const archiveChannel = guild.channels.cache.get(cfg.archive_channel_id);
+      if (!archiveChannel) continue;
+
+      const guildEntry = { guild_id: guildId, guild_name: guild.name, threads: [] };
+
+      // Fetch the active threads in the archive channel
+      const threads = await archiveChannel.threads.fetchActive().catch(() => ({ threads: new Map() }));
+      for (const [, thread] of threads.threads) {
+        // Pull the last 10 entries per thread for the browser preview
+        const messages = await thread.messages.fetch({ limit: 10 }).catch(() => new Map());
+        const entries = [];
+        for (const [, msg] of messages) {
+          const att = msg.attachments?.first();
+          if (!att) continue;
+          entries.push({
+            id: msg.id,
+            url: att.url,           // direct CDN link
+            thumb: att.proxyURL,    // smaller preview
+            prompt: (msg.content || '').slice(0, 240),
+            author_id: msg.author.id,
+            author_name: msg.author.username,
+            timestamp: msg.createdTimestamp,
+            size: att.size,
+            width: att.width,
+            height: att.height,
+          });
+        }
+
+        guildEntry.threads.push({
+          thread_id: thread.id,
+          name: thread.name,
+          owner: thread.ownerId || null,
+          archive_key: cfg.threads?.[thread.id]?.profile_user || null,
+          count: cfg.threads?.[thread.id]?.count ?? entries.length,
+          entries,
+        });
+      }
+      snapshots.guilds.push(guildEntry);
+    }
+
+    await fs.mkdir(path.dirname(ARCHIVE_SNAPSHOT_PATH), { recursive: true });
+    await fs.writeFile(ARCHIVE_SNAPSHOT_PATH, JSON.stringify(snapshots, null, 2));
+    if (process.env.SEEKDEEP_ARCHIVE_SNAPSHOT_LOG === 'on') {
+      console.log(`[SeekDeep] archive snapshot written  ${snapshots.guilds.length} guilds  ${ARCHIVE_SNAPSHOT_PATH}`);
+    }
+  } catch (err) {
+    console.error('[SeekDeep] archive snapshot failed:', err.message);
+  }
+}
+
+// Run once at boot, then every 5 minutes.
+client.once('ready', () => {
+  setTimeout(seekdeepWriteArchiveSnapshot, 5_000);   // first run after 5s
+  setInterval(seekdeepWriteArchiveSnapshot, 5 * 60 * 1000);
+});
+```
+
+### How the GUI consumes it
+
+When the user clicks the Archive pane in the Control Center, the GUI hits `GET /data/archive-snapshots.json` (already wired via `gui_endpoints.py`) and renders the grid + per-thread tabs from the JSON. No browser-side Discord token, no auth gymnastics — same trust boundary as everything else in `data/`.
+
+### Adjustments you might want
+
+- **Snapshot cadence** — change the `5 * 60 * 1000` interval. 5 min is a balance between freshness and Discord API rate limits.
+- **Entries per thread** — `messages.fetch({ limit: 10 })` is plenty for previews. Bump for richer browsing.
+- **Privacy** — set `SEEKDEEP_ARCHIVE_SNAPSHOT_LOG=off` (default) so the snapshot path doesn't appear in console output.
+- **Naming the function** — adjust `seekdeepArchiveConfig` to whatever variable holds your loaded `archive-guild-config.json` in memory.
+
+### Hot-disable
+
+To shut the bridge off without code changes, gate the `setInterval` behind an env flag:
+
+```javascript
+if (process.env.SEEKDEEP_ARCHIVE_BRIDGE !== 'off') {
+  setInterval(seekdeepWriteArchiveSnapshot, 5 * 60 * 1000);
+}
+```
+
 ## 4 · How the GUI auto-detects the deployment
 
 Every wired page (`app.html`, `chat.html`, `api.html`, `installer.html`) now uses a smart `SEEKDEEP_BASE`:
