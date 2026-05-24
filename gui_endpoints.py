@@ -573,4 +573,69 @@ def register_gui_endpoints(
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    # ----- GET /config/status -----
+    # Drives the GUI's "missing values" modal (window.SeekDeepPrompt). Classifies
+    # required + optional env vars as present / placeholder / missing. Placeholder
+    # values like "YOUR_TOKEN_HERE" count as missing so the modal auto-pops.
+    # Only keys the bot literally cannot start without. The designer's draft
+    # included DISCORD_CLIENT_ID and LOCAL_CHAT_MODEL_ID here, but both have
+    # working fallbacks: client.user.id (index.js:1349) and a hardcoded default
+    # of meta-llama/Llama-3.1-8B-Instruct (local_ai_server.py:105). Marking
+    # those required would auto-pop the modal on every page load for users
+    # whose bot is already running fine, which is annoying.
+    REQUIRED_KEYS = [
+        ("DISCORD_TOKEN",       "Discord bot token from the developer portal.",                          "secret"),
+    ]
+    OPTIONAL_KEYS = [
+        ("DISCORD_CLIENT_ID",    "Discord application ID. Auto-derived from client.user.id at runtime.", "id"),
+        ("LOCAL_CHAT_MODEL_ID",  "HuggingFace repo ID for the default chat model. Defaults to Llama-3.1-8B-Instruct.", "model"),
+        ("HF_TOKEN",             "Hugging Face token - required only for gated models like Llama-3.1.", "secret"),
+        ("LOCAL_VISION_MODEL_ID","HuggingFace repo ID for the vision model. Leave blank to disable.",    "model"),
+        ("LOCAL_IMAGE_MODEL_ID", "HuggingFace repo ID for SDXL image gen. Leave blank to disable.",      "model"),
+        ("SEARXNG_BASE_URL",     "Local SearXNG URL - enables web-routed answers.",                      "url"),
+        ("SEEKDEEP_ADMIN_IDS",   "Comma-separated Discord user IDs that get queue priority.",            "csv"),
+    ]
+    PLACEHOLDER_FRAGMENTS = ("YOUR_", "TOKEN_HERE", "CLIENT_ID_HERE", "KEY_HERE", "REPLACE_ME")
+
+    def _read_env_kv(env_file: Path) -> dict[str, str]:
+        if not env_file.is_file():
+            return {}
+        out: dict[str, str] = {}
+        for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = _ENV_LINE_RE.match(line)
+            if not m:
+                continue
+            key = m.group(1)
+            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+            out[key] = val
+        return out
+
+    @app.get("/config/status")
+    async def get_config_status():
+        env = _read_env_kv(_env_path)
+        def status(key: str, desc: str, kind: str):
+            v = env.get(key, "")
+            is_placeholder = any(p in v for p in PLACEHOLDER_FRAGMENTS) if v else False
+            return {
+                "key": key,
+                "description": desc,
+                "kind": kind,
+                "present": bool(v) and not is_placeholder,
+                "is_placeholder": is_placeholder,
+                # Hide secret values from the wire so HF_TOKEN etc. don't leak
+                # into browser DevTools / cached fetches; non-secrets echo back.
+                "value": "" if kind == "secret" else v,
+            }
+        required = [status(k, d, kind) for k, d, kind in REQUIRED_KEYS]
+        optional = [status(k, d, kind) for k, d, kind in OPTIONAL_KEYS]
+        missing_required = [r for r in required if not r["present"]]
+        return {
+            "ok": True,
+            "env_path": str(_env_path),
+            "required": required,
+            "optional": optional,
+            "missing_required": missing_required,
+            "needs_setup": bool(missing_required),
+        }
+
     print(f"[SeekDeep] GUI endpoints registered  (log_dir={_log_dir}  data_dir={_data_dir}  env={_env_path})")

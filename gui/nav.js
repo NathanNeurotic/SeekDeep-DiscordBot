@@ -261,6 +261,29 @@
           0 0 90px rgba(45,212,255,0.40);
       }
     }
+
+    /* Caret that hints the lockup / titlebar opens the palette */
+    .sd-lockup-caret {
+      display: inline-block;
+      margin-left: 8px;
+      color: var(--cyan-1, #2dd4ff);
+      font-size: 0.7em;
+      opacity: 0.55;
+      transition: opacity 0.15s ease, transform 0.2s ease;
+      transform: translateY(-1px);
+      letter-spacing: 0;
+    }
+    .lockup:hover .sd-lockup-caret,
+    .win-titlebar .title:hover .sd-lockup-caret {
+      opacity: 1;
+      color: var(--cyan-0, #6df0ff);
+      transform: translateY(1px);
+    }
+    .lockup, .win-titlebar .title { transition: opacity 0.15s ease; }
+    .lockup:hover, .win-titlebar .title:hover { opacity: 1; }
+    .lockup:hover .wm, .win-titlebar .title:hover em {
+      text-shadow: 0 0 12px rgba(45, 212, 255, 0.5);
+    }
   `;
 
   const style = document.createElement('style');
@@ -277,7 +300,7 @@
     <div class="sd-jump-backdrop" id="sdJumpBack"></div>
     <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
       <div class="sd-jump-head">
-        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 16 SURFACES</em></div>
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 15 SURFACES</em></div>
         <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
       </div>
       <div class="sd-jump-list" id="sdJumpList"></div>
@@ -348,6 +371,44 @@
   btn.addEventListener('click', open);
   backdrop.addEventListener('click', close);
 
+  // Bind the SEEKDEEP lockup / window title as a jump opener
+  // (works retroactively on every page — no per-file edits needed)
+  function bindLockup(el) {
+    if (!el || el.dataset.sdJumpBound) return;
+    el.dataset.sdJumpBound = '1';
+    el.style.cursor = 'pointer';
+    el.title = 'Jump anywhere · Ctrl+K';
+    // Append a small caret to signal it's openable
+    if (!el.querySelector('.sd-lockup-caret')) {
+      const caret = document.createElement('span');
+      caret.className = 'sd-lockup-caret';
+      caret.textContent = '▾';
+      el.appendChild(caret);
+    }
+    el.addEventListener('click', e => {
+      // Don't intercept clicks on actual <a> children (e.g. the home logo link)
+      const link = e.target.closest('a[href]');
+      if (link && link !== el && link.getAttribute('href') && link.getAttribute('href') !== '#') {
+        // It's a nested link — but if the user clicked on the caret or the wordmark itself, open
+        if (e.target.classList.contains('sd-lockup-caret') ||
+            e.target.classList.contains('wm') ||
+            e.target.classList.contains('title')) {
+          e.preventDefault();
+          open();
+        }
+        return;
+      }
+      e.preventDefault();
+      open();
+    });
+  }
+  document.querySelectorAll('.lockup, .win-titlebar .title').forEach(bindLockup);
+  // Also catch lockups injected later (rare, but safe)
+  const mo = new MutationObserver(() => {
+    document.querySelectorAll('.lockup:not([data-sd-jump-bound]), .win-titlebar .title:not([data-sd-jump-bound])').forEach(bindLockup);
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+
   search.addEventListener('input', () => {
     filtered = fuzzyFilter(search.value);
     cursor = 0;
@@ -374,4 +435,241 @@
       close();
     }
   });
+
+  // ====================================================================
+  // SeekDeepPrompt — on-demand missing-value collector + CPU-mode banner
+  // ====================================================================
+  const promptCSS = `
+    .sd-prompt-back {
+      position: fixed; inset: 0; z-index: 10001;
+      background: radial-gradient(circle at 50% 50%, rgba(2,6,15,0.88), rgba(2,6,15,0.96));
+      backdrop-filter: blur(10px);
+      display: none; opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .sd-prompt-back.open { display: block; opacity: 1; }
+    .sd-prompt-modal {
+      position: fixed; left: 50%; top: 50%;
+      transform: translate(-50%, -50%) scale(0.96);
+      z-index: 10002;
+      width: min(560px, calc(100vw - 40px));
+      background: linear-gradient(180deg, rgba(10,26,48,0.97), rgba(6,18,31,0.99));
+      border: 1px solid rgba(45,212,255,0.50);
+      border-radius: 10px;
+      box-shadow: 0 30px 90px rgba(0,0,0,0.75), 0 0 60px rgba(45,212,255,0.30);
+      display: none; opacity: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      font-family: var(--font-display, system-ui), sans-serif;
+      overflow: hidden;
+    }
+    .sd-prompt-modal.open { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    .sd-prompt-modal::before {
+      content: ""; position: absolute; inset: 8px; pointer-events: none;
+      background:
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 1px 16px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 1px 16px no-repeat;
+      filter: drop-shadow(0 0 4px rgba(109,240,255,0.6));
+    }
+    .sd-prompt-head { padding: 20px 24px 14px; border-bottom: 1px solid rgba(45,212,255,0.25); position: relative; z-index: 1; }
+    .sd-prompt-head .label { font-family: var(--font-mono, monospace); font-size: 10px; letter-spacing: 0.22em; color: var(--warn, #ffb84d); text-transform: uppercase; margin-bottom: 6px; }
+    .sd-prompt-head h3 { font-size: 20px; letter-spacing: -0.01em; margin: 0 0 6px; color: var(--hull, #f4f8ff); font-weight: 500; }
+    .sd-prompt-head p { font-size: 13px; color: var(--hull-3, #7d92b8); line-height: 1.55; margin: 0; }
+    .sd-prompt-body { padding: 18px 24px; max-height: 60vh; overflow-y: auto; position: relative; z-index: 1; }
+    .sd-prompt-field { margin-bottom: 16px; }
+    .sd-prompt-field label { display: block; font-family: var(--font-mono, monospace); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan-1, #2dd4ff); margin-bottom: 6px; }
+    .sd-prompt-field label .opt { color: var(--hull-3, #7d92b8); margin-left: 8px; }
+    .sd-prompt-field input { width: 100%; background: rgba(0,0,0,0.55); border: 1px solid rgba(45,212,255,0.25); color: var(--hull, #f4f8ff); border-radius: 4px; padding: 9px 12px; font-family: var(--font-mono, monospace); font-size: 13px; outline: none; }
+    .sd-prompt-field input:focus { border-color: var(--cyan-1, #2dd4ff); box-shadow: inset 0 0 0 1px rgba(45,212,255,0.5); }
+    .sd-prompt-field .desc { font-size: 11px; color: var(--hull-3, #7d92b8); font-family: var(--font-mono, monospace); line-height: 1.55; margin-top: 5px; }
+    .sd-prompt-foot { padding: 14px 24px; border-top: 1px solid rgba(45,212,255,0.25); display: flex; gap: 10px; justify-content: flex-end; position: relative; z-index: 1; }
+    .sd-prompt-foot button { font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; padding: 8px 16px; border-radius: 4px; cursor: pointer; border: 1px solid rgba(45,212,255,0.30); background: transparent; color: var(--cyan-1, #2dd4ff); }
+    .sd-prompt-foot button.primary { background: linear-gradient(180deg, var(--cyan-1, #2dd4ff), var(--cyan-2, #00a8e8)); color: #001525; font-weight: 700; border-color: rgba(109,240,255,0.65); box-shadow: 0 4px 14px rgba(45,212,255,0.35); }
+    .sd-prompt-foot button:disabled { opacity: 0.5; cursor: wait; }
+
+    /* CPU-only mode banner — sits at the top of every page when no GPU detected */
+    .sd-cpu-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 9997;
+      background: linear-gradient(90deg, rgba(255,184,77,0.16), rgba(255,184,77,0.10));
+      border-bottom: 1px solid rgba(255,184,77,0.45);
+      color: var(--warn, #ffb84d);
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 8px 16px;
+      display: flex; gap: 14px; align-items: center; justify-content: center;
+      backdrop-filter: blur(6px);
+    }
+    .sd-cpu-banner b { color: var(--warn, #ffb84d); font-weight: 700; }
+    .sd-cpu-banner em { color: var(--hull-2, #c7d6f0); font-style: normal; }
+    .sd-cpu-banner button { background: transparent; border: 1px solid var(--warn, #ffb84d); color: var(--warn, #ffb84d); font-family: inherit; font-size: 10px; letter-spacing: 0.14em; padding: 3px 10px; border-radius: 3px; cursor: pointer; }
+    .sd-cpu-banner button:hover { background: rgba(255,184,77,0.10); }
+  `;
+  const promptStyle = document.createElement('style');
+  promptStyle.textContent = promptCSS;
+  document.head.appendChild(promptStyle);
+
+  const promptRoot = document.createElement('div');
+  promptRoot.innerHTML = `
+    <div class="sd-prompt-back" id="sdPromptBack"></div>
+    <div class="sd-prompt-modal" id="sdPromptModal" role="dialog">
+      <div class="sd-prompt-head">
+        <div class="label" id="sdPromptLabel">▸ MISSING VALUES</div>
+        <h3 id="sdPromptTitle">SeekDeep needs a few things</h3>
+        <p id="sdPromptDesc">Fill in the values below. They go straight to <span style="color:var(--cyan-1, #2dd4ff);">.env</span> via the local API — never anywhere else.</p>
+      </div>
+      <div class="sd-prompt-body" id="sdPromptBody"></div>
+      <div class="sd-prompt-foot">
+        <button id="sdPromptCancel">Skip</button>
+        <button class="primary" id="sdPromptSave">▸ Save &amp; continue</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(promptRoot);
+
+  const promptBack   = document.getElementById('sdPromptBack');
+  const promptModal  = document.getElementById('sdPromptModal');
+  const promptBody   = document.getElementById('sdPromptBody');
+  const promptCancel = document.getElementById('sdPromptCancel');
+  const promptSave   = document.getElementById('sdPromptSave');
+
+  let promptResolver = null;
+
+  function promptOpen(fields, opts = {}) {
+    if (opts.title) document.getElementById('sdPromptTitle').textContent = opts.title;
+    if (opts.desc)  document.getElementById('sdPromptDesc').innerHTML = opts.desc;
+    if (opts.label) document.getElementById('sdPromptLabel').textContent = opts.label;
+
+    promptBody.innerHTML = '';
+    fields.forEach(f => {
+      const wrap = document.createElement('div');
+      wrap.className = 'sd-prompt-field';
+      const isSecret = f.kind === 'secret' || /TOKEN|KEY|SECRET/.test(f.key);
+      wrap.innerHTML = `
+        <label>${f.key}${f.required ? '' : ' <span class="opt">optional</span>'}</label>
+        <input type="${isSecret ? 'password' : 'text'}" data-key="${f.key}" value="${(f.value || '').replace(/"/g,'&quot;')}" autocomplete="off" placeholder="${f.placeholder || ''}" />
+        <div class="desc">${f.description || ''}</div>
+      `;
+      promptBody.appendChild(wrap);
+    });
+    promptBack.classList.add('open');
+    promptModal.classList.add('open');
+    setTimeout(() => { promptBody.querySelector('input')?.focus(); }, 30);
+
+    return new Promise(resolve => { promptResolver = resolve; });
+  }
+  function promptClose(payload) {
+    promptBack.classList.remove('open');
+    promptModal.classList.remove('open');
+    if (promptResolver) { promptResolver(payload); promptResolver = null; }
+  }
+  promptBack.addEventListener('click', () => promptClose(null));
+  promptCancel.addEventListener('click', () => promptClose(null));
+  promptSave.addEventListener('click', async () => {
+    const updates = {};
+    promptBody.querySelectorAll('input[data-key]').forEach(i => {
+      const v = (i.value || '').trim();
+      if (v) updates[i.dataset.key] = v;
+    });
+    if (!Object.keys(updates).length) { promptClose(null); return; }
+    promptSave.disabled = true;
+    promptSave.textContent = '⋯ saving…';
+    try {
+      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const r = await fetch(base + '/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) {
+        promptClose(updates);
+      } else {
+        promptSave.textContent = '✕ failed · ' + r.status;
+        setTimeout(() => { promptSave.disabled = false; promptSave.textContent = '▸ Save & continue'; }, 1800);
+      }
+    } catch (e) {
+      promptSave.textContent = '✕ server offline';
+      // Still resolve with values so the caller can try direct again
+      setTimeout(() => promptClose(updates), 1200);
+    }
+  });
+
+  // Public API
+  window.SeekDeepPrompt = {
+    open: promptOpen,
+    close: promptClose,
+    // Convenience: collect by key names. Looks up descriptions from /config/status.
+    collect: async (keys, opts) => {
+      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      let meta = null;
+      try {
+        const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
+        if (r.ok) meta = await r.json();
+      } catch {}
+      const known = [...(meta?.required || []), ...(meta?.optional || [])];
+      const fields = keys.map(k => {
+        const m = known.find(x => x.key === k);
+        return m
+          ? { key: k, description: m.description, kind: m.kind, required: !!meta?.required?.find(r => r.key === k), value: m.value || '' }
+          : { key: k, description: '', kind: 'text', required: false, value: '' };
+      });
+      return promptOpen(fields, opts);
+    },
+  };
+
+  // CPU-only mode banner — surfaces when /health says no CUDA.
+  // Auto-detect on load, refresh every minute in case a GPU comes online.
+  async function checkGpuMode() {
+    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    try {
+      const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+      if (!r.ok) return;
+      const h = await r.json();
+      const noCuda = h.cuda_available === false;
+      let banner = document.querySelector('.sd-cpu-banner');
+      if (noCuda) {
+        if (!banner) {
+          banner = document.createElement('div');
+          banner.className = 'sd-cpu-banner';
+          banner.innerHTML = `
+            <span><b>⚠ CPU-ONLY MODE</b> · <em>no CUDA device detected</em> · chat models will load slowly · SDXL image gen unavailable</span>
+            <button id="sdCpuDismiss">DISMISS</button>
+          `;
+          document.body.appendChild(banner);
+          document.getElementById('sdCpuDismiss').addEventListener('click', () => {
+            banner.remove();
+            try { sessionStorage.setItem('sd-cpu-banner-dismissed', '1'); } catch {}
+          });
+          if (sessionStorage.getItem('sd-cpu-banner-dismissed') === '1') banner.remove();
+        }
+      } else if (banner) {
+        banner.remove();
+      }
+    } catch {}
+  }
+  // Auto-trigger missing-required-keys modal on first load if config/status flags it
+  async function checkConfigStatus() {
+    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    try {
+      const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const s = await r.json();
+      if (s.needs_setup && !sessionStorage.getItem('sd-setup-prompted')) {
+        sessionStorage.setItem('sd-setup-prompted', '1');
+        const fields = s.missing_required.map(m => ({
+          key: m.key, description: m.description, kind: m.kind, required: true, value: m.value || '',
+        }));
+        await window.SeekDeepPrompt.open(fields, {
+          label: '▸ SETUP REQUIRED',
+          title: 'SeekDeep needs a few values before it can run',
+          desc: 'These keys are missing or still placeholders in your <span style="color:var(--cyan-1, #2dd4ff);">.env</span>. Save them here and the bot will be ready.',
+        });
+      }
+    } catch {}
+  }
+  setTimeout(() => { checkGpuMode(); checkConfigStatus(); }, 400);
+  setInterval(checkGpuMode, 60_000);
 })();
