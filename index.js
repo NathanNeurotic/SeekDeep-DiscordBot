@@ -60,7 +60,7 @@ const __dirname = path.dirname(__filename);
         const ts = new Date().toISOString();
         const text = args.map((a) => {
           if (typeof a === 'string') return a;
-          try { return JSON.stringify(a); } catch { return String(a); }
+          try { return JSON.stringify(a, (_, v) => typeof v === 'bigint' ? v.toString() : v); } catch { return String(a); }
         }).join(' ');
         stream.write(`[${ts}] [${level}] ${redact(text)}\n`);
       } catch {}
@@ -174,7 +174,7 @@ function seekdeepCaptureRecentError(level, args) {
     const ts = new Date().toISOString();
     const raw = (args || []).map((a) => {
       if (typeof a === 'string') return a;
-      try { return JSON.stringify(a); } catch { return String(a); }
+      try { return JSON.stringify(a, (_, v) => typeof v === 'bigint' ? v.toString() : v); } catch { return String(a); }
     }).join(' ').slice(0, 600);
     const msg = seekdeepRedactErrorMsg(raw);
     SEEKDEEP_RECENT_ERRORS.unshift({ ts, level, msg });
@@ -1097,7 +1097,7 @@ function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = filePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(data, (_, v) => typeof v === 'bigint' ? v.toString() : v, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, filePath);
 }
 
@@ -1792,7 +1792,7 @@ async function fetchJson(url, options = {}) {
       const detail = json?.detail ?? json?.error ?? json?.message ?? json?.raw ?? `${res.status} ${res.statusText}`;
       let detailText;
       try {
-        detailText = typeof detail === 'string' ? detail : JSON.stringify(detail);
+        detailText = typeof detail === 'string' ? detail : JSON.stringify(detail, (_, v) => typeof v === 'bigint' ? v.toString() : v);
       } catch {
         detailText = String(detail);
       }
@@ -1825,7 +1825,7 @@ async function postLocal(pathname, body, options = {}) {
     return await fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body, (_, v) => typeof v === 'bigint' ? v.toString() : v),
       signal: controller?.signal,
     });
   } catch (err) {
@@ -1931,7 +1931,7 @@ function seekdeepDiscordSafeUrl(url = '') {
 
 // SEEKDEEP_ANTI_LOOP_HELPERS_START
 function cleanupAssistantReply(value) {
-  let text = stripQwenThinkingBlocks(value);
+  let text = typeof stripQwenThinkingBlocks === 'function' ? stripQwenThinkingBlocks(value) : String(value ?? '');
   text = String(text ?? '').replace(/\r\n/g, '\n');
 
   text = text.replace(/^\s*assistant\s*:\s*/i, '');
@@ -3676,7 +3676,7 @@ function seekdeepRememberTempImageState(state) {
     refinementMode: state?.refinementMode || '',
   };
 
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  fs.writeFileSync(metaPath, JSON.stringify(meta, (_, v) => typeof v === 'bigint' ? v.toString() : v, null, 2), 'utf8');
 
   const liveState = {
     ...meta,
@@ -8224,6 +8224,17 @@ async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', ke
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
   }
 
+  const cleanP = prompt.toLowerCase().trim();
+  const wantsBothExplicitly = /make both|original and refined|do both versions|queue both/.test(cleanP);
+
+  let wantsOriginal = Boolean(pending.wantsOriginal);
+  let wantsRefined = Boolean(pending.wantsRefined);
+
+  if (wantsOriginal && wantsRefined && !wantsBothExplicitly) {
+      wantsOriginal = true;
+      wantsRefined = false;
+  }
+
   const footerOptions = {
     startedAt: typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now(),
     modelUsed: typeof seekdeepNoModelLabel === 'function' ? seekdeepNoModelLabel() : 'local command (no AI model)',
@@ -9539,6 +9550,16 @@ function seekdeepImageModeOptionsFromPrompt(prompt = '') {
 function seekdeepIsGenericImageFollowupPrompt(prompt = '') {
   const p = normalizeUserText(prompt).toLowerCase().trim();
   if (seekdeepLooksLikeGenerateOnlyPrompt(p)) return true;
+
+  // Correction phrases
+  if (/^(?:no,?\s*)?(?:make|create|draw|generate|render|turn)\s+(?:an?\s+)?(?:image|picture|pic|art)\s*(?:from|out of|with)\s+(?:that|this|the)\s+(?:prompt|idea)(?:\s+instead)?(?:\s+please)?\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?(?:use|take)\s+(?:that|this|the)\s+(?:prompt|idea)\s+(?:for|to make|and make)\s+(?:an?\s+)?(?:image|picture|pic|art)\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?(?:make|turn)\s+(?:it|that|this)\s+(?:into\s+)?(?:an?\s+)?(?:image|picture|pic|art|picture)\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?(?:draw|generate|render|make)\s+(?:it|that)\s*(?:instead)?(?:\s+into\s+a\s+picture)?(?:\s+please)?\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?(?:make|create|draw|generate|render)\s+(?:an?\s+)?(?:image|picture|pic|art)\s+from\s+(?:that|this|it)(?:\s+prompt)?(?:\s+please)?\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?(?:use|make)\s+(?:that|this)\s+prompt(?:\s+please)?\.?[!?]*$/i.test(p)) return true;
+  if (/^(?:no,?\s*)?make\s+an\s+image\s+from\s+that(?:\s+prompt)?(?:\s+please)?\.?[!?]*$/i.test(p)) return true;
+
   // Standalone command without a real subject ("draw it", "make a picture").
   if (/^(generate|create|make|draw|paint|sketch|illustrate|render|show)(\s+me)?(?:\s+(an?\s+)?(image|picture|pic|art|drawing|illustration|it|that|this))?$/i.test(p)) return true;
   // Pronoun-only references ("draw him", "draw her", "make her", "image of him", "picture of them").
@@ -9782,10 +9803,15 @@ function seekdeepLooksLikeVisualRequest(prompt = '') {
   if (!p) return false;
   if (typeof seekdeepShouldKeepPromptAsChatBeforeImage === 'function' && seekdeepShouldKeepPromptAsChatBeforeImage(p)) return false;
 
-  const visualNouns = /\b(image|picture|pic|photo|art|artwork|drawing|illustration|painting|poster|album cover|cover art|banner|wallpaper|logo|icon|emblem|badge|character design|scene|portrait|sticker|thumbnail|concept art|screenshot|visual)\b/i;
+  const visualNouns = /\b(image|picture|pic|photo|art|artwork|drawing|illustration|painting|poster|album cover|cover art|banner|wallpaper|logo|icon|avatar|emblem|badge|character design|scene|portrait|sticker|thumbnail|concept art|screenshot|visual)\b/i;
   const creationVerbs = /\b(make|create|generate|render|draw|paint|sketch|illustrate|visualize|depict|design|show|give me|turn this into|can i see|could i see|i want|i'd like|id like)\b/i;
-  const scenePreps = /\b(of|with|wearing|holding|standing|sitting|smoking|on a|in a|inside|outside|under|over|during|at sunset|at sunrise|at night|in armor|in the style of|with a|over a|under a)\b/i;
-  const subjectCues = /\b(pepe|frog|cat|kitten|siamese|dog|dragon|robot|monster|anime|sailor moon|wizard|castle|cathedral|forest|tower|gothic|metal|punk|emo|screamo|hardcore|neon|album|poster|burning|armor|balcony|sunset|dead forest)\b/i;
+  const scenePreps = /\b(of|with|wearing|holding|standing|sitting|looking|pointing|carrying|smoking|on a|in a|inside|outside|under|over|during|at sunset|at sunrise|at night|in armor|in the style of|with a|over a|under a|in .* style)\b/i;
+  const subjectCues = /\b(pepe|frog|cat|kitten|siamese|dog|dragon|robot|monster|anime|sailor moon|wizard|castle|cathedral|forest|tower|gothic|metal|punk|emo|screamo|hardcore|neon|album|poster|burning|armor|balcony|sunset|dead forest|looneytunes|pixel|3d|cartoon)\b/i;
+
+  // Specific visual cues to strengthen detection
+  if (/holding a sign/i.test(p)) return true;
+  if (/sign that says|text that says|says ".*"/i.test(p)) return true;
+  if (/in .* style/i.test(p)) return true;
 
   // Explicit visual nouns/verbs override the generic text-question guard.
   if (visualNouns.test(p) && (creationVerbs.test(p) || scenePreps.test(p) || subjectCues.test(p))) return true;
@@ -9922,8 +9948,16 @@ async function seekdeepHandlePendingImageSubjectReply(message, prompt = '', key 
   if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-pending-subject', pending.prompt);
   if (typeof remember === 'function' && key) remember(key, 'user', `[pending-image-subject] ${pending.prompt}`);
 
-  const wantsOriginal = Boolean(pending.wantsOriginal);
-  const wantsRefined = Boolean(pending.wantsRefined);
+  const cleanP = prompt.toLowerCase().trim();
+  const wantsBothExplicitly = /make both|original and refined|do both versions|queue both/.test(cleanP);
+
+  let wantsOriginal = Boolean(pending.wantsOriginal);
+  let wantsRefined = Boolean(pending.wantsRefined);
+
+  if (wantsOriginal && wantsRefined && !wantsBothExplicitly) {
+      wantsOriginal = true;
+      wantsRefined = false;
+  }
   const width = pending.width || 1024;
   const height = pending.height || 1024;
   const seed = pending.seed ?? null;
@@ -10198,6 +10232,9 @@ function seekdeepLooksLikeShortNamedVisualSubject(prompt = '') {
 function seekdeepShouldKeepPromptAsChatBeforeImage(prompt = '') {
   const p = normalizeUserText(prompt).toLowerCase().trim();
   if (!p) return false;
+
+  // Reject text work, but don't reject visual override
+  if (!(/\b(infographic|panels?|comic|diagram)\b/i.test(p)) && /\b(tutorial|steps|plan|instructions|noob friendly|explain|summarize|summary|how to|guide)\b/i.test(p)) return true;
 
   if (typeof seekdeepHasTextListIntent === 'function' && seekdeepHasTextListIntent(p)) return true;
   if (/\b(?:image|picture|photo|art|visual|scene|prompt)\s+(?:ideas?|concepts?|directions?|options?|suggestions?|variations?|prompts?)\b/i.test(p)) return true;
@@ -13366,7 +13403,7 @@ function seekdeepFormatBytes(bytes = 0) {
 function seekdeepUpscaleFriendlyError(err) {
   const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.responseBody?.detail ?? err?.responseBody?.error ?? err?.responseText ?? err?.message ?? err;
   let text;
-  try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+  try { text = typeof detail === 'string' ? detail : JSON.stringify(detail, (_, v) => typeof v === 'bigint' ? v.toString() : v); } catch { text = String(detail); }
   text = String(text || 'unknown error');
 
   if (/animated\s+gifs?\s+are\s+not\s+supported/i.test(text)) {
@@ -13546,7 +13583,7 @@ async function seekdeepHandleInpaintMaskPreview(target, removeTarget, imageUrl) 
     console.error('[SeekDeep] inpaint mask preview failed:', err?.stack || err?.message || err, err?.responseJson || '');
     const detail = err?.detail ?? err?.responseJson?.detail ?? err?.responseJson?.error ?? err?.responseJson?.message ?? err?.message ?? err;
     let text;
-    try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); } catch { text = String(detail); }
+    try { text = typeof detail === 'string' ? detail : JSON.stringify(detail, (_, v) => typeof v === 'bigint' ? v.toString() : v); } catch { text = String(detail); }
     text = String(text || 'unknown error');
     
     const failure = {
@@ -14603,7 +14640,7 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
         url: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? 'gif' : 'png'}`,
       })),
     };
-    const jsonBuf = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+    const jsonBuf = Buffer.from(JSON.stringify(manifest, (_, v) => typeof v === 'bigint' ? v.toString() : v, null, 2), 'utf8');
     try {
       await thread.send({
         content: 'Emoji vault data:',
@@ -16550,6 +16587,9 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
                             (typeof isNaturalImagePrompt === 'function' && isNaturalImagePrompt(prompt));
 
     if (isContextualFollowup && !lastWasImage && !hasExplicitImage) {
+      if (typeof seekdeepRememberImageSubjectPrompt === 'function' && typeof seekdeepLooksLikeVisualRequest === 'function' && seekdeepLooksLikeVisualRequest(prompt)) {
+          seekdeepRememberImageSubjectPrompt(message, prompt);
+      }
       if (typeof seekdeepLogRoute === 'function') {
         seekdeepLogRoute('chat-context-safety-gate', prompt);
       }
@@ -17724,63 +17764,79 @@ async function seekdeepHandleContextMenuInspect(interaction, targetMessage) {
   await interaction.editReply({ content: '```\n' + body + '\n```' });
 }
 
+const SEEKDEEP_CONTEXT_MENU_GUARD = new Map();
+
 async function seekdeepHandleContextMenuGenerateImage(interaction, targetMessage) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-  const rawPrompt = seekdeepExtractContextMenuPromptText(targetMessage);
-  if (!rawPrompt) {
-    await interaction.editReply({
-      content: 'That message has no text I can use as an image prompt (only attachments/embeds). Pick a message with text.',
-    });
-    return;
+  const guardKey = `generate-image-from-this:${interaction.user?.id || 'unknown'}:${targetMessage?.id || 'unknown'}`;
+  if (SEEKDEEP_CONTEXT_MENU_GUARD.has(guardKey)) {
+      try {
+          await interaction.reply({ content: 'Already processing that request.', flags: MessageFlags.Ephemeral });
+      } catch {}
+      return;
   }
-
-  const prompt = rawPrompt.slice(0, 500).replace(/[,;:\s]+$/g, '').trim();
-
-  // Right-click is an intentional user action — do NOT block on frustration
-  // heuristics. If the user picked this message on purpose, send it through.
-
-  if (typeof seekdeepLogRoute === 'function') {
-    seekdeepLogRoute('context-menu-generate-image', prompt);
-  }
-
-  await interaction.editReply({
-    content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 400),
-  });
-
-  // Build a proxy message so we can reuse seekdeepSendImageWithButtons exactly
-  // like the regular natural-language path. The proxy replies into the original channel.
-  const proxy = {
-    author: { id: interaction.user?.id || 'unknown' },
-    channel: interaction.channel || null,
-    guild: interaction.guild || null,
-    client: interaction.client || client,
-    id: `ctx:${interaction.id}`,
-    content: prompt,
-    reply: async (payload) => {
-      if (interaction.channel && typeof interaction.channel.send === 'function') {
-        return await interaction.channel.send(payload);
-      }
-      return null;
-    },
-  };
+  SEEKDEEP_CONTEXT_MENU_GUARD.set(guardKey, true);
 
   try {
-    await seekdeepSendImageWithButtons(proxy, prompt, 1024, 1024, null, {
-      refine: false,
-      ground: true,
-      cleanPrompt: prompt,
-      skipCooldown: false,
-      silentAck: true,
-    });
-  } catch (err) {
-    console.error('Context menu Generate Image failed:', err?.stack || err?.message || err);
-    try {
-      await interaction.followUp({
-        content: 'Image generation failed: ' + (err?.message || 'unknown error').slice(0, 500),
-        flags: MessageFlags.Ephemeral,
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    let rawPrompt = seekdeepExtractContextMenuPromptText(targetMessage);
+
+    if (!rawPrompt && targetMessage?.content) {
+       if (targetMessage.content.startsWith('Refined prompt:') || targetMessage.content.startsWith('Prompt:')) {
+           rawPrompt = targetMessage.content.replace(/^Refined prompt:\s*|^Prompt:\s*/i, '').trim();
+       }
+    }
+
+    if (!rawPrompt || /^(Image generation failed:|Queued:|Generated:|Time to Generate:|Model Used:|Refinement:|Queue Wait:|Job ID:)/i.test(targetMessage?.content || '')) {
+      await interaction.editReply({
+        content: 'That message has no valid text I can use as an image prompt or is a status/error message. Pick a message with a text prompt.',
       });
-    } catch {}
+      return;
+    }
+
+    const prompt = rawPrompt.slice(0, 500).replace(/[,;:\s]+$/g, '').trim();
+
+    if (typeof seekdeepLogRoute === 'function') {
+      seekdeepLogRoute('context-menu-generate-image', prompt);
+    }
+
+    await interaction.editReply({
+      content: 'Queued: original (no refinement)\nPrompt: ' + prompt.slice(0, 400),
+    });
+
+    const proxy = {
+      author: { id: String(interaction.user?.id || 'unknown') },
+      channel: { id: String(interaction.channelId || '') },
+      guild: interaction.guildId ? { id: String(interaction.guildId) } : null,
+      id: `ctx:${interaction.id}`,
+      content: prompt,
+      reply: async (payload) => {
+        if (interaction.channel && typeof interaction.channel.send === 'function') {
+          return await interaction.channel.send(payload);
+        }
+        return null;
+      },
+    };
+
+    try {
+      await seekdeepSendImageWithButtons(proxy, prompt, 1024, 1024, null, {
+        refine: false,
+        ground: true,
+        cleanPrompt: prompt,
+        skipCooldown: false,
+        silentAck: true,
+      });
+    } catch (err) {
+      console.error('Context menu Generate Image failed:', err?.stack || err?.message || err);
+      try {
+        await interaction.followUp({
+          content: 'Image generation failed: ' + (err?.message || 'unknown error').slice(0, 500),
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {}
+    }
+  } finally {
+      setTimeout(() => SEEKDEEP_CONTEXT_MENU_GUARD.delete(guardKey), 10000);
   }
 }
 
@@ -19827,6 +19883,13 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
   const grounded = state.ground !== false && state.imageModeOptions?.ground !== false;
 
   const queueOne = async (regenMode, routeName, suffix) => {
+    let finalPrompt = basePrompt;
+    if (regenMode === 'rerefine' && typeof seekdeepIsGenericImageFollowupPrompt === 'function' && seekdeepIsGenericImageFollowupPrompt(finalPrompt)) {
+        const item = SEEKDEEP_RECENT_IMAGE_SUBJECTS.get(seekdeepImageContextKeyFromMessage(interaction));
+        if (item && item.prompt) {
+             finalPrompt = item.prompt;
+        }
+    }
     const proxy = typeof seekdeepPromptChoiceProxyMessage === 'function'
       ? seekdeepPromptChoiceProxyMessage(interaction, interaction?.user?.id || '', suffix)
       : {
@@ -19842,31 +19905,31 @@ if (interaction?.id && SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN.has(interaction.id))
         };
 
     if (typeof seekdeepLogRoute === 'function') {
-      seekdeepLogRoute(routeName, basePrompt);
+      seekdeepLogRoute(routeName, finalPrompt);
     }
 
     const modeOptions = typeof seekdeepRegenerateModeOptions === 'function'
       ? seekdeepRegenerateModeOptions(regenMode, {
           ...state,
-          originalPrompt: basePrompt,
+          originalPrompt: finalPrompt,
           ground: grounded,
         })
       : {
           ...(state?.imageModeOptions || {}),
           refine: regenMode !== 'original',
           ground: grounded,
-          cleanPrompt: basePrompt,
+          cleanPrompt: finalPrompt,
           skipCooldown: true,
       };
 
     if (String(regenMode || '').toLowerCase() === 'rerefine') {
-      console.log(`[SeekDeep] RE-REFINE queued actionId=${actionId} prompt=${basePrompt.slice(0, 120)}`);
+      console.log(`[SeekDeep] RE-REFINE queued actionId=${actionId} prompt=${finalPrompt.slice(0, 120)}`);
     }
     modeOptions.target = interaction;
 
     return await seekdeepSendImageWithButtons(
       proxy,
-      basePrompt,
+      finalPrompt,
       width,
       height,
       seed,
