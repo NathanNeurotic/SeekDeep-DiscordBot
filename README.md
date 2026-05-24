@@ -1,3 +1,6 @@
+<img width="1672" height="941" src="https://github.com/user-attachments/assets/41d77e75-59db-437a-b45f-c28905ff6abc" />
+
+
 # SeekDeep Discord Bot
 
 SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, web search, and image archiving.
