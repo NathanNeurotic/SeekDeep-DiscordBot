@@ -523,7 +523,7 @@
   <!-- TITLEBAR -->
   <div class="win-titlebar">
     <div class="left">
-      <img src="assets/seekdeep-mark.png" alt="" />
+      <img src="assets/seekdeep-mark.gif" alt="" />
       <span class="title">SEEK<em>DEEP</em> · CONTROL CENTER · <em id="active-mod-label">LAUNCHER</em><span class="cur"></span></span>
       <span class="pill" id="liveModePill" title="probes http://127.0.0.1:7865/health every 5s" style="margin-left: 12px; font-size: 9px;"><span class="dot"></span>MOCK · STANDALONE</span>
     </div>
@@ -598,10 +598,6 @@
       </a>
 
       <div class="grp" style="margin-top:auto; padding-top: 24px;">v10.15</div>
-      <a data-mod="brand" onclick="window.location.href='brand.html'; return false;" style="opacity:0.6;">
-        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
-        Open brand sys
-      </a>
     </nav>
 
     <!-- MAIN PANES -->
@@ -2922,5 +2918,6 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('tweaks-root'));
 root.render(<App />);
 </script>
+<script src="nav.js" defer></script>
 </body>
 </html>

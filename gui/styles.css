@@ -40,13 +40,14 @@
   --substrate-2: #0a1a30;
 }
 
-/* SeekDeep mark — always render circular wherever it appears */
+/* SeekDeep mark — animated GIF, render circular wherever it appears */
 img[src*="seekdeep-mark"] {
   border-radius: 50%;
   background: transparent;
   box-shadow:
-    inset 0 0 0 1px rgba(109, 240, 255, 0.18),
-    0 0 14px rgba(45, 212, 255, 0.2);
+    inset 0 0 0 1px rgba(109, 240, 255, 0.28),
+    0 0 24px rgba(45, 212, 255, 0.45),
+    0 0 60px rgba(45, 212, 255, 0.2);
 }
 
 * { box-sizing: border-box; }
@@ -61,46 +62,65 @@ body {
   letter-spacing: 0.01em;
 }
 
-/* ===== Abyss background — animated PS2 ripple + currents ===== */
+/* ===== Abyss background — banner-inspired HUD ===== */
 .abyss {
   position: fixed; inset: 0; z-index: -3;
   background:
-    radial-gradient(120% 80% at 50% 110%, rgba(0,120,180,0.45), transparent 70%),
-    radial-gradient(80% 60% at 20% 0%, rgba(20,48,107,0.7), transparent 60%),
-    radial-gradient(60% 50% at 90% 20%, rgba(13,33,82,0.8), transparent 70%),
-    linear-gradient(180deg, #02060f 0%, #050b1c 40%, #02060f 100%);
+    /* central vortex glow */
+    radial-gradient(60% 60% at 50% 50%, rgba(45,212,255,0.18), transparent 60%),
+    /* deep edges */
+    radial-gradient(120% 80% at 50% 110%, rgba(0,80,160,0.45), transparent 70%),
+    radial-gradient(80% 60% at 0% 0%,    rgba(20,48,120,0.65), transparent 60%),
+    radial-gradient(70% 60% at 100% 100%, rgba(13,33,82,0.7),  transparent 70%),
+    /* base */
+    linear-gradient(180deg, #020615 0%, #041025 50%, #02060f 100%);
 }
+
+/* Concentric HUD scan rings — like the banner's central vortex */
 .abyss::before {
-  /* concentric ripples from below — PS2 OSDSYS signature wave */
-  content: ""; position: absolute; inset: -40%;
+  content: ""; position: absolute;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 140vmin; height: 140vmin;
   background:
-    repeating-radial-gradient(circle at 50% 120%,
-      transparent 0 60px,
-      rgba(45,212,255,0.06) 60px 62px,
-      transparent 62px 120px);
-  animation: abyssPulse 18s ease-in-out infinite;
+    /* outer tick ring */
+    radial-gradient(circle, transparent 49%, rgba(45,212,255,0.12) 49.6%, rgba(45,212,255,0.12) 50%, transparent 50.4%, transparent 100%),
+    /* mid ring */
+    radial-gradient(circle, transparent 39%, rgba(109,240,255,0.10) 39.6%, rgba(109,240,255,0.10) 40%, transparent 40.4%, transparent 100%),
+    /* inner ring */
+    radial-gradient(circle, transparent 29%, rgba(45,212,255,0.18) 29.6%, rgba(45,212,255,0.18) 30%, transparent 30.4%, transparent 100%),
+    /* core glow */
+    radial-gradient(circle, rgba(109,240,255,0.06) 0%, transparent 25%);
+  animation: hudSweep 28s linear infinite;
+  filter: drop-shadow(0 0 30px rgba(45,212,255,0.18));
+  pointer-events: none;
   mix-blend-mode: screen;
-  opacity: 0.7;
+  opacity: 0.85;
 }
+
+/* Tick-mark band — rotates faster, like a scanner */
 .abyss::after {
-  /* horizontal current — slow drift */
-  content: ""; position: absolute; inset: 0;
+  content: ""; position: absolute;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 95vmin; height: 95vmin;
+  border-radius: 50%;
   background:
-    repeating-linear-gradient(180deg, transparent 0 3px, rgba(255,255,255,0.012) 3px 4px),
-    repeating-linear-gradient(8deg,
-      transparent 0 220px,
-      rgba(109,240,255,0.018) 220px 224px,
-      transparent 224px 440px);
-  animation: current 60s linear infinite;
+    repeating-conic-gradient(from 0deg,
+      transparent 0deg 4deg,
+      rgba(109,240,255,0.16) 4deg 4.6deg,
+      transparent 4.6deg 8deg);
+  -webkit-mask: radial-gradient(circle, transparent 47%, black 47.4%, black 49.6%, transparent 50%);
+          mask: radial-gradient(circle, transparent 47%, black 47.4%, black 49.6%, transparent 50%);
+  animation: hudSpin 50s linear infinite;
+  filter: drop-shadow(0 0 8px rgba(109,240,255,0.5));
   pointer-events: none;
 }
-@keyframes abyssPulse {
-  0%, 100% { transform: scale(1) translateY(0); opacity: 0.6; }
-  50%      { transform: scale(1.08) translateY(-2%); opacity: 0.95; }
+
+@keyframes hudSweep {
+  0%, 100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 0.7; }
+  50%      { transform: translate(-50%, -50%) scale(1.04) rotate(180deg); opacity: 1; }
 }
-@keyframes current {
-  0% { background-position: 0 0, 0 0; }
-  100% { background-position: 0 0, 600px 0; }
+@keyframes hudSpin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
 /* God rays — vertical light shafts from above */
@@ -114,20 +134,26 @@ body {
   background:
     linear-gradient(180deg,
       transparent 0%,
-      rgba(109,240,255,0.06) 18%,
-      rgba(45,212,255,0.03) 60%,
-      transparent 100%);
-  width: 200px;
-  filter: blur(28px);
+      rgba(109,240,255,0.10) 12%,
+      rgba(45,212,255,0.06) 45%,
+      transparent 90%);
+  width: 280px;
+  filter: blur(36px);
   mix-blend-mode: screen;
   transform-origin: top center;
-  animation: rayDrift 24s ease-in-out infinite alternate;
+  animation: rayDrift 18s ease-in-out infinite alternate;
 }
-.rays::before { left: 18%; transform: rotate(-6deg); animation-delay: 0s; }
-.rays::after  { left: 62%; transform: rotate(4deg);  animation-delay: -12s; width: 260px; }
+.rays::before { left: 14%; transform: rotate(-12deg); animation-delay: 0s; }
+.rays::after  { left: 64%; transform: rotate(8deg);   animation-delay: -9s; width: 340px; }
 @keyframes rayDrift {
-  0%, 100% { transform: rotate(-6deg) translateX(0); opacity: 0.7; }
-  50%      { transform: rotate(-2deg) translateX(40px); opacity: 1; }
+  0%, 100% { transform: rotate(-12deg) translateX(0);  opacity: 0.6; }
+  50%      { transform: rotate(-6deg)  translateX(60px); opacity: 1; }
+}
+
+/* Diagonal energy streaks · banner-inspired */
+.rays::before {
+  /* layered with a wider faint streak via box-shadow tricks not possible here.
+     We use the existing element only — the streaks come from .bubbles. */
 }
 
 /* drifting particles layer — cubes + bubbles */

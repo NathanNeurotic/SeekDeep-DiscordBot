@@ -1,0 +1,377 @@
+/* SeekDeep universal nav — auto-injects a floating "jump anywhere" palette
+   on every page that includes this script. Keyboard: Ctrl/Cmd + K, Esc to close.
+   Inject pattern: <script src="nav.js" defer></script> just before </body>. */
+(function () {
+  'use strict';
+  if (document.getElementById('sd-nav-root')) return;
+
+  const PAGES = [
+    { id: 'index',        title: 'Hub',                 path: 'index.html',        glyph: '⌂', meta: '01 · home' },
+    { id: 'landing',      title: 'Landing',             path: 'landing.html',      glyph: '◐', meta: '02 · marketing' },
+    { id: 'app',          title: 'Control Center',      path: 'app.html',          glyph: '⌘', meta: '03 · 10 modules · wired' },
+    { id: 'chat',         title: 'Chat Client',         path: 'chat.html',         glyph: '▸', meta: '04 · wired' },
+    { id: 'installer',    title: 'Installer',           path: 'installer.html',    glyph: '⚙', meta: '05 · 9-step wizard · wired' },
+    { id: 'docs',         title: 'Docs',                path: 'docs.html',         glyph: '▤', meta: '06 · 109 commands' },
+    { id: 'roadmap',      title: 'Roadmap',             path: 'roadmap.html',      glyph: '▦', meta: '07 · PLANNED.md' },
+    { id: 'api',          title: 'API Explorer',        path: 'api.html',          glyph: '⚡', meta: '08 · live + mock' },
+    { id: 'architecture', title: 'Architecture',        path: 'architecture.html', glyph: '⌬', meta: '09 · system map' },
+    { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '10 · splash' },
+    { id: 'changelog',    title: 'Changelog',           path: 'changelog.html',    glyph: '⊞', meta: '11 · v10.x history' },
+    { id: 'memory',       title: 'Memory · preview',    path: 'memory.html',       glyph: '⌗', meta: '12 · roadmap mock' },
+    { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '13 · phone mocks' },
+    { id: 'tour',         title: 'Tour',                path: 'tour.html',         glyph: '⊕', meta: '14 · guided' },
+    { id: 'pitch',        title: 'Pitch deck',          path: 'pitch.html',        glyph: '◊', meta: '15 · 9 slides' },
+  ];
+
+  // Detect current page from URL filename
+  const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+
+  const css = `
+    .sd-jump-btn {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 9998;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--cyan-1, #2dd4ff), var(--cyan-2, #00a8e8));
+      border: 1px solid rgba(109,240,255,0.65);
+      color: #001525;
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      cursor: pointer;
+      box-shadow: 0 6px 20px rgba(45,212,255,0.4), 0 0 30px rgba(45,212,255,0.3),
+                  inset 0 1px 0 rgba(255,255,255,0.5), inset 0 -1px 0 rgba(0,80,120,0.4);
+      display: grid; place-items: center;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      animation: sdJumpPulse 3s ease-in-out infinite;
+    }
+    .sd-jump-btn:hover { transform: scale(1.08); box-shadow: 0 8px 30px rgba(45,212,255,0.6), 0 0 40px rgba(45,212,255,0.5); }
+    .sd-jump-btn span.glyph { font-size: 22px; line-height: 1; }
+    .sd-jump-btn span.kbd { font-size: 8px; opacity: 0.7; margin-top: 2px; }
+    @keyframes sdJumpPulse {
+      0%, 100% { box-shadow: 0 6px 20px rgba(45,212,255,0.4), 0 0 30px rgba(45,212,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5), inset 0 -1px 0 rgba(0,80,120,0.4); }
+      50%      { box-shadow: 0 6px 20px rgba(45,212,255,0.6), 0 0 48px rgba(45,212,255,0.55), inset 0 1px 0 rgba(255,255,255,0.7), inset 0 -1px 0 rgba(0,80,120,0.4); }
+    }
+
+    .sd-jump-backdrop {
+      position: fixed; inset: 0; z-index: 9999;
+      background: radial-gradient(circle at 50% 50%, rgba(2,6,15,0.85), rgba(2,6,15,0.95));
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+    .sd-jump-backdrop.open { display: block; opacity: 1; }
+
+    .sd-jump-panel {
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%) scale(0.96);
+      z-index: 10000;
+      width: min(560px, calc(100vw - 40px));
+      max-height: min(620px, calc(100vh - 80px));
+      background: linear-gradient(180deg, rgba(10,26,48,0.96), rgba(6,18,31,0.98));
+      border: 1px solid rgba(45,212,255,0.45);
+      border-radius: 10px;
+      box-shadow: 0 30px 90px rgba(0,0,0,0.7), 0 0 60px rgba(45,212,255,0.25);
+      display: none;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      overflow: hidden;
+      font-family: var(--font-display, system-ui), sans-serif;
+    }
+    .sd-jump-backdrop.open + .sd-jump-panel,
+    .sd-jump-panel.open {
+      display: flex; flex-direction: column;
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .sd-jump-panel::before {
+      content: ""; position: absolute; inset: 8px;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top left / 1px 16px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top right / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) top right / 1px 16px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom left / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom left / 1px 16px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 16px 1px no-repeat,
+        linear-gradient(rgba(109,240,255,0.7), rgba(109,240,255,0.7)) bottom right / 1px 16px no-repeat;
+      filter: drop-shadow(0 0 4px rgba(109,240,255,0.6));
+      z-index: 1;
+    }
+
+    .sd-jump-head {
+      padding: 18px 22px 12px;
+      border-bottom: 1px solid rgba(45,212,255,0.25);
+      position: relative; z-index: 2;
+    }
+    .sd-jump-head .label {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      color: var(--hull-3, #7d92b8);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex; justify-content: space-between;
+    }
+    .sd-jump-head .label em {
+      font-style: normal;
+      color: var(--cyan-1, #2dd4ff);
+    }
+    .sd-jump-head input {
+      width: 100%;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(45,212,255,0.25);
+      color: var(--hull, #f4f8ff);
+      border-radius: 4px;
+      padding: 10px 14px;
+      font-family: var(--font-display, system-ui), sans-serif;
+      font-size: 15px;
+      outline: none;
+      letter-spacing: 0.01em;
+    }
+    .sd-jump-head input:focus {
+      border-color: var(--cyan-1, #2dd4ff);
+      box-shadow: inset 0 0 0 1px rgba(45,212,255,0.5), 0 0 0 2px rgba(45,212,255,0.18);
+    }
+
+    .sd-jump-list {
+      overflow-y: auto;
+      padding: 8px;
+      position: relative; z-index: 2;
+      flex: 1;
+    }
+    .sd-jump-item {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--hull-2, #c7d6f0);
+      text-decoration: none;
+      border: 1px solid transparent;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+      margin: 2px 0;
+      user-select: none;
+    }
+    .sd-jump-item:hover,
+    .sd-jump-item.active {
+      background: rgba(45,212,255,0.10);
+      border-color: rgba(45,212,255,0.35);
+      color: var(--cyan-1, #2dd4ff);
+    }
+    .sd-jump-item.here { background: rgba(45,212,255,0.06); }
+    .sd-jump-item.here .title::after {
+      content: " · YOU ARE HERE";
+      color: var(--good, #58e6a1);
+      font-family: var(--font-mono, monospace);
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      margin-left: 6px;
+    }
+    .sd-jump-item .glyph {
+      width: 36px; height: 36px;
+      display: grid; place-items: center;
+      border: 1px solid rgba(45,212,255,0.30);
+      border-radius: 4px;
+      background: rgba(0,0,0,0.40);
+      color: var(--cyan-1, #2dd4ff);
+      font-size: 18px;
+    }
+    .sd-jump-item .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .sd-jump-item .title {
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: var(--hull, #f4f8ff);
+    }
+    .sd-jump-item.active .title { color: var(--cyan-0, #6df0ff); }
+    .sd-jump-item .meta {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--hull-3, #7d92b8);
+      text-transform: uppercase;
+    }
+    .sd-jump-item .kbd-hint {
+      font-family: var(--font-mono, monospace);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      color: var(--hull-3, #7d92b8);
+      padding: 3px 7px;
+      border: 1px solid rgba(45,212,255,0.25);
+      border-radius: 3px;
+      background: rgba(0,0,0,0.45);
+    }
+    .sd-jump-foot {
+      padding: 10px 22px;
+      border-top: 1px solid rgba(45,212,255,0.25);
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      color: var(--hull-3, #7d92b8);
+      text-transform: uppercase;
+      display: flex; justify-content: space-between;
+      position: relative; z-index: 2;
+    }
+    .sd-jump-foot kbd {
+      display: inline-block;
+      padding: 1px 6px;
+      margin: 0 2px;
+      font-family: inherit;
+      font-size: 9px;
+      color: var(--cyan-1, #2dd4ff);
+      background: rgba(0,4,12,0.7);
+      border: 1px solid rgba(45,212,255,0.30);
+      border-radius: 3px;
+    }
+    .sd-jump-empty {
+      padding: 30px;
+      text-align: center;
+      color: var(--hull-3, #7d92b8);
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      letter-spacing: 0.14em;
+    }
+
+    /* Bump the logo's glow so the animated GIF reads more clearly */
+    img[src*="seekdeep-mark"] {
+      animation: sdMarkPulse 3.5s ease-in-out infinite;
+    }
+    @keyframes sdMarkPulse {
+      0%, 100% {
+        box-shadow:
+          inset 0 0 0 1px rgba(109,240,255,0.28),
+          0 0 24px rgba(45,212,255,0.45),
+          0 0 60px rgba(45,212,255,0.22);
+      }
+      50% {
+        box-shadow:
+          inset 0 0 0 1px rgba(109,240,255,0.55),
+          0 0 32px rgba(45,212,255,0.70),
+          0 0 90px rgba(45,212,255,0.40);
+      }
+    }
+  `;
+
+  const style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+
+  const root = document.createElement('div');
+  root.id = 'sd-nav-root';
+  root.innerHTML = `
+    <button class="sd-jump-btn" id="sdJumpBtn" title="Jump anywhere (Ctrl+K)">
+      <span class="glyph">◐</span>
+      <span class="kbd">⌘K</span>
+    </button>
+    <div class="sd-jump-backdrop" id="sdJumpBack"></div>
+    <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
+      <div class="sd-jump-head">
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 16 SURFACES</em></div>
+        <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
+      </div>
+      <div class="sd-jump-list" id="sdJumpList"></div>
+      <div class="sd-jump-foot">
+        <span><kbd>⌘K</kbd> open · <kbd>Esc</kbd> close · <kbd>↵</kbd> jump</span>
+        <span>v10.35 · LOCAL</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(root);
+
+  const panel = document.getElementById('sdJumpPanel');
+  const backdrop = document.getElementById('sdJumpBack');
+  const list = document.getElementById('sdJumpList');
+  const search = document.getElementById('sdJumpSearch');
+  const btn = document.getElementById('sdJumpBtn');
+
+  let filtered = PAGES.slice();
+  let cursor = 0;
+
+  function render() {
+    list.innerHTML = '';
+    if (!filtered.length) {
+      list.innerHTML = '<div class="sd-jump-empty">▸ no match</div>';
+      return;
+    }
+    filtered.forEach((p, i) => {
+      const a = document.createElement('a');
+      a.href = p.path;
+      a.className = 'sd-jump-item' + (i === cursor ? ' active' : '') + (p.path === here ? ' here' : '');
+      a.innerHTML = `
+        <span class="glyph">${p.glyph}</span>
+        <span class="info">
+          <span class="title">${p.title}</span>
+          <span class="meta">${p.meta}</span>
+        </span>
+        <span class="kbd-hint">${p.path}</span>
+      `;
+      a.addEventListener('mouseenter', () => { cursor = i; updateActive(); });
+      list.appendChild(a);
+    });
+  }
+  function updateActive() {
+    [...list.children].forEach((c, i) => c.classList.toggle('active', i === cursor));
+    const el = list.children[cursor];
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function open() {
+    backdrop.classList.add('open');
+    panel.classList.add('open');
+    cursor = 0;
+    filtered = PAGES.slice();
+    search.value = '';
+    render();
+    setTimeout(() => search.focus(), 30);
+  }
+  function close() {
+    backdrop.classList.remove('open');
+    panel.classList.remove('open');
+  }
+  function fuzzyFilter(q) {
+    if (!q) return PAGES.slice();
+    q = q.toLowerCase();
+    return PAGES.filter(p => (p.title + ' ' + p.path + ' ' + p.meta + ' ' + p.id).toLowerCase().includes(q));
+  }
+
+  btn.addEventListener('click', open);
+  backdrop.addEventListener('click', close);
+
+  search.addEventListener('input', () => {
+    filtered = fuzzyFilter(search.value);
+    cursor = 0;
+    render();
+  });
+  search.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); cursor = Math.min(filtered.length - 1, cursor + 1); updateActive(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cursor = Math.max(0, cursor - 1); updateActive(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      const p = filtered[cursor];
+      if (p) location.href = p.path;
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+  });
+
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      panel.classList.contains('open') ? close() : open();
+    } else if (e.key === 'Escape' && panel.classList.contains('open')) {
+      close();
+    }
+  });
+})();
