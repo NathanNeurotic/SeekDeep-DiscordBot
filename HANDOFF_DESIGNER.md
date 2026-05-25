@@ -395,6 +395,10 @@ npm run preflight
 
 Expected: `4 ok · 0 fail · 0 skipped`. The four stages are `js` (node --check on all JS), `py` (py_compile on all Python), `smoke` (504 unit-level checks), `gui-smoke` (52 endpoint-level checks via FastAPI TestClient).
 
+CI runs the same `npm run preflight` on every push and PR (see `.github/workflows/ci.yml`). If you push a regressed `local_ai_server.py` or `gui_endpoints.py`, the red X on the commit will tell you within ~30 seconds — don't wait for local feedback.
+
+There's also `npm run doctor` for setup diagnostics (env file presence, Discord token format, loopback URL checks, etc.). Doctor exits 0 when there are no failures, even with warnings — `DISCORD_CLIENT_ID` blank is now a WARN since the bot can reply to mentions without it. The Settings panel (Task 2) is the right place to expose `DISCORD_CLIENT_ID` so the user can fill it for slash-command registration.
+
 If `gui-smoke` fails after your changes, the most likely cause is your zip overwrote `gui_endpoints.py` or `local_ai_server.py`. Restore from `git` and port your changes in manually per `MAINTAINER.md` § 1.
 
 Visual smoke (optional but appreciated): start the bot + AI server and load `http://127.0.0.1:7865/gui/index.html`. Every nav-bar link should resolve, the brand page should not be linked anywhere, every page should show `v10.x` (auto-rewritten from `/health.version`), and the title-bar LIVE pill should be present (green if WS connected).

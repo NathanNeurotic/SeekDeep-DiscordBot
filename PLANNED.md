@@ -16,6 +16,24 @@ What's left, split by who owns it.
 
 Sorted by readiness to start.
 
+#### Audit fixes shipped 2026-05-25
+
+Both external audits (ChatGPT PR [#3](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/pull/3) and Jules PR [#2](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/pull/2)) reviewed; good findings cherry-picked:
+
+- ✅ **CI gui-smoke green again** (`eb14758`). The `gui-smoke` stage was failing on `No module named 'dotenv'` because CI only installs the lightweight `fastapi/httpx/pydantic` subset. Guarded the import in `local_ai_server.py` and `warmup_local_cache.py` with a try/except fallback, AND added `python-dotenv>=1.0.0` to the CI workflow so we still exercise the real launcher path.
+- ✅ **`scripts/doctor.mjs` overhaul** (`8c13e82`). `DISCORD_CLIENT_ID` is now WARN (not FAIL); it's only needed for slash-command registration diagnostics, not basic replies. `.env.default` is now detected as the first-run template (was checking only `.env.example`, conflicting with what `setup_local.ps1` actually copies from). Doctor warns on non-loopback `LOCAL_AI_BASE_URL` / `SEARXNG_BASE_URL` (privacy posture matches README). Distinct "completed with warnings" exit message. Kept the strict `WEB_AUTO_SEARCH === 'true'` semantics to match `index.js`.
+- ✅ **`.env.default` adds `DISCORD_CLIENT_ID=`** (`8c13e82`). Was missing from the template even though the doctor expected it.
+- ✅ **`.gitignore` consolidated** (`8c13e82`) from ~200 lines of duplicated publish-safety rules into ~140 lines organized by category. Preserved all the recent additions (`data/user-facts.json`, `data/memory-presets.json`, `data/prompt-templates.json`, the `!data/.gitkeep` allowlist).
+- ✅ **`_hf_uninstall` handles `CacheNotFound`** (`8c13e82`). Was 500-ing on a fresh install with no HF models ever downloaded; now returns the same idempotent `{ok:True, freed_bytes:0, note:"cache directory not found"}` shape as the "model not in cache" path.
+
+Skipped from the audits:
+- Index.js split (Nathan previously deferred — needs go-ahead).
+- `package-lock.json` (worth doing separately).
+- Linux/macOS launcher (out of scope — Windows-only is intentional).
+- The `envFlag` loosening for `WEB_AUTO_SEARCH` (would have diverged from bot's actual strict `=== 'true'` check; kept the bot-matching semantics).
+- Both audit markdown reports (`docs/AUDIT_2026-05-25.md`, `JULES_REPO_AUDIT_REPORT.md`) — they belong on the PRs, not main.
+- Jules's `test_hf.py` debug script.
+
 #### Can ship anytime (no blockers)
 
 All four "ready anytime" items shipped 2026-05-25 in commits `3e4a0fa`, `3878ba4`, `7a3368d`:
