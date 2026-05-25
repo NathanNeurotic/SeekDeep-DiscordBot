@@ -222,6 +222,55 @@ const SEEKDEEP_RATE_LIMIT_STATS = { count: 0, lastAt: 0, lastRoute: '', lastTime
 const TOKEN = process.env.DISCORD_TOKEN || '';
 const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:7865';
 
+// SEEKDEEP_GUI_EVENTS_START
+// Fire-and-forget producer for the GUI's WebSocket /events bus. Bot calls
+// seekdeepEmitGuiEvent('request.start', {...}) at request entry, '...done'
+// at exit; FastAPI side-car broadcasts to every connected browser tab.
+//
+// Token comes from process.env.SEEKDEEP_GUI_TOKEN. If unset (e.g. first
+// boot before the AI server has generated the token), all emits silently
+// no-op. After the AI server starts and writes the token, restart the
+// bot to pick it up.
+//
+// On first 401 we mark emits disabled so a stale token doesn't spam logs.
+let SEEKDEEP_EVENTS_DISABLED = false;
+async function seekdeepEmitGuiEvent(type, data) {
+  if (SEEKDEEP_EVENTS_DISABLED) return;
+  const tok = process.env.SEEKDEEP_GUI_TOKEN;
+  if (!tok) return;  // no token yet; AI server hasn't generated one
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    let r;
+    try {
+      r = await fetch(`${LOCAL_AI_BASE_URL}/events/emit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-SeekDeep-Token': tok },
+        body: JSON.stringify({ type, data: data || {} }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (r && r.status === 401) {
+      SEEKDEEP_EVENTS_DISABLED = true;
+      console.warn('[SeekDeep] GUI events emit got 401 — token mismatch; disabling further emits. Restart bot after rotating SEEKDEEP_GUI_TOKEN.');
+    }
+  } catch (_) {
+    // Server might be offline; bot must keep working regardless.
+  }
+}
+function seekdeepClassifyRequestKind(target) {
+  // Best-effort tag so the GUI can colour-code request lifecycle events.
+  try {
+    if (target?.commandName) return 'slash:' + target.commandName;
+    if (target?.componentType != null) return 'interaction';
+    if (target?.attachments?.size > 0) return 'message+attachment';
+    return 'message';
+  } catch { return 'unknown'; }
+}
+// SEEKDEEP_GUI_EVENTS_END
+
 // SEEKDEEP_HF_HOME_AUTOSET_START
 // Default HF_HOME to the project's local model cache so HF doesn't accidentally
 // write to ~/.cache/huggingface on machines that already have the model
@@ -432,6 +481,19 @@ function seekdeepMarkRequestStart(target) {
   try {
     if (target && !target.__seekdeepRequestStartedAt) {
       target.__seekdeepRequestStartedAt = seekdeepNowMs();
+      // Tag the request with a stable ID so the GUI can correlate
+      // request.start with the eventual request.done.
+      if (!target.__seekdeepRequestId) {
+        target.__seekdeepRequestId = 'req_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+      }
+      // Fire-and-forget WebSocket event for the live UI.
+      void seekdeepEmitGuiEvent('request.start', {
+        id:   target.__seekdeepRequestId,
+        kind: seekdeepClassifyRequestKind(target),
+        user_id: target?.author?.id || target?.user?.id || null,
+        channel_id: target?.channel?.id || target?.channelId || null,
+        guild_id: target?.guild?.id || target?.guildId || null,
+      });
     }
   } catch {}
 }
@@ -9012,48 +9074,78 @@ async function seekdeepReplyToTarget(target, payload, options = {}) {
   if (!target) return null;
   const { previousReply = null } = options;
 
-  // Suppress link previews globally if payload contains URLs or search sources
-  if (payload && typeof payload.content === 'string') {
-    const hasUrls = payload.content.includes('http://') || payload.content.includes('https://') || payload.content.includes('Sources:');
-    if (hasUrls && MessageFlags && MessageFlags.SuppressEmbeds) {
-      if (payload.flags === undefined) {
-        payload.flags = MessageFlags.SuppressEmbeds;
-      } else if (typeof payload.flags === 'number') {
-        payload.flags |= MessageFlags.SuppressEmbeds;
-      } else if (Array.isArray(payload.flags)) {
-        if (!payload.flags.includes(MessageFlags.SuppressEmbeds)) {
-          payload.flags.push(MessageFlags.SuppressEmbeds);
+  // Capture request lifecycle for GUI events. Best-effort; emits exactly
+  // once per request (subsequent edits on the same target are ignored
+  // because __seekdeepRequestDoneEmitted gets set on first emit).
+  const _seekdeepEmitDoneAfter = (ok, errMsg) => {
+    try {
+      if (!target || target.__seekdeepRequestDoneEmitted) return;
+      target.__seekdeepRequestDoneEmitted = true;
+      const startedAt = target?.__seekdeepRequestStartedAt;
+      const elapsed = startedAt ? (seekdeepNowMs() - startedAt) : null;
+      void seekdeepEmitGuiEvent('request.done', {
+        id: target?.__seekdeepRequestId || null,
+        kind: seekdeepClassifyRequestKind(target),
+        ok: !!ok,
+        elapsed_ms: elapsed,
+        model: target?.__seekdeepResponseModel || null,
+        error: errMsg || null,
+      });
+    } catch {}
+  };
+
+  let _seekdeepThrew = null;
+  try {
+    // Suppress link previews globally if payload contains URLs or search sources
+    if (payload && typeof payload.content === 'string') {
+      const hasUrls = payload.content.includes('http://') || payload.content.includes('https://') || payload.content.includes('Sources:');
+      if (hasUrls && MessageFlags && MessageFlags.SuppressEmbeds) {
+        if (payload.flags === undefined) {
+          payload.flags = MessageFlags.SuppressEmbeds;
+        } else if (typeof payload.flags === 'number') {
+          payload.flags |= MessageFlags.SuppressEmbeds;
+        } else if (Array.isArray(payload.flags)) {
+          if (!payload.flags.includes(MessageFlags.SuppressEmbeds)) {
+            payload.flags.push(MessageFlags.SuppressEmbeds);
+          }
         }
       }
     }
-  }
 
-  // Interaction: has deferReply/editReply on the prototype. safeEditOrReply
-  // already handles the "is it replied/deferred, do I edit or reply fresh"
-  // logic so previousReply is irrelevant here.
-  if (typeof target.deferReply === 'function' || typeof target.editReply === 'function') {
-    return await safeEditOrReply(target, payload);
-  }
-  // Message-shaped: has .reply but no deferReply.
-  if (typeof target.reply === 'function') {
-    try { stopSeekDeepTypingLoopForMessage(target); } catch {}
-    const merged = { allowedMentions: { repliedUser: false }, ...payload };
-    if (previousReply && typeof previousReply.edit === 'function') {
-      try {
-        return await previousReply.edit(merged);
-      } catch (err) {
-        console.warn('Could not edit prior reply; sending fresh reply instead:', err?.message || err);
-        // Safely delete the orphaned loading message
-        try {
-          if (typeof previousReply.delete === 'function') {
-            await previousReply.delete().catch(() => null);
-          }
-        } catch {}
-      }
+    // Interaction: has deferReply/editReply on the prototype. safeEditOrReply
+    // already handles the "is it replied/deferred, do I edit or reply fresh"
+    // logic so previousReply is irrelevant here.
+    if (typeof target.deferReply === 'function' || typeof target.editReply === 'function') {
+      return await safeEditOrReply(target, payload);
     }
-    return await target.reply(merged);
+    // Message-shaped: has .reply but no deferReply.
+    if (typeof target.reply === 'function') {
+      try { stopSeekDeepTypingLoopForMessage(target); } catch {}
+      const merged = { allowedMentions: { repliedUser: false }, ...payload };
+      if (previousReply && typeof previousReply.edit === 'function') {
+        try {
+          return await previousReply.edit(merged);
+        } catch (err) {
+          console.warn('Could not edit prior reply; sending fresh reply instead:', err?.message || err);
+          // Safely delete the orphaned loading message
+          try {
+            if (typeof previousReply.delete === 'function') {
+              await previousReply.delete().catch(() => null);
+            }
+          } catch {}
+        }
+      }
+      return await target.reply(merged);
+    }
+    return null;
+  } catch (err) {
+    _seekdeepThrew = err;
+    throw err;
+  } finally {
+    // Emit request.done exactly once per target. Safe to call multiple times --
+    // the helper is idempotent via the __seekdeepRequestDoneEmitted flag.
+    _seekdeepEmitDoneAfter(!_seekdeepThrew, _seekdeepThrew?.message);
   }
-  return null;
 }
 
 
