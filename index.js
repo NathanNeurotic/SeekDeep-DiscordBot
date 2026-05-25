@@ -37,9 +37,22 @@ const __dirname = path.dirname(__filename);
 // a value may transitively touch Discord objects, error payloads, manifests,
 // or queue/cache state.
 function seekdeepJsonStringifySafe(value, space) {
+  // BigInts throw "Do not know how to serialize a BigInt"; circular refs
+  // throw "Converting circular structure to JSON". Both are common when a
+  // Discord Interaction object leaks into a state object via a spread
+  // operator. Drop cycles cleanly with a marker so the caller's persisted
+  // metadata is still readable.
+  const seen = new WeakSet();
   return JSON.stringify(
     value,
-    (_key, v) => (typeof v === 'bigint' ? v.toString() : v),
+    (_key, v) => {
+      if (typeof v === 'bigint') return v.toString();
+      if (typeof v === 'object' && v !== null) {
+        if (seen.has(v)) return '[Circular]';
+        seen.add(v);
+      }
+      return v;
+    },
     space,
   );
 }
@@ -9263,6 +9276,15 @@ async function seekdeepReplyToTarget(target, payload, options = {}) {
             }
           } catch {}
         }
+      }
+      // Discord refuses message.reply() against system messages (pin
+      // notifications, member joins, thread-create, etc.) with error 50035
+      // REPLIES_CANNOT_REPLY_TO_SYSTEM_MESSAGE. Detect those up-front and
+      // send to the channel directly instead of catching the error after
+      // the fact. Saves a noisy stack trace per system-message reply.
+      if (target.system === true && typeof target.channel?.send === 'function') {
+        const { allowedMentions, ...rest } = merged;
+        return await target.channel.send({ allowedMentions, ...rest });
       }
       return await target.reply(merged);
     }
