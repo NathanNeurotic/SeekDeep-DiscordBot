@@ -60,6 +60,42 @@ Both v1 follow-ups shipped 2026-05-25 in [02127b9](https://github.com/NathanNeur
 
 Final smoke: bot 555, gui-smoke 73.
 
+#### Queued from designer zip 33 (greenlit by Nathan 2026-05-25, post-merge at 3d05e7c)
+
+Designer's hub-redesign + topnav-unification drop landed at [3d05e7c](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commit/3d05e7c). Two backend asks in their HANDOFF_CLAUDE_CODE.md, both extending features I already shipped at v1 with richer multi-mode UX:
+
+**D. `/archive/config` GET + POST + multi-mode notify pipeline + opt-out command** — designer's `app.html` archive pane has a notify-settings strip (mode picker, self-toggle, sent-24h counter, embed preview) wired to `GET/POST /archive/config`. Currently sits in pure in-page mode silently when offline.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET`  | `/archive/config` | — | `{ ok, config: { mode, notify_self, sent_24h, channels?: {...} } }` |
+| `POST` | `/archive/config` | `{ updates: { mode?, notify_self? } }` | `{ ok, config }` |
+
+- `mode` ∈ `silent` (default — matches my v1 when `SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY=off`) / `dm` / `reply` / `react` (matches my v1 `on` mode). The `react` path is already shipped at [02127b9](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commit/02127b9) — we just need to gate it on the new `mode` value instead of the env flag, and add `dm` + `reply` modes.
+- `notify_self` boolean (default false). Replaces my existing self-skip rule when true.
+- `sent_24h` is a read-only counter the GUI displays; increment on every notify, decay against absolute clock.
+- Persist to `data/archive-config.json`. POST token-guarded.
+- `channels: { "<id>": "dm" }` per-channel overrides — wire format leaves room; designer's UI doesn't expose it yet.
+- New user command `@SeekDeep archive opt-out` → writes `data/archive-optout.json` (`{ users: [ "<id>" ] }`). Notify pipeline skips opted-out users regardless of mode.
+
+Effort: ~2-3 hr. Mostly extending `seekdeepUniversalArchiveDispatch` to read from `archive-config.json` instead of (or in addition to) the env flag, plus the new endpoints + opt-out command + DM/reply notify branches.
+
+**E. `@SeekDeep template edit <name>` bot command + 14-day-window-aware reshare** — designer's `prompts.html` Edit modal targets this command. The button POSTs the new body, this command's job is to push it to the share embed with the right strategy:
+
+- If `now - shared.posted_at <= 14 days` → `message.edit()` on the existing embed (already shipped at [02127b9](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commit/02127b9) under `seekdeepPromptsEditExistingShare`).
+- If past 14 days → tombstone the original + post a fresh embed in the same channel. Update `shared.msg_id` to the new id.
+
+Also adds:
+- `shared.posted_at` timestamp on `data/prompt-templates.json` entries that have a share.
+- `shared.edit_count` counter (existing fields: `messageId`, `channelId`, `sharedAt` → renamed to `posted_at` for designer's spec).
+- `shared.last_edited_at` timestamp.
+
+Note: Discord's `message.edit()` actually has no 14-day limit (that's the bulk-delete window). Designer's `14d` threshold is a UX choice — re-share fresh after 14 days because importers may have moved on. Worth implementing as a configurable env var (`SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS=14`).
+
+Effort: ~1-2 hr. Extends my existing edit-in-place logic with the age threshold + tombstone-and-repost branch.
+
+---
+
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.
    - **B.1 Context menu (always-on)**: register `Archive (SeekDeep)` as a Message context menu command alongside the existing `Force React (SeekDeep)`. Right-click any message → Apps → Archive (SeekDeep) → bot archives the attachments + embed images to the requesting user's archive, replies ephemerally with a confirmation. Works on user posts, bot posts, link previews, anything with an image. ~80 lines including registration + dispatch + the "no image to archive" empty-state.
    - **B.2 Reply-with-"archive"**: in `messageCreate`, detect when a message is a reply (`message.reference?.messageId`) AND the body matches a permissive `archive` trigger (`/^(?:@\S+\s+)?archive(?:\s+(?:this|that|it|please))?\s*$/i`). Fetch the referenced message, run the archive flow against it. ~60 lines. Liberal phrasing supports natural variants: "archive", "archive this", "archive please", "@SeekDeep archive". Won't conflict with the existing `archive` admin commands because those don't run in reply-to-image context.
