@@ -1857,6 +1857,27 @@ check('context menu prompt extract: missing prompt line returns empty',
   check('universal-archive: summary text for duplicate', /Already archived/.test(sum2));
   const sum3 = T.seekdeepUniversalArchiveSummaryText({ error: 'no_images', humanReason: 'No image attachments or embed images on that message.' });
   check('universal-archive: summary text for no-image case', /No image attachments/.test(sum3));
+
+  // Author-notify gate logic. Exercises the predicate that decides
+  // whether to add the 📥 reaction on the source. No actual Discord
+  // calls — just the bool gate.
+  check('universal-archive notify: defaults to 📥', T.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI === '\u{1F4E5}');
+  // Skip when target is a bot message (bot-generated images already have an Archive button)
+  const botTarget = { author: { id: '111', bot: true } };
+  const userReq   = { user: { id: '222' } };
+  check('universal-archive notify: skips bot-source messages',
+    T.seekdeepUniversalArchiveShouldNotify(userReq, botTarget) === false);
+  // Skip when target author == requester (your own image)
+  const ownTarget = { author: { id: '222', bot: false } };
+  check('universal-archive notify: skips self-archives',
+    T.seekdeepUniversalArchiveShouldNotify(userReq, ownTarget) === false);
+  // Fire when someone archives a non-bot, non-self message
+  const otherTarget = { author: { id: '999', bot: false } };
+  check('universal-archive notify: fires on other-user image',
+    T.seekdeepUniversalArchiveShouldNotify(userReq, otherTarget) === true);
+  // No target → no notify
+  check('universal-archive notify: skips when target missing',
+    T.seekdeepUniversalArchiveShouldNotify(userReq, null) === false);
 }
 
 // 56 - Prompts marketplace (Item A): variable counter + embed shape + buttons
@@ -1909,6 +1930,28 @@ check('context menu prompt extract: missing prompt line returns empty',
   const single = T.seekdeepPromptsBuildEmbed({ name: 'x', prompt: 'no vars' }, { authorTag: 'a', importCount: 1 });
   check('prompts: footer singular when count=1',
     /1 user imported/.test(single.footer.text) && !/1 users/.test(single.footer.text));
+
+  // Tombstone embed (edit-in-place + delete cycle)
+  const liveEmbed = T.seekdeepPromptsBuildEmbed(
+    { name: 'mortuary-cat', prompt: 'A cat at rest' },
+    { authorTag: 'tester#0001', importCount: 5 },
+  );
+  const tomb = T.seekdeepPromptsBuildTombstoneEmbed(liveEmbed, 'tester#0001');
+  check('prompts tombstone: title gets strikethrough markdown',
+    tomb.title === '~~Template: mortuary-cat~~');
+  check('prompts tombstone: footer adds deleted-by note',
+    /deleted by author/.test(tomb.footer.text));
+  check('prompts tombstone: color desaturated to gray',
+    tomb.color === 0x8b8b8b);
+  check('prompts tombstone: preserves field set (Variables/Length/Author/Prompt)',
+    Array.isArray(tomb.fields) && tomb.fields.length === 4);
+  // Idempotent: re-tombstoning an already-tombstoned embed shouldn't
+  // double the strikethrough or the deleted-by note.
+  const reTomb = T.seekdeepPromptsBuildTombstoneEmbed(tomb, 'tester#0001');
+  check('prompts tombstone: idempotent on title',
+    reTomb.title === tomb.title);
+  check('prompts tombstone: idempotent on footer',
+    (reTomb.footer.text.match(/deleted by author/g) || []).length === 1);
 }
 
 console.log('');

@@ -13535,22 +13535,56 @@ function seekdeepSaveUserTemplate(guildId, userId, name, prompt) {
     return { error: `You already have ${SEEKDEEP_MAX_TEMPLATES_PER_USER} templates. Delete one first.` };
   }
 
+  // Preserve sharedAs across saves so editing the template body doesn't
+  // orphan an existing #prompts share. The share-edit hook on the
+  // `template save` command path uses this to push the new body into
+  // the live embed.
+  const existing = userTemplates[safeName] || {};
   userTemplates[safeName] = {
     prompt: safePrompt,
-    createdAt: userTemplates[safeName]?.createdAt || new Date().toISOString(),
+    createdAt: existing.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    usedCount: userTemplates[safeName]?.usedCount || 0,
+    usedCount: existing.usedCount || 0,
+    ...(existing.sharedAs ? { sharedAs: existing.sharedAs } : {}),
   };
   seekdeepWritePromptTemplates(data);
-  return { name: safeName, prompt: safePrompt };
+  return {
+    name: safeName,
+    prompt: safePrompt,
+    sharedAs: userTemplates[safeName].sharedAs || null,
+    wasUpdate: !!existing.prompt,
+  };
 }
 
 function seekdeepDeleteUserTemplate(guildId, userId, name) {
+  // Returns the deleted template record (so callers can tombstone the
+  // share, if any) or null if no such template existed.
+  const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  if (!safeName || !guildId || !userId) return null;
+  const data = seekdeepReadPromptTemplates();
+  const existing = data?.guilds?.[guildId]?.[userId]?.[safeName];
+  if (!existing) return null;
+  delete data.guilds[guildId][userId][safeName];
+  seekdeepWritePromptTemplates(data);
+  return { name: safeName, ...existing };
+}
+
+function seekdeepSetTemplateShareRef(guildId, userId, name, ref) {
+  // ref: { messageId, channelId, sharedAt } or null to clear.
   const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!safeName || !guildId || !userId) return false;
   const data = seekdeepReadPromptTemplates();
-  if (!data?.guilds?.[guildId]?.[userId]?.[safeName]) return false;
-  delete data.guilds[guildId][userId][safeName];
+  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
+  if (!tmpl) return false;
+  if (ref) {
+    tmpl.sharedAs = {
+      messageId: String(ref.messageId || ''),
+      channelId: String(ref.channelId || ''),
+      sharedAt: ref.sharedAt || new Date().toISOString(),
+    };
+  } else {
+    delete tmpl.sharedAs;
+  }
   seekdeepWritePromptTemplates(data);
   return true;
 }
@@ -13613,7 +13647,19 @@ async function seekdeepHandleTemplateCommand(message, raw = '') {
     } else if (result.error) {
       await message.reply({ content: result.error, allowedMentions: { repliedUser: false } });
     } else {
-      await message.reply({ content: `Template \`${result.name}\` saved. Use with \`@SeekDeep template use ${result.name}\`.`, allowedMentions: { repliedUser: false } });
+      // Auto edit-in-place: if this save was an update to a template that
+      // had been shared to #prompts, push the new body into the live embed.
+      let pushedToShare = false;
+      if (result.wasUpdate && result.sharedAs?.messageId && typeof seekdeepPromptsEditExistingShare === 'function') {
+        try {
+          pushedToShare = await seekdeepPromptsEditExistingShare(
+            guildId, userId, result.name, result.prompt,
+            String(message.author?.tag || message.author?.username || 'author'),
+          );
+        } catch {}
+      }
+      const suffix = pushedToShare ? ' (live share in <#' + result.sharedAs.channelId + '> updated)' : '';
+      await message.reply({ content: `Template \`${result.name}\` saved.` + suffix + ` Use with \`@SeekDeep template use ${result.name}\`.`, allowedMentions: { repliedUser: false } });
     }
     return true;
   }
@@ -13622,8 +13668,23 @@ async function seekdeepHandleTemplateCommand(message, raw = '') {
   const deleteMatch = body.match(/^(?:delete|remove|rm)\s+(.+)$/i);
   if (deleteMatch) {
     const name = seekdeepTemplateNameSanitize(deleteMatch[1]);
-    if (seekdeepDeleteUserTemplate(guildId, userId, name)) {
-      await message.reply({ content: `Template \`${name}\` deleted.`, allowedMentions: { repliedUser: false } });
+    const deleted = seekdeepDeleteUserTemplate(guildId, userId, name);
+    if (deleted) {
+      // If the template was shared to a #prompts channel, tombstone the
+      // share embed (strikethrough title, dropped buttons, gray color +
+      // footer date). Best-effort -- if the share was already moderated
+      // out, we silently move on.
+      let tombstoned = false;
+      if (deleted.sharedAs?.messageId && typeof seekdeepPromptsTombstoneShare === 'function') {
+        try {
+          tombstoned = await seekdeepPromptsTombstoneShare(
+            guildId, userId, deleted,
+            String(message.author?.tag || message.author?.username || 'author'),
+          );
+        } catch {}
+      }
+      const suffix = tombstoned ? ' (share tombstoned in <#' + deleted.sharedAs.channelId + '>)' : '';
+      await message.reply({ content: `Template \`${name}\` deleted.` + suffix, allowedMentions: { repliedUser: false } });
     } else {
       await message.reply({ content: `No template named \`${name}\` found.`, allowedMentions: { repliedUser: false } });
     }
@@ -13745,6 +13806,90 @@ function seekdeepPromptsBuildButtons(shareMessageId) {
   };
 }
 
+function seekdeepPromptsBuildTombstoneEmbed(originalEmbed, deletedByTag) {
+  // Re-render the share embed with a strikethrough title and a footer
+  // note indicating it was deleted. Discord embed titles support
+  // markdown strikethrough via ~~text~~ (since 2022).
+  const base = originalEmbed || {};
+  const origTitle = String(base.title || 'Template');
+  const tombstoneTitle = origTitle.startsWith('~~') ? origTitle : ('~~' + origTitle + '~~');
+  const baseFooter = String(base.footer?.text || '');
+  const tombstoneFooter = baseFooter.includes('deleted by author')
+    ? baseFooter
+    : (baseFooter + ' · deleted by author ' + new Date().toISOString().slice(0, 10));
+  return {
+    title: tombstoneTitle,
+    description: base.description,
+    color: 0x8b8b8b, // muted gray to signal tombstone
+    fields: base.fields,
+    footer: { text: tombstoneFooter },
+    timestamp: base.timestamp,
+  };
+}
+
+async function seekdeepPromptsTombstoneShare(guildId, userId, deletedTemplate, deletedByTag) {
+  // Edit the share message in #prompts to look tombstoned + disable
+  // the import button. Called when a user runs `template delete` on
+  // a template they previously shared.
+  const ref = deletedTemplate?.sharedAs;
+  if (!ref?.messageId || !ref?.channelId) return false;
+  try {
+    const guild = client?.guilds?.cache?.get?.(String(guildId));
+    if (!guild) return false;
+    const channel = guild.channels?.cache?.get?.(ref.channelId)
+      || (await guild.channels?.fetch?.(ref.channelId).catch(() => null));
+    if (!channel) return false;
+    const msg = await channel.messages?.fetch?.(ref.messageId).catch(() => null);
+    if (!msg) return false;
+    const tombstone = seekdeepPromptsBuildTombstoneEmbed(msg.embeds?.[0], deletedByTag);
+    // Drop buttons entirely — a deleted template can't be imported.
+    await msg.edit({ embeds: [tombstone], components: [] });
+    return true;
+  } catch (err) {
+    console.warn('[SeekDeep] prompts: tombstone failed:', err?.message || err);
+    return false;
+  }
+}
+
+async function seekdeepPromptsEditExistingShare(guildId, userId, templateName, newPrompt, authorTag) {
+  // Edit-in-place: pushes the latest template body into the existing
+  // share embed if one exists. Returns true on success, false if the
+  // share is missing/unreachable so the caller can decide whether to
+  // post a fresh share.
+  const templates = seekdeepGetUserTemplates(guildId, userId);
+  const tmpl = templates[templateName];
+  const ref = tmpl?.sharedAs;
+  if (!ref?.messageId || !ref?.channelId) return false;
+  try {
+    const guild = client?.guilds?.cache?.get?.(String(guildId));
+    if (!guild) return false;
+    const channel = guild.channels?.cache?.get?.(ref.channelId)
+      || (await guild.channels?.fetch?.(ref.channelId).catch(() => null));
+    if (!channel) return false;
+    const msg = await channel.messages?.fetch?.(ref.messageId).catch(() => null);
+    if (!msg) {
+      // Share was deleted (likely by a mod or self-clean). Clear the
+      // ref so the next share posts fresh.
+      seekdeepSetTemplateShareRef(guildId, userId, templateName, null);
+      return false;
+    }
+    const oldEmbed = msg.embeds?.[0];
+    const importCount = (() => {
+      const m = String(oldEmbed?.footer?.text || '').match(/(\d+)\s+user/);
+      return m ? Number(m[1]) : 0;
+    })();
+    const refreshed = seekdeepPromptsBuildEmbed(
+      { name: templateName, prompt: newPrompt },
+      { authorTag, authorId: userId, importCount },
+    );
+    await msg.edit({ embeds: [refreshed], components: [seekdeepPromptsBuildButtons(msg.id)] });
+    return true;
+  } catch (err) {
+    console.warn('[SeekDeep] prompts: edit-in-place failed:', err?.message || err);
+    return false;
+  }
+}
+
 async function seekdeepPromptsBumpImportCounter(shareMessage) {
   // Re-render the embed with a +1 import counter. We trust the existing
   // embed footer text "scope: this server only · N users imported".
@@ -13847,6 +13992,23 @@ async function seekdeepHandleTemplateShareCommand(message, raw = '') {
     return true;
   }
   const authorTag = String(message.author?.tag || message.author?.username || ('user-' + userId));
+
+  // Edit-in-place: if this template was already shared, push the latest
+  // body into the existing embed instead of posting a duplicate. Falls
+  // back to posting fresh if the share message was deleted or the
+  // bot can't reach the channel.
+  if (tmpl.sharedAs?.messageId) {
+    const edited = await seekdeepPromptsEditExistingShare(guildId, userId, name, tmpl.prompt, authorTag);
+    if (edited) {
+      await message.reply({
+        content: 'Updated existing share for `' + name + '` in <#' + (tmpl.sharedAs.channelId || promptsChannelId) + '>.',
+        allowedMentions: { repliedUser: false },
+      });
+      return true;
+    }
+    // edit failed (share message gone). Fall through to fresh post.
+  }
+
   const embed = seekdeepPromptsBuildEmbed({ name, prompt: tmpl.prompt }, { authorTag, authorId: userId, importCount: 0 });
   let sent = null;
   try {
@@ -13859,6 +14021,13 @@ async function seekdeepHandleTemplateShareCommand(message, raw = '') {
     await message.reply({ content: 'Could not post to <#' + promptsChannelId + '>: ' + String(err?.message || err).slice(0, 200), allowedMentions: { repliedUser: false } });
     return true;
   }
+  // Record the share so future edits can update-in-place + future
+  // delete can tombstone.
+  seekdeepSetTemplateShareRef(guildId, userId, name, {
+    messageId: sent.id,
+    channelId: promptsChannelId,
+    sharedAt: new Date().toISOString(),
+  });
   await message.reply({
     content: 'Shared `' + name + '` to <#' + promptsChannelId + '>.',
     allowedMentions: { repliedUser: false },
@@ -15796,13 +15965,53 @@ function seekdeepBuildUniversalArchiveStates(targetMessage) {
   });
 }
 
+const SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI = process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI || '\u{1F4E5}';  // 📥 inbox tray
+const SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY = String(process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY || 'on').toLowerCase() !== 'off';
+
+function seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage) {
+  // Skip notifying when:
+  //   - feature flag off (env opt-out)
+  //   - target is a bot message (bot-generated images already have an
+  //     Archive button — reacting on those is redundant + clutters reply
+  //     chains)
+  //   - target author == requester (you don't need to notify yourself
+  //     that you archived your own image)
+  if (!SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY) return false;
+  if (!targetMessage) return false;
+  if (targetMessage?.author?.bot) return false;
+  const requesterId = String(
+    requestSource?.user?.id
+    || requestSource?.author?.id
+    || requestSource?.member?.user?.id
+    || ''
+  );
+  const targetAuthorId = String(targetMessage?.author?.id || '');
+  if (requesterId && targetAuthorId && requesterId === targetAuthorId) return false;
+  return true;
+}
+
+async function seekdeepUniversalArchiveNotifyAuthor(targetMessage) {
+  // Add a 📥 reaction on the source message so the original author sees
+  // someone saved their image. Silent failure on permission errors —
+  // not having Add Reactions permission is a normal Discord state and
+  // shouldn't fail the archive flow.
+  try {
+    await targetMessage.react(SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI);
+    return true;
+  } catch (err) {
+    // 50013 = Missing Permissions; 10008 = Unknown Message; 30010 = Max
+    // reactions reached. All non-fatal.
+    return false;
+  }
+}
+
 async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, opts = {}) {
   // requestSource: a Message OR Interaction. Used as the archive target
   //   (i.e. determines whose archive thread to write to).
   // targetMessage: the message containing images to archive.
   // opts.wantsShared: if true, write to the shared server archive instead.
   //
-  // Returns: { ok, archived: N, duplicates: N, threadId, threadName, archiveCount, errors }
+  // Returns: { ok, archived: N, duplicates: N, threadId, threadName, archiveCount, errors, notifiedAuthor }
   const states = seekdeepBuildUniversalArchiveStates(targetMessage);
   const wantsShared = !!opts.wantsShared;
   const sender = (
@@ -15817,7 +16026,7 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
     return { ok: false, archived: 0, error: 'no_images', humanReason: 'No image attachments or embed images on that message.' };
   }
 
-  const out = { ok: true, archived: 0, duplicates: 0, threadId: '', threadName: '', archiveCount: 0, errors: [] };
+  const out = { ok: true, archived: 0, duplicates: 0, threadId: '', threadName: '', archiveCount: 0, errors: [], notifiedAuthor: false };
   for (const state of states) {
     try {
       const result = wantsShared
@@ -15844,6 +16053,13 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
     }
   }
   if (!out.archived && !out.duplicates && out.errors.length) out.ok = false;
+
+  // Author notify: only fire when we actually saved at least one NEW
+  // image (skip for pure duplicate-hits — author already got the
+  // reaction the first time someone archived it).
+  if (out.archived > 0 && seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage)) {
+    out.notifiedAuthor = await seekdeepUniversalArchiveNotifyAuthor(targetMessage);
+  }
   return out;
 }
 
@@ -19964,7 +20180,20 @@ client.on('interactionCreate', async (interaction) => {
         }
         const result = seekdeepSaveUserTemplate(guildId, userId, name, prompt);
         if (result?.error) await sendLongInteractionReply(interaction, result.error);
-        else if (result) await sendLongInteractionReply(interaction, `Template \`${result.name}\` saved.`);
+        else if (result) {
+          // Auto edit-in-place if this was an update to a shared template.
+          let pushedToShare = false;
+          if (result.wasUpdate && result.sharedAs?.messageId && typeof seekdeepPromptsEditExistingShare === 'function') {
+            try {
+              pushedToShare = await seekdeepPromptsEditExistingShare(
+                guildId, userId, result.name, result.prompt,
+                String(interaction.user?.tag || interaction.user?.username || 'author'),
+              );
+            } catch {}
+          }
+          const suffix = pushedToShare ? ' (live share updated)' : '';
+          await sendLongInteractionReply(interaction, `Template \`${result.name}\` saved.` + suffix);
+        }
         else await sendLongInteractionReply(interaction, 'Could not save template.');
         return;
       }
@@ -19998,8 +20227,19 @@ client.on('interactionCreate', async (interaction) => {
       if (action === 'delete') {
         if (!name) { await sendLongInteractionReply(interaction, 'Provide the template `name` to delete.'); return; }
         const safeName = seekdeepTemplateNameSanitize(name);
-        if (seekdeepDeleteUserTemplate(guildId, userId, safeName)) {
-          await sendLongInteractionReply(interaction, `Template \`${safeName}\` deleted.`);
+        const deleted = seekdeepDeleteUserTemplate(guildId, userId, safeName);
+        if (deleted) {
+          let tombstoned = false;
+          if (deleted.sharedAs?.messageId && typeof seekdeepPromptsTombstoneShare === 'function') {
+            try {
+              tombstoned = await seekdeepPromptsTombstoneShare(
+                guildId, userId, deleted,
+                String(interaction.user?.tag || interaction.user?.username || 'author'),
+              );
+            } catch {}
+          }
+          const suffix = tombstoned ? ' (share tombstoned)' : '';
+          await sendLongInteractionReply(interaction, `Template \`${safeName}\` deleted.` + suffix);
         } else {
           await sendLongInteractionReply(interaction, `No template named \`${safeName}\` found.`);
         }
@@ -20519,11 +20759,14 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepExtractImagesFromMessage,
     seekdeepBuildUniversalArchiveStates,
     seekdeepUniversalArchiveSummaryText,
+    seekdeepUniversalArchiveShouldNotify,
     SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE,
+    SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI,
     // Prompts marketplace (Item A)
     seekdeepPromptsCountVariables,
     seekdeepPromptsBuildEmbed,
     seekdeepPromptsBuildButtons,
+    seekdeepPromptsBuildTombstoneEmbed,
     SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX,
     SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX,
     SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
