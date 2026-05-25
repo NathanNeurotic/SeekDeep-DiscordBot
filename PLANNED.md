@@ -94,6 +94,10 @@ Note: Discord's `message.edit()` actually has no 14-day limit (that's the bulk-d
 
 Effort: ~1-2 hr. Extends my existing edit-in-place logic with the age threshold + tombstone-and-repost branch.
 
+**F. `GET /config` endpoint** — designer's zip 35 `index.html` added a dynamic-facts IIFE that reads `/health` + `/config` to populate the Models / Search / Runtime cells against live config instead of hardcoded strings. `/health` already exists; `/config` does not (we have `POST /config` for writes and `GET /config/status` for the modal-shaping endpoint, but no plain GET that returns the env map). Without it, the page silently falls back to its hardcoded defaults — designer designed this fallback in deliberately, so the merge is non-blocking. Ship a thin endpoint that returns either `{ env: { ... } }` or a bare env map, redacting any secret-tagged keys (`*_TOKEN`, `*_KEY`, `*_PASSWORD`, etc.) so we don't expose Discord tokens via a public read. ~20-30 LOC in `gui_endpoints.py`.
+
+Effort: ~30 min. Reuse the existing `/config/status` redaction logic.
+
 ---
 
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.

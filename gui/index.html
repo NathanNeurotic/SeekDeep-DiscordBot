@@ -258,13 +258,11 @@
   .aff-mark {
     width: 88px; height: 88px;
     border-radius: var(--r-md);
-    background: #0d0a1c;
     overflow: hidden;
     display: grid; place-items: center;
-    border: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
     text-decoration: none;
   }
-  .aff-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .aff-mark img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .aff-body { min-width: 0; }
   .aff-name {
     font-family: var(--font-display);
@@ -391,14 +389,15 @@
       <div class="eyebrow">About this project</div>
       <h1>SeekDeep</h1>
       <p class="lead">
-        A local-first Discord assistant. Llama, Qwen-VL, SDXL and SearXNG run on your own hardware;
+        A local-first Discord assistant. <span data-fact-families>Llama, Qwen-VL, SDXL</span>
+        and <span data-fact-search>SearXNG</span> run on your own hardware;
         this project is the GUI sitting on top of the bot and its FastAPI side-car.
       </p>
     </div>
     <div class="facts">
-      <span>Runtime</span><b>Node 20 · Python 3.11</b>
-      <span>Models</span><b>Llama · Qwen-VL · SDXL</b>
-      <span>Search</span><b>SearXNG (self-hosted)</b>
+      <span>Runtime</span><b data-fact="runtime">Node 20 · Python 3.11</b>
+      <span>Models</span><b data-fact="models">Llama · Qwen-VL · SDXL</b>
+      <span>Search</span><b data-fact="search">SearXNG (self-hosted)</b>
       <span>Telemetry</span><b>None</b>
     </div>
   </header>
@@ -578,6 +577,129 @@
     <span>No telemetry · No cloud · Runs on your machine</span>
   </div>
 </main>
+
+<script>
+/* Populate the About-page "facts" grid + lead paragraph from the live bot
+   config so it stays truthful when a user changes models / search backend.
+   Reads:
+     GET /health   → may include { runtime_node, runtime_python, model, ... }
+     GET /config   → expected { env: { default_chat, vision, image, SEARXNG_BASE, ... } }
+   When either is unreachable, the hardcoded defaults in the markup stay put.
+   No fetch error toasts — fallback is silent by design. */
+(function () {
+  const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+    ? location.origin
+    : 'http://127.0.0.1:7865';
+
+  // Friendly family labels — match against the model ID and emit the first hit.
+  // Order matters: more-specific patterns above more-generic ones.
+  const FAMILIES = [
+    { re: /qwen.*(?:vl|vision)/i,         label: 'Qwen-VL' },
+    { re: /llama.*(?:vision|vl)/i,        label: 'Llama Vision' },
+    { re: /llava/i,                       label: 'LLaVA' },
+    { re: /llama/i,                       label: 'Llama' },
+    { re: /qwen/i,                        label: 'Qwen' },
+    { re: /granite/i,                     label: 'Granite' },
+    { re: /mistral|mixtral/i,             label: 'Mistral' },
+    { re: /phi-?\d/i,                     label: 'Phi' },
+    { re: /gemma/i,                       label: 'Gemma' },
+    { re: /deepseek/i,                    label: 'DeepSeek' },
+    { re: /command-?r/i,                  label: 'Command-R' },
+    { re: /sdxl|stable-?diffusion-?xl/i,  label: 'SDXL' },
+    { re: /sd-?turbo/i,                   label: 'SD Turbo' },
+    { re: /sd-?3|sd3/i,                   label: 'SD 3' },
+    { re: /sd-?1\.5|sd15|stable-?diffusion-?1\.5/i, label: 'SD 1.5' },
+    { re: /flux/i,                        label: 'FLUX' },
+    { re: /playground/i,                  label: 'Playground v2.5' },
+    { re: /piper/i,                       label: 'Piper TTS' },
+    { re: /xtts/i,                        label: 'XTTS' },
+  ];
+  // Env keys we'll consult for model IDs, in order.
+  const ROLE_KEYS = [
+    'default_chat', 'quality_chat', 'lightweight_chat', 'reasoning_chat',
+    'fallback_chat', 'vision', 'image', 'img2img', 'inpaint',
+    'instruct_pix2pix', 'upscale', 'chart', 'tts',
+  ];
+
+  function familyOf(id) {
+    if (!id) return null;
+    const s = String(id);
+    for (const { re, label } of FAMILIES) if (re.test(s)) return label;
+    // Fallback: take the first chunk of the HF/Ollama id, capitalize.
+    const tail = s.split('/').pop().split(/[-_.]/)[0];
+    if (!tail) return null;
+    return tail.charAt(0).toUpperCase() + tail.slice(1);
+  }
+  function unique(arr) { return [...new Set(arr.filter(Boolean))]; }
+
+  async function fetchJSON(path) {
+    try {
+      const r = await fetch(BASE + path, { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+
+  async function populate() {
+    const [health, config] = await Promise.all([fetchJSON('/health'), fetchJSON('/config')]);
+    const env = (config && (config.env || config)) || {};
+
+    // ----- Models: union of every configured role -----
+    const ids = [];
+    for (const k of ROLE_KEYS) {
+      const v = env[k] ?? env[k.toUpperCase()];
+      if (v) ids.push(v);
+    }
+    if (health && health.model) ids.push(health.model);
+    if (health && health.loaded_model) ids.push(health.loaded_model);
+    const families = unique(ids.map(familyOf));
+    if (families.length) {
+      const dotJoin   = families.join(' · ');
+      const commaJoin = families.length === 1
+        ? families[0]
+        : families.slice(0, -1).join(', ') + ' and ' + families.slice(-1);
+      document.querySelectorAll('[data-fact="models"]').forEach(e => e.textContent = dotJoin);
+      document.querySelectorAll('[data-fact-families]').forEach(e => e.textContent = commaJoin);
+    }
+
+    // ----- Search backend -----
+    let searchLong = null, searchShort = null;
+    if (env.SEARXNG_BASE || env.SEARXNG_URL || env.searxng_url || env.searxng_base) {
+      searchLong  = 'SearXNG (self-hosted)';
+      searchShort = 'SearXNG';
+    } else if (env.SEARCH_BACKEND) {
+      searchLong  = String(env.SEARCH_BACKEND);
+      searchShort = searchLong;
+    } else if (env.WEB_SEARCH_DISABLED === 'true' || env.web_search_disabled === true) {
+      searchLong  = '(disabled)';
+      searchShort = 'no web search';
+    }
+    if (searchLong) {
+      document.querySelectorAll('[data-fact="search"]').forEach(e => e.textContent = searchLong);
+      document.querySelectorAll('[data-fact-search]').forEach(e => e.textContent = searchShort);
+    }
+
+    // ----- Runtime -----
+    if (health && (health.runtime_node || health.runtime_python || health.node || health.python)) {
+      const parts = [];
+      const n = health.runtime_node || health.node;
+      const p = health.runtime_python || health.python;
+      if (n) parts.push('Node ' + n);
+      if (p) parts.push('Python ' + p);
+      if (parts.length) {
+        document.querySelectorAll('[data-fact="runtime"]').forEach(e => e.textContent = parts.join(' · '));
+      }
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', populate, { once: true });
+  } else {
+    populate();
+  }
+})();
+</script>
+
 <script src="nav.js" defer></script>
 </body>
 </html>
