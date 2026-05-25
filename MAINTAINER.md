@@ -128,26 +128,32 @@ git for-each-ref --format='%(refname:short)' refs/heads/ | \
 
 ## 5. After every merge — verification checklist
 
-Run these once before the commit, once after:
+The fast path is one command:
 
 ```bash
-# Parse + import the Python side
-python -c "import ast; ast.parse(open('gui_endpoints.py', encoding='utf-8').read()); print('OK')"
+npm run preflight
+```
+
+`preflight` (defined in `scripts/preflight.mjs`) runs three stages:
+
+- **js** — `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/nav.js`
+- **py** — `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`
+- **smoke** — `node smoke_test.mjs` (no Discord login, no model load, no file mutation)
+
+Exit code 0 = green. Same checks run in CI on every push + PR via
+`.github/workflows/ci.yml`.
+
+When you want the deeper check (full server import + route enumeration,
+beyond what py_compile gives you):
+
+```bash
 .venv/Scripts/python.exe -c "
 import sys, importlib.util; sys.path.insert(0, '.')
 spec = importlib.util.spec_from_file_location('s', 'local_ai_server.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print('OK; GUI routes:',
+print('GUI routes:',
       sorted(set(r.path for r in m.app.routes if hasattr(r, 'path') and r.path.startswith(('/config','/data','/launcher','/logs','/model','/gui','/token')))))
 "
-
-# Parse the JS side
-node --check gui/nav.js
-node --check index.js
-
-# Verify no leaked brand or .gif refs after a merge
-grep -lE "brand\.html|seekdeep-mark\.gif" gui/*.html gui/*.js 2>/dev/null && \
-  echo "FAIL: brand or .gif refs still present" || echo "OK: clean"
 ```
 
 Expected GUI routes after a healthy merge:
@@ -156,6 +162,13 @@ Expected GUI routes after a healthy merge:
 ['/config', '/config/status', '/data/{file}', '/gui',
  '/launcher/{service}/{action}', '/logs/stream', '/logs/tail',
  '/model/warm', '/token']
+```
+
+And the one-liner that catches the recurring designer slip-ups:
+
+```bash
+grep -lE "brand\.html|seekdeep-mark\.gif" gui/*.html gui/*.js 2>/dev/null && \
+  echo "FAIL: brand or .gif refs still present" || echo "OK: clean"
 ```
 
 ---

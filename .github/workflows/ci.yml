@@ -1,0 +1,61 @@
+# SeekDeep CI · preflight on every push + PR
+#
+# Runs the same `npm run preflight` you run locally:
+#   - node --check on every JS file we ship (index.js, smoke_test.mjs,
+#     scripts/preflight.mjs, gui/nav.js)
+#   - python -m py_compile on every Python file we ship
+#     (local_ai_server.py, warmup_local_cache.py, gui_endpoints.py)
+#   - the smoke suite (smoke_test.mjs) — safe on CI, no Discord login,
+#     no model load, no file mutation
+#
+# Deliberately minimal: no Docker, no GPU-dependent tests, no model
+# downloads, no Python deps install. py_compile only checks syntax,
+# so we don't need to pip-install transformers / torch / fastapi to
+# validate the file parses. The smoke suite imports index.js with
+# SEEKDEEP_TEST_MODE=1, which gates Client instantiation.
+#
+# If a stage fails, the workflow exits non-zero and the commit gets
+# the red X badge. Open the Actions tab on github.com for the
+# per-stage detail.
+
+name: preflight
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Run preflight (js + py + smoke)
+        env:
+          # smoke_test.mjs reads CI to skip anything GPU/network-bound.
+          # SEEKDEEP_TEST_MODE is set by smoke_test.mjs itself.
+          CI: '1'
+        run: npm run preflight

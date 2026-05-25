@@ -81,7 +81,10 @@ function runSmokeTest() {
 function runPyCompile() {
   const venvPy = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
   const py = existsSync(venvPy) ? venvPy : 'python';
-  const targets = ['local_ai_server.py', 'warmup_local_cache.py'].filter((f) => existsSync(path.join(ROOT, f)));
+  // gui_endpoints.py is owned by us with extensive audit overrides; a parse
+  // regression there silently breaks the entire GUI write side at boot.
+  const targets = ['local_ai_server.py', 'warmup_local_cache.py', 'gui_endpoints.py']
+    .filter((f) => existsSync(path.join(ROOT, f)));
   if (!targets.length) return { ok: true, detail: 'no python files to compile' };
   const r = spawnSync(py, ['-m', 'py_compile', ...targets], {
     cwd: ROOT,
@@ -98,14 +101,16 @@ console.log('SeekDeep preflight');
 console.log('-------------------');
 
 stage('js', () => {
-  // Parse-check the two JS files we ship.
-  const a = checkJsFile('index.js');
-  if (!a.ok) return a;
-  const b = checkJsFile('smoke_test.mjs');
-  if (!b.ok) return b;
-  const c = checkJsFile('scripts/preflight.mjs');
-  if (!c.ok) return c;
-  return { ok: true, detail: 'index.js, smoke_test.mjs, scripts/preflight.mjs' };
+  // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
+  // interceptor + jump palette + SeekDeepPrompt API — a parse error there
+  // silently breaks every page.
+  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'gui/nav.js'];
+  for (const t of targets) {
+    if (!existsSync(path.join(ROOT, t))) continue;
+    const r = checkJsFile(t);
+    if (!r.ok) return r;
+  }
+  return { ok: true, detail: targets.filter((t) => existsSync(path.join(ROOT, t))).join(', ') };
 });
 
 stage('py', () => runPyCompile());
