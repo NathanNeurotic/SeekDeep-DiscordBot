@@ -2,14 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — Hub</title>
+<title>SeekDeep — About</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 <style>
-  .hub-shell { max-width: 1240px; margin: 0 auto; padding: 56px 36px 96px; }
+  .hub-shell { max-width: 1240px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  @media (max-width: 760px) {
+    .hub-shell { padding: 24px 18px 60px; }
+    .header { padding-bottom: 18px; margin-bottom: 26px; }
+    .header h1 { font-size: 34px !important; }
+    .header .lead { font-size: 14px !important; max-width: none !important; }
+    .header .facts { display: none !important; }
+    .footer { flex-direction: column; gap: 6px; align-items: flex-start; }
+  }
 
   /* ===== Header strip — measured, not heroic ===== */
   .header {
@@ -61,6 +70,7 @@
   /* ===== Section heading ===== */
   .sec-head {
     display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
     margin: 56px 0 16px;
   }
   .sec-head:first-of-type { margin-top: 0; }
@@ -78,6 +88,7 @@
     font-size: 11px;
     letter-spacing: 0.16em;
     color: var(--hull-3);
+    white-space: nowrap;
   }
 
   /* ===== Directory list ===== */
@@ -225,12 +236,117 @@
   /* ===== Tone down ambient motion ===== */
   .bubbles span { opacity: 0.5; }
 
+  /* ===== Affiliates ===== */
+  .aff { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+  .aff-row {
+    display: grid;
+    grid-template-columns: 88px 1fr auto;
+    gap: 24px;
+    align-items: center;
+    padding: 20px 24px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-lg);
+    background: linear-gradient(165deg, rgba(13,33,82,0.30), rgba(5,11,28,0.55));
+    transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+  }
+  .aff-row:hover {
+    border-color: color-mix(in oklab, var(--cyan-1) 40%, transparent);
+    transform: translateY(-1px);
+    background: linear-gradient(165deg, rgba(13,33,82,0.45), rgba(5,11,28,0.65));
+  }
+  .aff-row:hover .aff-arrow { transform: translate(3px, -3px); color: var(--cyan-1); }
+  .aff-mark {
+    width: 88px; height: 88px;
+    border-radius: var(--r-md);
+    background: #0d0a1c;
+    overflow: hidden;
+    display: grid; place-items: center;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
+    text-decoration: none;
+  }
+  .aff-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .aff-body { min-width: 0; }
+  .aff-name {
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 500;
+    color: var(--hull);
+    margin-bottom: 2px;
+  }
+  .aff-name > a {
+    color: var(--hull);
+    text-decoration: none;
+  }
+  .aff-name > a:hover { color: var(--cyan-1); }
+  .aff-author {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--hull-3);
+    letter-spacing: 0.04em;
+    margin-left: 8px;
+    font-weight: 400;
+  }
+  .aff-author a {
+    color: var(--hull-2);
+    text-decoration: none;
+    border-bottom: 1px dotted color-mix(in oklab, var(--cyan-1) 30%, transparent);
+  }
+  .aff-author a:hover { color: var(--cyan-1); }
+  .aff-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--cyan-1);
+    text-transform: uppercase;
+    margin: 2px 0 8px;
+    opacity: 0.85;
+  }
+  .aff-blurb {
+    color: var(--hull-3);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+    max-width: 68ch;
+  }
+  .aff-cta {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--hull-3);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .aff-host { color: var(--hull-2); }
+  .aff-cta:hover .aff-host { color: var(--cyan-1); }
+  .aff-arrow { font-size: 18px; color: var(--hull-3); transition: transform 0.18s ease, color 0.18s ease; }
+
+  @media (max-width: 760px) {
+    .aff-row { grid-template-columns: 56px 1fr; gap: 14px; padding: 16px; }
+    .aff-mark { width: 56px; height: 56px; }
+    .aff-cta { display: none; }
+    .aff-blurb { font-size: 12.5px; }
+    .aff-name { font-size: 16px; }
+  }
+
   @media (max-width: 1100px) {
-    .dir-row { grid-template-columns: 44px minmax(0,1fr) auto auto; gap: 18px; }
+    .dir-row { grid-template-columns: 40px minmax(0,1fr) auto; gap: 18px; }
     .dir-desc { display: none; }
-    .panels { grid-template-columns: 1fr; }
-    .header { grid-template-columns: 1fr; }
+    .dir-badge.empty { display: none; }
+    .dir-badge { font-size: 8.5px; padding: 2px 6px; }
+    .dir-path { min-width: 0; }
+    .header { grid-template-columns: 1fr; gap: 24px; }
     .header .facts { text-align: left; grid-template-columns: auto auto; }
+  }
+
+  @media (max-width: 760px) {
+    .dir-row { grid-template-columns: 32px minmax(0,1fr) auto; gap: 12px; padding: 14px 4px; }
+    .dir-name { font-size: 15px !important; }
+    .dir.featured-block .dir-name { font-size: 18px !important; }
+    .dir-row:hover { padding-left: 4px; }
+    .dir-path { display: none; }
+    .dir-arrow { color: var(--cyan-1); }
+    .sec-head { margin: 36px 0 12px; flex-wrap: wrap; gap: 8px; }
   }
 </style>
 </head>
@@ -253,7 +369,7 @@
     <span class="wm">SEEK<em>DEEP</em></span>
   </div>
   <div class="links">
-    <a href="index.html" class="active">Hub</a>
+    <a href="index.html" class="active">About</a>
     <a href="app.html">Control Center</a>
     <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>
@@ -272,11 +388,11 @@
   <!-- ===== HEADER ===== -->
   <header class="header">
     <div>
-      <div class="eyebrow">Project hub</div>
+      <div class="eyebrow">About this project</div>
       <h1>SeekDeep</h1>
       <p class="lead">
-        A local-first Discord assistant. Llama, Qwen-VL, SDXL, and SearXNG run on your own hardware; this project provides
-        the GUI surfaces that sit on top of the bot and its FastAPI side-car.
+        A local-first Discord assistant. Llama, Qwen-VL, SDXL and SearXNG run on your own hardware;
+        this project is the GUI sitting on top of the bot and its FastAPI side-car.
       </p>
     </div>
     <div class="facts">
@@ -430,59 +546,32 @@
     </a>
   </div>
 
-  <!-- ===== STATUS PANELS ===== -->
-  <section class="panels">
-    <div class="panel" style="padding: 22px 24px;">
-      <div class="panel-head">
-        <span class="label">Local stack</span>
-        <span class="tag" id="hub-stack-tag" data-task="3">· connecting to /events…</span>
+  <!-- ===== AFFILIATES ===== -->
+  <div class="sec-head">
+    <h2>Affiliates</h2>
+    <span class="count">01 · projects we vouch for</span>
+  </div>
+  <div class="aff">
+    <div class="aff-row">
+      <a class="aff-mark" href="https://www.demonbot.win/" target="_blank" rel="noopener" title="Open demonbot.win">
+        <img src="assets/demonbot-mark-thumb.png" alt="DemonBot" loading="lazy" />
+      </a>
+      <div class="aff-body">
+        <div class="aff-name">
+          <a href="https://www.demonbot.win/" target="_blank" rel="noopener">DemonBot</a>
+          <span class="aff-author">by <a href="https://github.com/akilluminati47" target="_blank" rel="noopener">@akilluminati47</a></span>
+        </div>
+        <div class="aff-tag">"Your Server. Unleashed."</div>
+        <p class="aff-blurb">A hosted Discord bot focused on rapid server moderation + utility — if local-first isn't your thing and you want plug-and-play with a hosted backend, this is what we'd point you at first.</p>
       </div>
-      <div class="stack-row" id="hub-row-vram">
-        <span class="who">VRAM <small>cuda:0</small></span>
-        <span class="muted" data-vram-used>—</span>
-        <span class="muted" data-vram-bar style="font-family:var(--font-mono); font-size: 11px;">────────</span>
-        <span class="pill" data-vram-pill><span class="dot"></span>WAITING</span>
-      </div>
-      <div class="stack-row" id="hub-row-loaded">
-        <span class="who" data-loaded-name>No model resident <small data-loaded-role>—</small></span>
-        <span class="muted" data-loaded-backend>—</span>
-        <span class="muted" data-loaded-vram>—</span>
-        <span class="pill" data-loaded-pill><span class="dot"></span>IDLE</span>
-      </div>
-      <div class="stack-row" id="hub-row-queue">
-        <span class="who">Request queue <small>in-flight</small></span>
-        <span class="muted" data-q-chat>chat 0</span>
-        <span class="muted" data-q-image>image 0</span>
-        <span class="pill" data-q-pill><span class="dot"></span>QUIET</span>
-      </div>
-      <div class="stack-row" id="hub-row-bus">
-        <span class="who">Event bus <small>/events</small></span>
-        <span class="muted" data-bus-events>0 events</span>
-        <span class="muted" data-bus-uptime>—</span>
-        <span class="pill" data-bus-pill><span class="dot"></span>OFFLINE</span>
-      </div>
-      <div class="stack-row" id="hub-row-bot">
-        <span class="who">SeekDeep bot <small>node index.js</small></span>
-        <span class="muted" data-bot-requests>—</span>
-        <span class="muted" data-bot-uptime>—</span>
-        <span class="pill" data-bot-pill><span class="dot"></span>WAITING</span>
-      </div>
+      <a class="aff-cta" href="https://www.demonbot.win/" target="_blank" rel="noopener">
+        <span class="aff-host">demonbot.win</span>
+        <span class="aff-arrow">↗</span>
+      </a>
     </div>
+  </div>
 
-    <div class="panel" style="padding: 22px 24px;">
-      <div class="panel-head">
-        <span class="label">GUI project status</span>
-      </div>
-      <div class="roadmap-row"><span>Brand system</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-      <div class="roadmap-row"><span>Landing page</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-      <div class="roadmap-row"><span>Control Center</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-      <div class="roadmap-row"><span>Chat client</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-      <div class="roadmap-row"><span>Installer wizard</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-      <div class="roadmap-row"><span>Token auth (GUI ↔ bot)</span><span class="pill warn"><span class="dot"></span>NEXT</span></div>
-      <div class="roadmap-row"><span>WebSocket event bridge</span><span class="pill warn"><span class="dot"></span>NEXT</span></div>
-      <div class="roadmap-row"><span>Tauri shell</span><span class="pill"><span class="dot"></span>LATER</span></div>
-    </div>
-  </section>
+
 
   <div class="footer">
     <span>SEEKDEEP · <span data-version>v10.35</span> · LOCAL</span>
@@ -490,132 +579,5 @@
   </div>
 </main>
 <script src="nav.js" defer></script>
-<script>
-/* Task 3 · wire Hub “Local stack” panel to SeekDeepEvents bus.
-   Bus is provided by gui/events.js (auto-loaded by nav.js). Falls back
-   gracefully when the bus isn't available (panel reads “OFFLINE”). */
-(function () {
-  const $  = (sel, root=document) => root.querySelector(sel);
-  let evCount = 0;
-  let connectedAt = null;
-
-  function fmtMb(mb) {
-    if (!Number.isFinite(mb)) return '—';
-    return mb >= 1024 ? (mb/1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
-  }
-  function vramBar(used, total) {
-    if (!total) return '────────';
-    const pct = Math.max(0, Math.min(1, used/total));
-    const w = 12, filled = Math.round(pct*w);
-    return '█'.repeat(filled) + '─'.repeat(w - filled) + ' ' + Math.round(pct*100) + '%';
-  }
-  function fmtUptime(sec) {
-    if (sec < 60) return Math.round(sec) + 's';
-    if (sec < 3600) return Math.floor(sec/60) + 'm';
-    return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
-  }
-
-  function setBus(state) {
-    const tag = $('#hub-stack-tag');
-    const pill = document.querySelector('[data-bus-pill]');
-    if (state === 'live') {
-      if (tag) { tag.textContent = '• live'; tag.style.color = 'var(--good)'; tag.style.borderColor = 'color-mix(in oklab, var(--good) 45%, transparent)'; }
-      if (pill) { pill.className = 'pill on'; pill.innerHTML = '<span class="dot"></span>LIVE'; pill.dataset.busPill = ''; }
-      connectedAt = Date.now();
-    } else {
-      if (tag) { tag.textContent = '· /events offline'; tag.style.color = 'var(--bad)'; tag.style.borderColor = 'color-mix(in oklab, var(--bad) 45%, transparent)'; }
-      if (pill) { pill.className = 'pill bad'; pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.dataset.busPill = ''; }
-      connectedAt = null;
-    }
-  }
-
-  function bump() {
-    evCount++;
-    const el = document.querySelector('[data-bus-events]');
-    if (el) el.textContent = evCount + ' event' + (evCount === 1 ? '' : 's');
-  }
-  setInterval(() => {
-    if (!connectedAt) return;
-    const el = document.querySelector('[data-bus-uptime]');
-    if (el) el.textContent = 'up ' + fmtUptime((Date.now() - connectedAt)/1000);
-  }, 1000);
-
-  function onVram(d) {
-    bump();
-    document.querySelector('[data-vram-used]').textContent = fmtMb(d.used_mb) + ' / ' + fmtMb(d.total_mb);
-    document.querySelector('[data-vram-bar]').textContent  = vramBar(d.used_mb, d.total_mb);
-    const pill = document.querySelector('[data-vram-pill]');
-    const pct = d.used_mb / d.total_mb;
-    pill.className = 'pill ' + (pct > 0.85 ? 'bad' : pct > 0.6 ? 'warn' : 'on');
-    pill.innerHTML = '<span class="dot"></span>' + (pct > 0.85 ? 'PRESSURE' : pct > 0.6 ? 'HOT' : 'OK');
-    pill.dataset.vramPill = '';
-  }
-  function onLoaded(d) {
-    bump();
-    document.querySelector('[data-loaded-name]').firstChild.textContent = d.model || '—';
-    document.querySelector('[data-loaded-role]').textContent = d.role || '—';
-    document.querySelector('[data-loaded-vram]').textContent = fmtMb(d.vram_mb);
-    const pill = document.querySelector('[data-loaded-pill]');
-    pill.className = 'pill cyan';
-    pill.innerHTML = '<span class="dot"></span>RESIDENT';
-    pill.dataset.loadedPill = '';
-  }
-  function onEvicted(d) {
-    bump();
-    const pill = document.querySelector('[data-loaded-pill]');
-    pill.className = 'pill warn';
-    pill.innerHTML = '<span class="dot"></span>EVICTED';
-    pill.dataset.loadedPill = '';
-    document.querySelector('[data-loaded-name]').firstChild.textContent = '(no model resident)';
-  }
-  function onQueue(d) {
-    bump();
-    document.querySelector('[data-q-chat]').textContent  = 'chat ' + (d.chat ?? 0);
-    document.querySelector('[data-q-image]').textContent = 'image ' + (d.image ?? 0);
-    const total = (d.chat||0) + (d.image||0) + (d.vision||0);
-    const pill = document.querySelector('[data-q-pill]');
-    pill.className = 'pill ' + (total > 3 ? 'warn' : total > 0 ? 'cyan' : '');
-    pill.innerHTML = '<span class="dot"></span>' + (total > 0 ? 'BUSY ' + total : 'QUIET');
-    pill.dataset.qPill = '';
-  }
-  function onRequest(d) {
-    bump();
-    const pill = document.querySelector('[data-bot-pill]');
-    pill.className = 'pill cyan';
-    pill.innerHTML = '<span class="dot"></span>SERVING';
-    pill.dataset.botPill = '';
-    document.querySelector('[data-bot-requests]').textContent = 'req ' + (d.id || '').slice(-6);
-  }
-  function onRequestDone(d) {
-    bump();
-    const pill = document.querySelector('[data-bot-pill]');
-    pill.className = 'pill on';
-    pill.innerHTML = '<span class="dot"></span>READY';
-    pill.dataset.botPill = '';
-    if (Number.isFinite(d.elapsed_ms)) {
-      document.querySelector('[data-bot-uptime]').textContent = d.elapsed_ms + 'ms last';
-    }
-  }
-
-  function attach() {
-    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
-    window.SeekDeepEvents.on('_open',         () => setBus('live'));
-    window.SeekDeepEvents.on('_close',        () => setBus('offline'));
-    window.SeekDeepEvents.on('vram.sample',   onVram);
-    window.SeekDeepEvents.on('model.loaded',  onLoaded);
-    window.SeekDeepEvents.on('model.evicted', onEvicted);
-    window.SeekDeepEvents.on('queue.depth',   onQueue);
-    window.SeekDeepEvents.on('request.start', onRequest);
-    window.SeekDeepEvents.on('request.done',  onRequestDone);
-    setBus(window.SeekDeepEvents.connected ? 'live' : 'offline');
-    return true;
-  }
-  if (!attach()) {
-    let n = 0;
-    const iv = setInterval(() => { if (attach() || ++n > 30) clearInterval(iv); }, 250);
-    setTimeout(() => { if (!window.SeekDeepEvents) setBus('offline'); }, 5000);
-  }
-})();
-</script>
 </body>
 </html>

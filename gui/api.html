@@ -200,10 +200,12 @@
 
   .send-row {
     display: flex; gap: 10px; align-items: center;
+    flex-wrap: wrap;
     margin: 20px 0 16px;
     padding-top: 16px;
     border-top: 1px solid var(--stroke);
   }
+  .send-row .btn { white-space: nowrap; }
   .send-row .latency {
     font-family: var(--font-mono); font-size: 11px;
     color: var(--hull-3); letter-spacing: 0.14em;
@@ -225,11 +227,11 @@
     padding: 8px 12px;
     background: rgba(8,20,52,0.7);
     border-bottom: 1px solid var(--stroke);
-    font-size: 10px; letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--hull-3);
-    display: flex; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 11px; color: var(--hull-2);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    display: flex; gap: 12px; justify-content: space-between; align-items: center;
   }
+  .curl-preview .ch span { white-space: nowrap; }
   .curl-preview pre {
     margin: 0; padding: 14px;
     color: var(--hull);
@@ -449,7 +451,7 @@
     <span class="wm">SEEK<em>DEEP</em></span>
   </div>
   <div class="links">
-    <a href="index.html">Hub</a>
+    <a href="index.html">About</a>
     <a href="app.html">Control Center</a>
     <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>

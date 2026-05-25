@@ -73,10 +73,18 @@
   .v-head { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; padding-bottom: 12px; border-bottom: 1px solid var(--stroke); }
   .v-head h2 { font-size: 24px; margin: 0; }
   .v-head .sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; margin-top: 4px; }
-  .v-head .actions { display: flex; gap: 8px; }
+  .v-head .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .v-head .actions .btn { white-space: nowrap; }
 
-  .meta-strip { display: flex; gap: 16px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); letter-spacing: 0.08em; }
-  .meta-strip span em { color: var(--cyan-1); font-style: normal; }
+  .meta-strip { display: flex; gap: 10px 20px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); letter-spacing: 0.04em; padding: 4px 0; }
+  .meta-strip span { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+  .meta-strip span em { color: var(--cyan-1); font-style: normal; opacity: 0.7; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; }
+
+  @media (max-width: 900px) {
+    .v-head { grid-template-columns: 1fr; }
+    .v-head .actions { justify-content: flex-start; }
+    .v-head .actions .btn { font-size: 12px; padding: 6px 10px; }
+  }
 
   .body-card {
     padding: 18px 20px;
@@ -183,7 +191,7 @@
     <span class="wm">SEEK<em>DEEP</em></span>
   </div>
   <div class="links">
-    <a href="index.html">Hub</a>
+    <a href="index.html">About</a>
     <a href="app.html">Control Center</a>
     <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>
@@ -235,7 +243,7 @@
           <button class="btn btn-ghost" id="vEdit">✎ Edit</button>
           <button class="btn btn-ghost" id="vDup">Duplicate</button>
           <button class="btn btn-ghost" id="vExport">⇩ Export JSON</button>
-          <button class="btn btn-primary" id="vShare">▸ Share to #prompts</button>
+          <button class="btn btn-primary" id="vShare">▸ Share</button>
         </div>
       </div>
 

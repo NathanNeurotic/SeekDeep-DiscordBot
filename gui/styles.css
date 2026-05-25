@@ -628,20 +628,30 @@ input.mono, textarea.mono { font-family: var(--font-mono); font-size: 12px; }
 /* ===== Top nav (shared across pages) ===== */
 .topnav {
   position: sticky; top: 0; z-index: 50;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 36px;
-  background: linear-gradient(180deg, rgba(2,6,15,0.92), rgba(2,6,15,0.6));
-  backdrop-filter: blur(14px);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 28px;
+  background: rgba(2, 6, 15, 0.96);
   border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 14%, transparent);
 }
-.topnav .links { display: flex; gap: 26px; flex-wrap: wrap; }
+.topnav .links {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+}
 .topnav .links a {
   color: var(--hull-2);
   text-decoration: none;
-  font-size: 13px;
+  font-size: 12px;
   font-family: var(--font-mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  white-space: nowrap;
   transition: color 0.2s;
 }
 .topnav .links a:hover { color: var(--cyan-1); }
@@ -652,12 +662,86 @@ input.mono, textarea.mono { font-family: var(--font-mono); font-size: 12px; }
   box-shadow: 0 0 6px var(--cyan-0);
 }
 
+/* Hamburger button — only shown at narrow widths */
+.topnav .menu-toggle {
+  display: none;
+  width: 36px; height: 36px;
+  background: transparent;
+  border: 1px solid color-mix(in oklab, var(--cyan-1) 30%, transparent);
+  border-radius: 6px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 8px;
+}
+.topnav .menu-toggle span {
+  display: block; height: 1.5px; width: 16px;
+  background: var(--cyan-1);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.topnav.is-open .menu-toggle span:nth-child(1) { transform: translateY(5.5px) rotate(45deg); }
+.topnav.is-open .menu-toggle span:nth-child(2) { opacity: 0; }
+.topnav.is-open .menu-toggle span:nth-child(3) { transform: translateY(-5.5px) rotate(-45deg); }
+
+/* Tablet — tighter spacing, smaller lockup */
+@media (max-width: 1100px) {
+  .topnav { gap: 16px; padding: 12px 18px; }
+  .topnav .links { gap: 14px; }
+  .topnav .links a { font-size: 11px; letter-spacing: 0.08em; }
+  .topnav .lockup img { width: 40px; height: 40px; }
+  .topnav .lockup .wm { font-size: 18px; }
+}
+
+/* Mobile — hamburger drawer */
+@media (max-width: 760px) {
+  .topnav {
+    grid-template-columns: auto 1fr auto;
+    gap: 10px; padding: 10px 14px;
+    position: sticky;
+  }
+  .topnav .lockup img { width: 36px; height: 36px; border-radius: 9px; }
+  .topnav .lockup .wm { font-size: 16px; }
+  .topnav .menu-toggle { display: inline-flex; }
+  .topnav .links {
+    display: none;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    background: rgba(2, 6, 15, 0.98);
+    padding: 14px 18px 18px;
+    gap: 4px;
+    border-bottom: 1px solid var(--stroke);
+    box-shadow: 0 30px 60px rgba(0,0,0,0.6);
+    text-align: left;
+    z-index: 60;
+  }
+  .topnav.is-open .links { display: flex; }
+  .topnav .links a {
+    padding: 10px 6px;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 8%, transparent);
+  }
+  .topnav .links a:last-child { border-bottom: none; }
+  .topnav .links a.active::after { display: none; }
+  .topnav .row .pill { font-size: 9px; padding: 4px 8px; }
+}
+
 /* Subpage shell — pages with a topnav above a fit-to-viewport .win.
-   The .win-titlebar that pages used to have is gone; the topnav replaces it. */
+   The .win-titlebar that pages used to have is gone; the topnav replaces it.
+   --topnav-h is set dynamically by nav.js trackTopnavHeight(); the
+   fallback values here are correct for typical desktop widths. */
+:root { --topnav-h: 80px; }
 body.has-topnav { overflow: hidden; }
-body.has-topnav .app-wrap { height: calc(100vh - var(--topnav-h, 88px)); }
+body.has-topnav .app-wrap {
+  height: calc(100dvh - var(--topnav-h));
+  min-height: 360px;
+}
 body.has-topnav .win {
-  height: calc(100vh - var(--topnav-h, 88px) - 48px);
+  height: calc(100dvh - var(--topnav-h) - 48px);
   grid-template-rows: 1fr !important;
 }
 /* Soften the heavy cyan border on the .win when paired with topnav — it's
@@ -667,6 +751,23 @@ body.has-topnav .win {
   box-shadow: 0 30px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04) !important;
 }
 body.has-topnav .win::before { display: none !important; }
+
+/* On narrow / mobile viewports, let pages scroll. The fixed-viewport .win
+   pattern doesn't survive small screens — content gets clipped. */
+@media (max-width: 760px) {
+  body.has-topnav { overflow: auto; }
+  body.has-topnav .app-wrap {
+    height: auto;
+    min-height: calc(100dvh - var(--topnav-h));
+    padding: 14px;
+    place-items: stretch;
+  }
+  body.has-topnav .win {
+    height: auto;
+    min-height: calc(100dvh - var(--topnav-h) - 28px);
+    max-width: none;
+  }
+}
 
 /* ===== Utility ===== */
 .glow-text { text-shadow: 0 0 18px rgba(45,212,255,0.45); }

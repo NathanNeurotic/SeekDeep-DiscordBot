@@ -34,9 +34,9 @@
   .user-item { display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; padding: 8px 10px; align-items: center; border-radius: var(--r-sm); cursor: pointer; transition: background 0.15s; margin: 2px 0; user-select: none; }
   .user-item:hover { background: rgba(45,212,255,0.06); }
   .user-item.active { background: rgba(45,212,255,0.10); border: 1px solid rgba(45,212,255,0.30); padding: 7px 9px; }
-  .user-item .av { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--abyss-3), var(--cyan-3)); display: grid; place-items: center; font-family: var(--font-mono); font-size: 13px; color: var(--cyan-1); }
-  .user-item .name { font-size: 13px; color: var(--hull); }
-  .user-item .id { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.04em; }
+  .user-item .av { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--abyss-3), var(--cyan-3)); display: grid; place-items: center; font-family: var(--font-mono); font-size: 13px; color: var(--cyan-1); flex-shrink: 0; }
+  .user-item .name { font-size: 13px; color: var(--hull); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-item .id { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .user-item .count { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.1em; }
 
   .pane { padding: 22px 26px; overflow-y: auto; min-width: 0; border-right: 1px solid var(--stroke); }
@@ -50,6 +50,7 @@
     font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em;
     padding: 2px 7px; border: 1px solid color-mix(in oklab, var(--good) 45%, transparent);
     color: var(--good); border-radius: 2px; text-transform: uppercase;
+    white-space: nowrap;
   }
   .live-tag .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); display: inline-block; margin-right: 5px; vertical-align: 1px; }
 
@@ -68,8 +69,8 @@
   .mini-btn.good { color: var(--good); border-color: color-mix(in oklab, var(--good) 35%, transparent); }
 
   .meter-card { padding: 10px 14px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); margin-bottom: 10px; }
-  .meter-card .lbl { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; display: flex; justify-content: space-between; }
-  .meter-card .lbl em { font-style: normal; color: var(--cyan-1); }
+  .meter-card .lbl { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: space-between; }
+  .meter-card .lbl em { font-style: normal; color: var(--cyan-1); white-space: nowrap; }
   .meter-card .bar { height: 5px; background: rgba(0,0,0,0.6); border: 1px solid rgba(45,212,255,0.20); margin-top: 7px; overflow: hidden; border-radius: 2px; }
   .meter-card .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0)); box-shadow: 0 0 8px var(--cyan-0); }
   .meter-card .bar i.warn { background: linear-gradient(90deg, var(--warn), #ff9d40); box-shadow: 0 0 8px var(--warn); }
@@ -154,7 +155,7 @@
     <span class="wm">SEEK<em>DEEP</em></span>
   </div>
   <div class="links">
-    <a href="index.html">Hub</a>
+    <a href="index.html">About</a>
     <a href="app.html">Control Center</a>
     <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>
@@ -612,8 +613,8 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     if (state.isMock) {
       tag.style.color = 'var(--warn)';
       tag.style.borderColor = 'color-mix(in oklab, var(--warn) 45%, transparent)';
-      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>MOCK · endpoints not shipped';
-      tag.title = 'GET /memory/users not implemented yet. UI reads from in-page mock until Claude Code ships the endpoints — see HANDOFF_CLAUDE_CODE.md';
+      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>MOCK';
+      tag.title = 'GET /memory/users not implemented yet. UI reads from in-page mock until the endpoints ship — see HANDOFF_CLAUDE_CODE.md';
     } else {
       tag.style.color = '';
       tag.style.borderColor = '';

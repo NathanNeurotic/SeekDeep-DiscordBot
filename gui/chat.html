@@ -130,12 +130,14 @@
     font-size: 13px;
     cursor: pointer;
     transition: background 0.12s;
+    min-width: 0;
   }
+  .ch .hash { font-family: var(--font-mono); color: var(--hull-3); font-size: 14px; flex-shrink: 0; }
+  .ch .cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .ch:hover { background: rgba(45,212,255,0.06); color: var(--hull); }
   .ch.active { background: rgba(45,212,255,0.12); color: var(--cyan-1); }
-  .ch .hash { font-family: var(--font-mono); color: var(--hull-3); font-size: 14px; }
   .ch.active .hash { color: var(--cyan-1); }
-  .ch .unread { margin-left: auto; font-family: var(--font-mono); font-size: 10px; background: var(--cyan-1); color: var(--ink); padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+  .ch .unread { margin-left: auto; font-family: var(--font-mono); font-size: 10px; background: var(--cyan-1); color: var(--ink); padding: 1px 6px; border-radius: 999px; font-weight: 600; flex-shrink: 0; }
 
   .user-card {
     background: rgba(2,6,15,0.7);
@@ -398,8 +400,8 @@
   .bot-card .bot-head .name { font-weight: 600; font-size: 13px; color: var(--cyan-1); }
   .bot-card .bot-head .ver { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); margin-left: auto; }
   .bot-card .stats { font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); display: grid; gap: 4px; }
-  .bot-card .stats .row { display: flex; justify-content: space-between; }
-  .bot-card .stats .row .v { color: var(--cyan-1); }
+  .bot-card .stats .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .bot-card .stats .row .v { color: var(--cyan-1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
   /* Tweaks panel root */
   #tweaks-root { font-family: var(--font-display); }
@@ -452,7 +454,7 @@
     <span class="wm">SEEK<em>DEEP</em></span>
   </div>
   <div class="links">
-    <a href="index.html">Hub</a>
+    <a href="index.html">About</a>
     <a href="app.html">Control Center</a>
     <a href="chat.html" class="active">Chat</a>
     <a href="installer.html">Installer</a>
@@ -498,24 +500,24 @@
 
       <div class="channels-list">
         <div class="ch-group"><span>Surface</span><span>+</span></div>
-        <div class="ch"><span class="hash">#</span>welcome</div>
-        <div class="ch"><span class="hash">#</span>announcements<span class="unread">2</span></div>
-        <div class="ch"><span class="hash">#</span>rules</div>
+        <div class="ch"><span class="hash">#</span><span class="cname">welcome</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">announcements</span><span class="unread">2</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">rules</span></div>
 
         <div class="ch-group"><span>Pelagic</span><span>+</span></div>
-        <div class="ch"><span class="hash">#</span>general</div>
-        <div class="ch active"><span class="hash">#</span>abyss-talk</div>
-        <div class="ch"><span class="hash">#</span>water-cooler<span class="unread">14</span></div>
-        <div class="ch"><span class="hash">#</span>show-and-tell</div>
+        <div class="ch"><span class="hash">#</span><span class="cname">general</span></div>
+        <div class="ch active"><span class="hash">#</span><span class="cname">abyss-talk</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">water-cooler</span><span class="unread">14</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">show-and-tell</span></div>
 
         <div class="ch-group"><span>Bathyal · seekdeep</span><span>+</span></div>
-        <div class="ch"><span class="hash">⚙</span>seekdeep-config</div>
-        <div class="ch"><span class="hash">📂</span>archive</div>
-        <div class="ch"><span class="hash">📊</span>dev-logs<span class="unread">3</span></div>
+        <div class="ch"><span class="hash">⚙</span><span class="cname">seekdeep-config</span></div>
+        <div class="ch"><span class="hash">📂</span><span class="cname">archive</span></div>
+        <div class="ch"><span class="hash">📊</span><span class="cname">dev-logs</span><span class="unread">3</span></div>
 
         <div class="ch-group"><span>Abyssal · voice</span><span>+</span></div>
-        <div class="ch"><span class="hash">🔊</span>general-vc</div>
-        <div class="ch"><span class="hash">🔊</span>code-cave</div>
+        <div class="ch"><span class="hash">🔊</span><span class="cname">general-vc</span></div>
+        <div class="ch"><span class="hash">🔊</span><span class="cname">code-cave</span></div>
       </div>
 
       <div class="user-card">

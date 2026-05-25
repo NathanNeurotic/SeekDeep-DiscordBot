@@ -835,7 +835,12 @@
       }
       return;
     }
-    const host = document.querySelector('.win-titlebar .title, .topnav .row, .topnav');
+    // Pick the most specific available host. querySelectorAll order is
+    // document order, which would pick the topnav parent before its .row
+    // child — so query each in priority order instead.
+    const host = document.querySelector('.win-titlebar .title')
+              || document.querySelector('.topnav .row')
+              || document.querySelector('.topnav');
     if (!host || host.querySelector('.sd-live-pill')) return;
     const pill = document.createElement('span');
     pill.className = 'sd-live-pill';
@@ -877,6 +882,89 @@
       } catch { setLiveState('offline'); }
     }, 6000);
   }
+
+  // ====================================================================
+  // Dynamic --topnav-h CSS var — keeps body.has-topnav math correct when
+  // the topnav reflows at narrow viewports (links wrap, hamburger drawer
+  // opens, etc.). Without this, the .app-wrap calc(100vh - 88px) clips
+  // content whenever the nav grows past the assumed 88px.
+  // ====================================================================
+  (function trackTopnavHeight() {
+    function update() {
+      const nav = document.querySelector('.topnav');
+      if (!nav) return;
+      const h = Math.ceil(nav.getBoundingClientRect().height);
+      document.documentElement.style.setProperty('--topnav-h', h + 'px');
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', update, { once: true });
+    } else {
+      update();
+    }
+    // Re-measure on resize + when the nav itself reflows.
+    window.addEventListener('resize', update);
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(update);
+      // Defer to next tick so the nav is in the DOM.
+      setTimeout(() => {
+        const nav = document.querySelector('.topnav');
+        if (nav) ro.observe(nav);
+      }, 0);
+    }
+    // After font load (font metrics shift the nav height), re-measure.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(update).catch(() => {});
+    }
+  })();
+
+  // ====================================================================
+  // Mobile menu toggle — at narrow widths the topnav links collapse into
+  // a hamburger drawer. Pure CSS handles the visual; this JS just toggles
+  // the .is-open class on click + closes on link / outside click / Esc.
+  // ====================================================================
+  (function mobileMenuToggle() {
+    function attach() {
+      const nav = document.querySelector('.topnav');
+      if (!nav || nav.querySelector('.menu-toggle')) return false;
+      const btn = document.createElement('button');
+      btn.className = 'menu-toggle';
+      btn.setAttribute('aria-label', 'Toggle menu');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.innerHTML = '<span></span><span></span><span></span>';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = nav.classList.toggle('is-open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      nav.appendChild(btn);
+      // Close on link click (drawer was open).
+      nav.querySelectorAll('.links a').forEach(a =>
+        a.addEventListener('click', () => {
+          nav.classList.remove('is-open');
+          btn.setAttribute('aria-expanded', 'false');
+        })
+      );
+      // Close on outside click + Esc.
+      document.addEventListener('click', (e) => {
+        if (!nav.contains(e.target)) {
+          nav.classList.remove('is-open');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          nav.classList.remove('is-open');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+      return true;
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', attach, { once: true });
+    } else {
+      attach();
+    }
+  })();
 
   // Auto-load sibling helper scripts (events.js + version.js) via dynamic
   // <script> appends so designer-shipped HTMLs only need to include nav.js —
