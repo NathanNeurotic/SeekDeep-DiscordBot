@@ -464,6 +464,7 @@
     <a href="roadmap.html">Roadmap</a>
   </div>
   <div class="row">
+    <span class="pill cyan" id="playgroundPill" title="Web playground is live — no Discord required"><span class="dot"></span>PLAYGROUND · LIVE</span>
     <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
   </div>
 </nav>
@@ -494,30 +495,26 @@
     <!-- ===== CHANNELS ===== -->
     <aside class="channels">
       <div class="channels-head">
-        <span>Abyss Guild</span>
-        <span class="meta">▾</span>
+        <span>Playground</span>
+        <span class="meta">SESSIONS</span>
       </div>
 
       <div class="channels-list">
-        <div class="ch-group"><span>Surface</span><span>+</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">welcome</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">announcements</span><span class="unread">2</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">rules</span></div>
+        <div class="ch-group"><span>This session</span><span title="New session">+</span></div>
+        <div class="ch active"><span class="hash">◆</span><span class="cname">tonga-trench-probe</span><span class="unread" title="unsaved turns">7</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">+ new chat</span></div>
 
-        <div class="ch-group"><span>Pelagic</span><span>+</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">general</span></div>
-        <div class="ch active"><span class="hash">#</span><span class="cname">abyss-talk</span></div>
+        <div class="ch-group"><span>Saved · local</span><span>☰</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">colossal-squid-refines</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">vision · sonar-screencaps</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">ocr · jamstec pdf p.14</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">persona test · unsettling</span></div>
+        <div class="ch"><span class="hash">◇</span><span class="cname">img2img bw passes</span></div>
+
+        <div class="ch-group"><span>Discord-mirrored</span><span title="Mirrors the same /chat surface on Discord">⇋</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">abyss-talk</span></div>
         <div class="ch"><span class="hash">#</span><span class="cname">water-cooler</span><span class="unread">14</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">show-and-tell</span></div>
-
-        <div class="ch-group"><span>Bathyal · seekdeep</span><span>+</span></div>
-        <div class="ch"><span class="hash">⚙</span><span class="cname">seekdeep-config</span></div>
-        <div class="ch"><span class="hash">📂</span><span class="cname">archive</span></div>
-        <div class="ch"><span class="hash">📊</span><span class="cname">dev-logs</span><span class="unread">3</span></div>
-
-        <div class="ch-group"><span>Abyssal · voice</span><span>+</span></div>
-        <div class="ch"><span class="hash">🔊</span><span class="cname">general-vc</span></div>
-        <div class="ch"><span class="hash">🔊</span><span class="cname">code-cave</span></div>
+        <div class="ch"><span class="hash">#</span><span class="cname">dev-logs</span><span class="unread">3</span></div>
       </div>
 
       <div class="user-card">
@@ -538,11 +535,11 @@
     <main class="conv">
 
       <div class="conv-head">
-        <span class="chname"><span class="hash">#</span>abyss-talk</span>
-        <span class="topic">cryptids · deep ocean · the things you don't want lit up</span>
+        <span class="chname"><span class="hash">◆</span>tonga-trench-probe</span>
+        <span class="topic">playground session · routes through <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/chat</code> · <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/image</code> · <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/vision</code></span>
         <div class="right">
           <button class="btn btn-ghost" style="padding: 5px 10px;">🔎 Search</button>
-          <button class="btn btn-ghost" style="padding: 5px 10px;">📂 Archive</button>
+          <button class="btn btn-ghost" style="padding: 5px 10px;">↓ Export</button>
         </div>
       </div>
 
@@ -684,26 +681,27 @@
 
         <!-- slash menu -->
         <div class="slash-menu" id="slashMenu">
-          <div class="slash-item active"><span class="cmd">/ask</span><span class="desc">Ask SeekDeep — optional web routing</span><span class="args">prompt, web</span></div>
-          <div class="slash-item"><span class="cmd">/image</span><span class="desc">Generate an image with SDXL</span><span class="args">prompt, style, w, h</span></div>
-          <div class="slash-item"><span class="cmd">/img2img</span><span class="desc">Transform attached image</span><span class="args">image, prompt, strength</span></div>
-          <div class="slash-item"><span class="cmd">/persona</span><span class="desc">Open persona editor</span><span class="args">— modal —</span></div>
-          <div class="slash-item"><span class="cmd">/status</span><span class="desc">Local backend status</span><span class="args">verbose</span></div>
-          <div class="slash-item"><span class="cmd">/stats</span><span class="desc">Server activity</span><span class="args">scope</span></div>
-          <div class="slash-item"><span class="cmd">/gpu</span><span class="desc">Live VRAM read</span><span class="args">watch, interval</span></div>
+          <div class="slash-item active"><span class="cmd">/chat</span><span class="desc">Send to <code>/chat</code> — role-routed text</span><span class="args">prompt, role, web</span></div>
+          <div class="slash-item"><span class="cmd">/image</span><span class="desc">SDXL txt2img — <code>/image</code></span><span class="args">prompt, style, w, h</span></div>
+          <div class="slash-item"><span class="cmd">/vision</span><span class="desc">Describe / OCR a dropped image — <code>/vision</code></span><span class="args">file, mode</span></div>
+          <div class="slash-item"><span class="cmd">/memory list</span><span class="desc">Show your stored facts</span><span class="args">— GET /memory/user/{id} —</span></div>
+          <div class="slash-item"><span class="cmd">/memory add</span><span class="desc">Append a fact (≤500 chars, 25 max)</span><span class="args">text</span></div>
+          <div class="slash-item"><span class="cmd">/memory forget</span><span class="desc">Delete fact at index</span><span class="args">n</span></div>
+          <div class="slash-item"><span class="cmd">/persona</span><span class="desc">Switch active persona for this session</span><span class="args">name</span></div>
+          <div class="slash-item"><span class="cmd">/status</span><span class="desc">Backend status — <code>/health</code> + <code>/gpu</code></span><span class="args">verbose</span></div>
         </div>
 
         <div class="composer-row">
           <div class="attach">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 14l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"/></svg>
           </div>
-          <input class="msg-input" id="msgInput" placeholder="Message #abyss-talk —  /  for commands  ·  @SeekDeep for mention" />
+          <input class="msg-input" id="msgInput" placeholder="Type a message  ·  /  for commands  ·  drop an image for vision" />
           <span class="pill cyan" style="padding: 2px 8px;"><span class="dot"></span>CLINICAL</span>
           <button class="send-btn">▸ Send</button>
         </div>
         <div class="helper">
           <div>
-            <span><span class="live-dot"></span>SEEKDEEP <span class="badge">ONLINE · default_chat · web auto</span></span>
+            <span><span class="live-dot"></span>SEEKDEEP <span class="badge" id="helperRoute">ROUTING … · default_chat · web auto</span></span>
           </div>
           <div class="tips">
             <span><kbd>↵</kbd> send</span>
@@ -853,6 +851,15 @@ const SEEKDEEP_BASE = (function() {
       this.isLive = (mode === 'live');
       const st = document.getElementById('cBotStatus');
       if (st) st.textContent = (mode === 'live') ? '● healthy · live' : '● mock · standalone';
+      const pp = document.getElementById('playgroundPill');
+      if (pp) {
+        pp.innerHTML = (mode === 'live')
+          ? '<span class="dot"></span>PLAYGROUND · LIVE'
+          : '<span class="dot"></span>PLAYGROUND · MOCK';
+        pp.classList.toggle('cyan', mode === 'live');
+      }
+      const hr = document.getElementById('helperRoute');
+      if (hr && mode !== 'live') hr.textContent = 'OFFLINE · mock · /chat unreachable';
     },
     apply(h, ms) {
       const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
@@ -869,6 +876,28 @@ const SEEKDEEP_BASE = (function() {
     }
   };
   cLIVE.start();
+
+  // ===== /route/debug — refresh helper-row badge with the live routing plan =====
+  // Read-only diagnostic; safe to poll. Falls back silently when offline (cLIVE
+  // already paints "OFFLINE · mock" in that case).
+  async function refreshRoute() {
+    if (!cLIVE.isLive) return;
+    const hr = document.getElementById('helperRoute');
+    if (!hr) return;
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/route/debug?role=default_chat', {
+        signal: AbortSignal.timeout(2000), cache: 'no-store'
+      });
+      if (!r.ok) throw 0;
+      const d = await r.json();
+      const backend = (d.backend || 'local').toLowerCase();
+      const model   = (d.model_id || d.model || 'default_chat').toString().split('/').pop();
+      const web     = d.web_mode || d.web || 'auto';
+      hr.textContent = `${backend.toUpperCase()} ROUTED · ${model} · web ${web}`;
+    } catch { /* keep last good label */ }
+  }
+  setInterval(refreshRoute, 8000);
+  setTimeout(refreshRoute, 800);
 </script>
 
 <!-- Tweaks panel -->

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node index.js",
-    "start:web": ".venv\\Scripts\\python.exe local_ai_server.py",
+    "start:standalone": ".venv\\Scripts\\python.exe local_ai_server.py",
     "test": "node smoke_test.mjs",
     "smoke": "node smoke_test.mjs",
     "preflight": "node scripts/preflight.mjs",

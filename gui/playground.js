@@ -126,12 +126,28 @@
     });
   }
 
+  // ---- Helper row updater (designer-shipped #helperRoute placeholder) ----
+  function updateHelperRoute(modelRole, modelId, label) {
+    const el = document.getElementById('helperRoute');
+    if (!el) return;
+    const role = modelRole || 'default_chat';
+    const trail = label ? (' · ' + label) : '';
+    if (modelId) {
+      // Short-form model id (drop org prefix for readability in the helper)
+      const short = String(modelId).split('/').pop() || modelId;
+      el.textContent = 'ONLINE · ' + role + ' · ' + short + trail;
+    } else {
+      el.textContent = 'ROUTING … · ' + role + trail;
+    }
+  }
+
   // ---- Chat (default action) ----
   async function sendChat(prompt) {
     if (!prompt) return;
     renderMessage({ who: 'you', html: escapeHtml(prompt) });
     history.push({ role: 'user', content: prompt });
     if (history.length > MAX_HISTORY_TURNS) history.splice(0, history.length - MAX_HISTORY_TURNS);
+    updateHelperRoute('default_chat', '', 'awaiting reply');
 
     const typing = renderTyping();
     try {
@@ -143,13 +159,16 @@
       if (!r.ok) {
         typing.text.innerHTML = '<span class="err">[' + r.status + ']</span> ' +
           escapeHtml((r.body && (r.body.error || r.body.detail)) || 'chat request failed');
+        updateHelperRoute('default_chat', '', '[' + r.status + ']');
         return;
       }
       const text = String((r.body && r.body.text) || '').trim() || '(empty response)';
       typing.text.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
       history.push({ role: 'assistant', content: text });
+      updateHelperRoute((r.body && r.body.model_role) || 'default_chat', (r.body && r.body.model_id) || '');
     } catch (err) {
       typing.text.innerHTML = '<span class="err">offline</span> · ' + escapeHtml(String(err.message || err));
+      updateHelperRoute('default_chat', '', 'offline');
     }
   }
 
@@ -366,6 +385,21 @@
     if (cmd === 'forget') {
       if (!args) return renderMessage({ who: '⌗', system: true, html: 'Usage: <code>/forget #N</code> or <code>/forget text</code> or <code>/forget all</code>' });
       return forgetFact(args);
+    }
+    // /memory list|add|forget — matches designer's slash-menu copy in chat.html
+    if (cmd === 'memory' || cmd === 'mem') {
+      const sub = args.split(/\s+/)[0] || '';
+      const rest = args.slice(sub.length).trim();
+      if (/^(?:list|show|all|facts|memories)$/i.test(sub) || !sub) return recallFacts();
+      if (/^(?:add|remember|new)$/i.test(sub)) {
+        if (!rest) return renderMessage({ who: '⌗', system: true, html: 'Usage: <code>/memory add &lt;fact&gt;</code>' });
+        return rememberFact(rest);
+      }
+      if (/^(?:forget|del|delete|remove|rm)$/i.test(sub)) {
+        if (!rest) return renderMessage({ who: '⌗', system: true, html: 'Usage: <code>/memory forget #N</code> or <code>/memory forget &lt;text&gt;</code> or <code>/memory forget all</code>' });
+        return forgetFact(rest);
+      }
+      return renderMessage({ who: '⌗', system: true, html: 'Unknown <code>/memory</code> subcommand. Try <code>list</code>, <code>add</code>, or <code>forget</code>.' });
     }
     if (cmd === 'route' || cmd === 'debug') return showRoute(args);
     if (cmd === 'help' || cmd === '?') return showHelp();

@@ -1,12 +1,16 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM SeekDeep Web-Only Launcher
+REM SeekDeep Standalone Launcher (no Discord required)
 REM
-REM Runs the local AI server + GUI without the Discord bot. Useful if you
-REM want SeekDeep as a standalone local AI client (chat / image / vision /
-REM memory recall through the browser at http://127.0.0.1:7865/gui/) and
-REM don't have / don't want a Discord bot token.
+REM Runs the local AI server + browser GUI without the Discord bot. SeekDeep
+REM is local-first either way -- this mode just skips the Discord client.
+REM Same local models, same chat / image / vision / memory features, same
+REM opt-in remote backends (if you've added any). The browser GUI at
+REM http://127.0.0.1:7865/gui/chat.html is the interaction surface.
+REM
+REM Use this when you don't have a Discord bot token, or just want to use
+REM SeekDeep directly without Discord in the middle.
 REM
 REM What this starts:
 REM   - SearXNG (Docker), if available, for /chat web routing
@@ -54,7 +58,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo ==========================================
-echo     SeekDeep — Web-Only Mode
+echo     SeekDeep — Standalone Mode (no Discord)
 echo ==========================================
 echo.
 echo Starting local AI server on http://127.0.0.1:7865 ...

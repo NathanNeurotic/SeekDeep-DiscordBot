@@ -140,18 +140,18 @@ The local AI server exposes:
 
 The launcher can also start only the local AI server or only the Discord bot when needed.
 
-## Web-Only Mode (no Discord)
+## Standalone Mode (no Discord required)
 
-You can run SeekDeep as a standalone local AI client — chat, image generation, vision, and persistent memory — without a Discord bot account. The Discord bot is one client of the local AI server; the GUI is another. They run independently.
+SeekDeep runs as a standalone local AI client — chat, image generation, vision, and persistent memory — without needing a Discord bot account. The Discord bot is one client of the local AI server; the browser GUI is another. They run independently and use the same local models (and the same opt-in remote backends, if you've configured any).
 
 ```powershell
-seekdeep_web_launcher.bat
+seekdeep_standalone_launcher.bat
 ```
 
 Or via npm:
 
 ```powershell
-npm run start:web
+npm run start:standalone
 ```
 
 Once the server boots, open **`http://127.0.0.1:7865/gui/chat.html`** in your browser. The composer is wired to `/chat` with persistent conversation memory keyed to the local owner. Slash commands cover everything the bot does (minus Discord-specific features like server-stats / auto-reactions):
