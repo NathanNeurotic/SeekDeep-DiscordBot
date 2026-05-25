@@ -126,9 +126,10 @@ Topics defined so far (`gui_endpoints.py` and `gui/events.js` agree on these —
 | `model.loaded` | `load_chat_model` / `load_vision_model` / `load_image_pipe` in `local_ai_server.py` | yes | `{role, model, task, vram_allocated_mb}` |
 | `model.evicted` | `unload_all` in `local_ai_server.py` | yes | `{task, role, model, reason}` |
 | `vram.sample` | startup task in `local_ai_server.py`, every 10s with subscribers | yes | `{used_mb, total_mb, free_mb, allocated_mb, reserved_mb, device, loaded_task, loaded_chat_role, loaded_chat_model_id}` |
-| `queue.depth` | not wired yet | no | `{image, chat, vision}` |
-| `request.start` / `request.done` | not wired yet | no | `{id, kind, ...}` |
-| `log.line` | not wired yet | no | `{level, src, msg}` |
+| `queue.depth` | ASGI middleware in `local_ai_server.py` — bumps on every `/chat`, `/image`, `/img2img`, `/inpaint`, `/instruct-pix2pix`, `/upscale`, `/chart`, `/vision` request entry/exit | yes | `{chat, image, vision}` |
+| `request.start` | `seekdeepMarkRequestStart` in `index.js` — every messageCreate path that addresses the bot | yes | `{id, kind, user_id, channel_id, guild_id}` |
+| `request.done` | `seekdeepReplyToTarget` try/finally in `index.js` | yes | `{id, kind, ok, elapsed_ms, model, error}` |
+| `log.line` | `index.js` console monkey-patch — **opt-in** via `SEEKDEEP_EMIT_LOG_LINES=on` in `.env`; rate-limited to 10/sec and skipped when no GUI subscribers | opt-in | `{level, src, msg}` |
 
 ### Producer patterns
 

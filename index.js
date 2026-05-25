@@ -227,13 +227,58 @@ const LOCAL_AI_BASE_URL = process.env.LOCAL_AI_BASE_URL || 'http://127.0.0.1:786
 // seekdeepEmitGuiEvent('request.start', {...}) at request entry, '...done'
 // at exit; FastAPI side-car broadcasts to every connected browser tab.
 //
-// Token comes from process.env.SEEKDEEP_GUI_TOKEN. If unset (e.g. first
-// boot before the AI server has generated the token), all emits silently
-// no-op. After the AI server starts and writes the token, restart the
-// bot to pick it up.
+// Token sources, in priority order:
+//   1. process.env.SEEKDEEP_GUI_TOKEN (set by dotenv from .env, or by the user)
+//   2. GET /token from the loopback AI server (the bot IS loopback, so it
+//      gets 200). Polled in the background after startup until a token
+//      arrives, so option-5 (bot-only) launches still light up the event
+//      bus once the AI server boots, without needing a bot restart.
 //
 // On first 401 we mark emits disabled so a stale token doesn't spam logs.
+// The auto-fetch loop is allowed to re-enable when it gets a fresh token.
 let SEEKDEEP_EVENTS_DISABLED = false;
+
+// Background poll that hydrates process.env.SEEKDEEP_GUI_TOKEN if it's
+// missing or becomes stale. Runs every 5s until a token is acquired, then
+// stops. Safe to start before the AI server is up -- fetch errors are
+// silent and the loop just keeps trying.
+async function seekdeepFetchGuiTokenOnce() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2000);
+    let r;
+    try {
+      r = await fetch(`${LOCAL_AI_BASE_URL}/token`, { cache: 'no-store', signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!r || !r.ok) return false;
+    const j = await r.json();
+    if (j && typeof j.token === 'string' && j.token) {
+      process.env.SEEKDEEP_GUI_TOKEN = j.token;
+      SEEKDEEP_EVENTS_DISABLED = false;
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+(function seekdeepStartTokenAutoFetch() {
+  if (process.env.SEEKDEEP_GUI_TOKEN) return;  // already have it
+  let attempts = 0;
+  const maxAttempts = 60;  // ~5 minutes at 5s intervals
+  const tick = async () => {
+    attempts += 1;
+    const got = await seekdeepFetchGuiTokenOnce();
+    if (got) {
+      console.log('[SeekDeep] fetched SEEKDEEP_GUI_TOKEN from loopback /token (attempt ' + attempts + ')');
+      return;  // stop
+    }
+    if (attempts >= maxAttempts) return;  // give up
+    setTimeout(tick, 5000);
+  };
+  // Defer the first try so dotenv + module init has finished settling.
+  setTimeout(tick, 250);
+})();
 async function seekdeepEmitGuiEvent(type, data) {
   if (SEEKDEEP_EVENTS_DISABLED) return;
   const tok = process.env.SEEKDEEP_GUI_TOKEN;
@@ -268,6 +313,90 @@ function seekdeepClassifyRequestKind(target) {
     if (target?.attachments?.size > 0) return 'message+attachment';
     return 'message';
   } catch { return 'unknown'; }
+}
+
+// ===== log.line forwarder =====
+// Monkey-patches console.{log,warn,error} to also forward each line as a
+// log.line event on the WS bus. Off by default -- set SEEKDEEP_EMIT_LOG_LINES=on
+// in .env to enable.
+//
+// Defenses against the obvious footguns:
+//   - Recursion guard: emit's own fetch error logs WON'T re-trigger emit
+//   - Rate limit: max 10 lines/sec, dropped silently when exceeded
+//   - Subscriber gate: when /events/status reports 0 subscribers, skip the
+//     HTTP entirely (refreshed every 30s)
+//   - Fail-soft: any error in the emit path swallows silently; the original
+//     console.* call always still runs
+const SEEKDEEP_EMIT_LOG_LINES = String(process.env.SEEKDEEP_EMIT_LOG_LINES || '').toLowerCase() === 'on';
+let _seekdeepLogEmitInFlight = false;
+let _seekdeepLogRateWindow = Date.now();
+let _seekdeepLogRateCount = 0;
+const _SEEKDEEP_LOG_RATE_MAX = Number(process.env.SEEKDEEP_LOG_LINE_RATE_PER_SEC || 10);
+let _seekdeepSubscriberCount = 0;
+let _seekdeepSubscriberFetchedAt = 0;
+
+async function _seekdeepRefreshSubscriberCount() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    let r;
+    try {
+      r = await fetch(`${LOCAL_AI_BASE_URL}/events/status`, { signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (r && r.ok) {
+      const j = await r.json();
+      _seekdeepSubscriberCount = Number(j?.subscribers) || 0;
+    }
+  } catch { /* keep stale count */ }
+  _seekdeepSubscriberFetchedAt = Date.now();
+}
+
+async function _seekdeepEmitLogLine(level, msg) {
+  if (!SEEKDEEP_EMIT_LOG_LINES) return;
+  if (SEEKDEEP_EVENTS_DISABLED) return;
+  if (_seekdeepLogEmitInFlight) return;            // recursion guard
+  if (!process.env.SEEKDEEP_GUI_TOKEN) return;     // no token yet
+  // Refresh subscriber count opportunistically
+  const now = Date.now();
+  if (now - _seekdeepSubscriberFetchedAt > 30_000) {
+    _seekdeepSubscriberFetchedAt = now;
+    void _seekdeepRefreshSubscriberCount();
+  }
+  if (_seekdeepSubscriberCount <= 0) return;       // nobody listening
+  // Rate limit (sliding 1s window)
+  if (now - _seekdeepLogRateWindow >= 1000) {
+    _seekdeepLogRateWindow = now;
+    _seekdeepLogRateCount = 0;
+  }
+  if (_seekdeepLogRateCount >= _SEEKDEEP_LOG_RATE_MAX) return;
+  _seekdeepLogRateCount += 1;
+  _seekdeepLogEmitInFlight = true;
+  try {
+    await seekdeepEmitGuiEvent('log.line', {
+      level,
+      src: 'bot',
+      msg: String(msg).slice(0, 800),
+    });
+  } catch { /* swallow */ }
+  finally {
+    _seekdeepLogEmitInFlight = false;
+  }
+}
+
+if (SEEKDEEP_EMIT_LOG_LINES) {
+  const _origLog   = console.log.bind(console);
+  const _origWarn  = console.warn.bind(console);
+  const _origError = console.error.bind(console);
+  const _join = (args) => {
+    try { return args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '); }
+    catch { return args.map(a => String(a)).join(' '); }
+  };
+  console.log   = (...a) => { _origLog(...a);   void _seekdeepEmitLogLine('info',  _join(a)); };
+  console.warn  = (...a) => { _origWarn(...a);  void _seekdeepEmitLogLine('warn',  _join(a)); };
+  console.error = (...a) => { _origError(...a); void _seekdeepEmitLogLine('error', _join(a)); };
+  _origLog('[SeekDeep] log.line forwarding enabled (SEEKDEEP_EMIT_LOG_LINES=on)');
 }
 // SEEKDEEP_GUI_EVENTS_END
 

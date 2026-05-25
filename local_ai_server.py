@@ -472,6 +472,57 @@ async def _stop_vram_sampler():
         t.cancel()
 
 
+# ===== queue.depth producer =====
+# Counts in-flight requests per pipeline kind (chat / image / vision) so
+# the GUI's queue panel reflects real load. Implemented as ASGI middleware
+# so no endpoint code changes -- every matched URL bumps the counter on
+# entry and decrements on exit. Unmatched paths are pass-throughs.
+#
+# Pipeline mapping: each route delegates to the same model class under
+# the hood, so we coalesce variants into the three buckets the GUI uses.
+import threading as _seekdeep_threading
+
+_SEEKDEEP_PATH_TO_KIND = {
+    "/chat":             "chat",
+    "/image":            "image",
+    "/img2img":          "image",
+    "/inpaint":          "image",
+    "/inpaint_mask_preview": "image",
+    "/instruct-pix2pix": "image",
+    "/upscale":          "image",
+    "/chart":            "image",
+    "/vision":           "vision",
+}
+_seekdeep_inflight_lock = _seekdeep_threading.Lock()
+_seekdeep_inflight: dict[str, int] = {"chat": 0, "image": 0, "vision": 0}
+
+
+def _seekdeep_emit_queue_depth() -> None:
+    """Publish a snapshot of the current in-flight counts. Cheap when no
+    subscribers (publish_sync's fast path skips the dispatch)."""
+    with _seekdeep_inflight_lock:
+        snapshot = dict(_seekdeep_inflight)
+    _emit_event("queue.depth", snapshot)
+
+
+@app.middleware("http")
+async def _seekdeep_track_inflight(request, call_next):
+    """ASGI middleware: bump the per-kind counter for known pipeline routes,
+    emit queue.depth, run the handler, decrement on the way out, emit again."""
+    kind = _SEEKDEEP_PATH_TO_KIND.get(request.url.path)
+    if kind is None:
+        return await call_next(request)
+    with _seekdeep_inflight_lock:
+        _seekdeep_inflight[kind] = _seekdeep_inflight.get(kind, 0) + 1
+    _seekdeep_emit_queue_depth()
+    try:
+        return await call_next(request)
+    finally:
+        with _seekdeep_inflight_lock:
+            _seekdeep_inflight[kind] = max(0, _seekdeep_inflight.get(kind, 0) - 1)
+        _seekdeep_emit_queue_depth()
+
+
 # ---------------------------------------------------------------------------
 # Stable helpers must be defined before any FastAPI route uses them.
 # ---------------------------------------------------------------------------
