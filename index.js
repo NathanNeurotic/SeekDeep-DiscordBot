@@ -7720,10 +7720,13 @@ function seekdeepHelpText(source = null) {
     'Inspect (SeekDeep)         - debug card: ids, attachments, components, cached state',
     'Translate (SeekDeep)       - translate / decode message text to plain English',
     'Compare with previous      - compare this message with the prior non-bot message',
+    'Archive (SeekDeep)         - archive ANY image (user upload or bot) to your archive thread',
     ...(SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? [
       'Force React (SeekDeep)     - paginated emoji picker; reacts up to 5 to the message',
     ] : []),
     '```',
+    '',
+    'You can also reply to any image message with `archive` (or `archive this` / `archive please`) to save it.',
     '',
     'Unsupported near-commands return: `Did you mean ...?`',
   ].join('\n');
@@ -8887,6 +8890,9 @@ const commands = [
 
   // Right-click message context menu commands. Show up under Apps when the user
   // right-clicks any Discord message.
+  new ContextMenuCommandBuilder()
+    .setName('Archive (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
   new ContextMenuCommandBuilder()
     .setName('Generate Image from this')
     .setType(ApplicationCommandType.Message),
@@ -15430,6 +15436,223 @@ async function seekdeepHandleNaturalArchiveImageFollowup(message, prompt = '') {
 }
 // SEEKDEEP_NATURAL_ARCHIVE_FOLLOWUP_END
 
+// SEEKDEEP_UNIVERSAL_ARCHIVE_START
+// Universal archive surface — archive ANY message with an image, not just
+// bot-generated ones. Two trigger surfaces:
+//   1. Right-click context menu "Archive (SeekDeep)" (handler in interactionCreate dispatcher)
+//   2. Reply to a message with body "archive" / "archive this" / "archive please" / "@SeekDeep archive"
+//
+// Both surfaces share the existing archive flow (seekdeepArchiveImageStateToDiscordThread)
+// by constructing a state object from arbitrary message attachments + embed images.
+
+const SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE = /^(?:<@!?\d+>\s+|@?seekdeep\s+|@?seekotics\s+)?archive(?:\s+(?:this|that|it|please|now|to\s+(?:my\s+)?archive))?\s*\.?\s*$/i;
+
+function seekdeepExtractImagesFromMessage(message) {
+  // Returns array of { url, filename, contentType, source } for every image
+  // attachment + embed image on the message. Empty array if none. Used to
+  // build archive states for arbitrary messages.
+  const out = [];
+  try {
+    const attachments = message?.attachments?.values?.() || [];
+    for (const att of attachments) {
+      const ctype = String(att?.contentType || '').toLowerCase();
+      const name = String(att?.name || '');
+      const url = String(att?.url || att?.proxyURL || '');
+      if (!url) continue;
+      // Image attachments: contentType prefix is image/, or fallback to filename extension
+      const looksImage =
+        ctype.startsWith('image/') ||
+        /\.(?:png|jpe?g|gif|webp|bmp|avif|tiff?)$/i.test(name);
+      if (!looksImage) continue;
+      out.push({ url, filename: name, contentType: ctype || 'image/unknown', source: 'attachment' });
+    }
+  } catch {}
+  try {
+    const embeds = Array.isArray(message?.embeds) ? message.embeds : (message?.embeds?.toArray?.() || []);
+    for (const emb of embeds) {
+      const url = String(emb?.image?.url || emb?.image?.proxyURL || emb?.thumbnail?.url || '');
+      if (!url) continue;
+      // Skip if the url is already accounted for by an attachment
+      if (out.some(x => x.url === url)) continue;
+      // Try to derive a filename from URL
+      let filename = '';
+      try {
+        const u = new URL(url);
+        filename = (u.pathname.split('/').pop() || '').slice(0, 200);
+      } catch {}
+      out.push({ url, filename, contentType: 'image/unknown', source: 'embed' });
+    }
+  } catch {}
+  return out;
+}
+
+function seekdeepBuildUniversalArchiveStates(targetMessage) {
+  // Convert an arbitrary message into a list of state objects usable by
+  // seekdeepArchiveImageStateToDiscordThread. One state per image.
+  const images = seekdeepExtractImagesFromMessage(targetMessage);
+  if (!images.length) return [];
+  const bodyContent = String(targetMessage?.content || '').slice(0, 1800);
+  const authorTag = String(targetMessage?.author?.tag || targetMessage?.author?.username || 'unknown user');
+  const messageId = String(targetMessage?.id || '');
+  return images.map((img, i) => {
+    const promptText = bodyContent
+      ? `[user upload by ${authorTag}] ${bodyContent}`
+      : `[user upload by ${authorTag}] (no caption)`;
+    return {
+      attachmentUrl: img.url,
+      url: img.url,
+      filename: img.filename || ('image-' + messageId + '-' + (i + 1) + '.bin'),
+      prompt: promptText,
+      originalPrompt: promptText,
+      rawPrompt: bodyContent,
+      contentType: img.contentType,
+      source: 'universal-archive:' + img.source,
+      // Archive key uses message id + image index to dedupe re-archives of the
+      // same message without re-hashing the image bytes (which would require
+      // downloading them up-front).
+      archiveKey: 'universal:' + (messageId || 'unknown') + ':' + i,
+      originatingMessageId: messageId,
+    };
+  });
+}
+
+async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, opts = {}) {
+  // requestSource: a Message OR Interaction. Used as the archive target
+  //   (i.e. determines whose archive thread to write to).
+  // targetMessage: the message containing images to archive.
+  // opts.wantsShared: if true, write to the shared server archive instead.
+  //
+  // Returns: { ok, archived: N, duplicates: N, threadId, threadName, archiveCount, errors }
+  const states = seekdeepBuildUniversalArchiveStates(targetMessage);
+  const wantsShared = !!opts.wantsShared;
+  const sender = (
+    requestSource?.author?.tag
+    || requestSource?.user?.tag
+    || requestSource?.author?.username
+    || requestSource?.user?.username
+    || 'user'
+  );
+
+  if (!states.length) {
+    return { ok: false, archived: 0, error: 'no_images', humanReason: 'No image attachments or embed images on that message.' };
+  }
+
+  const out = { ok: true, archived: 0, duplicates: 0, threadId: '', threadName: '', archiveCount: 0, errors: [] };
+  for (const state of states) {
+    try {
+      const result = wantsShared
+        ? (typeof seekdeepArchiveImageStateToSharedDiscordThread === 'function'
+           ? await seekdeepArchiveImageStateToSharedDiscordThread(state, requestSource)
+           : null)
+        : (typeof seekdeepArchiveImageStateToDiscordThread === 'function'
+           ? await seekdeepArchiveImageStateToDiscordThread(state, requestSource)
+           : null);
+      if (!result) {
+        out.errors.push('archive function unavailable');
+        continue;
+      }
+      if (result.duplicate) {
+        out.duplicates += 1;
+      } else {
+        out.archived += 1;
+      }
+      out.threadId = result.threadId || out.threadId;
+      out.threadName = result.threadName || out.threadName;
+      out.archiveCount = result.archiveCount !== undefined ? result.archiveCount : out.archiveCount;
+    } catch (err) {
+      out.errors.push(err?.message || String(err));
+    }
+  }
+  if (!out.archived && !out.duplicates && out.errors.length) out.ok = false;
+  return out;
+}
+
+function seekdeepUniversalArchiveSummaryText(result) {
+  // Build a human-friendly response for the requester.
+  if (!result || result.error === 'no_images') {
+    return result?.humanReason || 'Nothing archivable found on that message.';
+  }
+  const lines = [];
+  if (result.archived && result.duplicates) {
+    lines.push(`Archived ${result.archived} new + ${result.duplicates} duplicate from that message.`);
+  } else if (result.archived) {
+    lines.push(`Archived ${result.archived} image${result.archived === 1 ? '' : 's'}.`);
+  } else if (result.duplicates) {
+    lines.push(`Already archived (${result.duplicates} duplicate${result.duplicates === 1 ? '' : 's'} on that message).`);
+  } else {
+    lines.push('Archive attempt finished with no images saved.');
+  }
+  if (result.threadName) lines.push('Thread: ' + result.threadName);
+  if (result.archiveCount !== undefined && result.archiveCount !== null) lines.push('Archive count: ' + result.archiveCount);
+  if (result.errors && result.errors.length) {
+    lines.push('Errors: ' + result.errors.slice(0, 3).join(' · '));
+  }
+  return lines.join('\n');
+}
+
+async function seekdeepHandleContextMenuUniversalArchive(interaction, targetMessage) {
+  // Right-click → Apps → "Archive (SeekDeep)". Archives the targeted message's
+  // images to the requesting user's archive thread.
+  if (!interaction?.guild) {
+    try { await interaction.reply({ content: 'Archive threads only work inside a server.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  try { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); } catch {}
+  try {
+    const result = await seekdeepUniversalArchiveDispatch(interaction, targetMessage, { wantsShared: false });
+    const summary = seekdeepUniversalArchiveSummaryText(result);
+    try { await interaction.editReply({ content: summary }); } catch {}
+  } catch (err) {
+    console.error('Universal archive (context menu) failed:', err?.stack || err?.message || err);
+    try { await interaction.editReply({ content: 'Archive failed: ' + String(err?.message || err).slice(0, 1500) }); } catch {}
+  }
+}
+
+async function seekdeepHandleReplyArchive(message) {
+  // Detects a reply-to-image message whose body is "archive" / "archive this" /
+  // "archive please" / "@SeekDeep archive" (case-insensitive). Returns true
+  // when it handled the message; false otherwise so the normal dispatch chain
+  // continues.
+  if (!message?.reference?.messageId) return false;
+  const raw = String(message?.content || '').trim();
+  if (!SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE.test(raw)) return false;
+  if (!message?.guild) return false;
+
+  let targetMessage = null;
+  try {
+    targetMessage = await message.channel?.messages?.fetch?.(message.reference.messageId);
+  } catch (err) {
+    try {
+      await message.reply({
+        content: "I couldn't fetch that message to archive it (deleted, or I lack permission).",
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+    return true;
+  }
+  if (!targetMessage) return false;
+
+  if (typeof seekdeepLogRoute === 'function') {
+    try { seekdeepLogRoute('universal-archive-reply', raw); } catch {}
+  }
+
+  try {
+    const result = await seekdeepUniversalArchiveDispatch(message, targetMessage, { wantsShared: false });
+    const summary = seekdeepUniversalArchiveSummaryText(result);
+    await message.reply({ content: summary, allowedMentions: { repliedUser: false } });
+  } catch (err) {
+    console.error('Universal archive (reply) failed:', err?.stack || err?.message || err);
+    try {
+      await message.reply({
+        content: 'Archive failed: ' + String(err?.message || err).slice(0, 1500),
+        allowedMentions: { repliedUser: false },
+      });
+    } catch {}
+  }
+  return true;
+}
+// SEEKDEEP_UNIVERSAL_ARCHIVE_END
+
 // SEEKDEEP_REACTION_SHORTCUTS_START
 // Reaction shortcuts on SeekDeep bot messages:
 //   inbox tray (incoming):   archive the bot's image to your personal archive
@@ -16736,6 +16959,19 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
     // SEEKDEEP_ARCHIVE_STRIPPED_RETRY_V1_END
+
+    // Universal archive — reply to ANY message with "archive" / "archive this" /
+    // "archive please" / "@SeekDeep archive". Fetches the referenced message,
+    // extracts its image attachments + embed images, archives them via the
+    // existing per-user archive flow. Distinct from the natural-archive
+    // followup below (which only archives the most recent BOT-generated image
+    // in the channel).
+    if (
+      typeof seekdeepHandleReplyArchive === 'function' &&
+      await seekdeepHandleReplyArchive(message)
+    ) {
+      return true;
+    }
 
     // Natural-language archive followups ("archive this", "save it", "make it archive too",
     // "shared archive this", etc.). Looks up the most recent SeekDeep image in this channel
@@ -18145,6 +18381,9 @@ async function seekdeepHandleMessageContextMenu(interaction) {
 
   if (name === 'Inspect (SeekDeep)') {
     return seekdeepHandleContextMenuInspect(interaction, targetMessage);
+  }
+  if (name === 'Archive (SeekDeep)') {
+    return seekdeepHandleContextMenuUniversalArchive(interaction, targetMessage);
   }
   if (name === 'Generate Image from this') {
     return seekdeepHandleContextMenuGenerateImage(interaction, targetMessage);
@@ -19984,6 +20223,11 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_USER_FACTS_PATH,
     SEEKDEEP_USER_FACTS_MAX,
     SEEKDEEP_USER_FACT_MAX_CHARS,
+    // Universal archive (Item B)
+    seekdeepExtractImagesFromMessage,
+    seekdeepBuildUniversalArchiveStates,
+    seekdeepUniversalArchiveSummaryText,
+    SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

@@ -1803,6 +1803,62 @@ check('context menu prompt extract: missing prompt line returns empty',
     T.SEEKDEEP_USER_FACT_MAX_CHARS >= 40 && T.SEEKDEEP_USER_FACT_MAX_CHARS <= 2000);
 }
 
+// 55 - Universal archive (Item B): reply-trigger regex + image-extract + state-build
+// Pure helpers only -- no Discord, no archive thread writes.
+{
+  const re = T.SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE;
+  // Liberal phrasing — these should all match
+  for (const phrase of ['archive', 'Archive', 'archive this', 'archive that',
+                        'archive it', 'archive please', 'archive now',
+                        'archive to my archive', '<@123456> archive',
+                        'archive this.', 'Archive Please']) {
+    check(`universal-archive trigger matches: "${phrase}"`, re.test(phrase));
+  }
+  // Negatives -- these are normal conversation, not archive commands
+  for (const phrase of ['archive me', 'archive channel here', 'open the archive',
+                        'go archive your stuff', 'archive it later when you can']) {
+    check(`universal-archive trigger does NOT match: "${phrase}"`, !re.test(phrase));
+  }
+
+  // Image extractor: build mock messages and verify image discovery
+  const mkMessage = (attachments = [], embeds = []) => ({
+    id: '999',
+    content: 'hi',
+    author: { tag: 'tester#0001', username: 'tester' },
+    attachments: { values: () => attachments.values() },
+    embeds,
+  });
+  const imgAtt = { contentType: 'image/png', name: 'photo.png', url: 'https://cdn.example/photo.png' };
+  const docAtt = { contentType: 'application/pdf', name: 'paper.pdf', url: 'https://cdn.example/paper.pdf' };
+  const gifAtt = { contentType: '', name: 'anim.gif', url: 'https://cdn.example/anim.gif' };  // ctype empty → uses ext
+
+  const found = T.seekdeepExtractImagesFromMessage(mkMessage([imgAtt, docAtt, gifAtt]));
+  check('universal-archive: extracts image attachments + gif via extension', found.length === 2);
+  check('universal-archive: skips non-image attachments', !found.some(f => f.url.endsWith('.pdf')));
+
+  const found2 = T.seekdeepExtractImagesFromMessage(mkMessage([], [{ image: { url: 'https://cdn.example/embed.png' } }]));
+  check('universal-archive: extracts embed images', found2.length === 1 && found2[0].source === 'embed');
+
+  const found3 = T.seekdeepExtractImagesFromMessage(mkMessage([]));
+  check('universal-archive: empty message returns []', Array.isArray(found3) && found3.length === 0);
+
+  // State builder
+  const states = T.seekdeepBuildUniversalArchiveStates(mkMessage([imgAtt]));
+  check('universal-archive: state has attachmentUrl + archiveKey + prompt',
+    states.length === 1
+    && states[0].attachmentUrl === imgAtt.url
+    && states[0].archiveKey.startsWith('universal:999:')
+    && states[0].prompt.includes('user upload by tester'));
+
+  // Summary text builder
+  const sum1 = T.seekdeepUniversalArchiveSummaryText({ archived: 2, duplicates: 0, threadName: 'My Archive' });
+  check('universal-archive: summary text for new images', /Archived 2 image/.test(sum1) && /My Archive/.test(sum1));
+  const sum2 = T.seekdeepUniversalArchiveSummaryText({ archived: 0, duplicates: 1 });
+  check('universal-archive: summary text for duplicate', /Already archived/.test(sum2));
+  const sum3 = T.seekdeepUniversalArchiveSummaryText({ error: 'no_images', humanReason: 'No image attachments or embed images on that message.' });
+  check('universal-archive: summary text for no-image case', /No image attachments/.test(sum3));
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
