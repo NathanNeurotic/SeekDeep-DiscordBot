@@ -7629,6 +7629,7 @@ function seekdeepHelpText(source = null) {
     prefix + ' template list / use <name> / delete <name>',
     '/template action:save|list|use|delete name:<n> prompt:<p>',
     prefix + ' template share <name>                (post to this server\'s #prompts channel)',
+    prefix + ' template edit <name>: <new prompt>   (edit-in-place, or tombstone+repost past 14d)',
     prefix + ' prompts channel here                 (admin: set the #prompts channel)',
     '```',
     '',
@@ -13571,23 +13572,61 @@ function seekdeepDeleteUserTemplate(guildId, userId, name) {
 }
 
 function seekdeepSetTemplateShareRef(guildId, userId, name, ref) {
-  // ref: { messageId, channelId, sharedAt } or null to clear.
+  // ref: { messageId, channelId, sharedAt, posted_at?, edit_count?,
+  //        last_edited_at?, prior_msg_id? } or null to clear.
+  // `posted_at` mirrors `sharedAt` for designer's spec naming; both
+  // get written so older code paths keep working.
   const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!safeName || !guildId || !userId) return false;
   const data = seekdeepReadPromptTemplates();
   const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
   if (!tmpl) return false;
   if (ref) {
+    const ts = ref.sharedAt || ref.posted_at || new Date().toISOString();
     tmpl.sharedAs = {
       messageId: String(ref.messageId || ''),
       channelId: String(ref.channelId || ''),
-      sharedAt: ref.sharedAt || new Date().toISOString(),
+      sharedAt: ts,
+      posted_at: ts,
+      ...(ref.edit_count !== undefined ? { edit_count: Number(ref.edit_count) || 0 } : {}),
+      ...(ref.last_edited_at ? { last_edited_at: ref.last_edited_at } : {}),
+      ...(ref.prior_msg_id ? { prior_msg_id: String(ref.prior_msg_id) } : {}),
     };
   } else {
     delete tmpl.sharedAs;
   }
   seekdeepWritePromptTemplates(data);
   return true;
+}
+
+function seekdeepBumpShareEditCount(guildId, userId, name) {
+  const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  if (!safeName || !guildId || !userId) return false;
+  const data = seekdeepReadPromptTemplates();
+  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
+  if (!tmpl?.sharedAs) return false;
+  tmpl.sharedAs.edit_count = Number(tmpl.sharedAs.edit_count || 0) + 1;
+  tmpl.sharedAs.last_edited_at = new Date().toISOString();
+  seekdeepWritePromptTemplates(data);
+  return true;
+}
+
+const SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS = (() => {
+  const raw = Number(process.env.SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS);
+  // Designer's spec: 14d. Constrain to a sane range so a misconfigured
+  // env var can't disable the feature (0) or hold a stale share forever
+  // (huge number).
+  if (!Number.isFinite(raw) || raw <= 0) return 14;
+  return Math.min(365, Math.max(1, raw));
+})();
+
+function seekdeepPromptsShareAgeDays(ref) {
+  if (!ref) return null;
+  const ts = ref.posted_at || ref.sharedAt;
+  if (!ts) return null;
+  const ms = new Date(ts).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, (Date.now() - ms) / (24 * 60 * 60 * 1000));
 }
 
 function seekdeepIncrementTemplateUse(guildId, userId, name) {
@@ -13852,6 +13891,108 @@ async function seekdeepPromptsTombstoneShare(guildId, userId, deletedTemplate, d
   }
 }
 
+async function seekdeepPromptsTombstoneAndRepost(guildId, userId, templateName, newPrompt, authorTag) {
+  // Past the edit-in-place window: tombstone the old share, post a fresh
+  // embed in the same channel, and update sharedAs with the new message id.
+  // Returns { ok, strategy: 'repost', newMessageId? } or { ok: false, error }.
+  const templates = seekdeepGetUserTemplates(guildId, userId);
+  const tmpl = templates[templateName];
+  const ref = tmpl?.sharedAs;
+  if (!ref?.messageId || !ref?.channelId) return { ok: false, error: 'no existing share' };
+  try {
+    const guild = client?.guilds?.cache?.get?.(String(guildId));
+    if (!guild) return { ok: false, error: 'guild not in cache' };
+    const channel = guild.channels?.cache?.get?.(ref.channelId)
+      || (await guild.channels?.fetch?.(ref.channelId).catch(() => null));
+    if (!channel) return { ok: false, error: 'channel not reachable' };
+
+    // 1. Post the fresh embed first so the tombstone footer can link to it.
+    const importCount = 0;  // fresh share resets the counter
+    const newEmbed = seekdeepPromptsBuildEmbed(
+      { name: templateName, prompt: newPrompt },
+      { authorTag, authorId: userId, importCount },
+    );
+    const sent = await channel.send({
+      embeds: [newEmbed],
+      components: [seekdeepPromptsBuildButtons('pending')],
+    });
+    // Patch the buttons with the real new message id
+    try {
+      await sent.edit({
+        embeds: [newEmbed],
+        components: [seekdeepPromptsBuildButtons(sent.id)],
+      });
+    } catch {}
+
+    // 2. Tombstone the old message with a "superseded by <link>" footer note.
+    try {
+      const oldMsg = await channel.messages?.fetch?.(ref.messageId).catch(() => null);
+      if (oldMsg) {
+        const tombstone = seekdeepPromptsBuildTombstoneEmbed(oldMsg.embeds?.[0], authorTag);
+        // Replace the footer text with a more specific superseded-by note.
+        const supersededNote = '· superseded by ' + sent.url + ' on ' + new Date().toISOString().slice(0, 10);
+        const baseFooter = String(tombstone.footer?.text || '');
+        tombstone.footer = {
+          text: baseFooter.includes('superseded by')
+            ? baseFooter
+            : (baseFooter + ' ' + supersededNote),
+        };
+        await oldMsg.edit({ embeds: [tombstone], components: [] });
+      }
+    } catch (err) {
+      // Non-fatal: even if the old tombstone fails, the fresh share is up.
+      console.warn('[SeekDeep] prompts: old-share tombstone failed:', err?.message || err);
+    }
+
+    // 3. Record the new sharedAs + bump edit_count.
+    const priorMsgId = ref.messageId;
+    seekdeepSetTemplateShareRef(guildId, userId, templateName, {
+      messageId: sent.id,
+      channelId: ref.channelId,
+      sharedAt: new Date().toISOString(),
+      edit_count: Number(ref.edit_count || 0) + 1,
+      last_edited_at: new Date().toISOString(),
+      prior_msg_id: priorMsgId,
+    });
+
+    return { ok: true, strategy: 'repost', newMessageId: sent.id };
+  } catch (err) {
+    console.warn('[SeekDeep] prompts: tombstone-and-repost failed:', err?.message || err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+async function seekdeepPromptsResharePolicyDecide(guildId, userId, templateName, newPrompt, authorTag) {
+  // Picks the right strategy for a re-share based on share age.
+  //   no shared ref         -> { strategy: 'none' } (caller should post fresh)
+  //   age <= max-age days   -> edit-in-place
+  //   age >  max-age days   -> tombstone old + post fresh
+  // Returns { ok, strategy, ageDays, maxAgeDays, messageId, error? }
+  const templates = seekdeepGetUserTemplates(guildId, userId);
+  const tmpl = templates[templateName];
+  if (!tmpl) return { ok: false, strategy: 'failed', error: 'no such template' };
+  const ref = tmpl.sharedAs;
+  if (!ref?.messageId || !ref?.channelId) {
+    return { ok: true, strategy: 'none', ageDays: null, maxAgeDays: SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS };
+  }
+  const ageDays = seekdeepPromptsShareAgeDays(ref);
+
+  if (ageDays !== null && ageDays <= SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS) {
+    const edited = await seekdeepPromptsEditExistingShare(guildId, userId, templateName, newPrompt, authorTag);
+    if (edited) {
+      seekdeepBumpShareEditCount(guildId, userId, templateName);
+      return { ok: true, strategy: 'edit', ageDays, maxAgeDays: SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS, messageId: ref.messageId };
+    }
+    // edit failed (likely message deleted). Fall through to repost so the
+    // user's content still lands somewhere.
+    const result = await seekdeepPromptsTombstoneAndRepost(guildId, userId, templateName, newPrompt, authorTag);
+    return { ...result, ageDays, maxAgeDays: SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS, strategy: result.strategy || 'failed' };
+  }
+
+  const result = await seekdeepPromptsTombstoneAndRepost(guildId, userId, templateName, newPrompt, authorTag);
+  return { ...result, ageDays, maxAgeDays: SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS, strategy: result.strategy || 'failed' };
+}
+
 async function seekdeepPromptsEditExistingShare(guildId, userId, templateName, newPrompt, authorTag) {
   // Edit-in-place: pushes the latest template body into the existing
   // share embed if one exists. Returns true on success, false if the
@@ -14033,6 +14174,82 @@ async function seekdeepHandleTemplateShareCommand(message, raw = '') {
     content: 'Shared `' + name + '` to <#' + promptsChannelId + '>.',
     allowedMentions: { repliedUser: false },
   });
+  return true;
+}
+
+async function seekdeepHandleTemplateEditCommand(message, raw = '') {
+  // `@SeekDeep template edit <name>: <new body>` — explicit edit-in-place
+  // (or tombstone-and-repost past the configured age threshold).
+  // Distinct from `template save <name>: <body>` which auto-pushes shares
+  // but doesn't surface the age decision back to the user.
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = stripped.match(/^templates?\s+edit\s+([a-zA-Z0-9_-]+)\s*[:\s]\s*(.+)$/is);
+  if (!m) return false;
+  if (!message?.guild?.id) {
+    await message.reply({ content: 'Template editing only works inside a server.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const guildId = String(message.guild.id);
+  const userId = String(message.author?.id || '');
+  const name = seekdeepTemplateNameSanitize(m[1]);
+  const newBody = String(m[2] || '').trim();
+  const templates = seekdeepGetUserTemplates(guildId, userId);
+  if (!templates[name]) {
+    await message.reply({ content: 'No template named `' + name + '`. Use `@SeekDeep template list` to see yours, or `template save` to create.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  if (!newBody) {
+    await message.reply({ content: 'No new body. Usage: `@SeekDeep template edit <name>: <new prompt>`.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // Persist the new body
+  const result = seekdeepSaveUserTemplate(guildId, userId, name, newBody);
+  if (!result || result.error) {
+    await message.reply({ content: result?.error || 'Could not save template.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // If the template was never shared, this is just a save — tell the user
+  // so they can `template share` it if they want.
+  if (!result.sharedAs?.messageId) {
+    await message.reply({
+      content: 'Template `' + result.name + '` updated locally. (Not currently shared; run `@SeekDeep template share ' + result.name + '` to post it.)',
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+
+  // Apply the age-aware policy
+  const authorTag = String(message.author?.tag || message.author?.username || 'author');
+  const policy = await seekdeepPromptsResharePolicyDecide(guildId, userId, result.name, result.prompt, authorTag);
+
+  const ageStr = policy.ageDays !== null && policy.ageDays !== undefined
+    ? policy.ageDays.toFixed(1) + 'd'
+    : '?';
+
+  if (policy.strategy === 'edit') {
+    await message.reply({
+      content: 'Template `' + result.name + '` edited in place (share was ' + ageStr + ' old; window is ' + policy.maxAgeDays + 'd).',
+      allowedMentions: { repliedUser: false },
+    });
+  } else if (policy.strategy === 'repost') {
+    await message.reply({
+      content: 'Template `' + result.name + '` past the ' + policy.maxAgeDays + 'd edit window (was ' + ageStr + ' old). Old share tombstoned + fresh embed posted.',
+      allowedMentions: { repliedUser: false },
+    });
+  } else if (policy.strategy === 'none') {
+    // Shouldn't get here since we checked sharedAs above, but handle anyway
+    await message.reply({
+      content: 'Template `' + result.name + '` updated. (No active share to push to.)',
+      allowedMentions: { repliedUser: false },
+    });
+  } else {
+    await message.reply({
+      content: 'Template `' + result.name + '` saved locally, but pushing to the share failed: ' + (policy.error || 'unknown') + '. Try `@SeekDeep template share ' + result.name + '` to post fresh.',
+      allowedMentions: { repliedUser: false },
+    });
+  }
   return true;
 }
 
@@ -17606,6 +17823,13 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // Prompts marketplace: edit-in-place / tombstone-and-repost
+    // "@SeekDeep template edit <name>: <new body>"
+    // Must come BEFORE share/save so the parser sees `edit` first.
+    if (typeof seekdeepHandleTemplateEditCommand === 'function' && await seekdeepHandleTemplateEditCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
     // Prompts marketplace user: "@SeekDeep template share <name>"
     // Must come BEFORE the generic template command handler so "share" doesn't
     // fall through to the no-match branch there.
@@ -20967,14 +21191,17 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE,
     SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI,
     SEEKDEEP_ARCHIVE_NOTIFY_MODES,
-    // Prompts marketplace (Item A)
+    // Prompts marketplace (Item A + E)
     seekdeepPromptsCountVariables,
     seekdeepPromptsBuildEmbed,
     seekdeepPromptsBuildButtons,
     seekdeepPromptsBuildTombstoneEmbed,
+    seekdeepPromptsShareAgeDays,
+    seekdeepBumpShareEditCount,
     SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX,
     SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX,
     SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
+    SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

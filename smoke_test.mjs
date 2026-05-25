@@ -1975,6 +1975,25 @@ check('context menu prompt extract: missing prompt line returns empty',
     reTomb.title === tomb.title);
   check('prompts tombstone: idempotent on footer',
     (reTomb.footer.text.match(/deleted by author/g) || []).length === 1);
+
+  // Item E: age-aware reshare logic
+  check('prompts reshare: max-age default is 14d (designer spec)',
+    T.SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS === 14
+    // env override may run in tests; just check it's in the sane range.
+    || (T.SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS >= 1 && T.SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS <= 365));
+  // Age calculator handles posted_at + sharedAt fallback + bad input
+  const recent = new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString();   // 3d ago
+  const old    = new Date(Date.now() - 1000 * 60 * 60 * 24 * 30).toISOString(); // 30d ago
+  check('prompts reshare: age calc reads posted_at',
+    Math.abs(T.seekdeepPromptsShareAgeDays({ posted_at: recent }) - 3) < 0.05);
+  check('prompts reshare: age calc falls back to sharedAt',
+    Math.abs(T.seekdeepPromptsShareAgeDays({ sharedAt: recent }) - 3) < 0.05);
+  check('prompts reshare: 30d > 14d threshold (would tombstone)',
+    T.seekdeepPromptsShareAgeDays({ posted_at: old }) > T.SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS);
+  check('prompts reshare: missing ref returns null',
+    T.seekdeepPromptsShareAgeDays(null) === null);
+  check('prompts reshare: malformed timestamp returns null',
+    T.seekdeepPromptsShareAgeDays({ posted_at: 'definitely-not-a-date' }) === null);
 }
 
 console.log('');

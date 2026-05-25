@@ -443,10 +443,18 @@ def main() -> int:
               chans.get("123456") == "reply" and chans.get("789") == "silent" and "skip-this" not in chans,
               f"channels={chans}")
 
-        # Reset to silent so we leave clean state
-        c.post("/archive/config",
-               json={"updates": {"mode": "silent", "notify_self": False, "channels": {}}},
-               headers={_TOKEN_HEADER: token})
+        # Teardown: delete data/archive-config.json entirely so the env-flag
+        # fallback (SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY) is restored for any
+        # subsequent smoke runs (including bot-smoke, which assumes the
+        # env-driven default until the GUI strip writes a config file).
+        try:
+            import os as _os
+            from pathlib import Path as _Path
+            cfg_path = _Path("data") / "archive-config.json"
+            if cfg_path.is_file():
+                _os.remove(cfg_path)
+        except Exception:
+            pass
 
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
