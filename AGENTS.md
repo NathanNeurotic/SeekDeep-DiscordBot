@@ -1,5 +1,12 @@
 # Agents & Internal Components
 
+> **Sister docs:**
+> - **[README.md](README.md)** — user-facing install / commands / feature flags.
+> - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant. Repo shape, routing, gotchas, common edits.
+> - **[INTEGRATION.md](INTEGRATION.md)** — GUI ↔ FastAPI wiring.
+>
+> This file is the **architecture canonical**: what each subsystem does and where the key entry points live. Update this in the same change as the code edit.
+
 SeekDeep is a single-file Node bot (`index.js`, ~16k+ lines after v10.0–v10.29) plus a Python FastAPI local AI server (`local_ai_server.py`). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
 
 Function names are stable enough to grep for. If you find a stale reference here while reading the code, please update this file in the same change.

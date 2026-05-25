@@ -5,6 +5,14 @@
 
 SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, web search, and image archiving.
 
+> **Sister docs in this repo:**
+> - **[AGENTS.md](AGENTS.md)** — architecture reference: what each subsystem (chat / vision / image / web search / archive / routing) does and how they connect.
+> - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant picking up the repo cold.
+> - **[INTEGRATION.md](INTEGRATION.md)** — how the GUI mounts onto the FastAPI server (`gui/` static mount, write endpoints, WebSocket bridge, archive bot bridge).
+> - **[MAINTAINER.md](MAINTAINER.md)** — playbook for merging designer-shipped GUI zips without losing audit/auth overrides.
+>
+> This file is the **user-facing canonical**: install, configure, run, commands, feature flags. Internal architecture details live in `AGENTS.md`.
+
 ## Current Local Stack
 
 - Discord bot: `index.js`

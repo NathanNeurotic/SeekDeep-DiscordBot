@@ -1,5 +1,13 @@
 # Codex Repo Brief - SeekDeep Discord Bot
 
+> **Sister docs:**
+> - **[README.md](README.md)** — user-facing install / commands / tunables.
+> - **[AGENTS.md](AGENTS.md)** — architecture canonical: what each agent/subsystem does. When this brief and AGENTS.md disagree about an agent's behavior, **AGENTS.md wins**; update this brief.
+> - **[INTEGRATION.md](INTEGRATION.md)** — GUI ↔ FastAPI wiring.
+> - **[MAINTAINER.md](MAINTAINER.md)** — designer-zip merge protocol + audit overrides.
+>
+> This file is the **onboarding brief**: read it first when picking up the repo cold, then dive into the specific code path. Compact map, not a replacement for reading the actual functions.
+
 This file is a fast handoff for future repo work. It is intentionally a compact map, not a replacement for reading the touched code path. Use it first, then verify the specific functions/files involved in the task.
 
 Line numbers below are from the snapshot when this file was created and will drift. Function names, file names, and route names are the stable lookup keys.

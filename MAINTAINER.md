@@ -129,6 +129,24 @@ git for-each-ref --format='%(refname:short)' refs/heads/ | \
 
 ---
 
+## 4.3 · Doc split (README / AGENTS / CODEX_REPO_BRIEF / INTEGRATION / MAINTAINER)
+
+| File | Role | Audience | Canonical for |
+|---|---|---|---|
+| `README.md` | User-facing manual | new users, contributors | install, configure, run, commands, feature flags, tunables |
+| `AGENTS.md` | Architecture reference | maintainers, internal contributors | each agent/subsystem (chat, vision, image, web search, archive, etc.) and where its entry points live |
+| `CODEX_REPO_BRIEF.md` | AI-assistant onboarding | Codex / Claude / etc. picking up the repo cold | repo shape, routing map, common edit playbooks, gotchas |
+| `INTEGRATION.md` | GUI ↔ backend wiring spec | anyone wiring the GUI to a backend | static mount, write endpoints, auth, WebSocket bridge, archive bot bridge |
+| `MAINTAINER.md` | This file | future-me, anyone merging designer zips | designer-zip merge protocol, audit overrides catalog, recurring slip-ups |
+
+When two of these documents describe the same thing and they disagree:
+- For agent/subsystem behavior → **AGENTS.md wins**, update the others.
+- For user-facing commands → **README.md wins**.
+- For GUI ↔ backend wiring → **INTEGRATION.md wins**.
+- For "how do I handle the next designer zip" → **MAINTAINER.md wins**.
+
+The designer never touches these docs. They're entirely ours to maintain.
+
 ## 4.4 · `.env.default` vs `.env.example`
 
 Two intentional roles, documented in the headers of each file:
