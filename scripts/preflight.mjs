@@ -110,10 +110,10 @@ function runGuiSmoke() {
   const script = path.join(ROOT, 'scripts', 'smoke_gui_endpoints.py');
   if (!existsSync(script)) return { ok: true, detail: 'script missing; skipped' };
   // Skip cleanly if fastapi isn't importable -- e.g. CI without the deps yet.
-  const probe = spawnSync(py, ['-c', 'import fastapi, httpx, pydantic'],
+  const probe = spawnSync(py, ['-c', 'import fastapi, httpx, pydantic, dotenv'],
     { cwd: ROOT, encoding: 'utf8' });
   if (probe.status !== 0) {
-    return { ok: true, detail: 'fastapi/httpx/pydantic not installed; skipped' };
+    return { ok: true, detail: 'fastapi/httpx/pydantic/dotenv not installed; skipped' };
   }
   const r = spawnSync(py, [script], { cwd: ROOT, encoding: 'utf8' });
   if (r.status !== 0) {
