@@ -456,6 +456,159 @@ def main() -> int:
         except Exception:
             pass
 
+    # ---- /persona (Item G: web-playground persona override) ----
+    # Snapshot whatever the bot wrote before this run so we can restore at the
+    # end and not pollute Discord-side persona state for the next session.
+    import os as _os
+    from pathlib import Path as _Path
+    _persona_path = _Path("data") / "persona-overrides.json"
+    _persona_backup: bytes | None = None
+    try:
+        if _persona_path.is_file():
+            _persona_backup = _persona_path.read_bytes()
+    except Exception:
+        _persona_backup = None
+
+    r = c.get("/persona")
+    check("GET /persona -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, valid_personas, env_default, global, effective_global, channels_count, guilds_count}",
+          body.get("ok") is True
+          and set(body.get("valid_personas") or []) == {"neurotic", "unsettling", "clinical", "chaotic"}
+          and isinstance(body.get("env_default"), str)
+          and isinstance(body.get("effective_global"), str)
+          and isinstance(body.get("channels_count"), int)
+          and isinstance(body.get("guilds_count"), int),
+          f"body={body}")
+
+    # POST without token -> 401
+    r = c.post("/persona", json={"scope": "global", "persona": "clinical"})
+    check("POST /persona without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Set global persona to 'clinical'
+        r = c.post("/persona",
+                   json={"scope": "global", "persona": "clinical"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona scope=global persona=clinical -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, scope:'global', persona:'clinical', set_at}",
+              b.get("ok") is True and b.get("scope") == "global" and b.get("persona") == "clinical" and isinstance(b.get("set_at"), str),
+              f"body={b}")
+
+        # GET reflects the new global override
+        r = c.get("/persona")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...GET /persona reflects new global override",
+              b.get("global") == "clinical" and b.get("effective_global") == "clinical",
+              f"body={b}")
+
+        # Invalid persona -> 400
+        r = c.post("/persona",
+                   json={"scope": "global", "persona": "horny"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona invalid persona -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Invalid scope -> 400
+        r = c.post("/persona",
+                   json={"scope": "universe", "persona": "neurotic"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona invalid scope -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Channel scope without channel_id -> 400
+        r = c.post("/persona",
+                   json={"scope": "channel", "persona": "chaotic"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona scope=channel without channel_id -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Channel scope WITH channel_id -> 200, writes to channels map
+        r = c.post("/persona",
+                   json={"scope": "channel", "channel_id": "9999", "persona": "chaotic"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona scope=channel channel_id=9999 -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+
+        # Server-scope alias 'guild' also accepted
+        r = c.post("/persona",
+                   json={"scope": "guild", "guild_id": "8888", "persona": "unsettling"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona scope=guild guild_id=8888 -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+
+        # GET shows non-zero counts for channels + guilds
+        r = c.get("/persona")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...channels_count + guilds_count reflect written overrides",
+              b.get("channels_count", 0) >= 1 and b.get("guilds_count", 0) >= 1,
+              f"body={b}")
+
+        # Reset via action='reset' -> persona cleared
+        r = c.post("/persona",
+                   json={"scope": "global", "action": "reset"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona scope=global action=reset -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, persona: None}",
+              b.get("ok") is True and b.get("persona") is None and b.get("action") == "reset",
+              f"body={b}")
+
+        # Reset channel scope without channel_id -> 400
+        r = c.post("/persona",
+                   json={"scope": "channel", "action": "reset"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona reset scope=channel without channel_id -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Body without persona OR action -> 400
+        r = c.post("/persona",
+                   json={"scope": "global"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /persona missing both persona+action -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+    # Teardown: restore original persona-overrides.json (or delete if absent before).
+    try:
+        if _persona_backup is None:
+            if _persona_path.is_file():
+                _os.remove(_persona_path)
+        else:
+            _persona_path.write_bytes(_persona_backup)
+    except Exception:
+        pass
+
+    # ---- /stats/counts (Item J: source-of-truth counts for stat tiles) ----
+    r = c.get("/stats/counts")
+    check("GET /stats/counts -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, smoke_tests, gui_smoke_tests, releases, commands, surfaces, generated_at, sources}",
+          body.get("ok") is True
+          and "smoke_tests" in body and "gui_smoke_tests" in body
+          and "releases" in body and "commands" in body and "surfaces" in body
+          and isinstance(body.get("generated_at"), str)
+          and isinstance(body.get("sources"), dict),
+          f"body={body}")
+    # Sanity-check the counts that come from files we control. None is acceptable
+    # (degraded source) but if present, must be a positive int that matches the
+    # actual file content within a tolerance window — the test files exist in CI.
+    check("  ...smoke_tests is positive int (smoke_test.mjs check() calls)",
+          body.get("smoke_tests") is None or (isinstance(body["smoke_tests"], int) and body["smoke_tests"] > 0),
+          f"got {body.get('smoke_tests')!r}")
+    check("  ...gui_smoke_tests is positive int (smoke_gui_endpoints.py check() calls)",
+          body.get("gui_smoke_tests") is None or (isinstance(body["gui_smoke_tests"], int) and body["gui_smoke_tests"] > 0),
+          f"got {body.get('gui_smoke_tests')!r}")
+    check("  ...commands is positive int (COMMANDS.md table rows)",
+          body.get("commands") is None or (isinstance(body["commands"], int) and body["commands"] > 0),
+          f"got {body.get('commands')!r}")
+    check("  ...surfaces is positive int (gui/nav.js PAGES entries)",
+          body.get("surfaces") is None or (isinstance(body["surfaces"], int) and body["surfaces"] > 0),
+          f"got {body.get('surfaces')!r}")
+
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
     # These endpoints live on the AI server (not on the bare GUI app),

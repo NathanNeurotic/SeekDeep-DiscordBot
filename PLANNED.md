@@ -72,52 +72,19 @@ Final smoke: bot 565, gui-smoke 85.
 
 #### Queued from designer audit 2026-05-25 ([AUDIT_DESIGNER_2026-05-25.md](AUDIT_DESIGNER_2026-05-25.md))
 
-Designer ran a deep audit on chat.html + the rest of the GUI. Most findings are real, several were based on a stale local copy and need no action (see audit doc § D + § H for the "lessons learned"). New backend asks added:
+Designer ran a deep audit on chat.html + the rest of the GUI. Most findings are real, several were based on a stale local copy and need no action (see audit doc § D + § H for the "lessons learned"). All four new items shipped 2026-05-25 in the same pass:
 
-**G. `POST /persona` endpoint** — wire the chat-page persona pill + Tweaks panel's persona select to the bot's real persona-override system (currently only addressable via `@SeekDeep persona [scope] <name>` Discord command via `seekdeepHandlePersonaCommand` in `index.js`). Designer's audit item #6 + #14.
+- ✅ **G — `POST /persona` endpoint** (`gui_endpoints.py`). GET (open) returns `{ok, valid_personas, env_default, global, effective_global, channels_count, guilds_count}`. POST (token) accepts `{scope, persona}` or `{scope, action:'reset'}`; scopes are `global` / `channel` (+ `channel_id`) / `server`+`guild` alias (+ `guild_id`). Schema adds a new `global` key to `data/persona-overrides.json`; `seekdeepGetEffectivePersona` in index.js extended to check it after channels+guilds but before env default. Smoke tests cover happy path, validation failures, alias, and reset.
+- ✅ **H — Version reconciliation**. `package.json` bumped `10.0.0-fresh-rebuild` → `10.35.0`. `local_ai_server.py:_read_pkg_version()` already sources from package.json so `/health.version`, FastAPI's `version=`, and every `version.js`-rewritten `[data-version]` cell now match release tags. `src-tauri/tauri.conf.json` switched to `"version": "../package.json"` so installer metadata follows.
+- ✅ **I — PWA scope** (`gui/sw.js`). Kept `start_url: chat.html` (the playground is the daily-use surface). Cache expanded to include `events.js` + `version.js` + `playground.js` + `manifest.json` so offline chat.html keeps its event bus + version rewriter + composer wiring. CACHE_VERSION bumped to `v10.35.0-2`. Added explicit comment about the relative-paths-to-worker-URL convention (audit item #12).
+- ✅ **J — `GET /stats/counts` endpoint** (`gui_endpoints.py`). Open GET returns `{ok, smoke_tests, gui_smoke_tests, releases, commands, surfaces, generated_at, sources}`. Source matrix: `smoke_test.mjs check()` count, `scripts/smoke_gui_endpoints.py check()` count, `git tag --list`, `COMMANDS.md` `^\| \`` row count, `gui/nav.js` `PAGES` array length. Each degrades to `null` if its source is missing. Designer Phase 4 still needs to add `data-stat-<key>` attributes to the relevant cells + wire a tiny consumer (extend `version.js` or new `stats.js`) — see `INTEGRATION.md § 3.8`.
 
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| `POST` | `/persona` | `{ scope: 'channel'\|'server'\|'global', persona: 'neurotic'\|'unsettling'\|'clinical'\|'chaotic' }` | `{ ok, persona, scope, effective_at }` |
-| `POST` | `/persona` | `{ scope, action: 'reset' }` | `{ ok, persona: null, scope }` — clears the override |
-| `GET`  | `/persona` | — | `{ ok, current: { scope, persona } }` — currently effective override |
+Final smoke (this pass): bot 565, gui-smoke 107 (was 85, +22 new checks for /persona and /stats/counts).
 
-- Validate `persona` against `SEEKDEEP_VALID_PERSONAS` (`{neurotic, unsettling, clinical, chaotic}`).
-- `reset` is a meta-action that clears the override (not a 5th persona value).
-- `scope: 'channel'` needs a channel context — for the web playground (no channel), default to `scope: 'global'` since the playground is single-user-owner.
-- Token-guarded POST. Open GET.
-- Persist to `data/persona-overrides.json` (likely already exists from Discord-side handler; verify).
-
-Effort: ~1-2 hr. The bot already has the override system + `SEEKDEEP_VALID_PERSONAS`; this is wrapping it in an HTTP route + smoke tests. Likely lives in `gui_endpoints.py`.
-
-**H. Version reconciliation** — `package.json` has `"version": "10.0.0-fresh-rebuild"`. Release tags are `v10.35`. `/health.version` returns the package.json string. `version.js` rewrites every `[data-version]` cell to that string. The visible mismatch designer flagged in their screenshot ("FRESH-REBUILD" pill vs "v10.35" elsewhere) is partly *version.js not rewriting some cells* (page didn't load nav.js / cell missing `data-version` attribute / browser cache) and partly *the source-of-truth value itself looks wrong*. Two paths:
-
-- **Bump `package.json` to `10.35.0`** — release tags match the package.json version, marketing copy matches, every `[data-version]` cell flips to `v10.35.0` once `version.js` runs. Cleanest. Requires picking a versioning convention (semver vs the current label).
-- **Keep `10.0.0-fresh-rebuild`** as the rolling "what's actually built" version and update marketing copy + tags to match. Less common but valid.
-
-Nathan's call. Either way, the fix is editing `package.json` + bumping the affected docs.
-
-**I. PWA scope decision** — `gui/manifest.json` has `start_url: chat.html` and `gui/sw.js` caches only `chat.html` + `styles.css` + `nav.js` + `seekdeep-mark.webp` + Google Fonts. Designer flagged this as "users install the PWA and land on the most-broken page." With the playground now functional, `chat.html` may actually be the right landing — but other pages won't work offline. Options:
-
-- **Keep `chat.html` as `start_url`, expand SW cache** to include `index.html`, `app.html`, `memory.html`, `prompts.html`, `image-ab.html`, `events.js`, `version.js`, `playground.js`, all assets. Bundle size grows but every page survives offline.
-- **Switch `start_url` to `index.html`** (About) so the PWA opens at the directory page, then user navigates from there. Matches the "hub" mental model.
-- **Two-PWA approach**: `chat.html` is the standalone playground PWA; `index.html` is the "everything" PWA. Probably overkill.
-
-Effort: ~1 hour (cache list edits + manifest update). Nathan's call.
-
-**J. `GET /stats/counts` endpoint** — designer audit item #C3. Hardcoded `274 smoke tests` / `35 releases` / `109 commands` / `18 surfaces` on `pitch.html` + `changelog.html` will rot the moment any of those numbers change. Spec:
-
-| Method | Path | Returns |
-|---|---|---|
-| `GET` | `/stats/counts` | `{ ok, smoke_tests, gui_smoke_tests, releases, commands, surfaces, generated_at }` |
-
-- `smoke_tests` — read `pass=N fail=N` from the last preflight log, OR count from a generated artifact
-- `gui_smoke_tests` — same source, gui-smoke stage
-- `releases` — `len(git tag list)` (or last GH release count via API)
-- `commands` — count from a command-registry export (could scan `index.js` for `prefix +` patterns; brittle but works)
-- `surfaces` — `len(nav.js PAGES array)` — could be computed server-side by reading the file, OR hardcoded since nav.js IS the source of truth
-
-Effort: ~1-2 hr depending on how clean we want the data sourcing. Pair with designer Phase 4: add `data-stat-{smoke_tests,releases,commands,surfaces}` attributes to the relevant cells, then a tiny IIFE (or extend version.js) reads `/stats/counts` and rewrites them.
+Also fixed in the same pass (audit items resolvable without designer):
+- ✅ **C5 license mismatch** — `gui/landing.html` (lines 196 + 399) and `gui/pitch.html` (lines 328 + 340) all said "MIT" while `LICENSE` is GPL-2.0. Now all four say `GPL-2.0` / `GPL-2.0 licensed`.
+- ✅ **E13 cBotVram placeholder** (`gui/chat.html` `cLIVE.apply()`) — added `else { set('cBotVram', 'cpu · no gpu'); }` so the static "14.2 / 24 GB" placeholder is overwritten when `/health.gpu` is absent (CPU-only mode). Was lying to the user about VRAM that doesn't exist.
+- ✅ **E12 sw.js relative-paths comment** — added a path-convention note to the file header so anyone moving sw.js knows to adjust SHELL entries.
 
 ---
 

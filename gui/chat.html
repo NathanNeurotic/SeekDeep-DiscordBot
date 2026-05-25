@@ -868,6 +868,10 @@ const SEEKDEEP_BASE = (function() {
       const g = h.gpu || {};
       if (g.used_mb != null && g.total_mb != null) {
         set('cBotVram', `${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
+      } else {
+        // CPU-only or /health.gpu is empty — overwrite the static placeholder
+        // so we don't lie to the user about VRAM that isn't there.
+        set('cBotVram', 'cpu · no gpu');
       }
     },
     start() {

@@ -3,22 +3,35 @@
  * Scope: chat.html ONLY. Other pages don't register this SW.
  *
  * Strategy:
- *   - Cache the static shell (chat.html, styles.css, nav.js, the mark webp, the two Google
- *     Fonts CSS endpoints) on install so the chat client loads offline.
+ *   - Cache the static shell (chat.html, styles.css, nav.js, the three maintainer-owned
+ *     siblings nav.js auto-loads, manifest.json, the mark webp, the two Google Fonts CSS
+ *     endpoints) on install so the chat client loads offline.
  *   - All /chat, /image, /vision, /health and other API calls bypass the cache entirely —
  *     they're always network-first, never staled. (We don't want to serve a stale model
  *     response, ever.)
  *   - Same for /events (WebSocket): SW doesn't intercept those.
  *
+ * Path convention: SHELL paths are RELATIVE to this worker's URL. We register the worker
+ * at gui/sw.js, so 'chat.html' resolves to gui/chat.html. If you ever move sw.js to repo
+ * root or to a subdirectory, every entry in SHELL needs to be adjusted accordingly.
+ *
  * Update: bump CACHE_VERSION when shipping a new chat.html. Old caches are pruned on
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35-1';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.0-2';
 const SHELL = [
   'chat.html',
   'styles.css',
   'nav.js',
+  // Maintainer-owned siblings auto-loaded by nav.js's autoLoadSiblings tail.
+  // Without these in the cache, an offline chat.html load misses the token
+  // interceptor + the live event bus + the version-rewriter + the playground
+  // composer wiring — i.e. the page renders but the playground does nothing.
+  'events.js',
+  'version.js',
+  'playground.js',
+  'manifest.json',
   'assets/seekdeep-mark.webp',
   // Google Fonts CSS — the font files themselves come from fonts.gstatic.com and are
   // cache-controlled by the browser; we just cache the CSS index so the @font-face

@@ -12839,14 +12839,15 @@ const SEEKDEEP_VALID_CENSORSHIP = new Set(['off', 'loose', 'minimal']);
 
 function seekdeepReadPersonaOverrides() {
   try {
-    if (!fs.existsSync(SEEKDEEP_PERSONA_OVERRIDES_PATH)) return { channels: {}, guilds: {} };
+    if (!fs.existsSync(SEEKDEEP_PERSONA_OVERRIDES_PATH)) return { channels: {}, guilds: {}, global: null };
     const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return { channels: {}, guilds: {} };
+    if (!parsed || typeof parsed !== 'object') return { channels: {}, guilds: {}, global: null };
     if (!parsed.channels || typeof parsed.channels !== 'object') parsed.channels = {};
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    if (!('global' in parsed)) parsed.global = null;
     return parsed;
   } catch {
-    return { channels: {}, guilds: {} };
+    return { channels: {}, guilds: {}, global: null };
   }
 }
 
@@ -12868,6 +12869,11 @@ function seekdeepGetEffectivePersona(channelId = '', guildId = '') {
     if (ch?.persona && SEEKDEEP_VALID_PERSONAS.has(String(ch.persona).toLowerCase())) return String(ch.persona).toLowerCase();
     const g = data.guilds[String(guildId || '')];
     if (g?.persona && SEEKDEEP_VALID_PERSONAS.has(String(g.persona).toLowerCase())) return String(g.persona).toLowerCase();
+    // Global override (settable via web playground POST /persona scope='global').
+    // Falls below channel + guild but above env default so Discord per-channel
+    // overrides still take priority.
+    const gl = data.global;
+    if (gl?.persona && SEEKDEEP_VALID_PERSONAS.has(String(gl.persona).toLowerCase())) return String(gl.persona).toLowerCase();
   } catch {}
   return env;
 }

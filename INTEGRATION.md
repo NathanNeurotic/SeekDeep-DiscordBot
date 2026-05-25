@@ -324,6 +324,59 @@ Designer adoption (one attribute, no other changes):
 
 Optional `data-version-prefix="v"` forces a prefix; `data-version-raw` suppresses the auto `v` prefix.
 
+## 3.7 · Persona override over HTTP (`/persona`)
+
+The bot's persona ("neurotic" / "unsettling" / "clinical" / "chaotic") is overridable per-channel and per-guild via the Discord command `@SeekDeep persona [scope] <name>`. Designer's chat-page persona pill + Tweaks panel need the same control without going through Discord, so `gui_endpoints.py` wraps the existing `data/persona-overrides.json` store over HTTP.
+
+| Method | Path | Auth | Body | Returns |
+|---|---|---|---|---|
+| `GET` | `/persona` | open | — | `{ ok, valid_personas, env_default, global, effective_global, channels_count, guilds_count }` |
+| `POST` | `/persona` | token | `{ scope, persona }` | `{ ok, scope, persona, set_at }` |
+| `POST` | `/persona` | token | `{ scope, action: "reset" }` | `{ ok, scope, persona: null, action: "reset" }` |
+
+**Scopes:** `global` (web-playground default — no Discord context needed), `channel` (requires `channel_id` in body), `server` / `guild` (requires `guild_id`).
+
+**Validation:** `persona` must be one of `neurotic | unsettling | clinical | chaotic`. `reset` is a meta-action that clears the override, not a 5th persona value. Schema:
+
+```json
+{
+  "channels": { "<channel_id>": { "persona": "clinical", "setBy": "...", "setAt": "..." } },
+  "guilds":   { "<guild_id>":   { "persona": "chaotic",  "setBy": "...", "setAt": "..." } },
+  "global":   { "persona": "neurotic", "setBy": "web-owner", "setAt": "..." }
+}
+```
+
+**Effective persona resolution** (in `seekdeepGetEffectivePersona`, `index.js`): channel override → guild override → global override → env `SEEKDEEP_PERSONA` → `"neurotic"`. Discord per-channel commands still take priority over the web-playground global override.
+
+## 3.8 · Source-of-truth stat counts (`/stats/counts`)
+
+`pitch.html`, `changelog.html`, and the topnav stat tiles previously hardcoded `274 smoke tests / 35 releases / 109 commands / 18 surfaces`. Those numbers go stale the moment any of them changes. `GET /stats/counts` returns the live numbers so designer can mark each tile with `data-stat-<key>` and a tiny IIFE (or `version.js` extension) rewrites them on load.
+
+| Method | Path | Auth | Returns |
+|---|---|---|---|
+| `GET` | `/stats/counts` | open | `{ ok, smoke_tests, gui_smoke_tests, releases, commands, surfaces, generated_at, sources }` |
+
+**Sources** (best-effort, each degrades to `null` if its source file is missing):
+
+| Field | Source |
+|---|---|
+| `smoke_tests` | count of `check(` calls in `smoke_test.mjs` |
+| `gui_smoke_tests` | count of `check(` calls in `scripts/smoke_gui_endpoints.py` |
+| `releases` | `git tag --list \| wc -l` |
+| `commands` | count of table rows in `COMMANDS.md` (`^\| \`` regex) |
+| `surfaces` | count of entries inside `PAGES = [ ... ]` in `gui/nav.js` |
+
+**Designer adoption:** add `data-stat-<key>` to the relevant cells. Example wiring (Phase 4 designer task):
+
+```html
+<div class="num" data-stat-smoke_tests>274</div>
+<div class="num" data-stat-releases>35</div>
+<div class="num" data-stat-commands>109</div>
+<div class="num" data-stat-surfaces>18</div>
+```
+
+…then a small consumer (in `version.js` or a new `stats.js`) fetches `/stats/counts` once on load and rewrites every `[data-stat-X]` element. Until that consumer is wired, the existing literals remain visible.
+
 ## 4 · Archive browser bot bridge
 
 The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.

@@ -84,6 +84,19 @@ class ArchiveConfigPatch(BaseModel):
     updates: dict
 
 
+class PersonaPatch(BaseModel):
+    """Body for POST /persona. Schema:
+        { scope: 'channel'|'server'|'global', persona: 'neurotic'|'unsettling'|'clinical'|'chaotic' }
+        { scope: 'channel'|'server'|'global', action: 'reset' }
+    For 'channel' / 'server' scopes the request must include channel_id / guild_id.
+    The web playground (single-user-owner, no Discord context) always uses scope='global'."""
+    scope: str = "global"
+    persona: str | None = None
+    action: str | None = None
+    channel_id: str | None = None
+    guild_id: str | None = None
+
+
 # Constants mirror index.js. If you bump the bot-side env vars, mirror here too;
 # the bot remains source of truth -- these are just the validation ceilings on
 # the GUI write path so we don't silently accept facts the bot would reject.
@@ -986,6 +999,192 @@ def register_gui_endpoints(
             else:
                 redacted[k] = v
         return {"ok": True, "env": redacted}
+
+    # ----- /persona -----
+    # Wraps data/persona-overrides.json (the bot's persona override store) over
+    # HTTP so the chat.html persona pill + the Tweaks panel can change persona
+    # without going through Discord. See PLANNED.md item G.
+    #
+    # Schema mirrors what index.js's seekdeepReadPersonaOverrides() produces:
+    #   { channels: {<channel_id>: {persona, setBy, setAt}},
+    #     guilds:   {<guild_id>:   {persona, setBy, setAt}},
+    #     global:   {persona, setBy, setAt}  ← NEW; checked by extended
+    #                                          seekdeepGetEffectivePersona() after
+    #                                          channels+guilds, before env default }
+    #
+    # The web playground has no channel/guild context, so it always sends
+    # scope='global'. Channel/server scopes are accepted for symmetry but
+    # require channel_id / guild_id in the body.
+    _persona_overrides_path = _data_dir / "persona-overrides.json"
+    _VALID_PERSONAS = {"neurotic", "unsettling", "clinical", "chaotic"}
+    _VALID_SCOPES = {"channel", "server", "guild", "global"}
+    _WEB_OWNER_ID = "web-owner"  # sentinel for setBy when the call comes from the playground
+
+    def _read_persona_overrides() -> dict:
+        try:
+            if not _persona_overrides_path.is_file():
+                return {"channels": {}, "guilds": {}, "global": None}
+            data = json.loads(_persona_overrides_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"channels": {}, "guilds": {}, "global": None}
+            if not isinstance(data.get("channels"), dict): data["channels"] = {}
+            if not isinstance(data.get("guilds"), dict):   data["guilds"] = {}
+            if "global" not in data: data["global"] = None
+            return data
+        except Exception:
+            return {"channels": {}, "guilds": {}, "global": None}
+
+    def _env_default_persona() -> str:
+        env = _read_env_kv(_env_path)
+        v = str(env.get("SEEKDEEP_PERSONA", "") or "").strip().lower()
+        return v if v in _VALID_PERSONAS else "neurotic"
+
+    @app.get("/persona")
+    def get_persona():
+        data = _read_persona_overrides()
+        glob = data.get("global") or {}
+        global_persona = str(glob.get("persona") or "").lower() if isinstance(glob, dict) else ""
+        env_default = _env_default_persona()
+        effective_global = global_persona if global_persona in _VALID_PERSONAS else env_default
+        return {
+            "ok": True,
+            "valid_personas": sorted(_VALID_PERSONAS),
+            "env_default": env_default,
+            "global": global_persona or None,
+            "effective_global": effective_global,
+            "channels_count": len(data.get("channels") or {}),
+            "guilds_count": len(data.get("guilds") or {}),
+        }
+
+    @app.post("/persona", dependencies=[Depends(_require_gui_token)])
+    def post_persona(patch: PersonaPatch):
+        scope = (patch.scope or "global").strip().lower()
+        if scope == "guild":
+            scope = "server"  # alias
+        if scope not in {"channel", "server", "global"}:
+            raise HTTPException(400, f"scope must be one of: channel, server, global (got {scope!r})")
+
+        action = (patch.action or "").strip().lower() or None
+        persona = (patch.persona or "").strip().lower() or None
+
+        if action == "reset":
+            data = _read_persona_overrides()
+            if scope == "global":
+                data["global"] = None
+            elif scope == "channel":
+                cid = (patch.channel_id or "").strip()
+                if not cid:
+                    raise HTTPException(400, "scope='channel' reset requires channel_id")
+                data["channels"].pop(cid, None)
+            elif scope == "server":
+                gid = (patch.guild_id or "").strip()
+                if not gid:
+                    raise HTTPException(400, "scope='server' reset requires guild_id")
+                data["guilds"].pop(gid, None)
+            _atomic_write_json(_persona_overrides_path, data)
+            return {"ok": True, "scope": scope, "persona": None, "action": "reset"}
+
+        if not persona:
+            raise HTTPException(400, "body must include either persona='...' or action='reset'")
+        if persona not in _VALID_PERSONAS:
+            raise HTTPException(400, f"persona must be one of: {sorted(_VALID_PERSONAS)} (got {persona!r})")
+
+        entry = {"persona": persona, "setBy": _WEB_OWNER_ID, "setAt": _now_iso()}
+        data = _read_persona_overrides()
+        if scope == "global":
+            data["global"] = entry
+        elif scope == "channel":
+            cid = (patch.channel_id or "").strip()
+            if not cid:
+                raise HTTPException(400, "scope='channel' requires channel_id")
+            data["channels"][cid] = entry
+        elif scope == "server":
+            gid = (patch.guild_id or "").strip()
+            if not gid:
+                raise HTTPException(400, "scope='server' requires guild_id")
+            data["guilds"][gid] = entry
+        _atomic_write_json(_persona_overrides_path, data)
+        return {"ok": True, "scope": scope, "persona": persona, "set_at": entry["setAt"]}
+
+    # ----- GET /stats/counts -----
+    # Source-of-truth counts that pages display in their stat tiles. Replaces
+    # the hardcoded 274/35/109/18 literals on pitch.html + changelog.html so
+    # they stop rotting whenever a test/release/command/surface ships. See
+    # PLANNED.md item J.
+    #
+    # Each count has a "best-effort" data source — degrades to None if the
+    # source file is missing so the endpoint can't crash the GUI. The endpoint
+    # is open (no token) because the numbers are public anyway.
+    _smoke_test_path     = root / "smoke_test.mjs"
+    _smoke_gui_path      = root / "scripts" / "smoke_gui_endpoints.py"
+    _commands_md_path    = root / "COMMANDS.md"
+    _nav_js_path         = root / "gui" / "nav.js"
+
+    _CHECK_CALL_RE   = re.compile(r"^\s*check\(", re.MULTILINE)
+    _CMD_ROW_RE      = re.compile(r"^\|\s*`", re.MULTILINE)
+    _NAV_PAGE_ENTRY  = re.compile(r"^\s*\{\s*id\s*:\s*'", re.MULTILINE)
+
+    def _count_pattern(path: Path, regex: re.Pattern) -> int | None:
+        try:
+            if not path.is_file():
+                return None
+            return len(regex.findall(path.read_text(encoding="utf-8", errors="replace")))
+        except Exception:
+            return None
+
+    def _count_git_tags() -> int | None:
+        try:
+            r = subprocess.run(
+                ["git", "tag", "--list"],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode != 0:
+                return None
+            return sum(1 for line in r.stdout.splitlines() if line.strip())
+        except Exception:
+            return None
+
+    def _count_nav_surfaces() -> int | None:
+        # Count entries inside the PAGES = [ ... ] block in gui/nav.js. We
+        # scope to the PAGES region so unrelated `{ id: '...' }` literals
+        # elsewhere in the file don't inflate the count.
+        try:
+            if not _nav_js_path.is_file():
+                return None
+            text = _nav_js_path.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r"const\s+PAGES\s*=\s*\[(.*?)\];", text, re.DOTALL)
+            if not m:
+                return None
+            return len(_NAV_PAGE_ENTRY.findall(m.group(1)))
+        except Exception:
+            return None
+
+    @app.get("/stats/counts")
+    def get_stats_counts():
+        smoke_tests     = _count_pattern(_smoke_test_path, _CHECK_CALL_RE)
+        gui_smoke_tests = _count_pattern(_smoke_gui_path,  _CHECK_CALL_RE)
+        commands        = _count_pattern(_commands_md_path, _CMD_ROW_RE)
+        releases        = _count_git_tags()
+        surfaces        = _count_nav_surfaces()
+        return {
+            "ok": True,
+            "smoke_tests":     smoke_tests,
+            "gui_smoke_tests": gui_smoke_tests,
+            "releases":        releases,
+            "commands":        commands,
+            "surfaces":        surfaces,
+            "generated_at":    _now_iso(),
+            "sources": {
+                "smoke_tests":     "smoke_test.mjs (check() calls)",
+                "gui_smoke_tests": "scripts/smoke_gui_endpoints.py (check() calls)",
+                "releases":        "git tag --list",
+                "commands":        "COMMANDS.md (table rows)",
+                "surfaces":        "gui/nav.js (PAGES array)",
+            },
+        }
 
     # ----- WebSocket /events -----
     # Browsers can't set headers on the initial WS handshake, so auth is via
