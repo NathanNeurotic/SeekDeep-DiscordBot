@@ -10,7 +10,12 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 > - **HuggingFace Hub** — when you download a model via `huggingface_hub` (or `POST /model/install` with `backend=hf`), HF observes the model-download request. If you set `HF_TOKEN`, that token is sent on each download.
 > - **Ollama** — runs as a local daemon by default (no outbound network), but Ollama's own `ollama pull` reaches out to `registry.ollama.ai`. If you set custom OLLAMA env vars to point at a remote daemon, your prompts go there instead.
 > - **SearXNG** — local by default; the web queries you make then go out to whichever upstream search engines your SearXNG instance is configured to use.
-> - **Optional `openai-compat` chat backend** (DeepSeek, Groq, OpenRouter, Together, OpenAI itself, etc.) — set a chat role to `openai-compat` and your prompts for that role leave the box to whichever provider you point it at. Off by default. Backend / endpoint / API key are all opt-in env vars; see `.env.example` and `INTEGRATION.md § 3.4`.
+> - **Optional remote chat backends** (`openai-compat`, `anthropic`, `gemini`) — when a chat role is configured for one of these, prompts for that role leave the box to whichever provider you point it at. Off by default; opt-in per role via env. Covered providers:
+>   - `openai-compat` — OpenAI, DeepSeek, Groq, **xAI / Grok**, OpenRouter, Together, Mistral La Plateforme, Perplexity, plus any local proxy in openai-mode (LM Studio, vLLM, tgwui).
+>   - `anthropic` — native Claude API (`api.anthropic.com`).
+>   - `gemini` — native Google Gemini API (`generativelanguage.googleapis.com`).
+>
+>   Each remote provider has its own privacy / data-retention / training policy. SeekDeep cannot influence what they do with prompts you send via these backends. Stay on `hf` / `ollama` (or use a local openai-compat proxy) for anything you want to keep off-network. See `.env.example` and `INTEGRATION.md § 3.4`.
 >
 > Anything collected by those services is governed by *their* terms, not SeekDeep's. Run with the defaults (loopback FastAPI + local SearXNG + local Ollama + 127.0.0.1 binding on port 7865) to minimize the surface area.
 

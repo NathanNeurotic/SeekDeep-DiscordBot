@@ -96,7 +96,9 @@ The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm
 
 - **`hf`** (default) — in-process via `transformers` + `bitsandbytes`. Counts against the SDXL / vision VRAM budget. Per-role pinning, eviction, fallback all apply.
 - **`ollama`** — out-of-process via the Ollama daemon (default `http://127.0.0.1:11434`). Separate VRAM allocation managed by Ollama; **does not** count against this server's `vram_can_fit` budget.
-- **`openai-compat`** — remote `/v1/chat/completions` endpoint. **Sends prompts off the box.** Covers OpenAI, DeepSeek, Groq, OpenRouter, Together, Mistral La Plateforme, OpenRouter, perplexity, LM Studio / vLLM / text-generation-webui in openai-mode, etc. Per-role API URL + key.
+- **`openai-compat`** — remote `/v1/chat/completions` endpoint. **Sends prompts off the box.** Covers OpenAI, DeepSeek, Groq, **xAI / Grok**, OpenRouter, Together, Mistral La Plateforme, Perplexity, plus any local proxy in openai-mode (LM Studio, vLLM, tgwui). Per-role API URL + key.
+- **`anthropic`** — Anthropic's native `/v1/messages` endpoint. **Sends prompts off the box.** Distinct from openai-compat because of different auth header (`x-api-key`) and message shape (system at top level). Claude models only.
+- **`gemini`** — Google's native `/v1beta/models/{model}:generateContent`. **Sends prompts off the box.** Different again: `x-goog-api-key` auth, model name in URL, `user`/`model` role names. Gemini models only.
 
 ### Resolution
 
@@ -109,7 +111,7 @@ LOCAL_CHAT_LIGHTWEIGHT_BACKEND=ollama
 LOCAL_CHAT_REFINE_BACKEND=ollama
 ```
 
-Anything other than `hf` / `ollama` / `openai-compat` is normalized to `hf`. Resolution order per role: per-role env → global `LOCAL_CHAT_BACKEND` → `hf`.
+Anything other than `hf` / `ollama` / `openai-compat` / `anthropic` / `gemini` is normalized to `hf`. Resolution order per role: per-role env → global `LOCAL_CHAT_BACKEND` → `hf`.
 
 For `openai-compat`, the role's endpoint resolves the same way (per-role `LOCAL_CHAT_<ROLE>_API_URL` + `_API_KEY` → global `OPENAI_API_BASE_URL` + `OPENAI_API_KEY`). This lets different roles target different providers (e.g. cheap Groq for `default_chat`, premium OpenAI for `quality_text`).
 
@@ -121,7 +123,9 @@ The role's existing `LOCAL_CHAT_<...>_MODEL_ID` env value changes meaning based 
 |---|---|
 | `hf` | `meta-llama/Llama-3.1-8B-Instruct` (HuggingFace repo ID) |
 | `ollama` | `llama3:8b` (Ollama tag, with optional `:version`) |
-| `openai-compat` | `deepseek-chat` / `gpt-4o-mini` / `mistral-small-latest` / `anthropic/claude-3.5-sonnet` (via OpenRouter) — whatever the remote provider names it |
+| `openai-compat` | `deepseek-chat` / `gpt-4o-mini` / `grok-2-latest` / `mistral-small-latest` / `anthropic/claude-3.5-sonnet` (via OpenRouter) — whatever the remote provider names it |
+| `anthropic` | `claude-3-5-sonnet-20241022` / `claude-3-5-haiku-20241022` / `claude-3-opus-20240229` (Anthropic native names) |
+| `gemini` | `gemini-2.0-flash` / `gemini-1.5-pro` / `gemini-2.5-pro-exp-03-25` (Google Gemini model names) |
 
 ### Auto-pull
 
@@ -210,7 +214,9 @@ Local backends (`hf`, `ollama`) keep everything on `127.0.0.1`.
 - **default_chat (heavy, every conversation)** — usually HF with 4-bit quant for max quality per VRAM byte. Ollama works too but uses different (often less tight) quantization.
 - **quality_text (one-off serious answers)** — Ollama is great here: no VRAM displacement of the resident default_chat, and Ollama's swap is fast.
 - **lightweight_chat (short replies)** — Ollama: tiny models like `phi3:mini` boot in <1s and don't fight the SDXL pipeline for VRAM.
-- **`openai-compat` (any role)** — pick this when you want a frontier model that doesn't fit locally (Claude Opus, GPT-4, DeepSeek R1) and you're OK with prompts leaving the box. Common patterns: assign `reasoning_code` to OpenAI o1 via OpenRouter; `quality_text` to DeepSeek-Chat for cost; or point at a **local** LM Studio / vLLM / tgwui-openai-mode proxy to use the openai-compat backend without anything going off-network.
+- **`openai-compat` (any role)** — pick this when you want a frontier model that doesn't fit locally (Claude via OpenRouter, GPT-4, DeepSeek R1, Grok) and you're OK with prompts leaving the box. Common patterns: assign `reasoning_code` to OpenAI o1 via OpenRouter; `quality_text` to DeepSeek-Chat for cost; xAI's Grok via `https://api.x.ai/v1`; or point at a **local** LM Studio / vLLM / tgwui-openai-mode proxy to use the openai-compat backend without anything going off-network.
+- **`anthropic` (any role)** — pick this when you want native Claude with direct billing through Anthropic (skip the OpenRouter middleman). Claude 3.5 Sonnet / Opus / Haiku. Sends prompts off-box.
+- **`gemini` (any role)** — pick this when you want Google's Gemini family with native billing through Google AI Studio / Vertex. Gemini 2.0 Flash, 1.5 Pro, 2.5 Pro exp. Sends prompts off-box.
 - **vision / image** — must stay HF. Ollama doesn't run SDXL or Qwen2.5-VL.
 
 ## 3.5 · WebSocket event bridge (`/events`)

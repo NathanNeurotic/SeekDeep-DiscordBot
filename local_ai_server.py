@@ -706,7 +706,7 @@ CHAT_ROLE_BACKEND_ENV = {
 }
 
 
-CHAT_BACKEND_KINDS = {"hf", "ollama", "openai-compat"}
+CHAT_BACKEND_KINDS = {"hf", "ollama", "openai-compat", "anthropic", "gemini"}
 
 
 def _resolve_chat_backend(role: str) -> str:
@@ -975,6 +975,221 @@ def _openai_compat_chat(messages: list[dict], model: str, base_url: str,
     if not choices:
         return ""
     return str((choices[0].get("message") or {}).get("content") or "").strip()
+
+
+# ===== Anthropic native backend (/v1/messages) =====
+# Anthropic's API is NOT OpenAI-compatible. Different shape:
+#   - System prompt at top level (not in messages array)
+#   - Auth via x-api-key header (not Bearer)
+#   - anthropic-version header required
+#   - Response: content[].text (list of content blocks)
+#
+# Set a chat role's backend to 'anthropic' to route through claude-*.
+# Sends prompts off-box -- same privacy warning as openai-compat.
+
+ANTHROPIC_API_BASE_URL_DEFAULT = "https://api.anthropic.com/v1"
+ANTHROPIC_VERSION_DEFAULT = "2023-06-01"
+ANTHROPIC_TIMEOUT_SECS = float(os.getenv("ANTHROPIC_TIMEOUT_SECS", "120"))
+ANTHROPIC_PROBE_TIMEOUT_SECS = float(os.getenv("ANTHROPIC_PROBE_TIMEOUT_SECS", "5"))
+
+
+def _resolve_anthropic_endpoint(role: str) -> tuple[str, str, str]:
+    """Return (base_url, api_key, anthropic_version). Resolution mirrors
+    openai-compat: per-role override -> global ANTHROPIC_* -> Anthropic
+    public default URL. Shares the same LOCAL_CHAT_<ROLE>_API_URL/KEY
+    per-role envs as openai-compat (the BACKEND env decides interpretation)."""
+    role_clean = (role or "").strip().lower()
+    url = ""
+    key = ""
+    if role_clean in CHAT_ROLE_API_URL_ENV:
+        url = (os.getenv(CHAT_ROLE_API_URL_ENV[role_clean], "") or "").strip()
+    if role_clean in CHAT_ROLE_API_KEY_ENV:
+        key = (os.getenv(CHAT_ROLE_API_KEY_ENV[role_clean], "") or "").strip()
+    if not url:
+        url = (os.getenv("ANTHROPIC_API_BASE_URL", "") or "").strip() or ANTHROPIC_API_BASE_URL_DEFAULT
+    if not key:
+        key = (os.getenv("ANTHROPIC_API_KEY", "") or "").strip()
+    version = (os.getenv("ANTHROPIC_VERSION", "") or "").strip() or ANTHROPIC_VERSION_DEFAULT
+    return url.rstrip("/"), key, version
+
+
+def _anthropic_request(base_url: str, api_key: str, version: str,
+                       path: str, body: dict | None = None,
+                       method: str = "POST", timeout: float | None = None) -> dict:
+    if not base_url:
+        raise RuntimeError("anthropic base URL is empty")
+    url = f"{base_url}{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = _seekdeep_urllib_req.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    if api_key:
+        req.add_header("x-api-key", api_key)
+    req.add_header("anthropic-version", version or ANTHROPIC_VERSION_DEFAULT)
+    t = timeout if timeout is not None else ANTHROPIC_TIMEOUT_SECS
+    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw else {}
+
+
+def _anthropic_probe(base_url: str, api_key: str, version: str) -> tuple[bool, str]:
+    """Anthropic exposes GET /v1/models. Use that to verify auth + reachability."""
+    if not base_url:
+        return False, "no base URL configured"
+    if not api_key:
+        return False, "ANTHROPIC_API_KEY missing"
+    try:
+        _anthropic_request(base_url, api_key, version, "/models", method="GET",
+                            timeout=ANTHROPIC_PROBE_TIMEOUT_SECS)
+        return True, "endpoint reachable"
+    except _seekdeep_urllib_err.HTTPError as e:
+        return False, f"HTTP {e.code} -- check ANTHROPIC_API_KEY"
+    except Exception as e:
+        return False, f"unreachable: {e}"
+
+
+def _split_system_from_messages(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Anthropic + Gemini both take `system` separately from the messages
+    array. Pull every system-role entry out and concatenate; return
+    (system_text, remaining_messages_in_order)."""
+    sys_parts: list[str] = []
+    remaining: list[dict] = []
+    for m in messages:
+        if m.get("role") == "system":
+            content = str(m.get("content") or "").strip()
+            if content:
+                sys_parts.append(content)
+        else:
+            remaining.append(m)
+    return ("\n\n".join(sys_parts), remaining)
+
+
+def _anthropic_chat(messages: list[dict], model: str, base_url: str,
+                    api_key: str, version: str,
+                    temperature: float, max_tokens: int) -> str:
+    """Call /v1/messages. Returns the assistant text from content[].text."""
+    system_text, msgs = _split_system_from_messages(messages)
+    # Anthropic only accepts 'user' and 'assistant' roles in messages
+    sanitized = []
+    for m in msgs:
+        role = "assistant" if m.get("role") == "assistant" else "user"
+        content = str(m.get("content") or "")
+        if content:
+            sanitized.append({"role": role, "content": content})
+    body: dict = {
+        "model": model,
+        "messages": sanitized,
+        "max_tokens": int(max_tokens),
+        "temperature": max(0.0, min(1.0, float(temperature))),
+    }
+    if system_text:
+        body["system"] = system_text
+    result = _anthropic_request(base_url, api_key, version, "/messages",
+                                body=body, timeout=ANTHROPIC_TIMEOUT_SECS)
+    # content is a list of {type, text|...} blocks; concatenate all text blocks
+    blocks = result.get("content") or []
+    pieces = [str(b.get("text") or "") for b in blocks if b.get("type") == "text"]
+    return "".join(pieces).strip()
+
+
+# ===== Google Gemini native backend =====
+# Distinct from both OpenAI and Anthropic. Notably:
+#   - Model name embedded in URL: /v1beta/models/{model}:generateContent
+#   - role values are 'user' and 'model' (NOT 'assistant')
+#   - system prompt under top-level 'systemInstruction'
+#   - Auth via x-goog-api-key header
+#   - Response shape: candidates[].content.parts[].text
+
+GEMINI_API_BASE_URL_DEFAULT = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_TIMEOUT_SECS = float(os.getenv("GEMINI_TIMEOUT_SECS", "120"))
+GEMINI_PROBE_TIMEOUT_SECS = float(os.getenv("GEMINI_PROBE_TIMEOUT_SECS", "5"))
+
+
+def _resolve_gemini_endpoint(role: str) -> tuple[str, str]:
+    """Return (base_url, api_key). Resolution: per-role override ->
+    global GEMINI_API_BASE_URL/KEY -> Gemini public default URL."""
+    role_clean = (role or "").strip().lower()
+    url = ""
+    key = ""
+    if role_clean in CHAT_ROLE_API_URL_ENV:
+        url = (os.getenv(CHAT_ROLE_API_URL_ENV[role_clean], "") or "").strip()
+    if role_clean in CHAT_ROLE_API_KEY_ENV:
+        key = (os.getenv(CHAT_ROLE_API_KEY_ENV[role_clean], "") or "").strip()
+    if not url:
+        url = (os.getenv("GEMINI_API_BASE_URL", "") or "").strip() or GEMINI_API_BASE_URL_DEFAULT
+    if not key:
+        key = (os.getenv("GEMINI_API_KEY", "") or "").strip()
+    return url.rstrip("/"), key
+
+
+def _gemini_request(base_url: str, api_key: str, path: str,
+                    body: dict | None = None, method: str = "POST",
+                    timeout: float | None = None) -> dict:
+    if not base_url:
+        raise RuntimeError("gemini base URL is empty")
+    url = f"{base_url}{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = _seekdeep_urllib_req.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    if api_key:
+        req.add_header("x-goog-api-key", api_key)
+    t = timeout if timeout is not None else GEMINI_TIMEOUT_SECS
+    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw else {}
+
+
+def _gemini_probe(base_url: str, api_key: str) -> tuple[bool, str]:
+    """Gemini exposes GET /models. Use it to verify auth + reachability."""
+    if not base_url:
+        return False, "no base URL configured"
+    if not api_key:
+        return False, "GEMINI_API_KEY missing"
+    try:
+        _gemini_request(base_url, api_key, "/models", method="GET",
+                         timeout=GEMINI_PROBE_TIMEOUT_SECS)
+        return True, "endpoint reachable"
+    except _seekdeep_urllib_err.HTTPError as e:
+        return False, f"HTTP {e.code} -- check GEMINI_API_KEY"
+    except Exception as e:
+        return False, f"unreachable: {e}"
+
+
+def _gemini_chat(messages: list[dict], model: str, base_url: str,
+                  api_key: str, temperature: float, max_tokens: int) -> str:
+    """Call /models/{model}:generateContent. Returns the candidate text."""
+    system_text, msgs = _split_system_from_messages(messages)
+    # Gemini role names: assistant -> model, everything else -> user
+    contents = []
+    for m in msgs:
+        role = "model" if m.get("role") == "assistant" else "user"
+        content = str(m.get("content") or "")
+        if not content:
+            continue
+        contents.append({"role": role, "parts": [{"text": content}]})
+    body: dict = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": max(0.0, min(2.0, float(temperature))),
+            "maxOutputTokens": int(max_tokens),
+            "topP": 0.9,
+        },
+    }
+    if system_text:
+        body["systemInstruction"] = {"parts": [{"text": system_text}]}
+    # Model in URL, not body
+    path = f"/models/{model}:generateContent"
+    result = _gemini_request(base_url, api_key, path, body=body,
+                              timeout=GEMINI_TIMEOUT_SECS)
+    candidates = result.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(str(p.get("text") or "") for p in parts).strip()
+
+
+def b64_to_bytes(data: str) -> bytes:
     if "," in data and data.strip().startswith("data:"):
         data = data.split(",", 1)[1]
     return base64.b64decode(data)
@@ -1385,11 +1600,18 @@ def health():
     for role, backend in _chat_backends.items():
         if backend == "openai-compat":
             base_url, _key = _resolve_openai_endpoint(role)
-            _remote_chat_endpoints[role] = {
-                "endpoint": base_url or "(unconfigured)",
-                "external": True,
-                "warning": "prompts for this role leave the local machine",
-            }
+        elif backend == "anthropic":
+            base_url, _key, _ver = _resolve_anthropic_endpoint(role)
+        elif backend == "gemini":
+            base_url, _key = _resolve_gemini_endpoint(role)
+        else:
+            continue
+        _remote_chat_endpoints[role] = {
+            "backend": backend,
+            "endpoint": base_url or "(unconfigured)",
+            "external": True,
+            "warning": "prompts for this role leave the local machine",
+        }
     return {
         "status": "ready",
         "version": SEEKDEEP_VERSION,
@@ -1517,6 +1739,42 @@ def warm_chat_role(role: str = "default_chat") -> dict:
             "warning": "prompts for this role leave the local machine",
             "note": note,
         }
+    if backend == "anthropic":
+        resolved_role, model_name = resolve_chat_role(role)
+        base_url, api_key, version = _resolve_anthropic_endpoint(resolved_role)
+        if not model_name:
+            return {"ok": False, "task": "chat", "role": resolved_role, "backend": "anthropic",
+                    "error": "missing model name -- set the role's LOCAL_CHAT_<...>_MODEL_ID"}
+        ok, note = _anthropic_probe(base_url, api_key, version)
+        return {
+            "ok": ok,
+            "status": "remote_ok" if ok else "remote_probe_failed",
+            "task": "chat",
+            "role": resolved_role,
+            "model_id": model_name,
+            "backend": "anthropic",
+            "endpoint": base_url,
+            "warning": "prompts for this role leave the local machine",
+            "note": note,
+        }
+    if backend == "gemini":
+        resolved_role, model_name = resolve_chat_role(role)
+        base_url, api_key = _resolve_gemini_endpoint(resolved_role)
+        if not model_name:
+            return {"ok": False, "task": "chat", "role": resolved_role, "backend": "gemini",
+                    "error": "missing model name -- set the role's LOCAL_CHAT_<...>_MODEL_ID"}
+        ok, note = _gemini_probe(base_url, api_key)
+        return {
+            "ok": ok,
+            "status": "remote_ok" if ok else "remote_probe_failed",
+            "task": "chat",
+            "role": resolved_role,
+            "model_id": model_name,
+            "backend": "gemini",
+            "endpoint": base_url,
+            "warning": "prompts for this role leave the local machine",
+            "note": note,
+        }
     # HF default path
     resolved_role, model_id = load_chat_model(role)
     return {"ok": True, "status": "warmed_up", "task": "chat",
@@ -1536,13 +1794,14 @@ class ModelInstallRequest(BaseModel):
       ollama        -- Ollama tag (e.g. llama3:8b)
       openai-compat -- remote provider model name (e.g. deepseek-chat)
     Optional `role` patches .env to assign this model to a chat role."""
-    backend: Literal["hf", "ollama", "openai-compat"]
+    backend: Literal["hf", "ollama", "openai-compat", "anthropic", "gemini"]
     model_id: str
     role: str = ""           # if provided, .env gets updated for this role
     revision: str = ""       # HF only: branch/tag/commit
     auto_pull: bool = True   # Ollama only: auto-pull if tag missing
-    api_url: str = ""        # openai-compat only: per-role API endpoint
-    api_key: str = ""        # openai-compat only: per-role API key
+    api_url: str = ""        # remote backends: per-role API endpoint override
+    api_key: str = ""        # remote backends: per-role API key
+    api_version: str = ""    # anthropic only: per-call anthropic-version
 
 
 def _hf_install(model_id: str, revision: str = "") -> dict:
@@ -1602,22 +1861,31 @@ def model_install(req: ModelInstallRequest):
         ok, note = _ollama_ensure_tag(model_id, auto_pull=bool(req.auto_pull))
         install_result = {"ok": ok, "backend": "ollama", "model_id": model_id,
                           "note": note, "base_url": OLLAMA_BASE_URL}
-    elif req.backend == "openai-compat":
+    elif req.backend in {"openai-compat", "anthropic", "gemini"}:
         # No download -- remote provider hosts the model. Validate connectivity
-        # against the resolved endpoint (per-role override on req.api_url wins,
-        # else fall back to OPENAI_API_BASE_URL via _resolve_openai_endpoint
-        # once .env is patched. For pre-patch validation, prefer req.api_url
-        # so the wizard can verify BEFORE writing the key to disk).
-        probe_url = (req.api_url or "").strip().rstrip("/") or (
-            os.getenv("OPENAI_API_BASE_URL", "") or ""
-        ).strip().rstrip("/")
-        probe_key = (req.api_key or "").strip() or (
-            os.getenv("OPENAI_API_KEY", "") or ""
-        ).strip()
-        ok, note = _openai_compat_probe(probe_url, probe_key)
+        # against the resolved endpoint. Per-role override on req.api_url wins
+        # over the env-resolved global so the wizard can verify BEFORE writing
+        # the key to disk.
+        per_role_url = (req.api_url or "").strip().rstrip("/")
+        per_role_key = (req.api_key or "").strip()
+        if req.backend == "openai-compat":
+            probe_url = per_role_url or (os.getenv("OPENAI_API_BASE_URL", "") or "").strip().rstrip("/")
+            probe_key = per_role_key or (os.getenv("OPENAI_API_KEY", "") or "").strip()
+            ok, note = _openai_compat_probe(probe_url, probe_key)
+        elif req.backend == "anthropic":
+            probe_url = (per_role_url or (os.getenv("ANTHROPIC_API_BASE_URL", "") or "").strip().rstrip("/")
+                         or ANTHROPIC_API_BASE_URL_DEFAULT)
+            probe_key = per_role_key or (os.getenv("ANTHROPIC_API_KEY", "") or "").strip()
+            probe_ver = (req.api_version or "").strip() or (os.getenv("ANTHROPIC_VERSION", "") or "").strip() or ANTHROPIC_VERSION_DEFAULT
+            ok, note = _anthropic_probe(probe_url, probe_key, probe_ver)
+        else:  # gemini
+            probe_url = (per_role_url or (os.getenv("GEMINI_API_BASE_URL", "") or "").strip().rstrip("/")
+                         or GEMINI_API_BASE_URL_DEFAULT)
+            probe_key = per_role_key or (os.getenv("GEMINI_API_KEY", "") or "").strip()
+            ok, note = _gemini_probe(probe_url, probe_key)
         install_result = {
             "ok": ok,
-            "backend": "openai-compat",
+            "backend": req.backend,
             "model_id": model_id,
             "endpoint": probe_url or "(unconfigured)",
             "note": note,
@@ -1652,16 +1920,29 @@ def model_install(req: ModelInstallRequest):
             updates = {model_id_key: model_id}
             if backend_key:
                 updates[backend_key] = req.backend
-            # For openai-compat, persist the per-role endpoint + key when
-            # the caller provided them. The wizard typically supplies these
-            # in the same request so the role is usable immediately.
-            if req.backend == "openai-compat":
+            # For remote backends, persist per-role endpoint + key when the
+            # caller provided them. The wizard typically supplies these in
+            # the same request so the role is usable immediately.
+            # Defaults to per-backend global env when no per-role override is set.
+            remote_url_global = {
+                "openai-compat": "OPENAI_API_BASE_URL",
+                "anthropic":     "ANTHROPIC_API_BASE_URL",
+                "gemini":        "GEMINI_API_BASE_URL",
+            }
+            remote_key_global = {
+                "openai-compat": "OPENAI_API_KEY",
+                "anthropic":     "ANTHROPIC_API_KEY",
+                "gemini":        "GEMINI_API_KEY",
+            }
+            if req.backend in remote_url_global:
                 if req.api_url:
-                    api_url_key = CHAT_ROLE_API_URL_ENV.get(role) or "OPENAI_API_BASE_URL"
+                    api_url_key = CHAT_ROLE_API_URL_ENV.get(role) or remote_url_global[req.backend]
                     updates[api_url_key] = req.api_url.rstrip("/")
                 if req.api_key:
-                    api_key_key = CHAT_ROLE_API_KEY_ENV.get(role) or "OPENAI_API_KEY"
+                    api_key_key = CHAT_ROLE_API_KEY_ENV.get(role) or remote_key_global[req.backend]
                     updates[api_key_key] = req.api_key
+                if req.backend == "anthropic" and req.api_version:
+                    updates["ANTHROPIC_VERSION"] = req.api_version
             patched = _seekdeep_merge_env(env_path, updates)
             install_result["env_patched"] = True
             install_result["env_keys_updated"] = patched.get("updated", [])
@@ -2022,15 +2303,67 @@ def _run_openai_compat_generation(req: ChatRequest, role: str) -> tuple[str, str
     return text, resolved_role, model_name
 
 
+def _run_anthropic_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
+    """Dispatch a chat request to Anthropic's /v1/messages.
+    Sends prompts off-box. Model ID is a Claude model name."""
+    resolved_role, model_name = resolve_chat_role(role)
+    if not model_name:
+        raise RuntimeError(
+            f"anthropic role {resolved_role!r} has no model name configured "
+            f"(set {CHAT_ROLE_ENV.get(resolved_role, 'LOCAL_CHAT_MODEL_ID')})"
+        )
+    base_url, api_key, version = _resolve_anthropic_endpoint(resolved_role)
+    if not api_key:
+        raise RuntimeError(
+            f"anthropic role {resolved_role!r} needs ANTHROPIC_API_KEY "
+            f"(or {CHAT_ROLE_API_KEY_ENV.get(resolved_role, 'LOCAL_CHAT_API_KEY')}) "
+            f"to be set"
+        )
+    messages = build_chat_prompt(req.system, req.context, req.prompt, req.messages or None)
+    text = _anthropic_chat(messages, model_name, base_url, api_key, version,
+                           req.temperature, req.max_new_tokens)
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"<think>[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+    return text, resolved_role, model_name
+
+
+def _run_gemini_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
+    """Dispatch a chat request to Google Gemini's generateContent endpoint.
+    Sends prompts off-box. Model ID is a Gemini model name."""
+    resolved_role, model_name = resolve_chat_role(role)
+    if not model_name:
+        raise RuntimeError(
+            f"gemini role {resolved_role!r} has no model name configured "
+            f"(set {CHAT_ROLE_ENV.get(resolved_role, 'LOCAL_CHAT_MODEL_ID')})"
+        )
+    base_url, api_key = _resolve_gemini_endpoint(resolved_role)
+    if not api_key:
+        raise RuntimeError(
+            f"gemini role {resolved_role!r} needs GEMINI_API_KEY "
+            f"(or {CHAT_ROLE_API_KEY_ENV.get(resolved_role, 'LOCAL_CHAT_API_KEY')}) "
+            f"to be set"
+        )
+    messages = build_chat_prompt(req.system, req.context, req.prompt, req.messages or None)
+    text = _gemini_chat(messages, model_name, base_url, api_key,
+                        req.temperature, req.max_new_tokens)
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"<think>[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+    return text, resolved_role, model_name
+
+
 def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     """Load a chat role and run a single generation. Returns (text, resolved_role, model_id).
     Dispatches per-role to HF transformers (in-process), Ollama (local daemon),
-    or an OpenAI-compatible remote endpoint (off-box, opt-in)."""
+    OpenAI-compatible remote, Anthropic native, or Gemini native."""
     backend = _resolve_chat_backend(role)
     if backend == "ollama":
         return _run_ollama_generation(req, role)
     if backend == "openai-compat":
         return _run_openai_compat_generation(req, role)
+    if backend == "anthropic":
+        return _run_anthropic_generation(req, role)
+    if backend == "gemini":
+        return _run_gemini_generation(req, role)
     # Default: in-process HF transformers path.
     resolved_role, model_id = load_chat_model(role)
 
