@@ -137,7 +137,7 @@
   .cf .row { display: flex; gap: 10px; justify-content: flex-end; }
 </style>
 </head>
-<body>
+<body class="has-topnav">
 <div class="abyss"></div>
 <div class="rays"></div>
 <div class="bubbles">
@@ -148,20 +148,27 @@
   <span style="left:84%;animation-duration:44s;animation-delay:-25s" class="cube"></span>
 </div>
 
-<div class="app-wrap"><div class="win">
-  <div class="win-titlebar">
-    <div class="left">
-      <img src="assets/seekdeep-mark.webp" alt="" />
-      <span class="title">SEEK<em>DEEP</em> · MEMORY · <em>USER-FACTS</em><span class="cur"></span></span>
-    </div>
-    <div></div>
-    <div class="right">
-      <span class="live-tag" id="memBackendTag" title="data/user-facts.json · live"><span class="dot"></span>BACKEND LIVE</span>
-      <a href="index.html">↩ HUB</a>
-      <a href="docs.html">▤ DOCS</a>
-    </div>
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
   </div>
+  <div class="links">
+    <a href="index.html">Hub</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
+  </div>
+</nav>
 
+<div class="app-wrap"><div class="win">
   <div class="body">
 
     <!-- ===== LEFT RAIL · USER PICKER ===== -->
@@ -186,9 +193,12 @@
 
     <!-- ===== CENTER PANE · FACTS LIST ===== -->
     <section class="pane">
-      <div style="display: flex; justify-content: space-between; align-items: end; margin-bottom: 6px;">
-        <h2 id="hUserName">— select a user</h2>
-        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--hull-3);">
+      <div style="display: flex; justify-content: space-between; align-items: end; margin-bottom: 6px; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 14px; min-width: 0;">
+          <h2 id="hUserName">— select a user</h2>
+          <span class="live-tag" id="memBackendTag" title="data/user-facts.json · live"><span class="dot"></span>BACKEND LIVE</span>
+        </div>
+        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--hull-3); white-space: nowrap;">
           <span id="hUserId">—</span>
         </span>
       </div>
@@ -598,11 +608,17 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
 
   function updateMockTag() {
     const tag = $('#memBackendTag');
+    if (!tag) return;
     if (state.isMock) {
       tag.style.color = 'var(--warn)';
       tag.style.borderColor = 'color-mix(in oklab, var(--warn) 45%, transparent)';
       tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>MOCK · endpoints not shipped';
       tag.title = 'GET /memory/users not implemented yet. UI reads from in-page mock until Claude Code ships the endpoints — see HANDOFF_CLAUDE_CODE.md';
+    } else {
+      tag.style.color = '';
+      tag.style.borderColor = '';
+      tag.innerHTML = '<span class="dot"></span>BACKEND LIVE';
+      tag.title = 'data/user-facts.json · live';
     }
   }
 

@@ -515,18 +515,21 @@ h1, h2, h3 { font-weight: 500; letter-spacing: -0.01em; margin: 0; }
 }
 
 /* ===== Logo lockup ===== */
-.lockup { display: inline-flex; align-items: center; gap: 12px; }
-.lockup img { width: 36px; height: 36px; border-radius: 8px; }
+.lockup { display: inline-flex; align-items: center; gap: 14px; }
+.lockup img { width: 44px; height: 44px; border-radius: 10px; filter: drop-shadow(0 0 16px rgba(45,212,255,0.35)); }
 .lockup .wm {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 17px;
+  font-size: 20px;
   letter-spacing: 0.04em;
 }
 .lockup .wm em {
   font-style: normal;
   color: var(--cyan-1);
 }
+/* Topnav variant — heavier lockup so the mark holds its own next to the wordmark */
+.topnav .lockup img { width: 52px; height: 52px; border-radius: 12px; }
+.topnav .lockup .wm { font-size: 22px; }
 
 /* ===== Window chrome (original — not Windows 11) ===== */
 .window {
@@ -626,12 +629,12 @@ input.mono, textarea.mono { font-family: var(--font-mono); font-size: 12px; }
 .topnav {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 36px;
-  background: linear-gradient(180deg, rgba(2,6,15,0.85), rgba(2,6,15,0.4));
+  padding: 16px 36px;
+  background: linear-gradient(180deg, rgba(2,6,15,0.92), rgba(2,6,15,0.6));
   backdrop-filter: blur(14px);
   border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 14%, transparent);
 }
-.topnav .links { display: flex; gap: 28px; }
+.topnav .links { display: flex; gap: 26px; flex-wrap: wrap; }
 .topnav .links a {
   color: var(--hull-2);
   text-decoration: none;
@@ -648,6 +651,22 @@ input.mono, textarea.mono { font-family: var(--font-mono); font-size: 12px; }
   background: var(--cyan-1); margin-top: 4px;
   box-shadow: 0 0 6px var(--cyan-0);
 }
+
+/* Subpage shell — pages with a topnav above a fit-to-viewport .win.
+   The .win-titlebar that pages used to have is gone; the topnav replaces it. */
+body.has-topnav { overflow: hidden; }
+body.has-topnav .app-wrap { height: calc(100vh - var(--topnav-h, 88px)); }
+body.has-topnav .win {
+  height: calc(100vh - var(--topnav-h, 88px) - 48px);
+  grid-template-rows: 1fr !important;
+}
+/* Soften the heavy cyan border on the .win when paired with topnav — it's
+   visual double-chrome otherwise. */
+body.has-topnav .win {
+  border-color: color-mix(in oklab, var(--cyan-1) 14%, transparent) !important;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04) !important;
+}
+body.has-topnav .win::before { display: none !important; }
 
 /* ===== Utility ===== */
 .glow-text { text-shadow: 0 0 18px rgba(45,212,255,0.45); }

@@ -566,7 +566,7 @@
   .alert.ok { background: rgba(88,230,161,0.06); border-color: color-mix(in oklab, var(--good) 40%, transparent); color: var(--good); }
 </style>
 </head>
-<body>
+<body class="has-topnav">
 <div class="abyss"></div>
 <div class="rays"></div>
 <div class="bubbles">
@@ -599,29 +599,30 @@
   </defs>
 </svg>
 
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">Hub</a>
+    <a href="app.html" class="active">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
+  </div>
+</nav>
+
 <div class="app-wrap">
 <div class="win">
 
   <!-- TITLEBAR -->
-  <div class="win-titlebar">
-    <div class="left">
-      <img src="assets/seekdeep-mark.webp" alt="" />
-      <span class="title">SEEK<em>DEEP</em> · CONTROL CENTER · <em id="active-mod-label">LAUNCHER</em><span class="cur"></span></span>
-      <span class="pill" id="liveModePill" title="probes http://127.0.0.1:7865/health every 5s" style="margin-left: 12px; font-size: 9px;"><span class="dot"></span>MOCK · STANDALONE</span>
-    </div>
-    <div></div>
-    <div class="right">
-      <a href="index.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">↩ HUB</a>
-      <a href="installer.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">⚙ INSTALLER</a>
-      <a href="docs.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">▤ DOCS</a>
-      <a href="roadmap.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">▦ ROADMAP</a>
-      <a href="api.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">⚡ API</a>
-      <a href="architecture.html" style="display:flex; align-items:center; padding: 0 10px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none;">⌬ ARCH</a>
-      <button>—</button>
-      <button>▢</button>
-      <button class="close">✕</button>
-    </div>
-  </div>
 
   <!-- BODY -->
   <div class="win-body">
@@ -1716,6 +1717,50 @@
           </div>
         </div>
 
+        <!-- Author-notify settings strip -->
+        <div class="panel-flat" id="archNotifyStrip" style="padding: 14px 18px; margin-bottom: 14px; display: grid; grid-template-columns: 1fr auto auto auto; gap: 18px; align-items: center;">
+          <div>
+            <div style="font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; margin-bottom: 4px;">▸ AUTHOR NOTIFY</div>
+            <div style="color: var(--hull-2); font-size: 13px; line-height: 1.5;">When someone archives a post, optionally DM the original author so they know their work is being kept. Defaults to silent. Per-channel overrides below.</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.16em; color: var(--hull-3); text-transform: uppercase; margin-bottom: 4px;">MODE</div>
+            <select id="archNotifyMode" style="font-size: 12px; padding: 6px 10px; min-width: 160px;">
+              <option value="silent">Silent (v1 default)</option>
+              <option value="dm">DM author</option>
+              <option value="reply">Public reply ↑</option>
+              <option value="react">React 📂 only</option>
+            </select>
+          </div>
+          <div style="text-align: center;">
+            <div style="font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.16em; color: var(--hull-3); text-transform: uppercase; margin-bottom: 4px;">SELF</div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 0;">
+              <div class="toggle" id="archNotifySelfTog" title="notify when you archive your own posts"></div>
+              <span style="font-size: 11px; color: var(--hull-3); font-family: var(--font-mono);">own posts</span>
+            </div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.16em; color: var(--hull-3); text-transform: uppercase; margin-bottom: 4px;">SENT 24h</div>
+            <div style="font-family: var(--font-mono); font-size: 14px; color: var(--hull);" id="archNotifySent">—</div>
+          </div>
+        </div>
+
+        <!-- Notify preview · what gets sent when MODE !== silent -->
+        <details id="archNotifyPreview" style="margin-bottom: 14px; border: 1px dashed color-mix(in oklab, var(--cyan-1) 22%, transparent); border-radius: var(--r-md); padding: 10px 14px; display: none;">
+          <summary style="cursor: pointer; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--cyan-1); text-transform: uppercase;">▾ PREVIEW · what the author sees</summary>
+          <div style="margin-top: 12px; padding: 14px; background: #2b2d31; color: #dbdee1; border-radius: 6px; border-left: 4px solid #5865f2; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13.5px; line-height: 1.55;">
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 6px;">
+              <div style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #5865f2, #2dd4ff); display: grid; place-items: center; color: white; font-weight: 700; font-size: 12px;">S</div>
+              <span style="font-weight: 600; color: #f2f3f5;">SeekDeep</span>
+              <span style="background: #5865f2; color: white; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 4px; font-weight: 700;">APP</span>
+              <span style="color: #949ba4; font-size: 11px; margin-left: auto;">DM · just now</span>
+            </div>
+            <div>📂 Your post in <b style="color:#5865f2;">#abyss-talk</b> was archived by <b style="color:#f2f3f5;">@nautilus</b>.</div>
+            <div style="margin-top: 4px; color: #b5bac1;">It's now in their <span class="mono">Universal Archive</span> — kept locally, never re-shared without your permission. You can opt-out replies with <span class="mono" style="background:#1e1f22; padding: 1px 5px; border-radius: 3px;">@SeekDeep archive opt-out</span>.</div>
+            <div style="margin-top: 8px; font-size: 11px; color: #949ba4;">If you don't want these, mute the bot DMs or change MODE → Silent.</div>
+          </div>
+        </details>
+
         <div class="arch-tabs" id="archTabs">
           <span class="chip active" data-thread="*">SHARED · —</span>
         </div>
@@ -2176,7 +2221,73 @@
     onActive();
   })();
 
-  // ===== Sidebar live badges (queue depth · persona reflected from /health if available) =====
+  // ===== Universal Archive · author-notify settings (v2 follow-up) =====
+  // Persists to data/archive-config.json via POST /archive/config. Read on mount.
+  // Mode options mirror the bot's index.js seekdeepArchiveNotifyMode constants:
+  //   silent | dm | reply | react
+  // "silent" is the v1 default — author never hears about it. Anything else
+  // triggers a notification per the embed preview below the strip.
+  (function wireArchiveNotify() {
+    const mode    = document.getElementById('archNotifyMode');
+    const selfTog = document.getElementById('archNotifySelfTog');
+    const sentLbl = document.getElementById('archNotifySent');
+    const preview = document.getElementById('archNotifyPreview');
+    if (!mode || !selfTog) return;
+
+    const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+      ? location.origin : 'http://127.0.0.1:7865';
+
+    let state = { mode: 'silent', notify_self: false, sent_24h: 0 };
+
+    function render() {
+      mode.value = state.mode;
+      selfTog.classList.toggle('on', !!state.notify_self);
+      sentLbl.textContent = state.sent_24h ? String(state.sent_24h) : '0';
+      // Hide preview if Silent — nothing gets sent.
+      preview.style.display = state.mode === 'silent' ? 'none' : 'block';
+    }
+
+    async function load() {
+      try {
+        const r = await fetch(BASE + '/archive/config', { signal: AbortSignal.timeout(3000) });
+        if (r.ok) {
+          const j = await r.json();
+          if (j && j.ok) state = Object.assign(state, j.config || {});
+        }
+      } catch {}
+      render();
+    }
+    async function save(patch) {
+      Object.assign(state, patch);
+      render();
+      try {
+        await fetch(BASE + '/archive/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: patch }),
+        });
+      } catch {
+        // graceful — settings still applied in-page; will retry on next change.
+      }
+    }
+
+    mode.addEventListener('change',    () => save({ mode: mode.value }));
+    selfTog.addEventListener('click',  () => save({ notify_self: !state.notify_self }));
+
+    // Only load when the archive pane becomes active (first time).
+    let loaded = false;
+    const pane = document.querySelector('[data-pane="archive"]');
+    function onActive() {
+      if (loaded) return;
+      if (!pane || !pane.classList.contains('active')) return;
+      loaded = true;
+      load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="archive"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(onActive, 60))
+    );
+    onActive();
+  })();
   // The LIVE poller already updates VRAM in the sidebar status panel. This adds a
   // tiny extra: if /health exposes queue depth in future, we'll surface it here.
   // Currently a no-op placeholder so the wiring is in place when the field appears.

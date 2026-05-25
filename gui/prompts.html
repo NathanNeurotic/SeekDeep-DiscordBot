@@ -167,7 +167,7 @@
   .sh .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
 </style>
 </head>
-<body>
+<body class="has-topnav">
 <div class="abyss"></div>
 <div class="rays"></div>
 <div class="bubbles">
@@ -177,20 +177,27 @@
   <span style="left:84%;animation-duration:44s;animation-delay:-25s" class="cube"></span>
 </div>
 
-<div class="app-wrap"><div class="win">
-  <div class="win-titlebar">
-    <div class="left">
-      <img src="assets/seekdeep-mark.webp" alt="" />
-      <span class="title">SEEK<em>DEEP</em> · PROMPT TEMPLATES · <em>#prompts</em><span class="cur"></span></span>
-    </div>
-    <div></div>
-    <div class="right">
-      <a href="index.html">↩ HUB</a>
-      <a href="roadmap.html">▦ ROADMAP</a>
-      <a href="docs.html">▤ DOCS</a>
-    </div>
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
   </div>
+  <div class="links">
+    <a href="index.html">Hub</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
+  </div>
+</nav>
 
+<div class="app-wrap"><div class="win">
   <div class="body">
 
     <!-- ===== LEFT · TEMPLATE LIST ===== -->
@@ -225,6 +232,7 @@
           <div class="sub" id="vSub">▸ no template selected</div>
         </div>
         <div class="actions">
+          <button class="btn btn-ghost" id="vEdit">✎ Edit</button>
           <button class="btn btn-ghost" id="vDup">Duplicate</button>
           <button class="btn btn-ghost" id="vExport">⇩ Export JSON</button>
           <button class="btn btn-primary" id="vShare">▸ Share to #prompts</button>
@@ -286,14 +294,15 @@
         </div>
       </div>
 
-      <div class="body-card" style="background: rgba(255,184,77,0.04); border-color: color-mix(in oklab, var(--warn) 30%, transparent);">
-        <h3 style="color: var(--warn);">EDGE CASES &middot; spec'd, awaiting backend</h3>
+      <div class="body-card" style="background: rgba(45,212,255,0.04); border-color: color-mix(in oklab, var(--cyan-1) 30%, transparent);">
+        <h3 style="color: var(--cyan-1);">EDIT-IN-PLACE · shared templates</h3>
         <pre style="font-size: 12px; color: var(--hull-2);">
 ▸ <span style="color:var(--cyan-1)">Editing a shared template locally:</span>
-  the shared embed in #prompts goes stale (no live link to the local file).
-  Mirror the archive pattern → edit-in-place via embed.edit() when the
-  bot still owns the message; otherwise post a new embed and tombstone
-  the old one with a strikethrough title + footer note.
+  Now live. When you re-share an edited template:
+    • if the bot still owns the original embed (≤ 14 days),
+      <span style="color: var(--good)">edit-in-place</span> via <span style="color: var(--cyan-1)">message.edit()</span> — same channel post, new body, “edited” marker.
+    • otherwise <span style="color: var(--warn)">tombstone</span> the original (strikethrough title + footer note)
+      and post a fresh embed; importers keep their copy regardless.
 
 ▸ <span style="color:var(--cyan-1)">Deleting a shared template locally:</span>
   same — keep the channel post for archival, just tombstone it.
@@ -336,6 +345,63 @@
   </div>
 </div>
 
+<!-- Edit modal — in-place editor + re-share strategy picker -->
+<div class="sh-back" id="edBack"></div>
+<div class="sh" id="ed" role="dialog" style="width: min(720px, calc(100vw - 40px));">
+  <h3>EDIT TEMPLATE &middot; <span id="edName" style="color:var(--hull); font-family: var(--font-mono);">—</span></h3>
+  <p>Edits update your local <span class="mono">data/prompt-templates.json</span> immediately. If this template was previously shared to <span class="mono" style="color:var(--cyan-1)">#prompts</span>, choose how to handle the existing embed.</p>
+
+  <div class="field">
+    <label>NAME</label>
+    <input type="text" id="edInputName" />
+  </div>
+  <div class="field">
+    <label>BODY</label>
+    <textarea id="edInputBody" rows="10" style="width: 100%; font-family: var(--font-mono); font-size: 12px; line-height: 1.55; padding: 12px; resize: vertical;"></textarea>
+    <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.08em; margin-top: 4px;">
+      <span>{{vars}} highlighted in viewer</span>
+      <span id="edInputLen">0 chars</span>
+    </div>
+  </div>
+
+  <!-- Re-share strategy strip — only shown if template has been shared -->
+  <div class="field" id="edStrategyWrap" style="padding: 12px 14px; border: 1px dashed color-mix(in oklab, var(--cyan-1) 25%, transparent); border-radius: var(--r-md); background: rgba(45,212,255,0.04);">
+    <label style="text-transform: uppercase; color: var(--cyan-1);">RE-SHARE STRATEGY</label>
+    <div id="edStratNote" style="font-size: 12px; color: var(--hull-2); line-height: 1.55; margin-bottom: 10px;">
+      Last shared <span id="edSharedAgo">—</span> in <span class="mono" style="color:var(--cyan-1)">#prompts</span> on <b id="edSharedGuild">—</b>. <span id="edStratPicked">—</span>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+      <label class="strat-opt" data-strat="edit-in-place">
+        <input type="radio" name="edStrat" value="edit-in-place" style="width:auto;" />
+        <div>
+          <div style="color: var(--good); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;">● EDIT-IN-PLACE</div>
+          <div style="font-size: 11px; color: var(--hull-3); margin-top: 2px;">message.edit() the existing embed. Importers see the new body next time they open it.</div>
+        </div>
+      </label>
+      <label class="strat-opt" data-strat="tombstone-repost">
+        <input type="radio" name="edStrat" value="tombstone-repost" style="width:auto;" />
+        <div>
+          <div style="color: var(--warn); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;">● TOMBSTONE + REPOST</div>
+          <div style="font-size: 11px; color: var(--hull-3); margin-top: 2px;">Strikethrough the old embed with a footer note, then post a fresh one. Existing imports unaffected.</div>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <div class="row">
+    <button class="btn btn-ghost" id="edCancel">Cancel</button>
+    <button class="btn btn-ghost" id="edSaveLocal">Save local only</button>
+    <button class="btn btn-primary" id="edSaveReshare">▸ Save &amp; re-share</button>
+  </div>
+</div>
+
+<style>
+  .strat-opt { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--stroke); border-radius: var(--r-sm); cursor: pointer; align-items: flex-start; }
+  .strat-opt:hover { border-color: var(--cyan-1); }
+  .strat-opt input[type="radio"]:checked + div > div:first-child { text-shadow: 0 0 6px currentColor; }
+  .strat-opt:has(input:checked) { background: rgba(45,212,255,0.08); border-color: var(--cyan-1); }
+</style>
+
 <script>
 (function () {
   const $ = (s, r=document) => r.querySelector(s);
@@ -344,6 +410,7 @@
     {
       id: 'cli-reviewer', name: 'cli-reviewer', source: 'own', vars: ['language', 'code'],
       uses: 18, lastUsed: '4h ago', author: '@nautilus',
+      shared: { guild: 'Abyss Guild', age_days: 3, msg_id: 'm-31a8…' },
       body: `You are a code reviewer specializing in {{language}}.
 
 Review the following code with a focus on:
@@ -375,6 +442,7 @@ Transcript:
     {
       id: 'tweet-shrink', name: 'tweet-shrink', source: 'own', vars: ['idea', 'voice'],
       uses: 33, lastUsed: '3h ago', author: '@nautilus',
+      shared: { guild: 'Bathyscaphe Co', age_days: 24, msg_id: 'm-08c1…' },
       body: `Convert this idea into 3 tweet-sized variants ({{voice}} voice):
 - < 240 chars each
 - no hashtags
@@ -400,6 +468,7 @@ Mention the file path in parens. Skip pure refactors.
     {
       id: 'rubber-duck', name: 'rubber-duck', source: 'own', vars: ['problem'],
       uses: 41, lastUsed: '2h ago', author: '@nautilus',
+      shared: null,
       body: `You are a rubber duck. Read my problem and ask me one clarifying question per turn — never more — until I tell you I've figured it out.
 
 When I'm done, summarize what I worked through and one risk I might have missed.
@@ -465,12 +534,23 @@ The user wants information density, not company.`,
     renderList($('#filter').value);
     $('#vName').textContent = active.name;
     $('#vSub').innerHTML = `▸ data/prompt-templates.json · ${active.source === 'own' ? 'local · authored here' : 'imported from #prompts'}`;
+    // Edit button only enabled for OWN templates (imported ones round-trip thru re-share locally).
+    const editBtn = $('#vEdit');
+    if (editBtn) {
+      editBtn.disabled = active.source !== 'own';
+      editBtn.style.opacity = active.source === 'own' ? '' : '0.35';
+      editBtn.style.pointerEvents = active.source === 'own' ? '' : 'none';
+      editBtn.title = active.source === 'own' ? 'Edit body / re-share' : 'Imported templates are read-only here — duplicate to fork.';
+    }
     $('#vMeta').innerHTML = `
       <span><em>source</em> ${active.source}</span>
       <span><em>variables</em> ${active.vars.join(', ') || '(none)'}</span>
       <span><em>chars</em> ${active.body.length}</span>
       <span><em>uses</em> ${active.uses}</span>
       <span><em>last used</em> ${active.lastUsed}</span>
+      <span><em>shared</em> ${active.shared
+        ? active.shared.guild + ' · ' + (active.shared.age_days < 1 ? 'today' : active.shared.age_days + 'd ago')
+        : '<span style="color:var(--hull-3)">never</span>'}</span>
     `;
     $('#vBody').innerHTML = highlightVars(active.body, active.vars);
     // Embed preview
@@ -521,6 +601,101 @@ The user wants information density, not company.`,
     alert('Mock: would deep-link to #prompts in the connected Discord client.');
   });
   $('#newBtn').addEventListener('click', () => alert('Mock: would open a "new template" editor (out of scope for this drop).'));
+
+  // ===== Edit-in-place flow (v2 follow-up — prompts marketplace) =====
+  // Mirrors the bot side: when a previously-shared template is edited, the
+  // user picks edit-in-place (≤ 14d old, recommended) or tombstone+repost.
+  // The 14-day cut-off matches Discord's hard limit on bot message edits.
+  const SHARE_EDIT_CUTOFF_DAYS = 14;
+  const edBack = $('#edBack'), ed = $('#ed');
+  function openEdit() {
+    if (!active || active.source !== 'own') return;
+    $('#edName').textContent = active.name;
+    $('#edInputName').value = active.name;
+    $('#edInputBody').value = active.body;
+    updateLen();
+    // Strategy strip wiring
+    const wrap = $('#edStrategyWrap');
+    if (active.shared) {
+      wrap.style.display = '';
+      $('#edSharedAgo').textContent  = active.shared.age_days < 1
+        ? 'today'
+        : active.shared.age_days + ' day' + (active.shared.age_days === 1 ? '' : 's') + ' ago';
+      $('#edSharedGuild').textContent = active.shared.guild;
+      const inWindow = active.shared.age_days <= SHARE_EDIT_CUTOFF_DAYS;
+      const pick = inWindow ? 'edit-in-place' : 'tombstone-repost';
+      $('#edStratPicked').innerHTML = inWindow
+        ? 'Within the <b>' + SHARE_EDIT_CUTOFF_DAYS + '-day</b> edit window — <span style="color: var(--good)">edit-in-place recommended</span>.'
+        : 'Past the <b>' + SHARE_EDIT_CUTOFF_DAYS + '-day</b> edit window — <span style="color: var(--warn)">tombstone + repost</span> required.';
+      document.querySelectorAll('input[name="edStrat"]').forEach(r => r.checked = (r.value === pick));
+      document.querySelector('input[name="edStrat"][value="edit-in-place"]').disabled = !inWindow;
+      // Visually grey the disabled option.
+      const eipLabel = document.querySelector('.strat-opt[data-strat="edit-in-place"]');
+      eipLabel.style.opacity = inWindow ? '' : '0.45';
+      eipLabel.style.cursor  = inWindow ? '' : 'not-allowed';
+    } else {
+      wrap.style.display = 'none';
+    }
+    ed.classList.add('open'); edBack.classList.add('open');
+  }
+  function closeEdit() { ed.classList.remove('open'); edBack.classList.remove('open'); }
+  function updateLen() {
+    $('#edInputLen').textContent = ($('#edInputBody').value.length) + ' chars';
+  }
+  $('#edInputBody').addEventListener('input', updateLen);
+  $('#vEdit').addEventListener('click', openEdit);
+  $('#edCancel').addEventListener('click', closeEdit);
+  edBack.addEventListener('click', closeEdit);
+
+  function commitLocal() {
+    active.name = $('#edInputName').value.trim() || active.name;
+    active.body = $('#edInputBody').value;
+    // Re-compute vars from {{ }} tokens in body.
+    const tokens = new Set();
+    (active.body.match(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi) || []).forEach(m => {
+      const v = m.replace(/[{}\s]/g, '');
+      if (v) tokens.add(v);
+    });
+    active.vars = [...tokens];
+  }
+
+  $('#edSaveLocal').addEventListener('click', () => {
+    commitLocal();
+    closeEdit();
+    select(active.id);
+    flashChannelState('✓ SAVED LOCALLY · #prompts embed unchanged');
+  });
+
+  $('#edSaveReshare').addEventListener('click', () => {
+    commitLocal();
+    if (active.shared) {
+      const strat = (document.querySelector('input[name="edStrat"]:checked') || {}).value;
+      if (strat === 'edit-in-place') {
+        // "message.edit()" — keep same msg_id, mark edited.
+        active.shared.age_days = 0;
+        flashChannelState('✓ EDIT-IN-PLACE · #prompts embed updated');
+      } else {
+        // tombstone the old, post a fresh one
+        active.shared = { guild: active.shared.guild, age_days: 0, msg_id: 'm-' + Math.random().toString(16).slice(2,6) + '…' };
+        flashChannelState('✓ TOMBSTONED + REPOSTED · fresh embed in #prompts');
+      }
+    } else {
+      // first-time share
+      active.shared = { guild: 'Abyss Guild', age_days: 0, msg_id: 'm-' + Math.random().toString(16).slice(2,6) + '…' };
+      flashChannelState('✓ POSTED · #prompts embed shipped');
+    }
+    closeEdit();
+    select(active.id);
+  });
+
+  function flashChannelState(msg) {
+    const ch = $('#chState');
+    if (!ch) return;
+    const orig = ch.textContent;
+    ch.textContent = msg;
+    ch.style.color = '#57f287';
+    setTimeout(() => { ch.textContent = orig; ch.style.color = ''; }, 4000);
+  }
 
   renderList();
   select(TEMPLATES[0].id);

@@ -80,80 +80,84 @@
     color: var(--hull-3);
   }
 
-  /* ===== Card system ===== */
-  .grid { display: grid; gap: 14px; }
-  .grid.primary   { grid-template-columns: repeat(3, 1fr); }
-  .grid.secondary { grid-template-columns: repeat(3, 1fr); }
-  .grid.tertiary  { grid-template-columns: repeat(5, 1fr); }
-
-  .card {
-    padding: 22px;
-    border-radius: var(--r-lg);
-    background: linear-gradient(170deg, rgba(13,33,82,0.32), rgba(5,11,28,0.6));
-    border: 1px solid var(--stroke);
+  /* ===== Directory list ===== */
+  .dir { display: flex; flex-direction: column; gap: 0; }
+  .dir-row {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 240px) minmax(0, 1fr) auto auto;
+    gap: 28px;
+    align-items: baseline;
+    padding: 16px 4px;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 7%, transparent);
     text-decoration: none;
     color: inherit;
-    transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease;
-    display: flex; flex-direction: column; gap: 14px;
     position: relative;
+    transition: background 0.15s ease, padding 0.15s ease;
   }
-  .card:hover {
-    border-color: color-mix(in oklab, var(--cyan-1) 45%, transparent);
-    transform: translateY(-1px);
+  .dir-row:hover {
+    background: linear-gradient(90deg, rgba(45,212,255,0.05), transparent 60%);
+    padding-left: 14px;
   }
-  .card .num {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.22em;
-    color: var(--cyan-1);
-    opacity: 0.85;
-  }
-  .card h3 {
-    font-family: var(--font-display);
-    font-weight: 500;
-    font-size: 19px;
-    letter-spacing: -0.01em;
-    color: var(--hull);
-    margin: 0;
-  }
-  .card p {
-    color: var(--hull-3);
-    font-size: 12.5px;
-    line-height: 1.55;
-    margin: 0;
-  }
-  .card .foot {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-top: auto; padding-top: 8px;
+  .dir-row:hover .dir-arrow { transform: translateX(4px); color: var(--cyan-1); }
+  .dir-row:hover .dir-name { color: var(--cyan-1); }
+  .dir-row:last-child { border-bottom: none; }
+  .dir-num {
     font-family: var(--font-mono);
     font-size: 11px;
-    color: var(--hull-3);
+    letter-spacing: 0.18em;
+    color: var(--cyan-1);
+    opacity: 0.8;
   }
-  .card .foot .path { color: var(--cyan-1); opacity: 0.75; }
-
-  /* Primary cards a bit weightier */
-  .grid.primary .card { padding: 28px; min-height: 188px; }
-  .grid.primary .card h3 { font-size: 24px; margin-top: 4px; }
-
-  /* Tertiary cards: compact reference strip */
-  .grid.tertiary .card { padding: 18px; min-height: 120px; gap: 8px; }
-  .grid.tertiary .card h3 { font-size: 15px; }
-  .grid.tertiary .card p { font-size: 11.5px; line-height: 1.5; }
-  .grid.tertiary .card .foot { display: none; }
-
-  /* Status badge in corner of card (for parked / preview etc) */
-  .card .badge {
-    position: absolute; top: 18px; right: 18px;
+  .dir-name {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 17px;
+    letter-spacing: -0.005em;
+    color: var(--hull);
+    transition: color 0.15s ease;
+  }
+  .dir-desc {
+    color: var(--hull-3);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dir-badge {
     font-family: var(--font-mono);
-    font-size: 9.5px;
+    font-size: 9px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--hull-3);
-    padding: 3px 8px;
-    border: 1px solid color-mix(in oklab, var(--hull-3) 35%, transparent);
-    border-radius: var(--r-md);
+    padding: 2px 7px;
+    border: 1px solid color-mix(in oklab, var(--hull-3) 30%, transparent);
+    border-radius: 2px;
   }
-  .card .badge.warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 45%, transparent); }
+  .dir-badge.featured { color: var(--cyan-1); border-color: color-mix(in oklab, var(--cyan-1) 45%, transparent); }
+  .dir-badge.live     { color: var(--good); border-color: color-mix(in oklab, var(--good)  45%, transparent); }
+  .dir-badge.mock     { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 45%, transparent); }
+  .dir-badge.empty    { visibility: hidden; }
+  .dir-path {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--hull-3);
+    letter-spacing: 0.04em;
+    min-width: 130px;
+    text-align: right;
+  }
+  .dir-arrow {
+    color: var(--hull-3);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    transition: transform 0.18s ease, color 0.18s ease;
+    width: 16px; text-align: right;
+  }
+
+  /* Featured row — first 3 stand out slightly */
+  .dir.featured-block .dir-row { padding-top: 22px; padding-bottom: 22px; }
+  .dir.featured-block .dir-name { font-size: 21px; }
+  .dir.featured-block .dir-desc { font-size: 13.5px; }
 
   /* ===== Status panels ===== */
   .panels {
@@ -222,9 +226,8 @@
   .bubbles span { opacity: 0.5; }
 
   @media (max-width: 1100px) {
-    .grid.primary   { grid-template-columns: 1fr; }
-    .grid.secondary { grid-template-columns: 1fr 1fr; }
-    .grid.tertiary  { grid-template-columns: 1fr 1fr 1fr; }
+    .dir-row { grid-template-columns: 44px minmax(0,1fr) auto auto; gap: 18px; }
+    .dir-desc { display: none; }
     .panels { grid-template-columns: 1fr; }
     .header { grid-template-columns: 1fr; }
     .header .facts { text-align: left; grid-template-columns: auto auto; }
@@ -284,136 +287,146 @@
     </div>
   </header>
 
-  <!-- ===== PRIMARY: the three surfaces people actually use ===== -->
+  <!-- ===== PRIMARY ===== -->
   <div class="sec-head">
     <h2>Primary surfaces</h2>
-    <span class="count">03</span>
+    <span class="count">03 · the ones people actually live in</span>
   </div>
-  <div class="grid primary">
-    <a class="card" href="app.html">
-      <div class="num">01 / CONTROL CENTER</div>
-      <h3>Operator console</h3>
-      <p>Launcher, GPU and VRAM monitor, model manager, configuration editor, log tail, archive browser, and request playgrounds in one window.</p>
-      <div class="foot"><span class="path">app.html</span><span>→</span></div>
+  <div class="dir featured-block">
+    <a class="dir-row" href="app.html">
+      <span class="dir-num">01</span>
+      <span class="dir-name">Control Center</span>
+      <span class="dir-desc">Launcher, GPU/VRAM monitor, model manager, config editor, log tail, archive browser.</span>
+      <span class="dir-badge featured">Operator</span>
+      <span class="dir-path">app.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="chat.html">
-      <div class="num">02 / CHAT</div>
-      <h3>Conversation client</h3>
-      <p>Server and channel navigation, threads, image attachments, and per-conversation persona overrides. Designed to feel native alongside Discord.</p>
-      <div class="foot"><span class="path">chat.html</span><span>→</span></div>
+    <a class="dir-row" href="chat.html">
+      <span class="dir-num">02</span>
+      <span class="dir-name">Chat</span>
+      <span class="dir-desc">Conversation client with servers, threads, attachments, persona overrides. PWA-installable.</span>
+      <span class="dir-badge featured">Client</span>
+      <span class="dir-path">chat.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="installer.html">
-      <div class="num">03 / INSTALLER</div>
-      <h3>First-run setup</h3>
-      <p>Nine-step wizard with system checks, model picker, and a VRAM budget calculator. Emits a populated <span class="mono">.env</span> on completion.</p>
-      <div class="foot"><span class="path">installer.html</span><span>→</span></div>
+    <a class="dir-row" href="installer.html">
+      <span class="dir-num">03</span>
+      <span class="dir-name">Installer</span>
+      <span class="dir-desc">Nine-step wizard — system checks, model picker, VRAM calculator. Emits a populated <span class="mono">.env</span>.</span>
+      <span class="dir-badge featured">Setup</span>
+      <span class="dir-path">installer.html <span class="dir-arrow">→</span></span>
     </a>
   </div>
 
   <!-- ===== WORKING SURFACES ===== -->
   <div class="sec-head">
     <h2>Working surfaces</h2>
-    <span class="count">09</span>
+    <span class="count">09 · day-to-day tooling</span>
   </div>
-  <div class="grid secondary">
-    <a class="card" href="docs.html">
-      <div class="num">04 / DOCS</div>
-      <h3>Command reference</h3>
-      <p>Filterable view of <span class="mono">COMMANDS.md</span> — slash, mention, context-menu, and reaction commands.</p>
-      <div class="foot"><span class="path">docs.html</span><span>→</span></div>
+  <div class="dir">
+    <a class="dir-row" href="docs.html">
+      <span class="dir-num">04</span>
+      <span class="dir-name">Docs</span>
+      <span class="dir-desc">Filterable view of <span class="mono">COMMANDS.md</span> — slash, mention, context-menu, reaction commands.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">docs.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="api.html">
-      <div class="num">05 / API</div>
-      <h3>Endpoint explorer</h3>
-      <p>Request builder for <span class="mono">/health</span>, <span class="mono">/gpu</span>, <span class="mono">/chat</span>, <span class="mono">/image</span>, <span class="mono">/vision</span>, <span class="mono">/inpaint</span>, <span class="mono">/upscale</span>, <span class="mono">/chart</span>, <span class="mono">/unload</span>. Falls back to local mocks when the server is offline.</p>
-      <div class="foot"><span class="path">api.html</span><span>→</span></div>
+    <a class="dir-row" href="api.html">
+      <span class="dir-num">05</span>
+      <span class="dir-name">API explorer</span>
+      <span class="dir-desc">Request builder for <span class="mono">/health</span>, <span class="mono">/gpu</span>, <span class="mono">/chat</span>, <span class="mono">/image</span>, <span class="mono">/vision</span>, <span class="mono">/route/debug</span>, plus offline mocks.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">api.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="architecture.html">
-      <div class="num">06 / ARCHITECTURE</div>
-      <h3>System diagram</h3>
-      <p>Interactive map of the stack — Discord gateway, route dispatchers, agents, FastAPI side-car, persistence, and SearXNG.</p>
-      <div class="foot"><span class="path">architecture.html</span><span>→</span></div>
+    <a class="dir-row" href="architecture.html">
+      <span class="dir-num">06</span>
+      <span class="dir-name">Architecture</span>
+      <span class="dir-desc">Interactive map — Discord gateway, route dispatchers, agents, FastAPI side-car, persistence, SearXNG.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">architecture.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="roadmap.html">
-      <div class="num">07 / ROADMAP</div>
-      <h3>Planned work</h3>
-      <p>Live view of <span class="mono">PLANNED.md</span> — shipped, in-flight, parked, and out-of-scope items grouped by area.</p>
-      <div class="foot"><span class="path">roadmap.html</span><span>→</span></div>
+    <a class="dir-row" href="roadmap.html">
+      <span class="dir-num">07</span>
+      <span class="dir-name">Roadmap</span>
+      <span class="dir-desc">Live view of <span class="mono">PLANNED.md</span> — shipped, in-flight, parked, out-of-scope.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">roadmap.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="changelog.html">
-      <div class="num">08 / CHANGELOG</div>
-      <h3>Release history</h3>
-      <p>Versioned timeline from <span data-version>v10.1</span> onward, tagged by category (feat / fix / perf / docs) with per-release item lists.</p>
-      <div class="foot"><span class="path">changelog.html</span><span>→</span></div>
+    <a class="dir-row" href="changelog.html">
+      <span class="dir-num">08</span>
+      <span class="dir-name">Changelog</span>
+      <span class="dir-desc">Versioned timeline from <span data-version>v10.1</span> onward, tagged feat / fix / perf / docs.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">changelog.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="memory.html">
-      <span class="badge">Live</span>
-      <div class="num">09 / MEMORY</div>
-      <h3>Persistent memory</h3>
-      <p>Per-user fact store — review, edit, export, clear. Backend now live; data/user-facts.json schema with 25-fact / 500-char caps.</p>
-      <div class="foot"><span class="path">memory.html</span><span>→</span></div>
+    <a class="dir-row" href="memory.html">
+      <span class="dir-num">09</span>
+      <span class="dir-name">Memory</span>
+      <span class="dir-desc">Per-user fact store — review, edit, export, clear. 25-fact / 500-char caps; backend live.</span>
+      <span class="dir-badge live">Live</span>
+      <span class="dir-path">memory.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="image-ab.html">
-      <div class="num">10 / IMAGE A/B</div>
-      <h3>Pipeline comparison</h3>
-      <p>Same prompt + seed across <span class="mono">/image</span>, <span class="mono">/img2img</span>, <span class="mono">/instruct-pix2pix</span>, <span class="mono">/inpaint</span>. Four panels, one click.</p>
-      <div class="foot"><span class="path">image-ab.html</span><span>→</span></div>
+    <a class="dir-row" href="image-ab.html">
+      <span class="dir-num">10</span>
+      <span class="dir-name">Image A/B</span>
+      <span class="dir-desc">Same prompt + seed across <span class="mono">/image</span>, <span class="mono">/img2img</span>, <span class="mono">/instruct-pix2pix</span>, <span class="mono">/inpaint</span>.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">image-ab.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="prompts.html">
-      <div class="num">11 / PROMPTS</div>
-      <h3>Template marketplace</h3>
-      <p>Local prompt templates + share-to-#prompts channel embed. Discord <em>is</em> the storage — no cloud, no auth, server-scoped.</p>
-      <div class="foot"><span class="path">prompts.html</span><span>→</span></div>
+    <a class="dir-row" href="prompts.html">
+      <span class="dir-num">11</span>
+      <span class="dir-name">Prompt marketplace</span>
+      <span class="dir-desc">Local templates + share-to-<span class="mono">#prompts</span> embed. Discord is the storage — server-scoped, no cloud.</span>
+      <span class="dir-badge live">Live</span>
+      <span class="dir-path">prompts.html <span class="dir-arrow">→</span></span>
     </a>
-
-    <a class="card" href="tts.html">
-      <span class="badge warn">Mock</span>
-      <div class="num">12 / TTS</div>
-      <h3>Voice channel preview</h3>
-      <p>VC picker, Piper voice list, queue mockup. Backend (Piper / XTTS) deferred indefinitely; this is the integration target when it lands.</p>
-      <div class="foot"><span class="path">tts.html</span><span>→</span></div>
+    <a class="dir-row" href="tts.html">
+      <span class="dir-num">12</span>
+      <span class="dir-name">TTS preview</span>
+      <span class="dir-desc">VC picker, Piper voice list, queue mockup. Backend deferred — this is the integration target.</span>
+      <span class="dir-badge mock">Mock</span>
+      <span class="dir-path">tts.html <span class="dir-arrow">→</span></span>
     </a>
   </div>
 
   <!-- ===== REFERENCE & MARKETING ===== -->
   <div class="sec-head">
     <h2>Reference &amp; marketing</h2>
-    <span class="count">05</span>
+    <span class="count">05 · external surfaces</span>
   </div>
-  <div class="grid tertiary">
-    <a class="card" href="landing.html">
-      <div class="num">13 / LANDING</div>
-      <h3>Public landing page</h3>
-      <p>External-facing overview of the project.</p>
+  <div class="dir">
+    <a class="dir-row" href="landing.html">
+      <span class="dir-num">13</span>
+      <span class="dir-name">Landing</span>
+      <span class="dir-desc">External-facing overview of the project.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">landing.html <span class="dir-arrow">→</span></span>
     </a>
-    <a class="card" href="pitch.html">
-      <div class="num">14 / PITCH</div>
-      <h3>Nine-slide deck</h3>
-      <p>1920×1080, scaled to fit. ← / → to navigate.</p>
+    <a class="dir-row" href="pitch.html">
+      <span class="dir-num">14</span>
+      <span class="dir-name">Pitch deck</span>
+      <span class="dir-desc">Nine slides at 1920×1080, scaled to fit. ← / → to navigate.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">pitch.html <span class="dir-arrow">→</span></span>
     </a>
-    <a class="card" href="tour.html">
-      <div class="num">15 / TOUR</div>
-      <h3>Guided walkthrough</h3>
-      <p>Seven-step overlay with spotlight and keyboard navigation.</p>
+    <a class="dir-row" href="tour.html">
+      <span class="dir-num">15</span>
+      <span class="dir-name">Tour</span>
+      <span class="dir-desc">Seven-step guided overlay with spotlight and keyboard navigation.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">tour.html <span class="dir-arrow">→</span></span>
     </a>
-    <a class="card" href="mobile.html">
-      <div class="num">16 / MOBILE</div>
-      <h3>Phone-size mocks</h3>
-      <p>Hub, Chat, and Control Center at 375×812. Chat.html is now a real PWA.</p>
+    <a class="dir-row" href="mobile.html">
+      <span class="dir-num">16</span>
+      <span class="dir-name">Mobile mocks</span>
+      <span class="dir-desc">Hub, Chat, Control Center at 375×812. Chat is a real PWA.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">mobile.html <span class="dir-arrow">→</span></span>
     </a>
-    <a class="card" href="boot.html">
-      <div class="num">17 / BOOT</div>
-      <h3>Startup animation</h3>
-      <p>14-step boot log with logo materialization.</p>
+    <a class="dir-row" href="boot.html">
+      <span class="dir-num">17</span>
+      <span class="dir-name">Boot animation</span>
+      <span class="dir-desc">Fourteen-step boot log with logo materialization.</span>
+      <span class="dir-badge empty">·</span>
+      <span class="dir-path">boot.html <span class="dir-arrow">→</span></span>
     </a>
   </div>
 
