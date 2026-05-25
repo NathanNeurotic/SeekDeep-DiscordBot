@@ -28,6 +28,8 @@ genuinely new pieces into it manually.
 | `gui/events.js` | Entire file is ours — designer doesn't ship this. WebSocket consumer for `/events` (pub/sub for `model.loaded` / `vram.sample` / `queue.depth` / `log.line` / etc). |
 | `gui/version.js` | Entire file is ours — designer doesn't ship this. Reads `version` from `/health` and rewrites every `[data-version]` element. Hardcoded version strings stay as the fallback if `/health` is unreachable. |
 | `gui/playground.js` | Entire file is ours — designer doesn't ship this. Turns the `chat.html` composer into a live local AI playground (drives `/chat`, `/image`, `/vision`, `/memory/*` via slash commands). Auto-injected by `nav.js` on every page; self-gates to chat.html only. Hooks designer's existing `#msgInput`, `.composer .send-btn`, and `#messages` selectors — if designer changes those, playground breaks silently (preflight `js` stage catches the parse error but not the selector mismatch). |
+| `src-tauri/` (entire dir) | Tauri 2 desktop shell. Cargo.toml, tauri.conf.json, build.rs, src/main.rs, src/lib.rs, capabilities/, icons/. Designer never touches Rust — this is entirely Claude Code's. The Tauri shell wraps the existing browser GUI in a native window; building it produces Windows .msi / .exe, macOS .dmg, Linux .AppImage installers via the `.github/workflows/tauri-release.yml` rolling-nightly workflow. |
+| `.github/workflows/tauri-release.yml` | CI matrix-builds the Tauri app on Win/Mac/Linux and publishes installers as a rolling `nightly` pre-release on every push to main. Companion to the existing `preflight` workflow — that catches code regressions; this catches build/packaging regressions. |
 
 When a zip arrives:
 

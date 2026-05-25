@@ -93,6 +93,11 @@ data/prompt-templates.json
 data/user-facts.json
 !data/.gitkeep
 
+# Tauri build artifacts (Rust target dir + generated schemas)
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+
 # ---------------------------------------------------------------------------
 # Agent/tool workspaces and one-off repair artifacts
 # ---------------------------------------------------------------------------

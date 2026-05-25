@@ -154,6 +154,30 @@ Or via npm:
 npm run start:standalone
 ```
 
+### Desktop App (Tauri)
+
+A native desktop wrapper is auto-built on every push to `main` via GitHub Actions. Grab the latest installer from the [**rolling nightly release**](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases/tag/nightly):
+
+| Platform | File |
+|---|---|
+| Windows | `SeekDeep_0.1.0_x64-setup.exe` (NSIS) or `.msi` |
+| macOS   | `SeekDeep_0.1.0_universal.dmg` |
+| Linux   | `SeekDeep_0.1.0_amd64.AppImage` or `.deb` |
+
+Double-click to install. First launch opens a native window pointing at the local AI server's GUI. **Python 3.11+ and Node.js 20+ still need to be installed on your system** — the Tauri app contains SeekDeep's code, not the runtimes (~5 MB bundle instead of ~150 MB).
+
+**Today (v0.1):** the desktop app assumes the AI server is already running (start it with `seekdeep_standalone_launcher.bat` first, then open SeekDeep). **Next iteration:** auto-spawn the server as a sidecar process on app launch, so it's truly one-click.
+
+Build it yourself:
+
+```powershell
+npm install
+npm run tauri:dev    # dev mode with hot reload
+npm run tauri:build  # produces an installer in src-tauri/target/release/bundle/
+```
+
+Note: first-time builds require [Rust](https://rustup.rs/) and the Tauri platform-specific build deps (see [Tauri's prereqs](https://v2.tauri.app/start/prerequisites/)).
+
 Once the server boots, open **`http://127.0.0.1:7865/gui/chat.html`** in your browser. The composer is wired to `/chat` with persistent conversation memory keyed to the local owner. Slash commands cover everything the bot does (minus Discord-specific features like server-stats / auto-reactions):
 
 - `/image <prompt>` — generate an image inline

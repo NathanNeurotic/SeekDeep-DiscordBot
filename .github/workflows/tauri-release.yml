@@ -1,0 +1,126 @@
+# SeekDeep · Tauri rolling-nightly build
+#
+# On every push to main, matrix-builds the Tauri desktop shell for
+# Windows / macOS / Linux and publishes the resulting installers as a
+# single rolling pre-release tagged `nightly`. The tag is force-moved
+# each run so storage stays bounded (one set of installers, always
+# pointing at the latest main).
+#
+# Independent from the preflight workflow — that catches code regressions;
+# this catches build/packaging regressions. Both run in parallel on push.
+#
+# Triggers:
+#   - push to main (auto-build the rolling nightly)
+#   - tag push (v*.*.*) → publishes a stable release with the tag name
+#   - workflow_dispatch (manual run from the Actions UI)
+#
+# Public repo, so all three OS runners are free (no Actions minutes
+# billing). Typical full-matrix build: ~10-15 min cached.
+#
+# Code signing: deliberately NOT wired here. Without certs, Windows
+# shows "unverified publisher" SmartScreen warning and macOS shows
+# "Apple cannot verify this developer" on first launch — tolerable
+# for nightly. Wire signing when promoting to stable channel.
+
+name: tauri-release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+concurrency:
+  group: tauri-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: write   # needed to create/update the nightly release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Universal macOS binary needs both x86_64 + aarch64 toolchains
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build (src-tauri/target)
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install Linux Tauri dependencies
+        # libwebkit2gtk + soup3 are required for the WebView on Linux.
+        # ubuntu-22.04 ships webkit2gtk-4.0; we use that.
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build Tauri app + publish to rolling nightly release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Rolling nightly: the same `nightly` tag is force-moved on
+          # every main push so users always grab the latest installers
+          # from the same URL. On tag pushes (v*.*.*), tauri-action
+          # ignores tagName + releaseName below and publishes against
+          # the actual tag instead.
+          TAURI_SIGNING_PRIVATE_KEY: ''
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('SeekDeep {0}', github.ref_name) || 'SeekDeep nightly (rolling)' }}
+          releaseBody: |
+            **Rolling nightly build** — auto-built from the latest commit on `main`.
+
+            Picked from commit `${{ github.sha }}` on ${{ github.event.head_commit.timestamp }}.
+
+            **Installation:**
+            - **Windows:** download `.msi` or `.exe`, double-click. SmartScreen will warn "unverified publisher" — click "More info" → "Run anyway".
+            - **macOS:** download `.dmg`, drag SeekDeep to Applications. First launch: right-click the app → "Open" → confirm. Required because the build is unsigned.
+            - **Linux:** download `.AppImage`, `chmod +x` it, run.
+
+            **Prerequisites on your machine** (NOT bundled in the app — install once):
+            - Python 3.11+
+            - Node.js 20+
+            - Optional: Ollama (for local Ollama backend), Docker (for SearXNG web search)
+
+            **First run:** the app opens a window pointing at `http://127.0.0.1:7865/gui/chat.html`. You need to start the local AI server separately for now (`seekdeep_standalone_launcher.bat` on Windows, or `npm run start:standalone`). Sidecar auto-start is coming in a future build.
+
+            See [CHANGELOG](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) for what's in this build.
+          releaseDraft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          args: ${{ matrix.args }}

@@ -1,0 +1,26 @@
+[package]
+name = "seekdeep"
+version = "0.1.0"
+description = "SeekDeep — local AI assistant (Discord bot + standalone GUI)"
+authors = ["NathanNeurotic"]
+edition = "2021"
+rust-version = "1.77"
+
+# This stops Cargo from looking at the parent dir for a workspace it
+# doesn't belong to.
+[lib]
+name = "seekdeep_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+# Bundle config — keep size lean. No Updater plugin in v1.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
