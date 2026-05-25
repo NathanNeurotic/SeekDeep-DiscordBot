@@ -7628,6 +7628,8 @@ function seekdeepHelpText(source = null) {
     prefix + ' template save <name>: <prompt>     (save a reusable image prompt)',
     prefix + ' template list / use <name> / delete <name>',
     '/template action:save|list|use|delete name:<n> prompt:<p>',
+    prefix + ' template share <name>                (post to this server\'s #prompts channel)',
+    prefix + ' prompts channel here                 (admin: set the #prompts channel)',
     '```',
     '',
     '## ' + clock + ' Recent / Stats / GPU / Queue',
@@ -13662,6 +13664,284 @@ async function seekdeepHandleTemplateCommand(message, raw = '') {
 }
 // SEEKDEEP_PROMPT_TEMPLATES_END
 
+// SEEKDEEP_PROMPTS_MARKETPLACE_START
+// Per-server prompt-template sharing via a designated #prompts channel.
+// Mirrors the archive-channel pattern -- server admin opts in once with
+// `@SeekDeep prompts channel here`, then users run
+// `@SeekDeep template share <name>` to post their saved template as an
+// embed. Other users click "Import to my templates" to add it to their
+// own `data/prompt-templates.json`. Discord IS the storage; no extra infra.
+// Cross-server sharing is intentionally not supported -- channel scope is
+// the community boundary.
+
+const SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX = 'sd-prompts-import:';
+const SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX = 'sd-prompts-copy:';
+const SEEKDEEP_PROMPTS_SHARE_BODY_MAX = 360;   // truncated preview in the embed
+const SEEKDEEP_PROMPTS_IMPORT_VAR_RE = /\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g;
+
+function seekdeepGetPromptsChannelIdForGuild(guildId = '') {
+  const id = String(guildId || '').trim();
+  if (!id) return '';
+  const config = seekdeepReadArchiveGuildConfig();
+  return String(config.guilds?.[id]?.promptsChannelId || '').trim();
+}
+
+function seekdeepSetPromptsChannelIdForGuild(guildId = '', channelId = '', configuredBy = '') {
+  const gid = String(guildId || '').trim();
+  const cid = String(channelId || '').trim();
+  if (!gid || !cid) return false;
+  const config = seekdeepReadArchiveGuildConfig();
+  if (!config.guilds || typeof config.guilds !== 'object') config.guilds = {};
+  config.guilds[gid] = {
+    ...(config.guilds[gid] || {}),
+    promptsChannelId: cid,
+    promptsConfiguredBy: String(configuredBy || ''),
+    promptsConfiguredAt: new Date().toISOString(),
+  };
+  return seekdeepWriteArchiveGuildConfig(config);
+}
+
+function seekdeepPromptsCountVariables(text = '') {
+  const found = new Set();
+  let m;
+  const re = new RegExp(SEEKDEEP_PROMPTS_IMPORT_VAR_RE.source, 'g');
+  while ((m = re.exec(String(text || ''))) !== null) found.add(m[1]);
+  return found.size;
+}
+
+function seekdeepPromptsBuildEmbed(template, opts) {
+  // template: { name, prompt, ... }; opts: { authorTag, authorId, importCount }
+  const promptBody = String(template?.prompt || '');
+  const truncated = promptBody.length > SEEKDEEP_PROMPTS_SHARE_BODY_MAX
+    ? promptBody.slice(0, SEEKDEEP_PROMPTS_SHARE_BODY_MAX - 1) + '…'
+    : promptBody;
+  const varCount = seekdeepPromptsCountVariables(promptBody);
+  const importCount = Number(opts?.importCount || 0);
+  return {
+    title: 'Template: ' + String(template?.name || 'unnamed').slice(0, 120),
+    description: 'Posted by ' + (opts?.authorTag || 'unknown') + ' · ' + varCount + ' variable' + (varCount === 1 ? '' : 's'),
+    color: 0x2dd4ff,
+    fields: [
+      { name: 'Variables', value: String(varCount), inline: true },
+      { name: 'Length',    value: String(promptBody.length) + ' chars', inline: true },
+      { name: 'Author',    value: String(opts?.authorTag || 'unknown'), inline: true },
+      { name: 'Prompt',    value: '```\n' + truncated + '\n```', inline: false },
+    ],
+    footer: { text: 'scope: this server only · ' + importCount + ' user' + (importCount === 1 ? '' : 's') + ' imported' },
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function seekdeepPromptsBuildButtons(shareMessageId) {
+  // Uses the dynamic-import discord.js shape; the existing import-button
+  // handlers attach via the same pattern as archive buttons.
+  const id = String(shareMessageId || 'placeholder').slice(0, 90);
+  return {
+    type: 1, // ActionRow
+    components: [
+      { type: 2, style: 1, label: '▸ Import to my templates', custom_id: SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX + id },
+      { type: 2, style: 2, label: '⎘ Copy raw',                custom_id: SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX + id },
+    ],
+  };
+}
+
+async function seekdeepPromptsBumpImportCounter(shareMessage) {
+  // Re-render the embed with a +1 import counter. We trust the existing
+  // embed footer text "scope: this server only · N users imported".
+  try {
+    const embed = shareMessage?.embeds?.[0];
+    if (!embed) return;
+    const footerText = String(embed.footer?.text || '');
+    const m = footerText.match(/(\d+)\s+user/);
+    const current = m ? Number(m[1]) : 0;
+    const next = current + 1;
+    const newFooter = footerText.replace(/\d+\s+user[s]?\s+imported/, next + ' user' + (next === 1 ? '' : 's') + ' imported');
+    const updated = {
+      title: embed.title,
+      description: embed.description,
+      color: embed.color,
+      fields: embed.fields,
+      footer: { text: newFooter || ('scope: this server only · ' + next + ' user' + (next === 1 ? '' : 's') + ' imported') },
+      timestamp: embed.timestamp,
+    };
+    await shareMessage.edit({ embeds: [updated] });
+  } catch (err) {
+    // Edit can fail if the bot doesn't own the message OR rate-limit; non-fatal.
+    console.warn('[SeekDeep] prompts: bump-counter edit failed:', err?.message || err);
+  }
+}
+
+async function seekdeepHandlePromptsChannelAdminCommand(message, raw = '') {
+  // `@SeekDeep prompts channel here` (admin) -- sets the prompts channel for this server.
+  // Pattern intentionally mirrors `archive channel here`.
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = stripped.match(/^prompts?\s+channel\s+(here|<#(\d+)>|#?(\S+))(?:\s|$)/i);
+  if (!m) return false;
+  if (!message?.guild?.id) {
+    await message.reply({ content: 'Prompts channel only works inside a server.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  if (typeof seekdeepUserCanManageReactions === 'function' && !seekdeepUserCanManageReactions(message)) {
+    await message.reply({ content: 'You need Manage Messages / Manage Server / Admin to set the prompts channel.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  let channelId = '';
+  if (/^here$/i.test(m[1])) {
+    channelId = String(message.channel?.id || '');
+  } else if (m[2]) {
+    channelId = m[2];
+  } else if (m[3]) {
+    // Try to resolve by channel name
+    const candidate = (message.guild.channels?.cache || new Map());
+    for (const ch of candidate.values?.() || []) {
+      if (String(ch?.name || '').toLowerCase() === m[3].toLowerCase()) { channelId = String(ch.id); break; }
+    }
+  }
+  if (!channelId) {
+    await message.reply({ content: 'Could not resolve that channel. Try `@SeekDeep prompts channel here` from inside the channel you want.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const ok = seekdeepSetPromptsChannelIdForGuild(message.guild.id, channelId, String(message.author?.id || ''));
+  if (!ok) {
+    await message.reply({ content: 'Writing the prompts-channel config failed. Check file permissions for `data/archive-guild-config.json`.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  await message.reply({
+    content: 'Prompts channel set to <#' + channelId + '>. Users can now run `@SeekDeep template share <name>` to post their saved templates here.',
+    allowedMentions: { repliedUser: false },
+  });
+  return true;
+}
+
+async function seekdeepHandleTemplateShareCommand(message, raw = '') {
+  // `@SeekDeep template share <name>` -- posts the named template as an
+  // embed in the configured #prompts channel.
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const m = stripped.match(/^templates?\s+share\s+(.+)$/i);
+  if (!m) return false;
+  if (!message?.guild?.id) {
+    await message.reply({ content: 'Template sharing only works inside a server.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const guildId = String(message.guild.id);
+  const userId = String(message.author?.id || '');
+  const name = seekdeepTemplateNameSanitize(m[1]);
+  const templates = seekdeepGetUserTemplates(guildId, userId);
+  const tmpl = templates[name];
+  if (!tmpl || !tmpl.prompt) {
+    await message.reply({ content: 'No template named `' + name + '`. Use `@SeekDeep template list` to see yours.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const promptsChannelId = seekdeepGetPromptsChannelIdForGuild(guildId);
+  if (!promptsChannelId) {
+    await message.reply({
+      content: 'No prompts channel configured for this server yet. An admin can run `@SeekDeep prompts channel here` in the channel you want to use.',
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+  const targetChannel = message.guild.channels?.cache?.get?.(promptsChannelId)
+    || (await message.guild.channels?.fetch?.(promptsChannelId).catch(() => null));
+  if (!targetChannel) {
+    await message.reply({ content: 'The configured prompts channel <#' + promptsChannelId + '> is unreachable. Ask an admin to re-set it.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  const authorTag = String(message.author?.tag || message.author?.username || ('user-' + userId));
+  const embed = seekdeepPromptsBuildEmbed({ name, prompt: tmpl.prompt }, { authorTag, authorId: userId, importCount: 0 });
+  let sent = null;
+  try {
+    // We pass a placeholder custom_id then edit it with the real message id
+    // so the button handler can find the share message by id.
+    sent = await targetChannel.send({ embeds: [embed], components: [seekdeepPromptsBuildButtons('pending')] });
+    const finalButtons = seekdeepPromptsBuildButtons(sent.id);
+    await sent.edit({ embeds: [embed], components: [finalButtons] });
+  } catch (err) {
+    await message.reply({ content: 'Could not post to <#' + promptsChannelId + '>: ' + String(err?.message || err).slice(0, 200), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  await message.reply({
+    content: 'Shared `' + name + '` to <#' + promptsChannelId + '>.',
+    allowedMentions: { repliedUser: false },
+  });
+  return true;
+}
+
+async function seekdeepHandlePromptsButtonInteraction(interaction) {
+  // Routes both Import and Copy button clicks. Returns true if it claimed
+  // the interaction, false otherwise so the existing dispatcher continues.
+  if (!interaction?.customId) return false;
+  const isImport = interaction.customId.startsWith(SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX);
+  const isCopy   = interaction.customId.startsWith(SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX);
+  if (!isImport && !isCopy) return false;
+  if (!interaction.guild?.id) {
+    try { await interaction.reply({ content: 'Prompts sharing only works inside a server.', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+  const shareMessage = interaction.message;
+  const embed = shareMessage?.embeds?.[0];
+  if (!embed) {
+    try { await interaction.reply({ content: 'Could not read the shared template (no embed).', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+  const title = String(embed.title || '');
+  const nameMatch = title.match(/^Template:\s*(.+)$/);
+  const templateName = nameMatch ? seekdeepTemplateNameSanitize(nameMatch[1]) : '';
+  // Extract the prompt body from the "Prompt" field (which is wrapped in a code block).
+  const promptField = (embed.fields || []).find(f => f?.name === 'Prompt');
+  const codeBlockMatch = String(promptField?.value || '').match(/```(?:\w*\n)?([\s\S]*?)```/);
+  const sharedPrompt = codeBlockMatch ? codeBlockMatch[1].trim() : '';
+  if (!templateName || !sharedPrompt) {
+    try { await interaction.reply({ content: 'Could not parse the shared template.', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+
+  if (isCopy) {
+    // Drop the raw template in an ephemeral reply for easy copy/paste.
+    try {
+      await interaction.reply({
+        content: '```\n' + sharedPrompt.slice(0, 1900) + '\n```',
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch {}
+    return true;
+  }
+
+  // isImport: append into the clicker's data/prompt-templates.json with a
+  // name-collision suffix if they already have a template with this name.
+  const guildId = String(interaction.guild.id);
+  const userId = String(interaction.user?.id || interaction.member?.user?.id || '');
+  if (!userId) {
+    try { await interaction.reply({ content: 'Could not identify your user id.', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+  const existing = seekdeepGetUserTemplates(guildId, userId);
+  let importedName = templateName;
+  if (existing[importedName]) {
+    const suffix = Math.random().toString(36).slice(2, 6);
+    importedName = (templateName + '-imported-' + suffix).slice(0, SEEKDEEP_TEMPLATE_NAME_MAX);
+  }
+  const result = seekdeepSaveUserTemplate(guildId, userId, importedName, sharedPrompt);
+  if (!result || result.error) {
+    try {
+      await interaction.reply({
+        content: result?.error || 'Import failed (you may have hit the per-user template cap). Delete an existing template and try again.',
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch {}
+    return true;
+  }
+  try {
+    await interaction.reply({
+      content: 'Imported as `' + result.name + '`. Use it with `@SeekDeep template use ' + result.name + '`.',
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch {}
+  // Bump the import counter in the share embed (best-effort, fire-and-forget).
+  void seekdeepPromptsBumpImportCounter(shareMessage);
+  return true;
+}
+// SEEKDEEP_PROMPTS_MARKETPLACE_END
+
 // SEEKDEEP_IMG2IMG_UPSCALE_START
 // img2img: transform an existing image with a text prompt.
 // upscale: enlarge an image (Lanczos fallback; Real-ESRGAN when available).
@@ -16909,6 +17189,18 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
           }
         }
       }
+      return true;
+    }
+
+    // Prompts marketplace admin: "@SeekDeep prompts channel here" (admin)
+    if (typeof seekdeepHandlePromptsChannelAdminCommand === 'function' && await seekdeepHandlePromptsChannelAdminCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Prompts marketplace user: "@SeekDeep template share <name>"
+    // Must come BEFORE the generic template command handler so "share" doesn't
+    // fall through to the no-match branch there.
+    if (typeof seekdeepHandleTemplateShareCommand === 'function' && await seekdeepHandleTemplateShareCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
     }
 
@@ -20228,6 +20520,13 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepBuildUniversalArchiveStates,
     seekdeepUniversalArchiveSummaryText,
     SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE,
+    // Prompts marketplace (Item A)
+    seekdeepPromptsCountVariables,
+    seekdeepPromptsBuildEmbed,
+    seekdeepPromptsBuildButtons,
+    SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX,
+    SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX,
+    SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
@@ -20501,6 +20800,25 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 // SEEKDEEP_PROMPT_CHOICE_EMERGENCY_END
+
+// Prompts marketplace button listener. Catches Import + Copy clicks on
+// share embeds posted in a server's #prompts channel.
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (!(interaction?.isButton && interaction.isButton())) return;
+    const customId = String(interaction?.customId || '');
+    if (!customId.startsWith(SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX) &&
+        !customId.startsWith(SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX)) return;
+    await seekdeepHandlePromptsButtonInteraction(interaction);
+  } catch (err) {
+    console.error('Prompts marketplace button listener failed:', err?.stack || err?.message || err);
+    try {
+      if (!(interaction?.deferred || interaction?.replied)) {
+        await interaction.reply({ content: 'Prompts button failed: ' + String(err?.message || err).slice(0, 200), flags: MessageFlags.Ephemeral });
+      }
+    } catch {}
+  }
+});
 
 // SEEKDEEP_IMAGE_ACTION_EMERGENCY_START
 const SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN = globalThis.__SEEKDEEP_IMAGE_ACTION_EMERGENCY_SEEN || new Set();

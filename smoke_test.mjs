@@ -1859,6 +1859,58 @@ check('context menu prompt extract: missing prompt line returns empty',
   check('universal-archive: summary text for no-image case', /No image attachments/.test(sum3));
 }
 
+// 56 - Prompts marketplace (Item A): variable counter + embed shape + buttons
+{
+  // Variable counter -- counts unique {{name}} occurrences in prompt body
+  check('prompts: counts {{var}} occurrences',
+    T.seekdeepPromptsCountVariables('Render a {{subject}} in {{style}}') === 2);
+  check('prompts: dedupes repeated {{var}}',
+    T.seekdeepPromptsCountVariables('{{x}} and {{x}} again') === 1);
+  check('prompts: zero on plain text',
+    T.seekdeepPromptsCountVariables('just a regular prompt') === 0);
+  check('prompts: tolerates whitespace inside braces',
+    T.seekdeepPromptsCountVariables('{{  named  }}') === 1);
+
+  // Embed shape
+  const tmpl = { name: 'cosmic-cat', prompt: 'A {{subject}} drifting through {{place}}, painted in {{style}}.' };
+  const embed = T.seekdeepPromptsBuildEmbed(tmpl, { authorTag: 'tester#0001', authorId: '123', importCount: 0 });
+  check('prompts: embed title prefix',
+    embed.title === 'Template: cosmic-cat');
+  check('prompts: embed has 4 fields (Variables/Length/Author/Prompt)',
+    Array.isArray(embed.fields) && embed.fields.length === 4
+    && embed.fields.map(f => f.name).join('|') === 'Variables|Length|Author|Prompt');
+  check('prompts: embed shows correct variable count',
+    embed.fields[0].value === '3');
+  check('prompts: footer mentions scope + import count',
+    /scope: this server only/.test(embed.footer.text) && /0 users imported/.test(embed.footer.text));
+
+  // Truncation
+  const longPrompt = 'X'.repeat(2000);
+  const longEmbed = T.seekdeepPromptsBuildEmbed({ name: 'huge', prompt: longPrompt }, { authorTag: 'a', importCount: 0 });
+  check('prompts: long prompt truncated in embed Prompt field',
+    longEmbed.fields[3].value.length < T.SEEKDEEP_PROMPTS_SHARE_BODY_MAX + 30);
+  check('prompts: truncation appends ellipsis',
+    /…\n```$/.test(longEmbed.fields[3].value));
+
+  // Buttons -- custom_id wiring
+  const buttons = T.seekdeepPromptsBuildButtons('999');
+  check('prompts: ActionRow with 2 buttons',
+    buttons.type === 1 && Array.isArray(buttons.components) && buttons.components.length === 2);
+  check('prompts: Import button custom_id has share message id',
+    buttons.components[0].custom_id === T.SEEKDEEP_PROMPTS_IMPORT_BUTTON_PREFIX + '999');
+  check('prompts: Copy button custom_id has share message id',
+    buttons.components[1].custom_id === T.SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX + '999');
+  check('prompts: Import button is primary style (1)',
+    buttons.components[0].style === 1);
+  check('prompts: Copy button is secondary style (2)',
+    buttons.components[1].style === 2);
+
+  // Pluralization
+  const single = T.seekdeepPromptsBuildEmbed({ name: 'x', prompt: 'no vars' }, { authorTag: 'a', importCount: 1 });
+  check('prompts: footer singular when count=1',
+    /1 user imported/.test(single.footer.text) && !/1 users/.test(single.footer.text));
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
