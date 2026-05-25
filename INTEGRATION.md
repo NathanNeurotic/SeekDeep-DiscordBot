@@ -90,6 +90,71 @@ The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm
 
 **Still bind to `127.0.0.1`.** The token narrows the threat model but doesn't replace network isolation. If you expose port 7865 through ngrok / cloudflared / a port-forward, the token leaks via the tunnel like any response body.
 
+## 3.4 · Chat backends: HuggingFace transformers or Ollama (per-role)
+
+`POST /chat` dispatches each role to one of two backends, decided at request time from env:
+
+- **`hf`** (default) — in-process via `transformers` + `bitsandbytes`. Counts against the SDXL / vision VRAM budget. Per-role pinning, eviction, fallback all apply.
+- **`ollama`** — out-of-process via the Ollama daemon (default `http://127.0.0.1:11434`). Separate VRAM allocation managed by Ollama; **does not** count against this server's `vram_can_fit` budget.
+
+### Resolution
+
+```
+LOCAL_CHAT_BACKEND=hf                              # global default, applies to default_chat + anything not overridden
+LOCAL_CHAT_FALLBACK_BACKEND=ollama                 # per-role overrides
+LOCAL_CHAT_QUALITY_BACKEND=ollama
+LOCAL_CHAT_REASONING_BACKEND=ollama
+LOCAL_CHAT_LIGHTWEIGHT_BACKEND=ollama
+LOCAL_CHAT_REFINE_BACKEND=ollama
+```
+
+Anything other than `hf` / `ollama` is normalized to `hf`. Resolution order per role: per-role env → global `LOCAL_CHAT_BACKEND` → `hf`.
+
+### Model ID semantics
+
+The role's existing `LOCAL_CHAT_<...>_MODEL_ID` env value changes meaning based on the resolved backend:
+
+| Backend | Model ID env value example |
+|---|---|
+| `hf` | `meta-llama/Llama-3.1-8B-Instruct` (HuggingFace repo ID) |
+| `ollama` | `llama3:8b` (Ollama tag, with optional `:version`) |
+
+### Auto-pull
+
+`POST /model/warm` with an Ollama-backed role checks `GET /api/tags` and pulls via `POST /api/pull` if the tag isn't present. The pull is synchronous (governed by `OLLAMA_PULL_TIMEOUT_SECS`, default 30 min). Already-present tags are no-op.
+
+### `/health` reporting
+
+```jsonc
+{
+  "chat_backends": { "default_chat": "hf", "quality_text": "ollama", "lightweight_chat": "ollama", ... },
+  "ollama": {
+    "available": true,
+    "base_url": "http://127.0.0.1:11434",
+    "installed_tags": ["llama3:8b", "phi4:latest", "mistral-nemo:12b"]
+  }
+}
+```
+
+The GUI's Models pane can use this to render an "HF" / "Ollama" badge per role and an "Ollama daemon: online" indicator.
+
+### Operations
+
+| Action | How |
+|---|---|
+| Switch a single role to Ollama | Set `LOCAL_CHAT_QUALITY_BACKEND=ollama` and `LOCAL_CHAT_QUALITY_MODEL_ID=mistral-nemo:12b`. Restart the AI server. |
+| Switch ALL roles to Ollama | Set `LOCAL_CHAT_BACKEND=ollama` and every `LOCAL_CHAT_<...>_MODEL_ID` to its Ollama tag. |
+| Pre-pull a model | `curl -X POST http://127.0.0.1:7865/model/warm -H "X-SeekDeep-Token: $TOK" -d '{"role":"quality_text"}'` — pulls if missing |
+| Force-revert a role to HF | Set `LOCAL_CHAT_<ROLE>_BACKEND=hf` (overrides global Ollama) |
+| Daemon offline | `/health.ollama.available=false`. Chat requests to Ollama roles will fail; bot's `MODEL_AUTO_FALLBACK` path then tries `fallback_chat` (which can be either backend). |
+
+### When to pick each backend per role
+
+- **default_chat (heavy, every conversation)** — usually HF with 4-bit quant for max quality per VRAM byte. Ollama works too but uses different (often less tight) quantization.
+- **quality_text (one-off serious answers)** — Ollama is great here: no VRAM displacement of the resident default_chat, and Ollama's swap is fast.
+- **lightweight_chat (short replies)** — Ollama: tiny models like `phi3:mini` boot in <1s and don't fight the SDXL pipeline for VRAM.
+- **vision / image** — must stay HF. Ollama doesn't run SDXL or Qwen2.5-VL.
+
 ## 3.5 · WebSocket event bridge (`/events`)
 
 For live updates the GUI doesn't poll any more — it subscribes to a single push stream and the server emits events as they happen.

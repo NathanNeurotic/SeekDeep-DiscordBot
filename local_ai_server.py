@@ -408,7 +408,9 @@ try:
         # Control Center "Warm" buttons actually load the model instead of just
         # flashing a fake success.
         warmup_handlers={
-            "chat":   lambda role: load_chat_model(role),
+            # Backend-aware for chat: HF roles load via transformers;
+            # Ollama roles call /api/pull on the daemon if the tag isn't present.
+            "chat":   lambda role: warm_chat_role(role),
             "image":  lambda: load_image_pipe(),
             "vision": lambda: load_vision_model(),
         },
@@ -662,6 +664,157 @@ def cleanup_cuda() -> None:
             torch.cuda.ipc_collect()
         except Exception:
             pass
+
+
+# ===== Ollama backend (alternative to HF transformers for chat) =====
+# Ollama is a separate daemon (default localhost:11434) that runs GGUF
+# models with its own VRAM management, completely independent of PyTorch.
+#
+# Per-role backend selection:
+#   LOCAL_CHAT_BACKEND=hf|ollama          (default: hf -- the global default)
+#   LOCAL_CHAT_FALLBACK_BACKEND=hf|ollama (per-role override)
+#   LOCAL_CHAT_QUALITY_BACKEND=hf|ollama
+#   LOCAL_CHAT_REASONING_BACKEND=hf|ollama
+#   LOCAL_CHAT_LIGHTWEIGHT_BACKEND=hf|ollama
+#   LOCAL_CHAT_REFINE_BACKEND=hf|ollama
+#
+# When a role is set to ollama, its existing LOCAL_CHAT_<...>_MODEL_ID env
+# becomes an Ollama tag (e.g. "llama3:8b") instead of an HF repo ID. The
+# server skips PyTorch loading entirely for ollama roles -- they cost
+# nothing against the SDXL / vision VRAM budget.
+
+import urllib.request as _seekdeep_urllib_req
+import urllib.error as _seekdeep_urllib_err
+
+OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "").rstrip("/")
+OLLAMA_TIMEOUT_SECS = float(os.getenv("OLLAMA_TIMEOUT_SECS", "180"))
+OLLAMA_PROBE_TIMEOUT_SECS = float(os.getenv("OLLAMA_PROBE_TIMEOUT_SECS", "2"))
+OLLAMA_PULL_TIMEOUT_SECS = float(os.getenv("OLLAMA_PULL_TIMEOUT_SECS", "1800"))
+
+# Per-role backend env vars, mirrored after CHAT_ROLE_ENV. default_chat uses
+# the global LOCAL_CHAT_BACKEND directly.
+CHAT_ROLE_BACKEND_ENV = {
+    "fallback_chat":    "LOCAL_CHAT_FALLBACK_BACKEND",
+    "quality_text":     "LOCAL_CHAT_QUALITY_BACKEND",
+    "reasoning_code":   "LOCAL_CHAT_REASONING_BACKEND",
+    "lightweight_chat": "LOCAL_CHAT_LIGHTWEIGHT_BACKEND",
+    "refine_chat":      "LOCAL_CHAT_REFINE_BACKEND",
+}
+
+
+def _resolve_chat_backend(role: str) -> str:
+    """Return 'hf' or 'ollama' for the given role. Per-role env override
+    beats the global LOCAL_CHAT_BACKEND. Anything unrecognized -> 'hf'."""
+    role_clean = (role or "").strip().lower()
+    env_key = CHAT_ROLE_BACKEND_ENV.get(role_clean)
+    if env_key:
+        per_role = (os.getenv(env_key, "") or "").strip().lower()
+        if per_role in {"hf", "ollama"}:
+            return per_role
+    global_val = (os.getenv("LOCAL_CHAT_BACKEND", "hf") or "hf").strip().lower()
+    return global_val if global_val in {"hf", "ollama"} else "hf"
+
+
+def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
+                     timeout: float | None = None) -> dict:
+    """Bare-metal Ollama HTTP call using stdlib urllib (no extra runtime dep).
+    Returns parsed JSON. Raises on HTTP errors so the caller can decide."""
+    url = f"{OLLAMA_BASE_URL}{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = _seekdeep_urllib_req.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    t = timeout if timeout is not None else OLLAMA_TIMEOUT_SECS
+    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            # Streaming endpoints can return NDJSON; take the last full object.
+            for line in reversed(raw.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+            return {}
+
+
+def ollama_available() -> bool:
+    """Cheap probe of the Ollama daemon. True if /api/tags responds within OLLAMA_PROBE_TIMEOUT_SECS."""
+    try:
+        _ollama_request("/api/tags", method="GET", timeout=OLLAMA_PROBE_TIMEOUT_SECS)
+        return True
+    except Exception:
+        return False
+
+
+def ollama_list_tags() -> list[str]:
+    """Sorted list of installed Ollama model tags. Empty list if daemon down."""
+    try:
+        data = _ollama_request("/api/tags", method="GET", timeout=OLLAMA_PROBE_TIMEOUT_SECS + 1)
+        names = [m.get("name", "") for m in (data.get("models") or [])]
+        return sorted(n for n in names if n)
+    except Exception:
+        return []
+
+
+def _ollama_chat(messages: list[dict], model_tag: str, temperature: float,
+                  max_tokens: int) -> str:
+    """Call /api/chat (non-streaming). Returns the assistant text. Raises on
+    transport / API error so the chat handler can fall through to its existing
+    HF fallback path."""
+    body = {
+        "model": model_tag,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": max(0.0, min(2.0, float(temperature))),
+            "num_predict": int(max_tokens),
+        },
+    }
+    result = _ollama_request("/api/chat", body=body, timeout=OLLAMA_TIMEOUT_SECS)
+    msg = result.get("message") or {}
+    return str(msg.get("content") or "").strip()
+
+
+def _ollama_pull(model_tag: str) -> dict:
+    """Force-pull an Ollama tag (non-streaming so we wait for completion).
+    Multi-GB downloads can take a while -- governed by OLLAMA_PULL_TIMEOUT_SECS."""
+    return _ollama_request("/api/pull", body={"model": model_tag, "stream": False},
+                            timeout=OLLAMA_PULL_TIMEOUT_SECS)
+
+
+def _ollama_ensure_tag(model_tag: str, auto_pull: bool = True) -> tuple[bool, str]:
+    """Return (ok, note). If tag is already present, ok=True. If not present
+    and auto_pull, attempt /api/pull (blocking). Returns ok=False with a
+    diagnostic string if pull fails or daemon is unreachable."""
+    if not ollama_available():
+        return False, f"Ollama daemon not reachable at {OLLAMA_BASE_URL}"
+    tags = ollama_list_tags()
+    if model_tag in tags:
+        return True, "already-present"
+    # Ollama tags can omit the ':latest' suffix in /api/tags responses.
+    short = model_tag.split(":", 1)[0]
+    if any(t == short or t.startswith(short + ":") for t in tags):
+        return True, "matched-by-base-name"
+    if not auto_pull:
+        return False, f"tag {model_tag!r} not installed (auto_pull disabled)"
+    print(f"[SeekDeep] Ollama: pulling {model_tag} (may take a while for first download)", flush=True)
+    try:
+        _ollama_pull(model_tag)
+    except Exception as e:
+        return False, f"pull failed: {e}"
+    # Re-verify after pull
+    tags = ollama_list_tags()
+    if model_tag in tags or any(t == short or t.startswith(short + ":") for t in tags):
+        print(f"[SeekDeep] Ollama: pull complete for {model_tag}", flush=True)
+        return True, "pulled"
+    return False, "pull-completed-but-tag-still-missing"
 
 
 def b64_to_bytes(data: str) -> bytes:
@@ -1064,6 +1217,11 @@ async def seekdeep_singleflight_middleware(request, call_next):
 
 @app.get("/health")
 def health():
+    # Snapshot Ollama state so the GUI can show daemon status + per-role
+    # backend badges. Probe is cheap (~2s timeout) but cached at request
+    # time -- /health isn't hit often enough to need finer caching.
+    _ollama_up = ollama_available()
+    _chat_backends = {role: _resolve_chat_backend(role) for role in chat_role_map().keys()}
     return {
         "status": "ready",
         "version": SEEKDEEP_VERSION,
@@ -1073,6 +1231,12 @@ def health():
         "loaded_chat_role": loaded_chat_role,
         "loaded_chat_model_id": loaded_chat_model_id,
         "chat_roles": chat_role_map(),
+        "chat_backends": _chat_backends,
+        "ollama": {
+            "available": _ollama_up,
+            "base_url": OLLAMA_BASE_URL,
+            "installed_tags": ollama_list_tags() if _ollama_up else [],
+        },
         "chat_quant_mode": _normalized_chat_quant_mode(),
         "chat_quant_full_roles": sorted(LOCAL_CHAT_QUANT_FULL_ROLES),
         "keep_mode": MODEL_KEEP_MODE,
@@ -1142,11 +1306,40 @@ def unload_endpoint():
     return {"ok": True, "status": "unloaded"}
 
 
+def warm_chat_role(role: str = "default_chat") -> dict:
+    """Backend-aware chat warm. For HF roles, loads into chat_model global.
+    For Ollama roles, verifies the daemon is reachable and the tag is
+    present (auto-pulling via /api/pull if missing). Returns a uniform
+    {ok, status, task, role, model_id, backend, ...} dict."""
+    backend = _resolve_chat_backend(role)
+    if backend == "ollama":
+        resolved_role, model_tag = resolve_chat_role(role)
+        if not model_tag:
+            return {"ok": False, "task": "chat", "role": resolved_role, "backend": "ollama",
+                    "error": f"no Ollama tag configured for role {resolved_role!r}"}
+        ok, note = _ollama_ensure_tag(model_tag, auto_pull=True)
+        return {
+            "ok": ok,
+            "status": "warmed_up" if ok else "pull_or_probe_failed",
+            "task": "chat",
+            "role": resolved_role,
+            "model_id": model_tag,
+            "backend": "ollama",
+            "note": note,
+        }
+    # HF default path
+    resolved_role, model_id = load_chat_model(role)
+    return {"ok": True, "status": "warmed_up", "task": "chat",
+            "role": resolved_role, "model_id": model_id, "backend": "hf"}
+
+
 @app.post("/warmup/chat", dependencies=[Depends(require_gui_token)])
 def warmup_chat_endpoint():
     try:
-        role, model_id = load_chat_model("default_chat")
-        return {"ok": True, "status": "warmed_up", "task": "chat", "role": role, "model_id": model_id}
+        result = warm_chat_role("default_chat")
+        if not result.get("ok"):
+            return JSONResponse(status_code=500, content=result)
+        return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e), "task": "chat"})
 
@@ -1403,8 +1596,31 @@ def build_chat_prompt(system: str, context: str, prompt: str, messages: list | N
     ]
 
 
+def _run_ollama_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
+    """Dispatch a chat request to the Ollama daemon. The role's existing
+    LOCAL_CHAT_<...>_MODEL_ID env is interpreted as an Ollama tag.
+    Returns (text, resolved_role, model_tag)."""
+    resolved_role, model_tag = resolve_chat_role(role)
+    if not model_tag:
+        raise RuntimeError(
+            f"Ollama role {resolved_role!r} has no model tag configured "
+            f"(set {CHAT_ROLE_ENV.get(resolved_role, 'LOCAL_CHAT_MODEL_ID')})"
+        )
+    messages = build_chat_prompt(req.system, req.context, req.prompt, req.messages or None)
+    text = _ollama_chat(messages, model_tag, req.temperature, req.max_new_tokens)
+    # Strip any thinking blocks that some models still emit
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"<think>[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+    return text, resolved_role, model_tag
+
+
 def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
-    """Load a chat role and run a single generation. Returns (text, resolved_role, model_id)."""
+    """Load a chat role and run a single generation. Returns (text, resolved_role, model_id).
+    Dispatches per-role to HF transformers (in-process) or Ollama (HTTP daemon)."""
+    backend = _resolve_chat_backend(role)
+    if backend == "ollama":
+        return _run_ollama_generation(req, role)
+    # Default: in-process HF transformers path.
     resolved_role, model_id = load_chat_model(role)
 
     import torch
