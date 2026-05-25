@@ -29,7 +29,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from dotenv import load_dotenv
+# python-dotenv is preferred but optional (see note in local_ai_server.py).
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 from huggingface_hub import snapshot_download
 
 load_dotenv()

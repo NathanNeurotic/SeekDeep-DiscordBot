@@ -13,7 +13,15 @@ import traceback
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from dotenv import load_dotenv
+# python-dotenv is preferred but optional. The bot launcher always installs
+# it via requirements-local.txt, but CI's gui-smoke stage only installs the
+# minimal fastapi/httpx/pydantic subset; the module-level import would fail
+# there and break the entire test client. Fall back to a no-op when missing.
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
