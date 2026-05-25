@@ -43,6 +43,21 @@ All four "ready anytime" items shipped 2026-05-25 in commits `3e4a0fa`, `3878ba4
 - ✅ **`POST /model/uninstall`** — counterpart to `/model/install` at `local_ai_server.py:2031`. HF cache delete via `huggingface_hub.scan_cache_dir().delete_revisions()`, Ollama `DELETE /api/delete`, no-op for remote backends. Optional `role` param blanks per-role `LOCAL_CHAT_<ROLE>_*` env keys via `_seekdeep_merge_env`.
 - ✅ **Extended `gui-smoke`** — 20 new checks in `scripts/smoke_gui_endpoints.py` covering `/route/debug` (response shape, default role, bogus-role fallback, prompt-preview truncation), `/model/install` (auth + Pydantic validation), `/model/uninstall` (auth + hf-absent idempotency + remote no-op + unknown-role 400 with env_patched=False). `gui-smoke` is now 52 checks (was 32). Bot smoke is 501 checks (was 493).
 
+#### Queued for post-designer cycle (greenlit by Nathan 2026-05-25)
+
+These have a "go" and only wait on designer's current 15-task queue wrapping up, so we're not stepping on their work mid-flight.
+
+**A. Prompts marketplace via per-server `#prompts` channel** — same pattern as the existing archive channel. Server admin opts in with `@SeekDeep prompts channel here`. Users run `@SeekDeep template share <name>` to post their saved template as a formatted embed in that channel with an "Import to my templates" button. Other users in the same server hit the button to add the template to their local `data/prompt-templates.json`. **Discord IS the storage** — zero hosting, zero auth, zero infra. Cross-server sharing is intentionally NOT supported (community boundary). Supersedes the previous "hosting model decision needed" question for Task 15 in the Designer queue.
+   - Reuses: `data/archive-guild-config.json` (add `promptsChannelId` field), the embed-with-button pattern from archive, the existing `@SeekDeep template import` JSON path for the import side.
+   - New code: ~200 lines in `index.js` for the share command + import button handler + `prompts channel here` admin command. Plus a help section + smoke checks.
+   - Open edge cases: how to handle edits/deletes of a shared template (edit-in-place if Discord allows, otherwise post a new one and tombstone the old — mirror the archive pattern), how to handle a user sharing a template they later modified locally.
+
+**B. Universal "Archive (SeekDeep)" surface — context menu + opt-in auto-reply button** — make EVERY image in chat archivable, not just bot-generated ones.
+   - **B.1 Context menu (always-on, no noise)**: register `Archive (SeekDeep)` as a Message context menu command alongside `Force React (SeekDeep)`. Right-click any message → Apps → Archive (SeekDeep) → bot ephemerally archives any attachments + embed images to the user's personal archive. Works on user posts, bot posts, link previews, anything. Zero channel noise. Probably ~80 lines.
+   - **B.2 Auto-reply button (opt-in per channel, more discoverable)**: when an image is posted in a channel that has opted in via `@SeekDeep archive button on here`, bot replies with a single tiny "[📥]" button. Click → archive. Uses `allowedMentions: { repliedUser: false }` + `MessageFlags.SuppressNotifications` to stay quiet. Gated per-channel because in busy image-heavy channels it'd be too noisy by default. Probably ~120 lines including the channel-binding config + the per-image hook in messageCreate.
+   - Acknowledgment policy: silent for v1 (matches how anyone can already save any Discord image). Add author-mention later if real users find it weird.
+   - Both surfaces share the existing archive flow as their backend, so the actual "save to archive thread" code is reused — only the trigger surfaces are new.
+
 #### Needs a "go" from the user
 
 5. **`index.js` split** into `lib/image-pipeline.js`, `lib/archive.js`, `lib/persona.js`, `lib/router.js`, `lib/commands.js`, `lib/reactrules.js`, `lib/discord-presence.js`. Designer's HANDOFF Task 6.
@@ -93,13 +108,12 @@ All have backend ready unless noted.
 
 14. **TTS preview UI** — voice channel picker + voice picker + queue mockup. Backend (Piper / XTTS / etc.) is deferred indefinitely; designer can mock now so when TTS finally lands, the integration target is clear.
 
-15. **Prompt template marketplace** — Import-from-URL / share button. **Blocked on hosting decision** (see "Needs decision" below).
+15. **Prompt template marketplace** — Now spec'd as a per-server `#prompts` channel pattern (see "Queued for post-designer cycle" item **A** above). Designer can mock the share/import button UX against the new spec; Claude Code builds the backend after designer wraps.
 
 ### Needs decision before either of us starts
 
 | Item | Decision needed |
 |---|---|
-| **Prompt template marketplace** | Where do shared templates live? gist / your domain / signed URLs / nothing remote (export-import .json only)? |
 | **Streaming chat responses** | Big refactor (`/chat` → SSE, bot handler restructures, Discord edits token-by-token). Worth the win? |
 | **Per-message cost tracking for remote backends** | Useful to prevent surprise bills on `openai-compat` / `anthropic` / `gemini`. Where to store? How to display? |
 
