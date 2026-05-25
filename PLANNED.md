@@ -18,17 +18,12 @@ Sorted by readiness to start.
 
 #### Can ship anytime (no blockers)
 
-1. **`GET /route/debug?prompt=...`** in `local_ai_server.py` (or `index.js`). Returns `{matched_rule, confidence, chosen_model, fallback_chain}` for the future Route Inspector panel. Backend can ship before designer's UI exists; UI just consumes the payload.
-   - Effort: ~1 hr. Stub from `seekdeepSelectChatModelRole` + the routing-tables in `index.js`.
+All four "ready anytime" items shipped 2026-05-25 in commits `3e4a0fa`, `3878ba4`, `7a3368d`:
 
-2. **Memory recall: write-side** — bot-side `remember <fact>` / `forget <fact>` commands + atomic writes to `data/user-memories.json` + injection into chat context. Independent of the UI that comes later; the UI just reads `/data/user-memories.json` once this exists.
-   - Effort: ~half-day. Bot-side only.
-
-3. **`POST /model/uninstall`** — counterpart to `/model/install`. HF cache delete / Ollama `/api/delete` / strip role's `LOCAL_CHAT_<...>_*` env keys.
-   - Effort: ~1 hr. Nice symmetry; designer wizard wants this for "remove" buttons.
-
-4. **Extend `gui-smoke`** — add tests for `/model/install` (mock the HF download + Ollama pull) + the new remote-backend dispatch paths (mock `_openai_compat_chat` etc.). Catches regressions on the BYK feature in CI.
-   - Effort: ~45 min. Reuses the existing pattern in `scripts/smoke_gui_endpoints.py`.
+- ✅ **`GET /route/debug?role=...`** — read-only diagnostic at `local_ai_server.py:2098`. Returns `{ok, prompt_preview, role_requested, role_resolved, backend, model_id, endpoint, fallback_chain, auto_fallback_enabled, note}`. The bot's regex-based role selector still lives in `seekdeepSelectChatModelRole` (index.js); the endpoint is honest about that boundary in its `note` field. Pass the role the bot WOULD pick (or what the user requested) as the `role` query param.
+- ✅ **Memory recall: write-side** — bot-side `@SeekDeep remember <fact>` / `recall` / `forget #N | <substring> | all` commands, persisted to `data/user-facts.json` (gitignored, atomic writes), injected into the chat system prompt via new `seekdeepComposeUserSystemBlock` helper. Caps: 25 facts/user, 500 chars/fact. Both chat call sites updated.
+- ✅ **`POST /model/uninstall`** — counterpart to `/model/install` at `local_ai_server.py:2031`. HF cache delete via `huggingface_hub.scan_cache_dir().delete_revisions()`, Ollama `DELETE /api/delete`, no-op for remote backends. Optional `role` param blanks per-role `LOCAL_CHAT_<ROLE>_*` env keys via `_seekdeep_merge_env`.
+- ✅ **Extended `gui-smoke`** — 20 new checks in `scripts/smoke_gui_endpoints.py` covering `/route/debug` (response shape, default role, bogus-role fallback, prompt-preview truncation), `/model/install` (auth + Pydantic validation), `/model/uninstall` (auth + hf-absent idempotency + remote no-op + unknown-role 400 with env_patched=False). `gui-smoke` is now 52 checks (was 32). Bot smoke is 501 checks (was 493).
 
 #### Needs a "go" from the user
 
