@@ -160,6 +160,52 @@ _TOKEN_HEADER = "X-SeekDeep-Token"
 _TOKEN_ENV_KEY = "SEEKDEEP_GUI_TOKEN"
 _TOKEN_DISABLE_KEY = "SEEKDEEP_GUI_TOKEN_DISABLED"
 
+# Module-level auth state. Populated by register_gui_endpoints() on first call
+# so other modules (notably local_ai_server.py) can `from gui_endpoints import
+# require_gui_token` and apply the same dependency to their own destructive
+# endpoints (/unload, /warmup/*).
+_AUTH_STATE: dict[str, Any] = {
+    "env_path": None,   # Path to .env
+    "initial": "",      # Token read or generated at register time
+    "disabled": False,  # SEEKDEEP_GUI_TOKEN_DISABLED honored
+    "ready": False,     # True once register_gui_endpoints has run
+}
+
+
+def _current_token() -> str:
+    """Read the current token from .env, falling back to the initial value
+    captured at register time. Lets `.env` rotation take effect without a
+    server restart."""
+    env_path = _AUTH_STATE.get("env_path")
+    initial = _AUTH_STATE.get("initial", "")
+    if not env_path or not env_path.is_file():
+        return str(initial).strip()
+    env_kv: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _ENV_LINE_RE.match(line)
+        if m:
+            env_kv[m.group(1)] = line.split("=", 1)[1].strip().strip('"').strip("'")
+    return env_kv.get(_TOKEN_ENV_KEY, str(initial)).strip()
+
+
+async def require_gui_token(request: Request) -> None:
+    """FastAPI dependency: 401 unless X-SeekDeep-Token matches the live .env
+    value. Exported so endpoints outside gui_endpoints.py (e.g. /unload in
+    local_ai_server.py) can apply the same auth via Depends()."""
+    if not _AUTH_STATE.get("ready"):
+        # Auth hasn't been registered yet (e.g. import-only test); permit.
+        return
+    if _AUTH_STATE.get("disabled"):
+        return
+    header_val = request.headers.get(_TOKEN_HEADER) or request.headers.get(_TOKEN_HEADER.lower())
+    expected = _current_token()
+    if not expected:
+        raise HTTPException(503, f"{_TOKEN_ENV_KEY} not configured; restart server to regenerate")
+    if not header_val or not secrets.compare_digest(header_val, expected):
+        raise HTTPException(401,
+            f"missing or invalid {_TOKEN_HEADER}; GUI fetches the token from GET /token, "
+            f"or you can read it from .env and pass it manually")
+
 
 def _ensure_gui_token(env_path: Path) -> tuple[str, bool]:
     """
@@ -592,40 +638,22 @@ def register_gui_endpoints(
             return False
 
     # ----- Token bootstrap -----
-    # Generate SEEKDEEP_GUI_TOKEN if it isn't already in .env so first-time
-    # users don't have to do anything manual. Read it fresh from .env on
-    # every request so a manual rotation (edit .env, do NOT need to restart
-    # the server) takes effect immediately for subsequent calls.
-    _token_disabled = os.environ.get(_TOKEN_DISABLE_KEY, "").strip().lower() in {"1", "true", "yes", "on"}
+    # Populate module-level auth state so `require_gui_token` works for
+    # callers outside this function (e.g. /unload in local_ai_server.py).
     _initial_token, _token_was_generated = _ensure_gui_token(_env_path)
+    _AUTH_STATE["env_path"] = _env_path
+    _AUTH_STATE["initial"] = _initial_token
+    _AUTH_STATE["disabled"] = os.environ.get(_TOKEN_DISABLE_KEY, "").strip().lower() in {"1", "true", "yes", "on"}
+    _AUTH_STATE["ready"] = True
     if _token_was_generated:
         print(f"[SeekDeep] generated new {_TOKEN_ENV_KEY}; persisted to {_env_path}")
-    if _token_disabled:
+    if _AUTH_STATE["disabled"]:
         print(f"[SeekDeep] auth DISABLED ({_TOKEN_DISABLE_KEY} is set) - GUI write endpoints are unprotected")
 
-    def _current_token() -> str:
-        # Re-read .env so rotations don't require a server restart.
-        env_kv: dict[str, str] = {}
-        if _env_path.is_file():
-            for line in _env_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                m = _ENV_LINE_RE.match(line)
-                if m:
-                    env_kv[m.group(1)] = line.split("=", 1)[1].strip().strip('"').strip("'")
-        return env_kv.get(_TOKEN_ENV_KEY, _initial_token).strip()
-
-    async def _require_gui_token(request: Request):
-        """FastAPI dependency: 401 unless X-SeekDeep-Token matches .env value."""
-        if _token_disabled:
-            return
-        header_val = request.headers.get(_TOKEN_HEADER) or request.headers.get(_TOKEN_HEADER.lower())
-        expected = _current_token()
-        if not expected:
-            # Token file got wiped between boots; fail closed.
-            raise HTTPException(503, f"{_TOKEN_ENV_KEY} not configured; restart server to regenerate")
-        if not header_val or not secrets.compare_digest(header_val, expected):
-            raise HTTPException(401,
-                f"missing or invalid {_TOKEN_HEADER}; GUI fetches the token from GET /token, "
-                f"or you can read it from .env and pass it manually")
+    # Local alias for the rest of register_gui_endpoints so the existing
+    # Depends() calls below don't have to change. Same function object.
+    _require_gui_token = require_gui_token
+    _token_disabled = _AUTH_STATE["disabled"]  # used by the WS endpoint below
 
     # ----- GET /token -----
     # Returns the GUI token but only to loopback callers. If someone exposes

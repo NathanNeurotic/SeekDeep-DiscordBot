@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
@@ -384,8 +384,13 @@ if os.path.isdir(_GUI_DIR):
     print(f"[SeekDeep] GUI mounted at /gui  ->  {_GUI_DIR}")
 
 # ===== SeekDeep GUI · backend endpoints (config / logs / launcher / data / model.warm) =====
+# `require_gui_token` is set up by register_gui_endpoints. We import it once
+# here so the destructive routes defined further down in this file (/unload,
+# /warmup/chat, /warmup/image, /warmup/vision) can apply the same X-SeekDeep-
+# Token check via Depends(). Defaults to a no-op if gui_endpoints isn't
+# available, so the routes still work if someone runs the server without it.
 try:
-    from gui_endpoints import register_gui_endpoints
+    from gui_endpoints import register_gui_endpoints, require_gui_token
     register_gui_endpoints(
         app,
         log_dir="logs", data_dir="data", env_path=".env",
@@ -400,6 +405,7 @@ try:
     )
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
+    async def require_gui_token(request=None): return None  # no-op fallback
 
 
 # ---------------------------------------------------------------------------
@@ -885,14 +891,14 @@ def vram_budget_endpoint():
     }
 
 
-@app.post("/unload")
+@app.post("/unload", dependencies=[Depends(require_gui_token)])
 def unload_endpoint():
     # Explicit user request ignores keep-resident pins.
     unload_all(force=True)
     return {"ok": True, "status": "unloaded"}
 
 
-@app.post("/warmup/chat")
+@app.post("/warmup/chat", dependencies=[Depends(require_gui_token)])
 def warmup_chat_endpoint():
     try:
         role, model_id = load_chat_model("default_chat")
@@ -901,7 +907,7 @@ def warmup_chat_endpoint():
         return JSONResponse(status_code=500, content={"error": str(e), "task": "chat"})
 
 
-@app.post("/warmup/image")
+@app.post("/warmup/image", dependencies=[Depends(require_gui_token)])
 def warmup_image_endpoint():
     try:
         load_image_pipe()
@@ -910,7 +916,7 @@ def warmup_image_endpoint():
         return JSONResponse(status_code=500, content={"error": str(e), "task": "image"})
 
 
-@app.post("/warmup/vision")
+@app.post("/warmup/vision", dependencies=[Depends(require_gui_token)])
 def warmup_vision_endpoint():
     try:
         load_vision_model()
