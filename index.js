@@ -3547,9 +3547,14 @@ async function seekdeepPrepareImagePromptDynamic(prompt = '', fallbackPromptInfo
   let lastRawExcerpt = '';
 
   try {
+    // Resolve the chat role ONCE for the whole attempt loop. Re-resolving
+    // every retry can pick a different role if the router state shifts mid-
+    // request, which would cost a 7-14s chat-model swap on the retry for
+    // no quality benefit (the prompt is unchanged). Same role + temperature
+    // bump is enough to get the second attempt past the validator.
+    const refineRole = seekdeepSelectChatModelRole(originalPrompt, 'image_refinement');
     for (let attempt = 0; attempt < REFINE_ATTEMPTS; attempt++) {
       const temp = SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE + (attempt > 0 ? RETRY_TEMP_BUMP : 0);
-      const refineRole = seekdeepSelectChatModelRole(originalPrompt, 'image_refinement');
       console.log(`[SeekDeep] dynamic refine attempt ${attempt + 1}/${REFINE_ATTEMPTS} role=${refineRole} forceFresh=${forceFreshRefinement}`);
       const answer = await runLocalChat(
         seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt, replyImagePrompt),

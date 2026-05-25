@@ -1733,6 +1733,65 @@ def load_image_pipe() -> None:
         "vram_allocated_mb": _vram_event_payload().get("allocated_mb"),
     })
 
+def _cap_sdxl_prompt(prompt: str, tokenizer, max_tokens: int = 75) -> tuple[str, bool]:
+    """Trim `prompt` so it tokenizes to <= max_tokens under `tokenizer`. SDXL's
+    CLIP text encoders cap at 77 tokens (including BOS/EOS), so anything past
+    token 75 gets silently dropped by the pipeline. Without this cap, dynamic
+    refinement's longer prompts (200-360 chars) lose their tail descriptors
+    -- the SDXL output reflects only the first sentence or two.
+
+    Trims at a sentence-end (. ! ? ,) boundary when possible so the truncated
+    prompt still parses coherently. Returns (capped_prompt, was_truncated)."""
+    if not prompt or tokenizer is None:
+        return prompt or "", False
+    try:
+        ids = tokenizer(prompt, add_special_tokens=False).input_ids
+        if len(ids) <= max_tokens:
+            return prompt, False
+        # Walk back char-by-char to find a clean break that still tokenizes
+        # short enough. Two-pass: first try sentence boundaries, then commas,
+        # then just hard-cap.
+        for sep_chars in (".!?", ",;", " "):
+            best = ""
+            for i, ch in enumerate(prompt):
+                if ch in sep_chars:
+                    candidate = prompt[: i + 1].rstrip(", ;")
+                    if len(tokenizer(candidate, add_special_tokens=False).input_ids) <= max_tokens:
+                        best = candidate
+                    else:
+                        break
+            if best:
+                return best.strip(), True
+        # Hard truncate as last resort
+        encoded = tokenizer(prompt, add_special_tokens=False, truncation=True,
+                            max_length=max_tokens)
+        truncated = tokenizer.decode(encoded.input_ids, skip_special_tokens=True).strip()
+        return truncated, True
+    except Exception:
+        return prompt, False
+
+
+def _apply_sdxl_prompt_cap(args: dict, pipe) -> None:
+    """In-place: trim args['prompt'] and args.get('negative_prompt') so neither
+    exceeds the pipeline's 77-token text-encoder limit. Logs each truncation."""
+    tok = getattr(pipe, "tokenizer", None)
+    if tok is None:
+        return
+    for key in ("prompt", "negative_prompt"):
+        val = args.get(key)
+        if not val or not isinstance(val, str):
+            continue
+        capped, truncated = _cap_sdxl_prompt(val, tok)
+        if truncated:
+            print(
+                f"[SeekDeep] SDXL {key} trimmed to <=75 tokens (was ~{len(val)} chars, "
+                f"now ~{len(capped)} chars). Tail descriptors past token 75 would have "
+                f"been silently dropped by the text encoder.",
+                flush=True,
+            )
+            args[key] = capped
+
+
 @app.post("/image")
 def image(req: ImageRequest):
     load_image_pipe()
@@ -1779,6 +1838,12 @@ def image(req: ImageRequest):
 
     if generator is not None:
         args["generator"] = generator
+
+    # SDXL text encoder caps at 77 tokens (incl. BOS/EOS); trim cleanly here
+    # so dynamic refinement's longer prompts don't lose their tail silently.
+    # Skipped for Z-Image, which has its own tokenizer behavior.
+    if not is_zimage:
+        _apply_sdxl_prompt_cap(args, image_pipe)
 
     final_prompt_for_response = str(args.get("prompt", req.prompt.strip())).strip()
 
@@ -1844,6 +1909,8 @@ def img2img(req: Img2ImgRequest):
         args["negative_prompt"] = req.negative_prompt.strip()
     if generator is not None:
         args["generator"] = generator
+
+    _apply_sdxl_prompt_cap(args, i2i_pipe)
 
     result = i2i_pipe(**args)
     img = result.images[0]
@@ -2248,6 +2315,8 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
     if generator is not None:
         args["generator"] = generator
 
+    _apply_sdxl_prompt_cap(args, instruct_pix2pix_pipe)
+
     result = instruct_pix2pix_pipe(**args)
     img = result.images[0]
 
@@ -2362,6 +2431,8 @@ def inpaint_endpoint(req: InpaintRequest):
         args["negative_prompt"] = req.negative_prompt.strip()
     if generator is not None:
         args["generator"] = generator
+
+    _apply_sdxl_prompt_cap(args, inpaint_pipe)
 
     result = inpaint_pipe(**args)
     img = result.images[0]
