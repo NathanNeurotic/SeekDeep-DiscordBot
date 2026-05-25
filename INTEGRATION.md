@@ -96,19 +96,22 @@ The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm
 
 - **`hf`** (default) — in-process via `transformers` + `bitsandbytes`. Counts against the SDXL / vision VRAM budget. Per-role pinning, eviction, fallback all apply.
 - **`ollama`** — out-of-process via the Ollama daemon (default `http://127.0.0.1:11434`). Separate VRAM allocation managed by Ollama; **does not** count against this server's `vram_can_fit` budget.
+- **`openai-compat`** — remote `/v1/chat/completions` endpoint. **Sends prompts off the box.** Covers OpenAI, DeepSeek, Groq, OpenRouter, Together, Mistral La Plateforme, OpenRouter, perplexity, LM Studio / vLLM / text-generation-webui in openai-mode, etc. Per-role API URL + key.
 
 ### Resolution
 
 ```
 LOCAL_CHAT_BACKEND=hf                              # global default, applies to default_chat + anything not overridden
 LOCAL_CHAT_FALLBACK_BACKEND=ollama                 # per-role overrides
-LOCAL_CHAT_QUALITY_BACKEND=ollama
+LOCAL_CHAT_QUALITY_BACKEND=openai-compat           # mix-and-match across all three backends
 LOCAL_CHAT_REASONING_BACKEND=ollama
 LOCAL_CHAT_LIGHTWEIGHT_BACKEND=ollama
 LOCAL_CHAT_REFINE_BACKEND=ollama
 ```
 
-Anything other than `hf` / `ollama` is normalized to `hf`. Resolution order per role: per-role env → global `LOCAL_CHAT_BACKEND` → `hf`.
+Anything other than `hf` / `ollama` / `openai-compat` is normalized to `hf`. Resolution order per role: per-role env → global `LOCAL_CHAT_BACKEND` → `hf`.
+
+For `openai-compat`, the role's endpoint resolves the same way (per-role `LOCAL_CHAT_<ROLE>_API_URL` + `_API_KEY` → global `OPENAI_API_BASE_URL` + `OPENAI_API_KEY`). This lets different roles target different providers (e.g. cheap Groq for `default_chat`, premium OpenAI for `quality_text`).
 
 ### Model ID semantics
 
@@ -118,6 +121,7 @@ The role's existing `LOCAL_CHAT_<...>_MODEL_ID` env value changes meaning based 
 |---|---|
 | `hf` | `meta-llama/Llama-3.1-8B-Instruct` (HuggingFace repo ID) |
 | `ollama` | `llama3:8b` (Ollama tag, with optional `:version`) |
+| `openai-compat` | `deepseek-chat` / `gpt-4o-mini` / `mistral-small-latest` / `anthropic/claude-3.5-sonnet` (via OpenRouter) — whatever the remote provider names it |
 
 ### Auto-pull
 
@@ -167,7 +171,14 @@ Response:
 
 ```jsonc
 {
-  "chat_backends": { "default_chat": "hf", "quality_text": "ollama", "lightweight_chat": "ollama", ... },
+  "chat_backends": { "default_chat": "hf", "quality_text": "openai-compat", "lightweight_chat": "ollama", ... },
+  "remote_chat_endpoints": {
+    "quality_text": {
+      "endpoint": "https://api.deepseek.com/v1",
+      "external": true,
+      "warning": "prompts for this role leave the local machine"
+    }
+  },
   "ollama": {
     "available": true,
     "base_url": "http://127.0.0.1:11434",
@@ -176,7 +187,13 @@ Response:
 }
 ```
 
-The GUI's Models pane can use this to render an "HF" / "Ollama" badge per role and an "Ollama daemon: online" indicator.
+The GUI's Models pane can use `chat_backends` to render an "HF" / "Ollama" / "Remote ⚠" badge per role, and `remote_chat_endpoints` to show which provider each external role is calling. API keys are NEVER returned in `/health` — only the public endpoint URL.
+
+### Privacy posture for `openai-compat`
+
+Every role configured with `openai-compat` sends its prompts and conversation context OUTSIDE the local machine. The remote provider may log, retain, or train on those prompts per their own terms — **SeekDeep does not, and cannot, control this.** Use this backend per role only for content you're comfortable sharing with the named provider.
+
+Local backends (`hf`, `ollama`) keep everything on `127.0.0.1`.
 
 ### Operations
 
@@ -193,6 +210,7 @@ The GUI's Models pane can use this to render an "HF" / "Ollama" badge per role a
 - **default_chat (heavy, every conversation)** — usually HF with 4-bit quant for max quality per VRAM byte. Ollama works too but uses different (often less tight) quantization.
 - **quality_text (one-off serious answers)** — Ollama is great here: no VRAM displacement of the resident default_chat, and Ollama's swap is fast.
 - **lightweight_chat (short replies)** — Ollama: tiny models like `phi3:mini` boot in <1s and don't fight the SDXL pipeline for VRAM.
+- **`openai-compat` (any role)** — pick this when you want a frontier model that doesn't fit locally (Claude Opus, GPT-4, DeepSeek R1) and you're OK with prompts leaving the box. Common patterns: assign `reasoning_code` to OpenAI o1 via OpenRouter; `quality_text` to DeepSeek-Chat for cost; or point at a **local** LM Studio / vLLM / tgwui-openai-mode proxy to use the openai-compat backend without anything going off-network.
 - **vision / image** — must stay HF. Ollama doesn't run SDXL or Qwen2.5-VL.
 
 ## 3.5 · WebSocket event bridge (`/events`)

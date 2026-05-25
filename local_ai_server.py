@@ -706,17 +706,20 @@ CHAT_ROLE_BACKEND_ENV = {
 }
 
 
+CHAT_BACKEND_KINDS = {"hf", "ollama", "openai-compat"}
+
+
 def _resolve_chat_backend(role: str) -> str:
-    """Return 'hf' or 'ollama' for the given role. Per-role env override
-    beats the global LOCAL_CHAT_BACKEND. Anything unrecognized -> 'hf'."""
+    """Return one of CHAT_BACKEND_KINDS for the given role. Per-role env
+    override beats the global LOCAL_CHAT_BACKEND. Anything unrecognized -> 'hf'."""
     role_clean = (role or "").strip().lower()
     env_key = CHAT_ROLE_BACKEND_ENV.get(role_clean)
     if env_key:
         per_role = (os.getenv(env_key, "") or "").strip().lower()
-        if per_role in {"hf", "ollama"}:
+        if per_role in CHAT_BACKEND_KINDS:
             return per_role
     global_val = (os.getenv("LOCAL_CHAT_BACKEND", "hf") or "hf").strip().lower()
-    return global_val if global_val in {"hf", "ollama"} else "hf"
+    return global_val if global_val in CHAT_BACKEND_KINDS else "hf"
 
 
 def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
@@ -848,7 +851,130 @@ def _ollama_ensure_tag(model_tag: str, auto_pull: bool = True) -> tuple[bool, st
     return False, "pull-completed-but-tag-still-missing"
 
 
-def b64_to_bytes(data: str) -> bytes:
+# ===== OpenAI-compatible remote backend (BYK / "Bring Your Own Key") =====
+# This is the gateway to OpenAI itself + DeepSeek + Groq + OpenRouter + Together
+# + Mistral La Plateforme + Anyscale + perplexity + most other hosted LLM
+# providers, all of which expose the same /v1/chat/completions JSON shape.
+#
+# IMPORTANT: roles set to 'openai-compat' send your prompts OUTSIDE the box.
+# Every other backend in this server runs locally. The README's privacy block
+# calls this out explicitly. Treat as opt-in per role.
+#
+# Defaults read from OPENAI_API_BASE_URL + OPENAI_API_KEY. Per-role
+# overrides via LOCAL_CHAT_<ROLE>_API_URL / _API_KEY let you point
+# different roles at different providers (e.g. default_chat=DeepSeek,
+# reasoning_code=OpenAI). LOCAL_CHAT_<ROLE>_MODEL_ID is the model name
+# the remote provider expects (e.g. "deepseek-chat", "gpt-4o-mini",
+# "anthropic/claude-3.5-sonnet" via OpenRouter).
+
+OPENAI_COMPAT_TIMEOUT_SECS = float(os.getenv("OPENAI_COMPAT_TIMEOUT_SECS", "120"))
+OPENAI_COMPAT_PROBE_TIMEOUT_SECS = float(os.getenv("OPENAI_COMPAT_PROBE_TIMEOUT_SECS", "5"))
+
+# Per-role API endpoint + key envs, mirrored after CHAT_ROLE_BACKEND_ENV.
+CHAT_ROLE_API_URL_ENV = {
+    "default_chat":     "LOCAL_CHAT_API_URL",
+    "fallback_chat":    "LOCAL_CHAT_FALLBACK_API_URL",
+    "quality_text":     "LOCAL_CHAT_QUALITY_API_URL",
+    "reasoning_code":   "LOCAL_CHAT_REASONING_API_URL",
+    "lightweight_chat": "LOCAL_CHAT_LIGHTWEIGHT_API_URL",
+    "refine_chat":      "LOCAL_CHAT_REFINE_API_URL",
+}
+CHAT_ROLE_API_KEY_ENV = {
+    "default_chat":     "LOCAL_CHAT_API_KEY",
+    "fallback_chat":    "LOCAL_CHAT_FALLBACK_API_KEY",
+    "quality_text":     "LOCAL_CHAT_QUALITY_API_KEY",
+    "reasoning_code":   "LOCAL_CHAT_REASONING_API_KEY",
+    "lightweight_chat": "LOCAL_CHAT_LIGHTWEIGHT_API_KEY",
+    "refine_chat":      "LOCAL_CHAT_REFINE_API_KEY",
+}
+
+
+def _resolve_openai_endpoint(role: str) -> tuple[str, str]:
+    """Return (base_url, api_key) for a role's openai-compat config.
+    Resolution: per-role override -> global OPENAI_API_BASE_URL/OPENAI_API_KEY.
+    Either can be empty -- caller must check."""
+    role_clean = (role or "").strip().lower()
+    url = ""
+    key = ""
+    if role_clean in CHAT_ROLE_API_URL_ENV:
+        url = (os.getenv(CHAT_ROLE_API_URL_ENV[role_clean], "") or "").strip()
+    if role_clean in CHAT_ROLE_API_KEY_ENV:
+        key = (os.getenv(CHAT_ROLE_API_KEY_ENV[role_clean], "") or "").strip()
+    if not url:
+        url = (os.getenv("OPENAI_API_BASE_URL", "") or "").strip()
+    if not key:
+        key = (os.getenv("OPENAI_API_KEY", "") or "").strip()
+    return url.rstrip("/"), key
+
+
+def _openai_compat_request(base_url: str, api_key: str, path: str,
+                            body: dict | None = None, method: str = "POST",
+                            timeout: float | None = None) -> dict:
+    """Authenticated JSON request against an OpenAI-compatible endpoint.
+    Raises on transport / HTTP / JSON-decode errors so /chat can classify
+    and fall back via MODEL_AUTO_FALLBACK."""
+    if not base_url:
+        raise RuntimeError("openai-compat base URL is empty")
+    url = f"{base_url}{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = _seekdeep_urllib_req.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    t = timeout if timeout is not None else OPENAI_COMPAT_TIMEOUT_SECS
+    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        if not raw:
+            return {}
+        return json.loads(raw)
+
+
+def _openai_compat_probe(base_url: str, api_key: str) -> tuple[bool, str]:
+    """Hit GET /models on the endpoint to verify auth + connectivity.
+    Returns (ok, note). Used by warm_chat_role for remote roles."""
+    if not base_url:
+        return False, "no base URL configured"
+    try:
+        _openai_compat_request(base_url, api_key, "/models", method="GET",
+                                timeout=OPENAI_COMPAT_PROBE_TIMEOUT_SECS)
+        return True, "endpoint reachable"
+    except _seekdeep_urllib_err.HTTPError as e:
+        return False, f"HTTP {e.code} from {base_url}/models -- check API key"
+    except Exception as e:
+        return False, f"unreachable: {e}"
+
+
+def _openai_compat_chat(messages: list[dict], model: str, base_url: str,
+                         api_key: str, temperature: float, max_tokens: int) -> str:
+    """Call /v1/chat/completions (non-streaming). Returns the assistant text.
+    Honors the same env knobs HF/Ollama do where the API supports them."""
+    try:
+        top_p = float(os.getenv("CHAT_TOP_P", "0.9"))
+    except ValueError:
+        top_p = 0.9
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": max(0.0, min(2.0, float(temperature))),
+        "max_tokens": int(max_tokens),
+        "top_p": top_p,
+        "stream": False,
+    }
+    # Some providers (notably DeepSeek) support 'frequency_penalty' which is
+    # the closest equivalent to repetition_penalty. Forward if env says > 0.
+    try:
+        freq = float(os.getenv("CHAT_FREQUENCY_PENALTY", "0"))
+        if freq != 0.0:
+            body["frequency_penalty"] = max(-2.0, min(2.0, freq))
+    except ValueError:
+        pass
+    result = _openai_compat_request(base_url, api_key, "/chat/completions",
+                                     body=body, timeout=OPENAI_COMPAT_TIMEOUT_SECS)
+    choices = result.get("choices") or []
+    if not choices:
+        return ""
+    return str((choices[0].get("message") or {}).get("content") or "").strip()
     if "," in data and data.strip().startswith("data:"):
         data = data.split(",", 1)[1]
     return base64.b64decode(data)
@@ -1253,6 +1379,17 @@ def health():
     # time -- /health isn't hit often enough to need finer caching.
     _ollama_up = ollama_available()
     _chat_backends = {role: _resolve_chat_backend(role) for role in chat_role_map().keys()}
+    # Surface remote-chat endpoints WITHOUT leaking API keys. The GUI uses
+    # this to badge external roles with a "prompts leave the box" warning.
+    _remote_chat_endpoints = {}
+    for role, backend in _chat_backends.items():
+        if backend == "openai-compat":
+            base_url, _key = _resolve_openai_endpoint(role)
+            _remote_chat_endpoints[role] = {
+                "endpoint": base_url or "(unconfigured)",
+                "external": True,
+                "warning": "prompts for this role leave the local machine",
+            }
     return {
         "status": "ready",
         "version": SEEKDEEP_VERSION,
@@ -1263,6 +1400,7 @@ def health():
         "loaded_chat_model_id": loaded_chat_model_id,
         "chat_roles": chat_role_map(),
         "chat_backends": _chat_backends,
+        "remote_chat_endpoints": _remote_chat_endpoints,
         "ollama": {
             "available": _ollama_up,
             "base_url": OLLAMA_BASE_URL,
@@ -1340,8 +1478,10 @@ def unload_endpoint():
 def warm_chat_role(role: str = "default_chat") -> dict:
     """Backend-aware chat warm. For HF roles, loads into chat_model global.
     For Ollama roles, verifies the daemon is reachable and the tag is
-    present (auto-pulling via /api/pull if missing). Returns a uniform
-    {ok, status, task, role, model_id, backend, ...} dict."""
+    present (auto-pulling via /api/pull if missing). For openai-compat
+    roles, probes /models on the remote endpoint to verify auth +
+    connectivity (does not 'warm' the model -- remote provider does that
+    on demand). Returns a uniform dict."""
     backend = _resolve_chat_backend(role)
     if backend == "ollama":
         resolved_role, model_tag = resolve_chat_role(role)
@@ -1358,6 +1498,25 @@ def warm_chat_role(role: str = "default_chat") -> dict:
             "backend": "ollama",
             "note": note,
         }
+    if backend == "openai-compat":
+        resolved_role, model_name = resolve_chat_role(role)
+        base_url, api_key = _resolve_openai_endpoint(resolved_role)
+        if not base_url or not model_name:
+            return {"ok": False, "task": "chat", "role": resolved_role, "backend": "openai-compat",
+                    "error": "missing API URL or model name -- set OPENAI_API_BASE_URL + "
+                             "the role's LOCAL_CHAT_<...>_MODEL_ID, optionally OPENAI_API_KEY"}
+        ok, note = _openai_compat_probe(base_url, api_key)
+        return {
+            "ok": ok,
+            "status": "remote_ok" if ok else "remote_probe_failed",
+            "task": "chat",
+            "role": resolved_role,
+            "model_id": model_name,
+            "backend": "openai-compat",
+            "endpoint": base_url,
+            "warning": "prompts for this role leave the local machine",
+            "note": note,
+        }
     # HF default path
     resolved_role, model_id = load_chat_model(role)
     return {"ok": True, "status": "warmed_up", "task": "chat",
@@ -1365,15 +1524,25 @@ def warm_chat_role(role: str = "default_chat") -> dict:
 
 
 class ModelInstallRequest(BaseModel):
-    """Body for POST /model/install. `backend` selects the storage path
-    (HF cache vs Ollama daemon). `model_id` is interpreted accordingly --
-    an HF repo ID for backend='hf' or an Ollama tag for backend='ollama'.
+    """Body for POST /model/install. `backend` selects the storage / dispatch path:
+      hf            -- download via huggingface_hub.snapshot_download
+      ollama        -- pull via Ollama /api/pull (auto if auto_pull=True)
+      openai-compat -- no install (model is hosted remotely); validate
+                       connectivity via /models probe, then patch .env.
+                       Optional api_url + api_key let the wizard configure
+                       the role's endpoint without a separate /config call.
+    `model_id` is interpreted by backend:
+      hf            -- HF repo ID (e.g. meta-llama/Llama-3.1-8B-Instruct)
+      ollama        -- Ollama tag (e.g. llama3:8b)
+      openai-compat -- remote provider model name (e.g. deepseek-chat)
     Optional `role` patches .env to assign this model to a chat role."""
-    backend: Literal["hf", "ollama"]
+    backend: Literal["hf", "ollama", "openai-compat"]
     model_id: str
     role: str = ""           # if provided, .env gets updated for this role
     revision: str = ""       # HF only: branch/tag/commit
     auto_pull: bool = True   # Ollama only: auto-pull if tag missing
+    api_url: str = ""        # openai-compat only: per-role API endpoint
+    api_key: str = ""        # openai-compat only: per-role API key
 
 
 def _hf_install(model_id: str, revision: str = "") -> dict:
@@ -1433,6 +1602,32 @@ def model_install(req: ModelInstallRequest):
         ok, note = _ollama_ensure_tag(model_id, auto_pull=bool(req.auto_pull))
         install_result = {"ok": ok, "backend": "ollama", "model_id": model_id,
                           "note": note, "base_url": OLLAMA_BASE_URL}
+    elif req.backend == "openai-compat":
+        # No download -- remote provider hosts the model. Validate connectivity
+        # against the resolved endpoint (per-role override on req.api_url wins,
+        # else fall back to OPENAI_API_BASE_URL via _resolve_openai_endpoint
+        # once .env is patched. For pre-patch validation, prefer req.api_url
+        # so the wizard can verify BEFORE writing the key to disk).
+        probe_url = (req.api_url or "").strip().rstrip("/") or (
+            os.getenv("OPENAI_API_BASE_URL", "") or ""
+        ).strip().rstrip("/")
+        probe_key = (req.api_key or "").strip() or (
+            os.getenv("OPENAI_API_KEY", "") or ""
+        ).strip()
+        ok, note = _openai_compat_probe(probe_url, probe_key)
+        install_result = {
+            "ok": ok,
+            "backend": "openai-compat",
+            "model_id": model_id,
+            "endpoint": probe_url or "(unconfigured)",
+            "note": note,
+            "external": True,
+            "warning": (
+                "This backend sends prompts OUTSIDE the local machine. The remote "
+                "provider has its own privacy / data-handling policy, separate from "
+                "SeekDeep. Token use, content, and metadata are subject to that policy."
+            ),
+        }
     else:  # hf
         install_result = _hf_install(model_id, req.revision or "")
         install_result["backend"] = "hf"
@@ -1457,6 +1652,16 @@ def model_install(req: ModelInstallRequest):
             updates = {model_id_key: model_id}
             if backend_key:
                 updates[backend_key] = req.backend
+            # For openai-compat, persist the per-role endpoint + key when
+            # the caller provided them. The wizard typically supplies these
+            # in the same request so the role is usable immediately.
+            if req.backend == "openai-compat":
+                if req.api_url:
+                    api_url_key = CHAT_ROLE_API_URL_ENV.get(role) or "OPENAI_API_BASE_URL"
+                    updates[api_url_key] = req.api_url.rstrip("/")
+                if req.api_key:
+                    api_key_key = CHAT_ROLE_API_KEY_ENV.get(role) or "OPENAI_API_KEY"
+                    updates[api_key_key] = req.api_key
             patched = _seekdeep_merge_env(env_path, updates)
             install_result["env_patched"] = True
             install_result["env_keys_updated"] = patched.get("updated", [])
@@ -1669,15 +1874,19 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
     return resolved_role, model_id
 
 
-def _is_ollama_transport_failure(exc: Exception) -> bool:
-    """True if `exc` looks like an Ollama daemon connectivity / HTTP error
-    (daemon offline, connection refused, HTTP 4xx/5xx). These are exactly
-    the cases where falling back to fallback_chat (potentially an HF role)
-    should rescue the request."""
+def _is_remote_chat_transport_failure(exc: Exception) -> bool:
+    """True if `exc` looks like a remote-chat connectivity / HTTP error from
+    EITHER the Ollama daemon OR an openai-compat endpoint (daemon/remote
+    offline, connection refused, HTTP 4xx/5xx, auth failure, etc.).
+    These are exactly the cases where falling back to fallback_chat
+    (potentially an HF or different remote role) should rescue the request."""
     name = type(exc).__name__
     msg = str(exc).lower()
-    # urllib.error.URLError / HTTPError, ConnectionRefusedError, OSError 10061
-    if name in {"URLError", "HTTPError", "ConnectionRefusedError", "TimeoutError"}:
+    # urllib.error.URLError / HTTPError, ConnectionRefusedError, OSError 10061,
+    # socket.timeout / TimeoutError -- the full transport-layer surface
+    if name in {"URLError", "HTTPError", "ConnectionRefusedError",
+                 "TimeoutError", "RemoteDisconnected", "BadStatusLine",
+                 "ContentTooShortError"}:
         return True
     if "connection refused" in msg or "actively refused" in msg:
         return True
@@ -1685,18 +1894,27 @@ def _is_ollama_transport_failure(exc: Exception) -> bool:
         return True
     if "winerror 10061" in msg:  # Windows: no connection could be made
         return True
-    # The Ollama tag isn't installed and auto-pull failed
+    # Ollama-specific: tag not installed and auto-pull failed
     if "ollama" in msg and ("not found" in msg or "tag" in msg):
         return True
+    # openai-compat-specific: auth / model-not-found errors from /chat/completions
+    if "openai-compat" in msg or "no base url configured" in msg:
+        return True
+    if "401" in msg and ("unauthorized" in msg or "api key" in msg or "auth" in msg):
+        return True
     return False
+
+
+# Back-compat alias for any external callers / tests
+_is_ollama_transport_failure = _is_remote_chat_transport_failure
 
 
 def _classify_chat_load_failure(exc: Exception) -> str:
     """Return a short, log-friendly reason string for known recoverable failures."""
     name = type(exc).__name__
     msg = str(exc).lower()
-    if _is_ollama_transport_failure(exc):
-        return "ollama-transport"
+    if _is_remote_chat_transport_failure(exc):
+        return "remote-chat-transport"
     if "out of memory" in msg or "cuda oom" in msg or "outofmemory" in name.lower():
         return "cuda-oom"
     if "no such file" in msg or "not found" in msg or "couldn't find" in msg or "missing" in msg:
@@ -1709,7 +1927,7 @@ def _classify_chat_load_failure(exc: Exception) -> str:
 
 
 def _is_fallback_eligible_exception(exc: Exception) -> bool:
-    if _is_ollama_transport_failure(exc):
+    if _is_remote_chat_transport_failure(exc):
         return True
     msg = str(exc).lower()
     if "out of memory" in msg or "cuda oom" in msg:
@@ -1778,12 +1996,41 @@ def _run_ollama_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     return text, resolved_role, model_tag
 
 
+def _run_openai_compat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
+    """Dispatch a chat request to an OpenAI-compatible remote endpoint.
+    Sends prompts OFF THE BOX. The role's MODEL_ID is the remote provider's
+    model name (e.g. 'deepseek-chat', 'gpt-4o-mini').
+    Returns (text, resolved_role, model_name)."""
+    resolved_role, model_name = resolve_chat_role(role)
+    if not model_name:
+        raise RuntimeError(
+            f"openai-compat role {resolved_role!r} has no model name configured "
+            f"(set {CHAT_ROLE_ENV.get(resolved_role, 'LOCAL_CHAT_MODEL_ID')})"
+        )
+    base_url, api_key = _resolve_openai_endpoint(resolved_role)
+    if not base_url:
+        raise RuntimeError(
+            f"openai-compat role {resolved_role!r} has no API URL configured "
+            f"(set {CHAT_ROLE_API_URL_ENV.get(resolved_role, 'OPENAI_API_BASE_URL')} "
+            f"or OPENAI_API_BASE_URL)"
+        )
+    messages = build_chat_prompt(req.system, req.context, req.prompt, req.messages or None)
+    text = _openai_compat_chat(messages, model_name, base_url, api_key,
+                                req.temperature, req.max_new_tokens)
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"<think>[\s\S]*$", "", text, flags=re.IGNORECASE).strip()
+    return text, resolved_role, model_name
+
+
 def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     """Load a chat role and run a single generation. Returns (text, resolved_role, model_id).
-    Dispatches per-role to HF transformers (in-process) or Ollama (HTTP daemon)."""
+    Dispatches per-role to HF transformers (in-process), Ollama (local daemon),
+    or an OpenAI-compatible remote endpoint (off-box, opt-in)."""
     backend = _resolve_chat_backend(role)
     if backend == "ollama":
         return _run_ollama_generation(req, role)
+    if backend == "openai-compat":
+        return _run_openai_compat_generation(req, role)
     # Default: in-process HF transformers path.
     resolved_role, model_id = load_chat_model(role)
 
