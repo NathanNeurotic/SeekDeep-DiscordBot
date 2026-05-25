@@ -19,6 +19,13 @@ they're all defended by the audit overrides catalogued in MAINTAINER.md:
   /events/emit   POST     (publish + delivered count round-trip via WS)
   /events/status GET      (cheap probe)
 
+Additionally exercises a second TestClient bound to local_ai_server.app for
+the model lifecycle + routing introspection endpoints:
+
+  /model/install   POST   (validation: missing model_id, unknown backend)
+  /model/uninstall POST   (auth required; hf absent-model is ok; remote no-op)
+  /route/debug     GET    (no auth; returns role -> backend -> endpoint plan)
+
 Each check prints "ok" or "FAIL" with detail. Exit code is 0 only if every
 check passes. Designed to be invoked from preflight.mjs and from CI.
 
@@ -246,6 +253,127 @@ def main() -> int:
                       f"got {msg}")
         except Exception as e:
             check("WS /events round-trip", False, str(e))
+
+    # =================================================================
+    # Section 2: local_ai_server.app -- model lifecycle + route debug.
+    # These endpoints live on the AI server (not on the bare GUI app),
+    # so we bind a second TestClient to local_ai_server.app. Importing
+    # local_ai_server has a ~0.5s overhead but loads NO ML models
+    # (it's all lazy-init at /chat / /image / /vision time).
+    # =================================================================
+    import os
+    os.environ.setdefault("SEEKDEEP_LOCAL_AI_BOOT_LITE", "1")
+    try:
+        import local_ai_server as _lai
+        check("import local_ai_server", True)
+    except Exception as e:
+        check("import local_ai_server", False, str(e))
+        return 1 if any(not ok for ok, _, _ in _results) else 0
+
+    cl = TestClient(_lai.app)
+
+    # ---- GET /route/debug (no auth required) ----
+    r = cl.get("/route/debug")
+    check("GET /route/debug (no params) -> 200", r.status_code == 200,
+          f"got {r.status_code}")
+    j = r.json() if r.status_code == 200 else {}
+    expected_keys = {"ok", "prompt_preview", "role_requested", "role_resolved",
+                     "backend", "model_id", "endpoint", "fallback_chain",
+                     "auto_fallback_enabled", "note"}
+    missing = expected_keys - set(j.keys())
+    check("  ...response has all documented keys", not missing,
+          f"missing: {sorted(missing)}")
+    check("  ...defaults role to 'default_chat'",
+          j.get("role_requested") == "default_chat",
+          f"got {j.get('role_requested')}")
+    check("  ...backend is one of the 5 known kinds",
+          j.get("backend") in {"hf", "ollama", "openai-compat", "anthropic", "gemini"},
+          f"got {j.get('backend')}")
+    check("  ...endpoint is a dict", isinstance(j.get("endpoint"), dict))
+    check("  ...fallback_chain is a list", isinstance(j.get("fallback_chain"), list))
+
+    # Unknown role should fall back to default_chat resolution
+    r = cl.get("/route/debug", params={"role": "totally_made_up_role_xyz"})
+    check("GET /route/debug?role=<bogus> -> 200 (resolves to default_chat)",
+          r.status_code == 200, f"got {r.status_code}")
+    if r.status_code == 200:
+        j = r.json()
+        check("  ...role_requested preserved, role_resolved fell back",
+              j.get("role_requested") == "totally_made_up_role_xyz"
+              and j.get("role_resolved") == "default_chat",
+              f"req={j.get('role_requested')} res={j.get('role_resolved')}")
+
+    # prompt_preview should be capped at 240 chars
+    long_prompt = "x" * 500
+    r = cl.get("/route/debug", params={"prompt": long_prompt})
+    if r.status_code == 200:
+        check("GET /route/debug truncates prompt_preview at 240 chars",
+              len(r.json().get("prompt_preview", "")) == 240,
+              f"got len={len(r.json().get('prompt_preview', ''))}")
+
+    # ---- POST /model/install -- validation only (no real downloads) ----
+    if token:
+        r = cl.post("/model/install",
+                    json={"backend": "hf", "model_id": ""},
+                    headers={_TOKEN_HEADER: token})
+        check("POST /model/install with empty model_id -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        r = cl.post("/model/install",
+                    json={"backend": "nonsense", "model_id": "x"},
+                    headers={_TOKEN_HEADER: token})
+        check("POST /model/install with invalid backend -> 422 (Pydantic)",
+              r.status_code == 422, f"got {r.status_code}")
+
+        r = cl.post("/model/install", json={"backend": "hf", "model_id": "x"})
+        check("POST /model/install without token -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+    # ---- POST /model/uninstall -- shape contract for the no-write paths ----
+    if token:
+        r = cl.post("/model/uninstall", json={"backend": "hf", "model_id": "x"})
+        check("POST /model/uninstall without token -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+        # Absent hf model -- idempotent success with freed_bytes=0
+        r = cl.post("/model/uninstall",
+                    json={"backend": "hf",
+                          "model_id": "nonexistent-smoke-test-org/never-existed"},
+                    headers={_TOKEN_HEADER: token})
+        check("POST /model/uninstall hf absent -> 200 (idempotent)",
+              r.status_code == 200, f"got {r.status_code}")
+        if r.status_code == 200:
+            body = r.json()
+            check("  ...ok=True, freed_bytes=0, backend=hf",
+                  body.get("ok") is True and body.get("freed_bytes") == 0
+                  and body.get("backend") == "hf",
+                  f"body={body}")
+
+        # Remote backend uninstall is a no-op (no local storage to free)
+        r = cl.post("/model/uninstall",
+                    json={"backend": "openai-compat", "model_id": "gpt-4"},
+                    headers={_TOKEN_HEADER: token})
+        check("POST /model/uninstall openai-compat -> 200 (no-op)",
+              r.status_code == 200, f"got {r.status_code}")
+        if r.status_code == 200:
+            body = r.json()
+            check("  ...external=True, backend=openai-compat",
+                  body.get("external") is True and body.get("backend") == "openai-compat",
+                  f"body={body}")
+
+        # Bogus role -> 400 with env_patched=False (doesn't touch .env)
+        r = cl.post("/model/uninstall",
+                    json={"backend": "openai-compat", "model_id": "x",
+                          "role": "totally_bogus_role_name_xyz"},
+                    headers={_TOKEN_HEADER: token})
+        check("POST /model/uninstall with unknown role -> 400 (env untouched)",
+              r.status_code == 400, f"got {r.status_code}")
+        if r.status_code == 400:
+            body = r.json()
+            check("  ...env_patched=False, error mentions unknown role",
+                  body.get("env_patched") is False
+                  and "unknown role" in str(body.get("error", "")),
+                  f"body={body}")
 
     # ---- Summary ----
     n_ok = sum(1 for ok, _, _ in _results if ok)
