@@ -126,6 +126,7 @@ Topics defined so far (`gui_endpoints.py` and `gui/events.js` agree on these —
 | `model.loaded` | `load_chat_model` / `load_vision_model` / `load_image_pipe` in `local_ai_server.py` | yes | `{role, model, task, vram_allocated_mb}` |
 | `model.evicted` | `unload_all` in `local_ai_server.py` | yes | `{task, role, model, reason}` |
 | `vram.sample` | startup task in `local_ai_server.py`, every 10s with subscribers | yes | `{used_mb, total_mb, free_mb, allocated_mb, reserved_mb, device, loaded_task, loaded_chat_role, loaded_chat_model_id}` |
+| `vram.pressure` | `_emit_pressure_event` in `local_ai_server.py` -- fires when a chat-role swap would spill into shared memory | yes | `{state: 'resolved'\|'fallback'\|'spill', task, role, available_mb, estimated_mb, mode, evicted_pinned, evicted_pinned_names}` |
 | `queue.depth` | ASGI middleware in `local_ai_server.py` — bumps on every `/chat`, `/image`, `/img2img`, `/inpaint`, `/instruct-pix2pix`, `/upscale`, `/chart`, `/vision` request entry/exit | yes | `{chat, image, vision}` |
 | `request.start` | `seekdeepMarkRequestStart` in `index.js` — every messageCreate path that addresses the bot | yes | `{id, kind, user_id, channel_id, guild_id}` |
 | `request.done` | `seekdeepReplyToTarget` try/finally in `index.js` | yes | `{id, kind, ok, elapsed_ms, model, error}` |

@@ -134,6 +134,18 @@ VRAM_SYSTEM_RESERVE_MB = int(os.getenv("VRAM_SYSTEM_RESERVE_MB", "4096"))
 # growth, PyTorch allocator fragmentation, and inference-time temporaries.
 VRAM_SAFETY_MARGIN_MB = int(os.getenv("VRAM_SAFETY_MARGIN_MB", "1024"))
 
+# Behavior when even after evicting non-pinned models we'd spill into
+# shared (system) memory:
+#   "fallback"    : refuse the role swap; serve from the currently-loaded
+#                   chat role with a note. Default -- best UX on a busy box.
+#   "warn"        : allow the load anyway. Logs WARNING; clients pay the
+#                   ~30-60s spilled-load cost. (Previous behavior.)
+#   "force-evict" : evict pinned models too if necessary. Aggressive: may
+#                   unload your pinned vision model to free space.
+VRAM_PRESSURE_MODE = (os.getenv("SEEKDEEP_VRAM_PRESSURE_MODE", "fallback") or "fallback").strip().lower()
+if VRAM_PRESSURE_MODE not in {"fallback", "warn", "force-evict"}:
+    VRAM_PRESSURE_MODE = "fallback"
+
 # Estimated VRAM per model (MB).  Used for pre-load budget checks.
 # These are conservative (slightly over real) so the gate errs on the side
 # of unloading rather than OOMing.  Override any entry via env.
@@ -197,24 +209,22 @@ def vram_used_mb() -> float:
 
 
 def vram_budget_available_mb() -> float:
-    """VRAM available for models after subtracting system reserve + safety margin.
+    """VRAM headroom an upcoming model can actually claim without spilling.
 
-    This is the headroom the model loader should work within.  It accounts for
-    Windows desktop overhead, background apps, and inference temporaries.
+    Uses the real free physical GPU memory (from cudaMemGetInfo) minus the
+    Windows-overhead reserve and the safety margin. PyTorch's caching pool
+    is intentionally NOT subtracted: empty_cache() releases unused pool
+    blocks at load time, so subtracting them here double-counts and makes
+    the budget falsely tight (which was causing spurious "spill warnings"
+    even when the model would actually fit).
     """
     if not cuda_available():
         return 0
     try:
         import torch
-        free, total = torch.cuda.mem_get_info()
-        total_mb = total / (1024 ** 2)
-        used_mb = (total - free) / (1024 ** 2)
-        # What PyTorch has reserved (includes loaded models + caching pool)
-        reserved_mb = torch.cuda.memory_reserved() / (1024 ** 2)
-        # Non-PyTorch VRAM usage (Windows, Discord, etc.)
-        system_used_mb = used_mb - reserved_mb
-        # Budget = total - system_reserve - safety - what PyTorch already holds
-        budget = total_mb - VRAM_SYSTEM_RESERVE_MB - VRAM_SAFETY_MARGIN_MB - reserved_mb
+        free, _total = torch.cuda.mem_get_info()
+        free_mb = free / (1024 ** 2)
+        budget = free_mb - VRAM_SYSTEM_RESERVE_MB - VRAM_SAFETY_MARGIN_MB
         return max(0.0, budget)
     except Exception:
         return 0
@@ -748,9 +758,32 @@ def unload_all(force: bool = False) -> None:
         })
 
 
+class VRAMPressureError(Exception):
+    """Raised by _evict_for_budget when an upcoming load would spill into
+    shared memory and SEEKDEEP_VRAM_PRESSURE_MODE='fallback' is set.
+    Carries the required/available numbers so callers can build a
+    user-facing message and degrade gracefully."""
+    def __init__(self, task: str, role: str, available_mb: float, estimated_mb: int):
+        self.task = task
+        self.role = role
+        self.available_mb = float(available_mb)
+        self.estimated_mb = int(estimated_mb)
+        super().__init__(
+            f"VRAM pressure: {task}({role}) needs ~{estimated_mb}MB but only "
+            f"{available_mb:.0f}MB free even after eviction"
+        )
+
+
 def _evict_for_budget(task: str, role: str = "") -> None:
     """If the incoming model won't fit in the VRAM budget, evict non-pinned
-    models (heaviest first) until it does.  Pinned models are never evicted.
+    models (heaviest first) until it does.
+
+    Behavior when even after evicting EVERY non-pinned model we'd still
+    spill is governed by SEEKDEEP_VRAM_PRESSURE_MODE:
+      "fallback"    -> raise VRAMPressureError (caller falls back)
+      "force-evict" -> additionally evict pinned models (most aggressive)
+      "warn"        -> log + let load proceed (legacy behavior)
+
     Falls through silently if CUDA is unavailable or budget check is N/A."""
     global image_pipe, vision_model, vision_processor, vision_tokenizer
 
@@ -762,38 +795,112 @@ def _evict_for_budget(task: str, role: str = "") -> None:
         f"only {available:.0f}MB free — evicting non-pinned models",
         flush=True,
     )
-    evictable: list[tuple[str, int]] = []
-    if not KEEP_RESIDENT_IMAGE and image_pipe is not None:
-        evictable.append(("image", estimate_model_vram("image")))
-    if not KEEP_RESIDENT_VISION and vision_model is not None:
-        evictable.append(("vision", estimate_model_vram("vision")))
-    if not KEEP_RESIDENT_CHAT and chat_model is not None:
-        evictable.append(("chat", estimate_model_vram("chat", loaded_chat_role or "default_chat")))
-    evictable.sort(key=lambda x: x[1], reverse=True)
+    evictable: list[tuple[str, int, bool]] = []   # (name, est_mb, is_pinned)
+    if image_pipe is not None:
+        evictable.append(("image", estimate_model_vram("image"), bool(KEEP_RESIDENT_IMAGE)))
+    if vision_model is not None:
+        evictable.append(("vision", estimate_model_vram("vision"), bool(KEEP_RESIDENT_VISION)))
+    if chat_model is not None:
+        evictable.append(("chat",
+                          estimate_model_vram("chat", loaded_chat_role or "default_chat"),
+                          bool(KEEP_RESIDENT_CHAT)))
+    # Non-pinned first, then pinned -- both sorted heaviest-first within their tier.
+    evictable.sort(key=lambda x: (x[2], -x[1]))
 
-    for name, est_mb in evictable:
+    def _do_evict(name: str, est_mb: int) -> None:
+        nonlocal_g = globals()
         if name == "image":
-            image_pipe = None
+            nonlocal_g["image_pipe"] = None
         elif name == "vision":
-            vision_model = None
-            vision_processor = None
-            vision_tokenizer = None
+            nonlocal_g["vision_model"] = None
+            nonlocal_g["vision_processor"] = None
+            nonlocal_g["vision_tokenizer"] = None
         elif name == "chat":
             unload_chat_model()
+
+    # First pass: only non-pinned.
+    for name, est_mb, is_pinned in evictable:
+        if is_pinned:
+            continue
+        _do_evict(name, est_mb)
         print(f"[SeekDeep VRAM] evicted {name} (~{est_mb}MB)", flush=True)
         cleanup_cuda()
         fits, available, estimated = vram_can_fit(task, role)
         if fits:
             print(f"[SeekDeep VRAM] budget OK after eviction: {available:.0f}MB free for ~{estimated}MB model", flush=True)
+            _emit_pressure_event("resolved", task, role, available, estimated, evicted_pinned=False)
             return
-    # If we get here, even after evicting everything we might be tight.
-    # Log a warning but let the load attempt proceed — PyTorch may still
-    # manage via its caching pool.
+
+    # Pinned models still in the way. Branch on configured pressure mode.
+    if VRAM_PRESSURE_MODE == "fallback":
+        print(
+            f"[SeekDeep VRAM] PRESSURE: {task}({role}) needs ~{estimated}MB but only "
+            f"{available:.0f}MB free after evicting non-pinned -- raising VRAMPressureError "
+            f"(mode=fallback). Set SEEKDEEP_VRAM_PRESSURE_MODE=warn to allow spilled loads.",
+            flush=True,
+        )
+        _emit_pressure_event("fallback", task, role, available, estimated, evicted_pinned=False)
+        raise VRAMPressureError(task, role, available, estimated)
+
+    if VRAM_PRESSURE_MODE == "force-evict":
+        print(
+            f"[SeekDeep VRAM] PRESSURE: still tight; force-evicting PINNED models "
+            f"(mode=force-evict)",
+            flush=True,
+        )
+        evicted_pinned_names: list[str] = []
+        for name, est_mb, is_pinned in evictable:
+            if not is_pinned:
+                continue
+            # Don't evict the same chat role we're about to load -- that's pointless
+            if name == "chat" and task == "chat" and role and loaded_chat_role == role:
+                continue
+            _do_evict(name, est_mb)
+            evicted_pinned_names.append(name)
+            print(f"[SeekDeep VRAM] evicted pinned {name} (~{est_mb}MB)", flush=True)
+            cleanup_cuda()
+            fits, available, estimated = vram_can_fit(task, role)
+            if fits:
+                print(f"[SeekDeep VRAM] budget OK after pinned eviction: {available:.0f}MB free", flush=True)
+                _emit_pressure_event("resolved", task, role, available, estimated,
+                                     evicted_pinned=True, evicted_pinned_names=evicted_pinned_names)
+                return
+
+    # mode == "warn" (or force-evict couldn't help): proceed with the spilled load.
     print(
         f"[SeekDeep VRAM] WARNING: after all evictions only {available:.0f}MB free "
         f"for ~{estimated}MB model — load may spill into shared memory",
         flush=True,
     )
+    _emit_pressure_event("spill", task, role, available, estimated, evicted_pinned=False)
+
+
+def _emit_pressure_event(state: str, task: str, role: str,
+                          available_mb: float, estimated_mb: int,
+                          evicted_pinned: bool = False,
+                          evicted_pinned_names: list[str] | None = None) -> None:
+    """Push a vram.pressure event on the bus so the GUI can show a banner
+    when the box is about to spill (or fall back). state is one of
+    'resolved' / 'fallback' / 'spill'. Skipped silently when the bus
+    isn't wired or has no subscribers (publish_sync fast-path)."""
+    if event_bus is None:
+        return
+    try:
+        event_bus.publish_sync({
+            "type": "vram.pressure",
+            "data": {
+                "state": state,
+                "task": task,
+                "role": role,
+                "available_mb": round(float(available_mb), 1),
+                "estimated_mb": int(estimated_mb),
+                "mode": VRAM_PRESSURE_MODE,
+                "evicted_pinned": bool(evicted_pinned),
+                "evicted_pinned_names": list(evicted_pinned_names or []),
+            },
+        })
+    except Exception:
+        pass
 
 
 def prepare_task(task: str, role: str = "") -> None:
@@ -823,7 +930,12 @@ def prepare_task(task: str, role: str = "") -> None:
             unload_all()
 
     # Even when loaded_task == task (no switch), check budget in case a
-    # different chat role within the same task needs more VRAM.
+    # different chat role within the same task needs more VRAM. But skip
+    # entirely if the SAME chat role is already loaded -- we already paid
+    # for that VRAM and don't need to re-check or re-evict.
+    if role and task == "chat" and loaded_chat_role == role and chat_model is not None:
+        loaded_task = task
+        return
     if role:
         _evict_for_budget(task, role)
 
@@ -1137,11 +1249,40 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         prepare_task("chat", resolved_role)
         return resolved_role, model_id
 
-    # A different chat model is loaded; unload it before bringing in the new one.
+    # A different chat model is loaded. Pre-check whether the swap would spill
+    # BEFORE tearing down the current model. If it would, fall back to the
+    # current chat role so the user gets a real answer (possibly with a
+    # different model) instead of a 30-60s spilled load.
     if chat_model is not None or chat_tokenizer is not None:
+        if VRAM_PRESSURE_MODE == "fallback":
+            current_chat_mb = estimate_model_vram("chat", loaded_chat_role or "default_chat")
+            new_chat_mb = estimate_model_vram("chat", resolved_role)
+            _fits, available_mb, _est = vram_can_fit("chat", resolved_role)
+            # Available AFTER hypothetical unload of current chat
+            projected_free_mb = available_mb + current_chat_mb
+            if projected_free_mb < new_chat_mb and loaded_chat_role and loaded_chat_model_id:
+                fb_role = loaded_chat_role
+                fb_id = loaded_chat_model_id
+                print(
+                    f"[SeekDeep Local AI] VRAM pressure -> falling back to resident {fb_role} "
+                    f"({fb_id}); requested {resolved_role} would need ~{new_chat_mb}MB but only "
+                    f"~{projected_free_mb:.0f}MB would be free even after unloading current chat. "
+                    f"Set SEEKDEEP_VRAM_PRESSURE_MODE=warn to allow spilled loads.",
+                    flush=True,
+                )
+                _emit_pressure_event("fallback", "chat", resolved_role, projected_free_mb, new_chat_mb)
+                return fb_role, fb_id
         unload_chat_model()
 
-    prepare_task("chat", resolved_role)
+    try:
+        prepare_task("chat", resolved_role)
+    except VRAMPressureError as pressure:
+        # Pressure raised AFTER unload (mode=fallback, but the unload was
+        # still necessary). Reload default_chat at minimum so the next request
+        # has something to serve. Bubble the error to the caller for clear
+        # signalling -- /chat will surface the issue.
+        print(f"[SeekDeep Local AI] VRAM pressure during chat prepare: {pressure}", flush=True)
+        raise
     role_is_full_precision = resolved_role in LOCAL_CHAT_QUANT_FULL_ROLES
     quant_mode = _normalized_chat_quant_mode()
     quant_config = None if role_is_full_precision else _build_chat_quant_config()
