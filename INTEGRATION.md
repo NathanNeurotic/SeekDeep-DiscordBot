@@ -172,6 +172,24 @@ curl -X POST http://127.0.0.1:7865/events/emit \
 
 If `delivered` matches `subscribers`, every connected browser tab received the event.
 
+## 3.6 · Version single source of truth (`/health.version` + `data-version`)
+
+`GET /health` returns a `version` field sourced from `package.json` so the Node bot, the FastAPI side-car, and every GUI page agree on what version is running.
+
+`gui/version.js` (auto-loaded by `nav.js`) fetches `/health` on load and rewrites every `[data-version]` element's text with the real value. The literal text inside each element is the static fallback shown when `/health` is unreachable (e.g. opening the file directly via `file://`).
+
+Designer adoption (one attribute, no other changes):
+
+```html
+<!-- BEFORE -->
+<span class="pill">v10.35</span>
+
+<!-- AFTER -->
+<span class="pill" data-version>v10.35</span>
+```
+
+Optional `data-version-prefix="v"` forces a prefix; `data-version-raw` suppresses the auto `v` prefix.
+
 ## 4 · Archive browser bot bridge
 
 The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.

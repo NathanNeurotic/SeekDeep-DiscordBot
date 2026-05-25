@@ -25,6 +25,7 @@ genuinely new pieces into it manually.
 | `gui/nav.js` token interceptor | Monkey-patches `window.fetch` to auto-inject `X-SeekDeep-Token` on same-origin POSTs. Designer's nav.js does not know about auth. |
 | `gui/nav.js` events.js auto-load | The tail of `nav.js` dynamically appends `<script src="events.js">` so `window.SeekDeepEvents` exists on every page. Designer's nav.js does not do this. |
 | `gui/events.js` | Entire file is ours — designer doesn't ship this. WebSocket consumer for `/events` (pub/sub for `model.loaded` / `vram.sample` / `queue.depth` / `log.line` / etc). |
+| `gui/version.js` | Entire file is ours — designer doesn't ship this. Reads `version` from `/health` and rewrites every `[data-version]` element. Hardcoded version strings stay as the fallback if `/health` is unreachable. |
 
 When a zip arrives:
 
@@ -127,6 +128,34 @@ git for-each-ref --format='%(refname:short)' refs/heads/ | \
 ```
 
 ---
+
+## 4.5 · Version `[data-version]` pattern (for the designer to adopt)
+
+Every HTML page hardcodes the version in the titlebar / footer / sidebar
+(`v10.35` at time of writing). Until the designer marks those cells, the
+hardcoded text shows. Once they mark them as below, `gui/version.js`
+auto-overwrites the text with the actual server version from `/health`:
+
+```html
+<!-- BEFORE (literal) -->
+<span class="pill">v10.35</span>
+
+<!-- AFTER (auto-swapped) -->
+<span class="pill" data-version>v10.35</span>
+```
+
+The literal text stays as the static fallback so `file://` viewing still
+shows a sensible value. When the server is up, `version.js` rewrites it
+to whatever `/health` reports.
+
+Optional attributes:
+- `data-version-prefix="v"` — force the prefix even if /health returns a
+  numeric-only version like `10.35`.
+- `data-version-raw` — suppress the auto `v` prefix entirely.
+
+The designer just needs to add `data-version` to every existing version
+cell. No JS / fetch / wiring on their side — `version.js` is auto-loaded
+by `nav.js`.
 
 ## 5. After every merge — verification checklist
 

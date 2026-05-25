@@ -773,21 +773,25 @@
   setTimeout(checkGpuMode, 400);
   setInterval(checkGpuMode, 60_000);
 
-  // Auto-load events.js (WebSocket pub/sub for live server events). Done as a
-  // dynamic <script> append so designer-shipped HTMLs only need to include
-  // nav.js — they get window.SeekDeepEvents for free without modification.
-  // Skipped if a page already loaded events.js explicitly, or if we're not
-  // being served from a web origin (file:// would block WS anyway).
-  (function autoLoadEvents() {
-    if (window.SeekDeepEvents) return;
+  // Auto-load sibling helper scripts (events.js + version.js) via dynamic
+  // <script> appends so designer-shipped HTMLs only need to include nav.js —
+  // they get window.SeekDeepEvents and window.SeekDeepVersion for free.
+  // Skipped if already loaded explicitly, or if we're on file:// (WS would
+  // 4xx anyway, and version.js needs the server too).
+  (function autoLoadSiblings() {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
-    const existing = document.querySelector('script[src$="events.js"], script[src*="/events.js"]');
-    if (existing) return;
     const navScript = document.querySelector('script[src$="nav.js"], script[src*="/nav.js"]');
     const base = navScript ? navScript.src.replace(/nav\.js(\?.*)?$/, '') : '';
-    const s = document.createElement('script');
-    s.src = base + 'events.js';
-    s.defer = true;
-    document.head.appendChild(s);
+    function inject(name, globalKey) {
+      if (window[globalKey]) return;
+      const existing = document.querySelector(`script[src$="${name}"], script[src*="/${name}"]`);
+      if (existing) return;
+      const s = document.createElement('script');
+      s.src = base + name;
+      s.defer = true;
+      document.head.appendChild(s);
+    }
+    inject('events.js',  'SeekDeepEvents');
+    inject('version.js', 'SeekDeepVersion');
   })();
 })();

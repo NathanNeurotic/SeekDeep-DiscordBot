@@ -360,7 +360,21 @@ def _log_vram(label: str) -> None:
     except Exception:
         pass
 
-app = FastAPI(title="SeekDeep Local AI Server", version="10.0.0-fresh-rebuild")
+# Read version from package.json so we have ONE source of truth shared by
+# the Node bot, the FastAPI side-car, and every GUI page. /health exposes it
+# below and gui/version.js fans it out to any [data-version] placeholder.
+def _read_pkg_version() -> str:
+    try:
+        import json as _json
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "package.json"),
+                  "r", encoding="utf-8") as _f:
+            return str(_json.load(_f).get("version") or "0.0.0")
+    except Exception:
+        return "0.0.0"
+
+SEEKDEEP_VERSION = _read_pkg_version()
+
+app = FastAPI(title="SeekDeep Local AI Server", version=SEEKDEEP_VERSION)
 
 # ===== SeekDeep GUI · static mount =====
 from fastapi.staticfiles import StaticFiles
@@ -802,6 +816,7 @@ async def seekdeep_singleflight_middleware(request, call_next):
 def health():
     return {
         "status": "ready",
+        "version": SEEKDEEP_VERSION,
         "device": device_name(),
         "cuda_available": cuda_available(),
         "loaded_task": loaded_task,
