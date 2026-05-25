@@ -690,6 +690,10 @@ OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "")
 OLLAMA_TIMEOUT_SECS = float(os.getenv("OLLAMA_TIMEOUT_SECS", "180"))
 OLLAMA_PROBE_TIMEOUT_SECS = float(os.getenv("OLLAMA_PROBE_TIMEOUT_SECS", "2"))
 OLLAMA_PULL_TIMEOUT_SECS = float(os.getenv("OLLAMA_PULL_TIMEOUT_SECS", "1800"))
+# How long the Ollama daemon keeps a model in memory after a request. Same
+# semantics as `OLLAMA_KEEP_ALIVE` env on the daemon side (default 5m).
+# Set to "-1" or "infinity" to pin indefinitely, "0" to unload immediately.
+OLLAMA_KEEP_ALIVE = (os.getenv("OLLAMA_KEEP_ALIVE", "5m") or "5m").strip()
 
 # Per-role backend env vars, mirrored after CHAT_ROLE_ENV. default_chat uses
 # the global LOCAL_CHAT_BACKEND directly.
@@ -767,15 +771,42 @@ def _ollama_chat(messages: list[dict], model_tag: str, temperature: float,
                   max_tokens: int) -> str:
     """Call /api/chat (non-streaming). Returns the assistant text. Raises on
     transport / API error so the chat handler can fall through to its existing
-    HF fallback path."""
+    HF fallback path.
+
+    Generation parameters are mapped to honor the same env knobs the HF path
+    uses (CHAT_TOP_K, CHAT_REPETITION_PENALTY), plus top_p hardcoded to
+    match the HF default of 0.9. Ollama uses 'repeat_penalty' (note: no
+    underscore between 'repeat' and 'penalty'), distinct from HF's
+    'repetition_penalty'."""
+    try:
+        top_k = max(int(os.getenv("CHAT_TOP_K", "50")), 0)
+    except ValueError:
+        top_k = 50
+    try:
+        repeat_penalty = max(float(os.getenv("CHAT_REPETITION_PENALTY", "1.08")), 1.0)
+    except ValueError:
+        repeat_penalty = 1.08
+
+    options: dict[str, Any] = {
+        "temperature": max(0.0, min(2.0, float(temperature))),
+        "num_predict": int(max_tokens),
+        "top_p": 0.9,                # matches the HF generate() default
+        "repeat_penalty": repeat_penalty,
+    }
+    # top_k=0 means "disabled" in Ollama -- omit the key when zero so we
+    # use the daemon's default rather than overriding to zero.
+    if top_k > 0:
+        options["top_k"] = top_k
+
     body = {
         "model": model_tag,
         "messages": messages,
         "stream": False,
-        "options": {
-            "temperature": max(0.0, min(2.0, float(temperature))),
-            "num_predict": int(max_tokens),
-        },
+        "options": options,
+        # Daemon-side: how long to keep the model in memory after this
+        # request. Mirrors HF's keep-resident pin behavior at a different
+        # layer (Ollama VRAM, not PyTorch VRAM).
+        "keep_alive": OLLAMA_KEEP_ALIVE,
     }
     result = _ollama_request("/api/chat", body=body, timeout=OLLAMA_TIMEOUT_SECS)
     msg = result.get("message") or {}
@@ -1333,6 +1364,113 @@ def warm_chat_role(role: str = "default_chat") -> dict:
             "role": resolved_role, "model_id": model_id, "backend": "hf"}
 
 
+class ModelInstallRequest(BaseModel):
+    """Body for POST /model/install. `backend` selects the storage path
+    (HF cache vs Ollama daemon). `model_id` is interpreted accordingly --
+    an HF repo ID for backend='hf' or an Ollama tag for backend='ollama'.
+    Optional `role` patches .env to assign this model to a chat role."""
+    backend: Literal["hf", "ollama"]
+    model_id: str
+    role: str = ""           # if provided, .env gets updated for this role
+    revision: str = ""       # HF only: branch/tag/commit
+    auto_pull: bool = True   # Ollama only: auto-pull if tag missing
+
+
+def _hf_install(model_id: str, revision: str = "") -> dict:
+    """Download an HF repo to LOCAL_MODEL_CACHE_DIR (or HF_HOME). Uses
+    huggingface_hub.snapshot_download so partial downloads resume cleanly.
+    Returns {ok, model_id, local_dir, files_downloaded}."""
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        return {"ok": False, "error": "huggingface_hub not installed"}
+    try:
+        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+        kw = {"repo_id": model_id, "cache_dir": cache_dir} if cache_dir else {"repo_id": model_id}
+        if revision:
+            kw["revision"] = revision
+        if os.getenv("HF_TOKEN"):
+            kw["token"] = os.getenv("HF_TOKEN")
+        local_dir = snapshot_download(**kw)
+        # Best-effort file count
+        try:
+            files = sum(1 for _ in Path(local_dir).rglob("*") if _.is_file())
+        except Exception:
+            files = -1
+        return {"ok": True, "model_id": model_id, "local_dir": str(local_dir),
+                "files_downloaded": files}
+    except Exception as e:
+        return {"ok": False, "error": f"hf download failed: {e}"}
+
+
+def _env_key_for_role(role: str, kind: Literal["model_id", "backend"]) -> str | None:
+    """Return the .env key that controls this role's model_id or backend.
+    default_chat uses the bare LOCAL_CHAT_MODEL_ID / LOCAL_CHAT_BACKEND;
+    other roles use the per-role mirror tables."""
+    role_clean = (role or "").strip().lower()
+    if not role_clean:
+        return None
+    if kind == "model_id":
+        return CHAT_ROLE_ENV.get(role_clean)
+    if kind == "backend":
+        if role_clean == "default_chat":
+            return "LOCAL_CHAT_BACKEND"
+        return CHAT_ROLE_BACKEND_ENV.get(role_clean)
+    return None
+
+
+@app.post("/model/install", dependencies=[Depends(require_gui_token)])
+def model_install(req: ModelInstallRequest):
+    """Install a model (HF download or Ollama pull) and optionally assign
+    it to a chat role by patching .env. Idempotent: re-running with the
+    same params is a no-op when the model is already present."""
+    model_id = (req.model_id or "").strip()
+    if not model_id:
+        raise HTTPException(400, "model_id is required")
+
+    if req.backend == "ollama":
+        # Ollama tag pull (or just verify presence)
+        ok, note = _ollama_ensure_tag(model_id, auto_pull=bool(req.auto_pull))
+        install_result = {"ok": ok, "backend": "ollama", "model_id": model_id,
+                          "note": note, "base_url": OLLAMA_BASE_URL}
+    else:  # hf
+        install_result = _hf_install(model_id, req.revision or "")
+        install_result["backend"] = "hf"
+
+    if not install_result.get("ok"):
+        return JSONResponse(status_code=500, content=install_result)
+
+    # Optional .env patch: assign this model to a chat role
+    role = (req.role or "").strip().lower()
+    if role:
+        model_id_key = _env_key_for_role(role, "model_id")
+        backend_key  = _env_key_for_role(role, "backend")
+        if not model_id_key:
+            return JSONResponse(status_code=400, content={
+                **install_result,
+                "env_patched": False,
+                "error": f"unknown role {role!r} -- expected one of {sorted(CHAT_ROLE_ENV.keys())}"
+            })
+        try:
+            from gui_endpoints import _merge_env as _seekdeep_merge_env
+            env_path = Path(os.path.dirname(os.path.abspath(__file__))) / ".env"
+            updates = {model_id_key: model_id}
+            if backend_key:
+                updates[backend_key] = req.backend
+            patched = _seekdeep_merge_env(env_path, updates)
+            install_result["env_patched"] = True
+            install_result["env_keys_updated"] = patched.get("updated", [])
+        except HTTPException as he:
+            install_result["env_patched"] = False
+            install_result["env_error"] = he.detail
+        except Exception as e:
+            install_result["env_patched"] = False
+            install_result["env_error"] = str(e)
+        install_result["role"] = role
+
+    return install_result
+
+
 @app.post("/warmup/chat", dependencies=[Depends(require_gui_token)])
 def warmup_chat_endpoint():
     try:
@@ -1531,10 +1669,34 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
     return resolved_role, model_id
 
 
+def _is_ollama_transport_failure(exc: Exception) -> bool:
+    """True if `exc` looks like an Ollama daemon connectivity / HTTP error
+    (daemon offline, connection refused, HTTP 4xx/5xx). These are exactly
+    the cases where falling back to fallback_chat (potentially an HF role)
+    should rescue the request."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    # urllib.error.URLError / HTTPError, ConnectionRefusedError, OSError 10061
+    if name in {"URLError", "HTTPError", "ConnectionRefusedError", "TimeoutError"}:
+        return True
+    if "connection refused" in msg or "actively refused" in msg:
+        return True
+    if "http error 4" in msg or "http error 5" in msg:
+        return True
+    if "winerror 10061" in msg:  # Windows: no connection could be made
+        return True
+    # The Ollama tag isn't installed and auto-pull failed
+    if "ollama" in msg and ("not found" in msg or "tag" in msg):
+        return True
+    return False
+
+
 def _classify_chat_load_failure(exc: Exception) -> str:
     """Return a short, log-friendly reason string for known recoverable failures."""
     name = type(exc).__name__
     msg = str(exc).lower()
+    if _is_ollama_transport_failure(exc):
+        return "ollama-transport"
     if "out of memory" in msg or "cuda oom" in msg or "outofmemory" in name.lower():
         return "cuda-oom"
     if "no such file" in msg or "not found" in msg or "couldn't find" in msg or "missing" in msg:
@@ -1547,6 +1709,8 @@ def _classify_chat_load_failure(exc: Exception) -> str:
 
 
 def _is_fallback_eligible_exception(exc: Exception) -> bool:
+    if _is_ollama_transport_failure(exc):
+        return True
     msg = str(exc).lower()
     if "out of memory" in msg or "cuda oom" in msg:
         return True

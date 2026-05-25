@@ -123,6 +123,46 @@ The role's existing `LOCAL_CHAT_<...>_MODEL_ID` env value changes meaning based 
 
 `POST /model/warm` with an Ollama-backed role checks `GET /api/tags` and pulls via `POST /api/pull` if the tag isn't present. The pull is synchronous (governed by `OLLAMA_PULL_TIMEOUT_SECS`, default 30 min). Already-present tags are no-op.
 
+### `POST /model/install` (auth required) — one-shot install + role assign
+
+Backend endpoint for "Add a Model" wizard workflows. Combines an install (HF `snapshot_download` or Ollama `/api/pull`) with an optional `.env` patch that assigns the new model to a chat role.
+
+```jsonc
+// Install an Ollama model and assign it to quality_text
+POST /model/install
+{
+  "backend": "ollama",
+  "model_id": "mistral-nemo:12b",
+  "role": "quality_text",
+  "auto_pull": true
+}
+
+// Install an HF model and assign it to default_chat (rewrites .env atomically)
+POST /model/install
+{
+  "backend": "hf",
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "role": "default_chat",
+  "revision": "main"
+}
+```
+
+Response:
+
+```jsonc
+{
+  "ok": true,
+  "backend": "ollama",
+  "model_id": "mistral-nemo:12b",
+  "note": "pulled",
+  "role": "quality_text",
+  "env_patched": true,
+  "env_keys_updated": ["LOCAL_CHAT_QUALITY_MODEL_ID", "LOCAL_CHAT_QUALITY_BACKEND"]
+}
+```
+
+`role` is optional — omit to just install/pull without touching `.env`. The env patch is atomic via `_merge_env` (preserves existing comments + ordering). Restart the AI server for new chat role bindings to take effect, OR call `POST /model/warm` to load the new model immediately.
+
 ### `/health` reporting
 
 ```jsonc

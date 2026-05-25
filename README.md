@@ -5,6 +5,15 @@
 
 SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, web search, and image archiving.
 
+> **Privacy note.** SeekDeep itself does not collect or transmit telemetry. The repo ships nothing that phones home. However, SeekDeep necessarily talks to third-party services you opt into, and **each of those services has its own privacy policy and may collect data per its own terms** — not under SeekDeep's control. The relevant third parties are:
+> - **Discord** — every message your bot sends and every interaction it serves passes through Discord's API.
+> - **HuggingFace Hub** — when you download a model via `huggingface_hub` (or `POST /model/install` with `backend=hf`), HF observes the model-download request. If you set `HF_TOKEN`, that token is sent on each download.
+> - **Ollama** — runs as a local daemon by default (no outbound network), but Ollama's own `ollama pull` reaches out to `registry.ollama.ai`. If you set custom OLLAMA env vars to point at a remote daemon, your prompts go there instead.
+> - **SearXNG** — local by default; the web queries you make then go out to whichever upstream search engines your SearXNG instance is configured to use.
+> - **Optional external chat providers** (DeepSeek, NIM, etc.) — if you set `CHAT_PROVIDER` to a hosted endpoint, your prompts leave the box.
+>
+> Anything collected by those services is governed by *their* terms, not SeekDeep's. Run with the defaults (loopback FastAPI + local SearXNG + local Ollama + 127.0.0.1 binding on port 7865) to minimize the surface area.
+
 > **Sister docs in this repo:**
 > - **[AGENTS.md](AGENTS.md)** — architecture reference: what each subsystem (chat / vision / image / web search / archive / routing) does and how they connect.
 > - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant picking up the repo cold.
