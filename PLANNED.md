@@ -70,7 +70,54 @@ All three queued items landed in sequence; each committed independently:
 
 Final smoke: bot 565, gui-smoke 85.
 
-Backend queue is empty.
+#### Queued from designer audit 2026-05-25 ([AUDIT_DESIGNER_2026-05-25.md](AUDIT_DESIGNER_2026-05-25.md))
+
+Designer ran a deep audit on chat.html + the rest of the GUI. Most findings are real, several were based on a stale local copy and need no action (see audit doc § D + § H for the "lessons learned"). New backend asks added:
+
+**G. `POST /persona` endpoint** — wire the chat-page persona pill + Tweaks panel's persona select to the bot's real persona-override system (currently only addressable via `@SeekDeep persona [scope] <name>` Discord command via `seekdeepHandlePersonaCommand` in `index.js`). Designer's audit item #6 + #14.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/persona` | `{ scope: 'channel'\|'server'\|'global', persona: 'neurotic'\|'unsettling'\|'clinical'\|'chaotic' }` | `{ ok, persona, scope, effective_at }` |
+| `POST` | `/persona` | `{ scope, action: 'reset' }` | `{ ok, persona: null, scope }` — clears the override |
+| `GET`  | `/persona` | — | `{ ok, current: { scope, persona } }` — currently effective override |
+
+- Validate `persona` against `SEEKDEEP_VALID_PERSONAS` (`{neurotic, unsettling, clinical, chaotic}`).
+- `reset` is a meta-action that clears the override (not a 5th persona value).
+- `scope: 'channel'` needs a channel context — for the web playground (no channel), default to `scope: 'global'` since the playground is single-user-owner.
+- Token-guarded POST. Open GET.
+- Persist to `data/persona-overrides.json` (likely already exists from Discord-side handler; verify).
+
+Effort: ~1-2 hr. The bot already has the override system + `SEEKDEEP_VALID_PERSONAS`; this is wrapping it in an HTTP route + smoke tests. Likely lives in `gui_endpoints.py`.
+
+**H. Version reconciliation** — `package.json` has `"version": "10.0.0-fresh-rebuild"`. Release tags are `v10.35`. `/health.version` returns the package.json string. `version.js` rewrites every `[data-version]` cell to that string. The visible mismatch designer flagged in their screenshot ("FRESH-REBUILD" pill vs "v10.35" elsewhere) is partly *version.js not rewriting some cells* (page didn't load nav.js / cell missing `data-version` attribute / browser cache) and partly *the source-of-truth value itself looks wrong*. Two paths:
+
+- **Bump `package.json` to `10.35.0`** — release tags match the package.json version, marketing copy matches, every `[data-version]` cell flips to `v10.35.0` once `version.js` runs. Cleanest. Requires picking a versioning convention (semver vs the current label).
+- **Keep `10.0.0-fresh-rebuild`** as the rolling "what's actually built" version and update marketing copy + tags to match. Less common but valid.
+
+Nathan's call. Either way, the fix is editing `package.json` + bumping the affected docs.
+
+**I. PWA scope decision** — `gui/manifest.json` has `start_url: chat.html` and `gui/sw.js` caches only `chat.html` + `styles.css` + `nav.js` + `seekdeep-mark.webp` + Google Fonts. Designer flagged this as "users install the PWA and land on the most-broken page." With the playground now functional, `chat.html` may actually be the right landing — but other pages won't work offline. Options:
+
+- **Keep `chat.html` as `start_url`, expand SW cache** to include `index.html`, `app.html`, `memory.html`, `prompts.html`, `image-ab.html`, `events.js`, `version.js`, `playground.js`, all assets. Bundle size grows but every page survives offline.
+- **Switch `start_url` to `index.html`** (About) so the PWA opens at the directory page, then user navigates from there. Matches the "hub" mental model.
+- **Two-PWA approach**: `chat.html` is the standalone playground PWA; `index.html` is the "everything" PWA. Probably overkill.
+
+Effort: ~1 hour (cache list edits + manifest update). Nathan's call.
+
+**J. `GET /stats/counts` endpoint** — designer audit item #C3. Hardcoded `274 smoke tests` / `35 releases` / `109 commands` / `18 surfaces` on `pitch.html` + `changelog.html` will rot the moment any of those numbers change. Spec:
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/stats/counts` | `{ ok, smoke_tests, gui_smoke_tests, releases, commands, surfaces, generated_at }` |
+
+- `smoke_tests` — read `pass=N fail=N` from the last preflight log, OR count from a generated artifact
+- `gui_smoke_tests` — same source, gui-smoke stage
+- `releases` — `len(git tag list)` (or last GH release count via API)
+- `commands` — count from a command-registry export (could scan `index.js` for `prefix +` patterns; brittle but works)
+- `surfaces` — `len(nav.js PAGES array)` — could be computed server-side by reading the file, OR hardcoded since nav.js IS the source of truth
+
+Effort: ~1-2 hr depending on how clean we want the data sourcing. Pair with designer Phase 4: add `data-stat-{smoke_tests,releases,commands,surfaces}` attributes to the relevant cells, then a tiny IIFE (or extend version.js) reads `/stats/counts` and rewrites them.
 
 ---
 
