@@ -1957,6 +1957,233 @@ def model_install(req: ModelInstallRequest):
     return install_result
 
 
+class ModelUninstallRequest(BaseModel):
+    """Body for POST /model/uninstall. Counterpart to /model/install.
+
+    For hf backend, deletes the cached snapshot via huggingface_hub.scan_cache_dir().
+    For ollama, calls DELETE /api/delete on the daemon.
+    For remote backends (openai-compat / anthropic / gemini), there's nothing
+    to delete remotely -- just strips per-role env keys.
+
+    If `role` is set, additionally wipes the role's BACKEND, MODEL_ID,
+    API_URL, API_KEY entries from .env (empties their values; doesn't
+    remove the lines so user can re-fill them later).
+
+    `purge` (default False) makes the cache-delete extra aggressive
+    (currently only meaningful for hf -- forces revision delete even
+    when other repos share the snapshot)."""
+    backend: Literal["hf", "ollama", "openai-compat", "anthropic", "gemini"]
+    model_id: str = ""       # required for hf / ollama; ignored for remote backends
+    role: str = ""           # if set, also blanks the role's env keys
+    purge: bool = False
+
+
+def _hf_uninstall(model_id: str) -> dict:
+    """Delete an HF snapshot from the cache. Returns {ok, freed_bytes, error?}."""
+    if not model_id:
+        return {"ok": False, "error": "model_id is required for hf uninstall"}
+    try:
+        from huggingface_hub import scan_cache_dir
+    except ImportError:
+        return {"ok": False, "error": "huggingface_hub not installed"}
+    try:
+        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        # Find the repo (handles 'meta-llama/Llama-3.1-8B-Instruct' shape)
+        repo_info = next((r for r in info.repos if r.repo_id == model_id), None)
+        if not repo_info:
+            return {"ok": True, "model_id": model_id, "freed_bytes": 0,
+                    "note": "not in HF cache (already absent)"}
+        # Collect every revision's hash and delete them
+        revisions = [r.commit_hash for r in repo_info.revisions]
+        if not revisions:
+            return {"ok": True, "model_id": model_id, "freed_bytes": 0,
+                    "note": "no revisions to delete"}
+        strategy = info.delete_revisions(*revisions)
+        freed = int(strategy.expected_freed_size)
+        strategy.execute()
+        return {"ok": True, "model_id": model_id, "freed_bytes": freed,
+                "revisions_deleted": len(revisions)}
+    except Exception as e:
+        return {"ok": False, "error": f"hf uninstall failed: {e}"}
+
+
+def _ollama_delete(model_tag: str) -> tuple[bool, str]:
+    """DELETE /api/delete on the Ollama daemon. Returns (ok, note)."""
+    if not model_tag:
+        return False, "model_id required for ollama uninstall"
+    if not ollama_available():
+        return False, f"Ollama daemon not reachable at {OLLAMA_BASE_URL}"
+    try:
+        # Ollama's delete is a DELETE method with body
+        _ollama_request("/api/delete", body={"model": model_tag}, method="DELETE",
+                         timeout=OLLAMA_TIMEOUT_SECS)
+        return True, "deleted"
+    except _seekdeep_urllib_err.HTTPError as e:
+        if e.code == 404:
+            return True, "not installed (already absent)"
+        return False, f"HTTP {e.code} from /api/delete"
+    except Exception as e:
+        return False, f"delete failed: {e}"
+
+
+@app.post("/model/uninstall", dependencies=[Depends(require_gui_token)])
+def model_uninstall(req: ModelUninstallRequest):
+    """Uninstall a model OR detach a role's env binding (or both).
+    Idempotent: re-running on an absent model is a no-op success."""
+    model_id = (req.model_id or "").strip()
+    backend = req.backend
+
+    if backend == "hf":
+        uninstall_result = _hf_uninstall(model_id)
+        uninstall_result["backend"] = "hf"
+    elif backend == "ollama":
+        ok, note = _ollama_delete(model_id)
+        uninstall_result = {"ok": ok, "backend": "ollama", "model_id": model_id,
+                             "note": note, "base_url": OLLAMA_BASE_URL}
+    else:  # openai-compat / anthropic / gemini -- nothing to delete remotely
+        uninstall_result = {
+            "ok": True,
+            "backend": backend,
+            "model_id": model_id,
+            "note": "remote backends have no local storage; nothing deleted",
+            "external": True,
+        }
+
+    if not uninstall_result.get("ok"):
+        return JSONResponse(status_code=500, content=uninstall_result)
+
+    # Optional .env detach: blank the role's binding so the next /chat
+    # request falls through to whatever LOCAL_CHAT_BACKEND globally points
+    # at. We BLANK rather than DELETE the lines so the user can re-fill
+    # them in the GUI later without losing comment context.
+    role = (req.role or "").strip().lower()
+    if role:
+        env_keys_to_blank: list[str] = []
+        model_id_key = _env_key_for_role(role, "model_id")
+        backend_key  = _env_key_for_role(role, "backend")
+        if model_id_key: env_keys_to_blank.append(model_id_key)
+        if backend_key:  env_keys_to_blank.append(backend_key)
+        # Remote-backend role bindings also clear per-role API URL/key
+        api_url_key = CHAT_ROLE_API_URL_ENV.get(role)
+        api_key_key = CHAT_ROLE_API_KEY_ENV.get(role)
+        if api_url_key: env_keys_to_blank.append(api_url_key)
+        if api_key_key: env_keys_to_blank.append(api_key_key)
+
+        if not env_keys_to_blank:
+            return JSONResponse(status_code=400, content={
+                **uninstall_result,
+                "env_patched": False,
+                "error": f"unknown role {role!r}",
+            })
+        try:
+            from gui_endpoints import _merge_env as _seekdeep_merge_env
+            env_path = Path(os.path.dirname(os.path.abspath(__file__))) / ".env"
+            blanks = {k: "" for k in env_keys_to_blank}
+            patched = _seekdeep_merge_env(env_path, blanks)
+            uninstall_result["env_patched"] = True
+            uninstall_result["env_keys_blanked"] = patched.get("updated", [])
+        except HTTPException as he:
+            uninstall_result["env_patched"] = False
+            uninstall_result["env_error"] = he.detail
+        except Exception as e:
+            uninstall_result["env_patched"] = False
+            uninstall_result["env_error"] = str(e)
+        uninstall_result["role"] = role
+
+    return uninstall_result
+
+
+@app.get("/route/debug")
+def route_debug(prompt: str = "", role: str = "default_chat"):
+    """Surface server-side routing decisions for diagnostics.
+
+    The bot's role-selection heuristics (regex patterns, casual-vs-formal
+    classification, lightweight-chat short-circuit, etc.) live in
+    index.js's seekdeepSelectChatModelRole. THIS endpoint can't see
+    those -- it can only describe what happens AFTER a role is chosen:
+      - which chat backend the role resolves to (hf / ollama / openai-compat
+        / anthropic / gemini)
+      - what model id / tag / remote model name the backend will use
+      - what HTTP endpoint (if remote) or in-process state (if hf)
+      - what the MODEL_AUTO_FALLBACK chain would be on failure
+      - whether the HF path would no-op (role already loaded) or swap
+
+    For the GUI's Route Inspector panel: have the bot's seekdeepSelectChatModelRole
+    pick a role, then call this with role=<that role> to see the
+    execution plan. Read-only; no auth required.
+    """
+    requested_role = (role or "default_chat").strip().lower() or "default_chat"
+    resolved_role, model_id = resolve_chat_role(requested_role)
+    backend = _resolve_chat_backend(resolved_role)
+
+    endpoint: dict[str, Any] = {}
+    if backend == "ollama":
+        endpoint = {
+            "base_url": OLLAMA_BASE_URL,
+            "tag": model_id,
+            "daemon_up": ollama_available(),
+            "external": False,
+        }
+    elif backend == "openai-compat":
+        url, _key = _resolve_openai_endpoint(resolved_role)
+        endpoint = {"base_url": url or "(unconfigured)", "external": True,
+                    "warning": "prompts for this role leave the local machine"}
+    elif backend == "anthropic":
+        url, _key, ver = _resolve_anthropic_endpoint(resolved_role)
+        endpoint = {"base_url": url, "version": ver, "external": True,
+                    "warning": "prompts for this role leave the local machine"}
+    elif backend == "gemini":
+        url, _key = _resolve_gemini_endpoint(resolved_role)
+        endpoint = {"base_url": url or "(unconfigured)", "external": True,
+                    "warning": "prompts for this role leave the local machine"}
+    else:  # hf
+        same_role_loaded = (chat_model is not None and loaded_chat_role == resolved_role)
+        endpoint = {
+            "external": False,
+            "already_loaded": bool(same_role_loaded),
+            "would_swap": bool(chat_model is not None and not same_role_loaded),
+            "currently_loaded_role": loaded_chat_role,
+            "currently_loaded_model_id": loaded_chat_model_id,
+            "estimated_vram_mb": estimate_model_vram("chat", resolved_role),
+        }
+
+    # MODEL_AUTO_FALLBACK chain. The bot does at most one fallback hop to
+    # fallback_chat; this exposes what that hop would resolve to so the
+    # GUI can render it.
+    fallback_chain: list[dict] = []
+    if resolved_role != "fallback_chat" and MODEL_AUTO_FALLBACK:
+        try:
+            fb_role, fb_model_id = resolve_chat_role("fallback_chat")
+        except Exception:
+            fb_role, fb_model_id = ("fallback_chat", "")
+        if fb_model_id and fb_role != resolved_role:
+            fallback_chain.append({
+                "role": fb_role,
+                "backend": _resolve_chat_backend(fb_role),
+                "model_id": fb_model_id,
+            })
+
+    return {
+        "ok": True,
+        "prompt_preview": str(prompt or "")[:240],
+        "role_requested": requested_role,
+        "role_resolved": resolved_role,
+        "backend": backend,
+        "model_id": model_id,
+        "endpoint": endpoint,
+        "fallback_chain": fallback_chain,
+        "auto_fallback_enabled": bool(MODEL_AUTO_FALLBACK),
+        "note": (
+            "Role-selection regex heuristics live in index.js "
+            "seekdeepSelectChatModelRole and are not visible from the AI "
+            "server. Pass the role the bot WOULD pick (or the role the "
+            "user requested directly via /chat) as the `role` query "
+            "param to inspect what happens once that role is resolved."
+        ),
+    }
+
+
 @app.post("/warmup/chat", dependencies=[Depends(require_gui_token)])
 def warmup_chat_endpoint():
     try:
