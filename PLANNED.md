@@ -53,9 +53,12 @@ After designer zip 31 landed, Claude Code knocked out all three queued backend i
 
 Final preflight: 4 ok / 0 fail · bot smoke 544 · gui-smoke 73.
 
-Open follow-ups (small, non-blocking):
-- Universal Archive could optionally notify the original image author when someone archives their post. Default for v1 is silent (matches how anyone can already save any Discord image).
-- Prompts marketplace v1 doesn't track edit/delete of shared templates — users re-share after editing locally. Edit-in-place would need persisting share-message IDs per template, which is more storage than the v1 value justifies.
+Both v1 follow-ups shipped 2026-05-25 in [02127b9](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commit/02127b9):
+
+- ✅ **Universal Archive author-notify** — bot adds 📥 reaction on the source message when someone archives a user-posted image. Skip rules: target is bot, target author == requester, archive was duplicates-only, permission denied. Configurable via `SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY=on|off` (default on) and `SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI` (default 📥).
+- ✅ **Prompts marketplace edit-in-place + tombstone** — templates now carry a `sharedAs` pointer at their share embed. `template save <existing>: <new>` auto-pushes to the share. `template share <existing>` updates the existing post instead of duplicating. `template delete <existing>` tombstones the share (strikethrough title + gray color + footer date + buttons dropped). Both mention + slash command paths wired symmetrically. Tombstone builder is idempotent.
+
+Final smoke: bot 555, gui-smoke 73.
 
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.
    - **B.1 Context menu (always-on)**: register `Archive (SeekDeep)` as a Message context menu command alongside the existing `Force React (SeekDeep)`. Right-click any message → Apps → Archive (SeekDeep) → bot archives the attachments + embed images to the requesting user's archive, replies ephemerally with a confirmation. Works on user posts, bot posts, link previews, anything with an image. ~80 lines including registration + dispatch + the "no image to archive" empty-state.
