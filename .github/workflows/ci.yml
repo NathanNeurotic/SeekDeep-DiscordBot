@@ -53,7 +53,13 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
-      - name: Run preflight (js + py + smoke)
+      - name: Install minimal Python deps for gui-smoke stage
+        # The full requirements-local.txt is enormous (torch, transformers,
+        # diffusers, ...). The gui-smoke stage only needs the lightweight
+        # subset; preflight self-skips it if these aren't importable.
+        run: python -m pip install --upgrade pip && python -m pip install 'fastapi>=0.115.0' 'httpx>=0.27.0' 'pydantic>=2.10.0'
+
+      - name: Run preflight (js + py + smoke + gui-smoke)
         env:
           # smoke_test.mjs reads CI to skip anything GPU/network-bound.
           # SEEKDEEP_TEST_MODE is set by smoke_test.mjs itself.

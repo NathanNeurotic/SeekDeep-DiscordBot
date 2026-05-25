@@ -7,9 +7,12 @@
 //   node scripts/preflight.mjs
 //
 // Stages (skip a stage by passing --skip-<stage>):
-//   js     — node --check index.js, smoke_test.mjs, scripts/preflight.mjs
-//   py     — python -m py_compile local_ai_server.py warmup_local_cache.py
-//   smoke  — node smoke_test.mjs
+//   js         — node --check on every JS file we ship (index, smoke, preflight, gui/*.js)
+//   py         — python -m py_compile on every .py we ship (server, warmup, gui_endpoints)
+//   smoke      — node smoke_test.mjs (no Discord login, no model load)
+//   gui-smoke  — python scripts/smoke_gui_endpoints.py (token auth + /config/status
+//                + /events WS + /data/* normalizers via TestClient).
+//                Self-skips if fastapi/httpx/pydantic aren't importable.
 //
 // Exit code 0 only when EVERY stage passes (or was skipped).
 
@@ -97,6 +100,32 @@ function runPyCompile() {
   return { ok: true, detail: targets.join(', ') };
 }
 
+function runGuiSmoke() {
+  // End-to-end check for the FastAPI side-car (token auth, /config/status,
+  // /events WS round-trip, /data/* normalizers). Lives in Python because
+  // it imports gui_endpoints + uses fastapi.TestClient. Needs only fastapi
+  // + httpx + pydantic installed (NOT torch/transformers/etc).
+  const venvPy = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
+  const py = existsSync(venvPy) ? venvPy : 'python';
+  const script = path.join(ROOT, 'scripts', 'smoke_gui_endpoints.py');
+  if (!existsSync(script)) return { ok: true, detail: 'script missing; skipped' };
+  // Skip cleanly if fastapi isn't importable -- e.g. CI without the deps yet.
+  const probe = spawnSync(py, ['-c', 'import fastapi, httpx, pydantic'],
+    { cwd: ROOT, encoding: 'utf8' });
+  if (probe.status !== 0) {
+    return { ok: true, detail: 'fastapi/httpx/pydantic not installed; skipped' };
+  }
+  const r = spawnSync(py, [script], { cwd: ROOT, encoding: 'utf8' });
+  if (r.status !== 0) {
+    // Surface the failure summary line if present
+    const lines = (r.stdout || r.stderr || '').trim().split('\n');
+    const fail = lines.find((l) => /FAIL|fail$/i.test(l)) || lines.slice(-1)[0] || 'gui-smoke failed';
+    return { ok: false, detail: fail.slice(0, 160) };
+  }
+  const tail = (r.stdout || '').trim().split('\n').slice(-1)[0] || '';
+  return { ok: true, detail: tail };
+}
+
 console.log('SeekDeep preflight');
 console.log('-------------------');
 
@@ -115,6 +144,7 @@ stage('js', () => {
 
 stage('py', () => runPyCompile());
 stage('smoke', () => runSmokeTest());
+stage('gui-smoke', () => runGuiSmoke());
 
 const failed = stages.filter((s) => !s.ok);
 const passed = stages.filter((s) => s.ok && !s.skipped);
