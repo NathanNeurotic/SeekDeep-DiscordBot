@@ -2,7 +2,103 @@
 
 This file tracks everything that's been discussed, scoped, or partially scaffolded but not yet shipped. Items here are not commitments — they're a parking lot for "next time we sit down with this codebase, here's what's on deck."
 
-Last full audit: 2026-05-19
+Last full audit: 2026-05-24 (GUI + backend stack)
+
+---
+
+## GUI / Backend Stack — Post-`5cd770b` Queue (2026-05-24)
+
+The "GUI shipped + backend wired" arc landed across ~40 commits ending at `5cd770b`. Token auth, WebSocket bridge, 7 live event topics, CI, version SoT, VRAM hardening, **all 5 chat backends (hf / ollama / openai-compat / anthropic / gemini)**, `POST /model/install`, telemetry disclaimer, etc. — all live.
+
+What's left, split by who owns it.
+
+### Claude Code queue (backend / repo work)
+
+Sorted by readiness to start.
+
+#### Can ship anytime (no blockers)
+
+1. **`GET /route/debug?prompt=...`** in `local_ai_server.py` (or `index.js`). Returns `{matched_rule, confidence, chosen_model, fallback_chain}` for the future Route Inspector panel. Backend can ship before designer's UI exists; UI just consumes the payload.
+   - Effort: ~1 hr. Stub from `seekdeepSelectChatModelRole` + the routing-tables in `index.js`.
+
+2. **Memory recall: write-side** — bot-side `remember <fact>` / `forget <fact>` commands + atomic writes to `data/user-memories.json` + injection into chat context. Independent of the UI that comes later; the UI just reads `/data/user-memories.json` once this exists.
+   - Effort: ~half-day. Bot-side only.
+
+3. **`POST /model/uninstall`** — counterpart to `/model/install`. HF cache delete / Ollama `/api/delete` / strip role's `LOCAL_CHAT_<...>_*` env keys.
+   - Effort: ~1 hr. Nice symmetry; designer wizard wants this for "remove" buttons.
+
+4. **Extend `gui-smoke`** — add tests for `/model/install` (mock the HF download + Ollama pull) + the new remote-backend dispatch paths (mock `_openai_compat_chat` etc.). Catches regressions on the BYK feature in CI.
+   - Effort: ~45 min. Reuses the existing pattern in `scripts/smoke_gui_endpoints.py`.
+
+#### Needs a "go" from the user
+
+5. **`index.js` split** into `lib/image-pipeline.js`, `lib/archive.js`, `lib/persona.js`, `lib/router.js`, `lib/commands.js`, `lib/reactrules.js`, `lib/discord-presence.js`. Designer's HANDOFF Task 6.
+   - Effort: 1–2 days dedicated. Risk: high — touches 100+ handlers. CI's `preflight` (493 smoke tests) is the safety net. Recommended: do one module per commit, run preflight between each. Don't half-do.
+
+6. **`smoke_test.mjs` split** into `tests/smoke/{archive,image-pipeline,router,persona,reactrules,commands,gpu-health}.mjs` with an index runner. Designer's HANDOFF Task 7.
+   - Effort: ~half-day. Easier after #5.
+
+7. **GIF history eviction** — `git lfs migrate import --include="*.gif"` OR `git filter-branch` to drop the 18 MB `seekdeep-mark.gif` from `.git` history (it's already deleted from the working tree at e13d361). Saves every fresh clone from downloading it.
+   - Effort: 30 min once you greenlight. Coordination cost: anyone else with a clone needs to re-pull from scratch.
+
+### Designer queue (UI work)
+
+All have backend ready unless noted.
+
+#### Backend ready — designer just builds UI
+
+1. **"Add a Model" wizard** — 3–4 step picker. Step 1: backend (hf/ollama/openai-compat/anthropic/gemini). Step 2: model ID (with provider-specific helper text — link to HF Hub for hf, list of installed tags for ollama, model dropdowns for the remotes). Step 3: API URL + key when remote. Step 4: assign to role + confirm. Backend: `POST /model/install`.
+
+2. **Settings / paths UI** in the Config pane — fields for `HF_HOME`, `OLLAMA_MODELS`, `LOCAL_MODEL_CACHE_DIR`, `OLLAMA_KEEP_ALIVE`, plus per-role API URL + key. Backend: existing `POST /config`.
+
+3. **Wire Hub "Local stack" panel** to live data and remove "Example readout · awaiting live wiring" label. Backend: `SeekDeepEvents.on('vram.sample', ...)`, `('model.loaded', ...)`, `('queue.depth', ...)`.
+
+4. **Wire Models pane** RESIDENT / PINNED / CACHED badges + HF / Ollama / Remote ⚠ backend badges. Backend: `/health.chat_backends` + `/health.remote_chat_endpoints` + `model.loaded` / `model.evicted` events.
+
+5. **Wire Logs viewer** to live `log.line` events (currently polls `/logs/tail`). Backend: `SeekDeepEvents.on('log.line', ...)`. Note: opt-in via `SEEKDEEP_EMIT_LOG_LINES=on`.
+
+6. **Title-bar LIVE pill** flips on WS connect / disconnect. Backend: `SeekDeepEvents.connected` + `'_open' / '_close'` pseudo-events.
+
+7. **`data-version` attribute** added to every `v10.x` cell in titlebars / footers / sidebars. Backend: `version.js` auto-rewrites once marked; no JS needed on designer side. Cells in: `index.html`, `app.html`, `chat.html`, `landing.html`, `pitch.html`, `docs.html`, `api.html`, `architecture.html`, `roadmap.html`, `changelog.html`, `memory.html`, `mobile.html`, `boot.html`, `installer.html`, `nav.js`.
+
+8. **Image pipeline A/B view** — same prompt + seed across `/image`, `/img2img`, `/instruct-pix2pix`, `/inpaint`. Four panels side by side. Backend: 4 endpoints already exist.
+
+9. **API Explorer offline state** — surface the "falls back to canned mocks when offline" UX as a labeled state on each endpoint card.
+
+10. **Quiet the bubbles** on `docs.html` + `api.html` (text-dense surfaces). CSS-only, opacity reduction on `.abyss` + `.bubbles` for those pages.
+
+11. **Mobile mocks → real PWA** — `manifest.json` + service worker on `chat.html` if they want the mobile mock to become a real installable companion app.
+
+#### Designer designs first, Claude Code builds backend after
+
+12. **Memory recall UI** in `memory.html` — review / edit / export / clear the bot's per-user memories. Needs my #2 above (write-side commands + JSON store) shipped first, OR can be designed as a clickable prototype against mock data while I build the backend in parallel.
+
+13. **Route Inspector panel** in `api.html` — renders the `/route/debug` debug payload. Needs my #1 above shipped first, OR can mock the JSON shape from this PLANNED entry while I build the endpoint in parallel.
+
+14. **TTS preview UI** — voice channel picker + voice picker + queue mockup. Backend (Piper / XTTS / etc.) is deferred indefinitely; designer can mock now so when TTS finally lands, the integration target is clear.
+
+15. **Prompt template marketplace** — Import-from-URL / share button. **Blocked on hosting decision** (see "Needs decision" below).
+
+### Needs decision before either of us starts
+
+| Item | Decision needed |
+|---|---|
+| **Prompt template marketplace** | Where do shared templates live? gist / your domain / signed URLs / nothing remote (export-import .json only)? |
+| **GIF history eviction** | OK to rewrite git history? Anyone else with a clone needs to re-pull from scratch. |
+| **Streaming chat responses** | Big refactor (`/chat` → SSE, bot handler restructures, Discord edits token-by-token). Worth the win? |
+| **Per-message cost tracking for remote backends** | Useful to prevent surprise bills on `openai-compat` / `anthropic` / `gemini`. Where to store? How to display? |
+
+### Already shipped — for cross-reference
+
+The "what's now live" snapshot lives in the commit log; the canonical entry points to read are:
+
+- `MAINTAINER.md § 1` — files we own and that designer zips would clobber (audit-overrides catalog)
+- `INTEGRATION.md § 3.4` — chat-backend matrix, per-role config, `/model/install`, `/health.remote_chat_endpoints`
+- `INTEGRATION.md § 3.5` — WebSocket event bridge (7 live topics)
+- `INTEGRATION.md § 3.6` — Version SoT (`/health.version` + `data-version`)
+- `INTEGRATION.md § 4` — Archive bot bridge snippet
+- `README.md` privacy block — third-party disclosure (Discord / HF / Ollama / SearXNG / `openai-compat` / `anthropic` / `gemini`)
+- `.env.example` — every supported env var with inline explainers
 
 ---
 
