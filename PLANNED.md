@@ -43,30 +43,19 @@ All four "ready anytime" items shipped 2026-05-25 in commits `3e4a0fa`, `3878ba4
 - ✅ **`POST /model/uninstall`** — counterpart to `/model/install` at `local_ai_server.py:2031`. HF cache delete via `huggingface_hub.scan_cache_dir().delete_revisions()`, Ollama `DELETE /api/delete`, no-op for remote backends. Optional `role` param blanks per-role `LOCAL_CHAT_<ROLE>_*` env keys via `_seekdeep_merge_env`.
 - ✅ **Extended `gui-smoke`** — 20 new checks in `scripts/smoke_gui_endpoints.py` covering `/route/debug` (response shape, default role, bogus-role fallback, prompt-preview truncation), `/model/install` (auth + Pydantic validation), `/model/uninstall` (auth + hf-absent idempotency + remote no-op + unknown-role 400 with env_patched=False). `gui-smoke` is now 52 checks (was 32). Bot smoke is 501 checks (was 493).
 
-#### Queued for post-designer cycle (greenlit by Nathan 2026-05-25)
+#### Post-designer cycle — all three items shipped 2026-05-25
 
-These have a "go" and only wait on designer's current 15-task queue wrapping up, so we're not stepping on their work mid-flight.
+After designer zip 31 landed, Claude Code knocked out all three queued backend items in sequence. Each was committed independently for clean rollback:
 
-**A. Prompts marketplace via per-server `#prompts` channel** — same pattern as the existing archive channel. Server admin opts in with `@SeekDeep prompts channel here`. Users run `@SeekDeep template share <name>` to post their saved template as a formatted embed in that channel with an "Import to my templates" button. Other users in the same server hit the button to add the template to their local `data/prompt-templates.json`. **Discord IS the storage** — zero hosting, zero auth, zero infra. Cross-server sharing is intentionally NOT supported (community boundary). Supersedes the previous "hosting model decision needed" question for Task 15 in the Designer queue.
-   - Reuses: `data/archive-guild-config.json` (add `promptsChannelId` field), the embed-with-button pattern from archive, the existing `@SeekDeep template import` JSON path for the import side.
-   - New code: ~200 lines in `index.js` for the share command + import button handler + `prompts channel here` admin command. Plus a help section + smoke checks.
-   - Open edge cases: how to handle edits/deletes of a shared template (edit-in-place if Discord allows, otherwise post a new one and tombstone the old — mirror the archive pattern), how to handle a user sharing a template they later modified locally.
+- ✅ **Item C — `/memory/*` endpoints** ([95948f4](https://github.com/NathanNeurotic/seekdeep-DiscordBot/commit/95948f4)). Nine routes in `gui_endpoints.py` over the existing `data/user-facts.json` + `data/memory-presets.json` files: GET /memory/users, GET/POST/PATCH/DELETE /memory/user/{id}[/fact/{n}], GET /memory/user/{id}/export, GET/POST /memory/presets/{id}. Write endpoints token-guarded; caps mirror `SEEKDEEP_USER_FACTS_MAX` + `SEEKDEEP_USER_FACT_MAX_CHARS`. gui-smoke 52 → 73.
+- ✅ **Item B — Universal Archive surface** ([e697f95](https://github.com/NathanNeurotic/seekdeep-DiscordBot/commit/e697f95)). Two trigger paths share the existing `seekdeepArchiveImageStateToDiscordThread` flow: (1) right-click → Apps → `Archive (SeekDeep)` context menu command, and (2) reply to a message with `archive` / `archive this` / `archive please` / `@SeekDeep archive`. Image extractor handles both attachments + embed images, content-type missing fallback to extension. Bot smoke 504 → 528.
+- ✅ **Item A — Prompts marketplace** ([560ecbf](https://github.com/NathanNeurotic/seekdeep-DiscordBot/commit/560ecbf)). Per-server `#prompts` channel — admin sets it with `@SeekDeep prompts channel here`, users post their saved templates with `@SeekDeep template share <name>` as formatted embeds with Import + Copy buttons. Import handler dedupes name collisions with `-imported-<short-hex>` suffix. Embed footer counter bumps via `message.edit` on each import. Reuses `data/archive-guild-config.json` for the channel-id config. Bot smoke 528 → 544.
 
-**C. `/memory/*` endpoints for the live memory.html surface** — Claude Designer's zip 31 shipped `memory.html` rewritten against this exact JSON contract. UI degrades to a small mock dataset + a `MOCK · endpoints not shipped` pill until these land; flips live as soon as `GET /memory/users` returns 200. All write endpoints token-guarded (nav.js interceptor handles it automatically). Mirrors the on-disk schema already in `data/user-facts.json` + `data/memory-presets.json`.
+Final preflight: 4 ok / 0 fail · bot smoke 544 · gui-smoke 73.
 
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| `GET`    | `/memory/users` | — | `{ ok, users: [ { user_id, display, fact_count, bytes, updatedAt } ] }` |
-| `GET`    | `/memory/user/{id}` | — | `{ ok, user_id, facts: [ { text, at } ], updatedAt, bytes }` · 404 if no row |
-| `POST`   | `/memory/user/{id}/fact` | `{ text }` | `{ ok, index }` · 422 on `>500` chars / cap reached |
-| `PATCH`  | `/memory/user/{id}/fact/{n}` | `{ text }` | `{ ok }` · 422 / 404 |
-| `DELETE` | `/memory/user/{id}/fact/{n}` | — | `{ ok, removed: { text, at } }` |
-| `DELETE` | `/memory/user/{id}` | — | `{ ok, removed_facts: N }` |
-| `GET`    | `/memory/user/{id}/export` | — | `application/json` download |
-| `GET`    | `/memory/presets/{id}` | — | `{ ok, presets: [string], updatedAt }` |
-| `POST`   | `/memory/presets/{id}` | `{ presets: [string] }` | `{ ok }`; validate against `SEEKDEEP_KNOWN_PRESETS`, 400 on unknown |
-
-Effort: ~3-4 hr. All routes are thin wrappers over the existing read/write helpers in `index.js` (`seekdeepReadUserFacts` / `seekdeepWriteUserFacts` / etc.) — they probably belong in `gui_endpoints.py` since they're HTTP-facing config. The bot is the source of truth for the JSON files but the FastAPI side-car can read/write them safely via the same atomic-write pattern.
+Open follow-ups (small, non-blocking):
+- Universal Archive could optionally notify the original image author when someone archives their post. Default for v1 is silent (matches how anyone can already save any Discord image).
+- Prompts marketplace v1 doesn't track edit/delete of shared templates — users re-share after editing locally. Edit-in-place would need persisting share-message IDs per template, which is more storage than the v1 value justifies.
 
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.
    - **B.1 Context menu (always-on)**: register `Archive (SeekDeep)` as a Message context menu command alongside the existing `Force React (SeekDeep)`. Right-click any message → Apps → Archive (SeekDeep) → bot archives the attachments + embed images to the requesting user's archive, replies ephemerally with a confirmation. Works on user posts, bot posts, link previews, anything with an image. ~80 lines including registration + dispatch + the "no image to archive" empty-state.
