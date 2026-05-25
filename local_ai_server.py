@@ -1987,8 +1987,18 @@ def _hf_uninstall(model_id: str) -> dict:
     except ImportError:
         return {"ok": False, "error": "huggingface_hub not installed"}
     try:
+        from huggingface_hub.errors import CacheNotFound
+    except ImportError:
+        CacheNotFound = Exception
+
+    try:
         cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        try:
+            info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        except CacheNotFound:
+            return {"ok": True, "model_id": model_id, "freed_bytes": 0,
+                    "note": "not in HF cache (cache directory not found)"}
+
         # Find the repo (handles 'meta-llama/Llama-3.1-8B-Instruct' shape)
         repo_info = next((r for r in info.repos if r.repo_id == model_id), None)
         if not repo_info:
