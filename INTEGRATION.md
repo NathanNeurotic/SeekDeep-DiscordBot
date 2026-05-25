@@ -90,6 +90,88 @@ The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm
 
 **Still bind to `127.0.0.1`.** The token narrows the threat model but doesn't replace network isolation. If you expose port 7865 through ngrok / cloudflared / a port-forward, the token leaks via the tunnel like any response body.
 
+## 3.5 · WebSocket event bridge (`/events`)
+
+For live updates the GUI doesn't poll any more — it subscribes to a single push stream and the server emits events as they happen.
+
+### Endpoints (in `gui_endpoints.py`)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET (WS)` | `/events?token=<token>` | yes (query param) | WebSocket subscriber connection |
+| `POST` | `/events/emit` | yes (`X-SeekDeep-Token`) | Server-side producers (e.g. the Node bot) push events here and the bus broadcasts |
+| `GET` | `/events/status` | open | Cheap probe: `{ok, subscribers, server_time_ms}` |
+
+Why query-string auth on the WS? Browsers cannot set headers on the initial WebSocket handshake. The token is the same value used elsewhere; the WS upgrades over the same `127.0.0.1` connection, so the wire-level confidentiality is identical.
+
+A 10s **heartbeat** event auto-emits while at least one subscriber is connected — it's a built-in canary so you can verify the bus is alive even before real producers are wired.
+
+### Event shape
+
+```jsonc
+// every event has the same envelope
+{
+  "type": "model.loaded",                      // topic
+  "ts":   1779668616368,                       // server ms; auto-stamped if producer omits
+  "data": { "role": "image", "vram_mb": 6800 } // arbitrary, topic-defined
+}
+```
+
+Topics defined so far (`gui_endpoints.py` and `gui/events.js` agree on these — the set is open, any new `type` works automatically):
+
+- `hello` — sent once to each new subscriber on connect
+- `heartbeat` — every 10s while at least one subscriber connected
+- `model.loaded` / `model.evicted` — VRAM lifecycle
+- `vram.sample` — periodic VRAM telemetry
+- `queue.depth` — per-pipeline queue counts
+- `request.start` / `request.done` — per-request lifecycle
+- `log.line` — structured log lines for the Logs viewer
+
+### Producer patterns
+
+**From an async FastAPI handler:**
+```python
+from gui_endpoints import event_bus
+await event_bus.publish({"type": "model.loaded", "data": {"role": "image", "vram_mb": 6800}})
+```
+
+**From the Node bot (or anything not in this Python process):**
+```javascript
+await fetch('http://127.0.0.1:7865/events/emit', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'X-SeekDeep-Token': process.env.SEEKDEEP_GUI_TOKEN },
+  body: JSON.stringify({ type: 'queue.depth', data: { image: 1, chat: 0, vision: 0 } }),
+});
+```
+
+### Consumer pattern (in `gui/events.js`)
+
+Already auto-loaded on every page that includes `nav.js`. Pages can subscribe with:
+
+```javascript
+const off = window.SeekDeepEvents.on('vram.sample', (data) => {
+  document.querySelector('#vram-used').textContent = data.used_mb + ' MB';
+});
+// Later, to unsubscribe: off();
+```
+
+Connection lifecycle is handled for you: fetches the token from `window.SeekDeepAuth`, opens the WS, reconnects with exponential backoff (1s → 30s cap) on disconnect, resets backoff on reconnect. Special pseudo-topics `_open` / `_close` / `_error` let you reflect connection state in the title bar.
+
+### Smoke test
+
+```bash
+# In one shell, start the server (see ยง6 for the launcher script).
+# In another:
+TOKEN=$(grep ^SEEKDEEP_GUI_TOKEN= .env | cut -d= -f2-)
+curl -X POST http://127.0.0.1:7865/events/emit \
+     -H "X-SeekDeep-Token: $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"type":"model.loaded","data":{"role":"image","vram_mb":6800}}'
+# Returns: {"ok":true,"type":"model.loaded","subscribers":N,"delivered":N}
+```
+
+If `delivered` matches `subscribers`, every connected browser tab received the event.
+
 ## 4 · Archive browser bot bridge
 
 The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.

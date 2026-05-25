@@ -772,4 +772,22 @@
   // GPU banner is informational + non-blocking; safe to run on load + every 60s.
   setTimeout(checkGpuMode, 400);
   setInterval(checkGpuMode, 60_000);
+
+  // Auto-load events.js (WebSocket pub/sub for live server events). Done as a
+  // dynamic <script> append so designer-shipped HTMLs only need to include
+  // nav.js — they get window.SeekDeepEvents for free without modification.
+  // Skipped if a page already loaded events.js explicitly, or if we're not
+  // being served from a web origin (file:// would block WS anyway).
+  (function autoLoadEvents() {
+    if (window.SeekDeepEvents) return;
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+    const existing = document.querySelector('script[src$="events.js"], script[src*="/events.js"]');
+    if (existing) return;
+    const navScript = document.querySelector('script[src$="nav.js"], script[src*="/nav.js"]');
+    const base = navScript ? navScript.src.replace(/nav\.js(\?.*)?$/, '') : '';
+    const s = document.createElement('script');
+    s.src = base + 'events.js';
+    s.defer = true;
+    document.head.appendChild(s);
+  })();
 })();

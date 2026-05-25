@@ -34,7 +34,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -49,6 +49,70 @@ class ConfigPatch(BaseModel):
 
 class WarmRequest(BaseModel):
     role: str = "default_chat"
+
+
+class EventPayload(BaseModel):
+    """Body of POST /events/emit. `type` is the event topic (e.g. 'model.loaded',
+    'vram.sample'); `data` is an arbitrary JSON object the consumer interprets."""
+    type: str
+    data: dict[str, Any] = {}
+
+
+# ====================================================================
+# EVENT BUS (WebSocket pub/sub)
+# ====================================================================
+# Single in-process broadcaster. Producers call `await bus.publish({...})`,
+# every connected websocket gets the event as a JSON message. Dead connections
+# are pruned lazily.
+#
+# Why module-level singleton: register_gui_endpoints can be called more than
+# once during tests / hot-reload, but we want a single subscriber set so events
+# fan out to ALL live connections regardless of which app instance produced them.
+
+class _EventBus:
+    def __init__(self) -> None:
+        self._subscribers: set[WebSocket] = set()
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self, ws: WebSocket) -> None:
+        async with self._lock:
+            self._subscribers.add(ws)
+
+    async def unsubscribe(self, ws: WebSocket) -> None:
+        async with self._lock:
+            self._subscribers.discard(ws)
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
+
+    async def publish(self, event: dict[str, Any]) -> int:
+        """Broadcast `event` to every subscriber. Returns the number of
+        successful sends. Auto-prunes any subscriber whose send raised."""
+        # Stamp with server ms if caller didn't provide ts
+        event.setdefault("ts", int(time.time() * 1000))
+        async with self._lock:
+            targets = list(self._subscribers)
+        if not targets:
+            return 0
+        sent = 0
+        dead: list[WebSocket] = []
+        for ws in targets:
+            try:
+                await ws.send_json(event)
+                sent += 1
+            except Exception:
+                dead.append(ws)
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    self._subscribers.discard(ws)
+        return sent
+
+
+# Module-level singleton. Importable from local_ai_server.py so producers can
+# call `from gui_endpoints import event_bus` and `await event_bus.publish(...)`.
+event_bus = _EventBus()
 
 
 # Whitelist of services the launcher endpoint may control.
@@ -743,5 +807,94 @@ def register_gui_endpoints(
             "missing_required": missing_required,
             "needs_setup": bool(missing_required),
         }
+
+    # ----- WebSocket /events -----
+    # Browsers can't set headers on the initial WS handshake, so auth is via
+    # the ?token=<token> query param. Token check is the same compare_digest
+    # against the live .env value, so rotation works without restart here too.
+    @app.websocket("/events")
+    async def events_ws(websocket: WebSocket, token: str = ""):
+        if not _token_disabled:
+            expected = _current_token()
+            if not expected or not secrets.compare_digest(token or "", expected):
+                # 4401 = custom close code; clients can distinguish auth from network
+                await websocket.close(code=4401, reason="invalid or missing ?token=")
+                return
+        await websocket.accept()
+        await event_bus.subscribe(websocket)
+        # Send an initial 'hello' so the client knows the connection is live + auth'd
+        try:
+            await websocket.send_json({
+                "type": "hello",
+                "ts": int(time.time() * 1000),
+                "data": {"subscribers": event_bus.subscriber_count, "server_time_ms": int(time.time() * 1000)},
+            })
+        except Exception:
+            pass
+        try:
+            while True:
+                # We don't expect inbound messages from the client; just keep the
+                # connection alive and detect disconnect via the receive timeout.
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            await event_bus.unsubscribe(websocket)
+
+    # ----- POST /events/emit -----
+    # For producers that aren't already inside an async FastAPI handler
+    # (notably the Node bot, which would POST events here from index.js).
+    # Token-required so random callers can't spam fake events at the GUI.
+    @app.post("/events/emit", dependencies=[Depends(_require_gui_token)])
+    async def post_events_emit(event: EventPayload):
+        sent = await event_bus.publish({"type": event.type, "data": event.data})
+        return {"ok": True, "type": event.type, "subscribers": event_bus.subscriber_count, "delivered": sent}
+
+    # ----- GET /events/status -----
+    # Cheap GET so the GUI can probe whether the bus is up + how many subscribers
+    # are connected (useful for the "WebSocket connected" indicator in the title bar).
+    @app.get("/events/status")
+    async def get_events_status():
+        return {"ok": True, "subscribers": event_bus.subscriber_count, "server_time_ms": int(time.time() * 1000)}
+
+    # ----- Heartbeat producer -----
+    # Emits {"type":"heartbeat","data":{"server_time_ms":...,"subscribers":N}}
+    # every HEARTBEAT_SEC. Gives clients a connection-keepalive AND a canary
+    # so the bus is provably alive even before real producers (model.loaded,
+    # vram.sample, etc.) are wired. Disabled when no subscribers to avoid
+    # logging noise.
+    HEARTBEAT_SEC = 10.0
+
+    async def _heartbeat_loop():
+        while True:
+            try:
+                await asyncio.sleep(HEARTBEAT_SEC)
+                if event_bus.subscriber_count > 0:
+                    await event_bus.publish({
+                        "type": "heartbeat",
+                        "data": {
+                            "server_time_ms": int(time.time() * 1000),
+                            "subscribers": event_bus.subscriber_count,
+                        },
+                    })
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Don't let a stray exception kill the heartbeat task
+                await asyncio.sleep(HEARTBEAT_SEC)
+
+    @app.on_event("startup")
+    async def _start_heartbeat():
+        # Stash the task on app.state so it can be cancelled on shutdown
+        loop = asyncio.get_event_loop()
+        app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
+
+    @app.on_event("shutdown")
+    async def _stop_heartbeat():
+        t = getattr(app.state, "seekdeep_heartbeat_task", None)
+        if t and not t.done():
+            t.cancel()
 
     print(f"[SeekDeep] GUI endpoints registered  (log_dir={_log_dir}  data_dir={_data_dir}  env={_env_path})")

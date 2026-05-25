@@ -23,6 +23,8 @@ genuinely new pieces into it manually.
 | `INTEGRATION.md` § 4 | Archive bridge snippet rewritten to match `index.js` conventions: sync `fs` (not `fs/promises`), `writeJsonAtomic` helper, `seekdeepReadArchiveGuildConfig()`, `client.once('clientReady', ...)` (not `'ready'`). Designer's draft uses APIs that don't exist in the actual file. |
 | `local_ai_server.py` register block | Passes `warmup_handlers={chat,image,vision}` wired to the real loaders. The designer's docs say "add 2 lines" — adding 2 lines gives you a stub `/model/warm` that never loads anything. |
 | `gui/nav.js` token interceptor | Monkey-patches `window.fetch` to auto-inject `X-SeekDeep-Token` on same-origin POSTs. Designer's nav.js does not know about auth. |
+| `gui/nav.js` events.js auto-load | The tail of `nav.js` dynamically appends `<script src="events.js">` so `window.SeekDeepEvents` exists on every page. Designer's nav.js does not do this. |
+| `gui/events.js` | Entire file is ours — designer doesn't ship this. WebSocket consumer for `/events` (pub/sub for `model.loaded` / `vram.sample` / `queue.depth` / `log.line` / etc). |
 
 When a zip arrives:
 
