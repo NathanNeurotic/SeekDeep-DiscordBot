@@ -6975,6 +6975,7 @@ function seekdeepFormatAdminStatusReport(health, online, message) {
     `• **TTS Voice**: ${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'OFF'}`,
     `• **Emoji Vault**: ${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'OFF'}`,
     `• **Force React**: ${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'OFF'}`,
+    `• **Auto React**: ${SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? 'ON' : 'OFF'}`,
   ].join('\n');
 
   const warnings = [];
@@ -7366,7 +7367,7 @@ async function statusText(verbose = false) {
     'Enabled features:',
     `  img2img: ${SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'ON' : 'off'}  |  pix2pix: ${SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'ON' : 'off'}  |  inpaint: ${SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'ON' : 'off'}`,
     `  upscale-esrgan: ${SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'ON' : 'off'}  |  nsfw-gate: ${SEEKDEEP_FEATURE_NSFW_GATE_ENABLED ? 'ON' : 'off'}  |  tts-voice: ${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'off'}`,
-    `  emoji-vault: ${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}  |  force-react: ${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}`,
+    `  emoji-vault: ${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}  |  force-react: ${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}  |  auto-react: ${SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? 'ON' : 'off'}`,
     ...(verbose ? ['', 'In-memory diagnostics:', ...seekdeepMapDiagnostics()] : []),
   ].join('\n'));
 }
@@ -7657,20 +7658,25 @@ function seekdeepHelpText(source = null) {
     '```',
     'Admin-only: persona + digest + translate + /say.',
     '',
-    '## Auto-reactions (admin / Manage Messages)',
-    '```text',
-    prefix + ' reactrule list',
-    prefix + ' reactrule add <emoji> when <pattern>',
-    prefix + ' reactrule add <emoji> when <pattern> in #channel',
-    prefix + ' reactrule add <emoji> for @user',
-    prefix + ' reactrule remove <id>',
-    prefix + ' reactrule toggle <id>',
-    prefix + ' reactrule builtin long_message|forwarded|code_block|image_only|link_only on|off',
-    prefix + ' reactrule export   (attaches JSON; use as a save slot)',
-    prefix + ' reactrule import   (attach a JSON file to your message)',
-    '```',
-    'Built-in stacking reactions auto-apply when their trigger matches (off by default; enable individually).',
-    '',
+    // Auto-reactions block is gated by SEEKDEEP_FEATURE_AUTO_REACT (default
+    // off) for the same demonbot-coexistence reason as the emoji vault. When
+    // the flag is off we omit it from help entirely.
+    ...(SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? [
+      '## Auto-reactions (admin / Manage Messages)',
+      '```text',
+      prefix + ' reactrule list',
+      prefix + ' reactrule add <emoji> when <pattern>',
+      prefix + ' reactrule add <emoji> when <pattern> in #channel',
+      prefix + ' reactrule add <emoji> for @user',
+      prefix + ' reactrule remove <id>',
+      prefix + ' reactrule toggle <id>',
+      prefix + ' reactrule builtin long_message|forwarded|code_block|image_only|link_only on|off',
+      prefix + ' reactrule export   (attaches JSON; use as a save slot)',
+      prefix + ' reactrule import   (attach a JSON file to your message)',
+      '```',
+      'Built-in stacking reactions auto-apply when their trigger matches (off by default; enable individually).',
+      '',
+    ] : []),
     // Emoji vault block is gated by SEEKDEEP_FEATURE_EMOJI_VAULT. When the
     // flag is off (default since v10.4.3) we omit it from help entirely so
     // users don't see commands that won't fire — keeping the floor clear
@@ -9046,7 +9052,7 @@ client.once('clientReady', async () => {
   console.log('  [Enabled Feature Flags]');
   console.log(`    Image Editing  : img2img=${SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'ON' : 'off'}, instruct-pix2pix=${SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'ON' : 'off'}, inpaint=${SEEKDEEP_FEATURE_INPAINT_ENABLED ? 'ON' : 'off'}`);
   console.log(`    Upscaling      : upscale-real-esrgan=${SEEKDEEP_FEATURE_UPSCALE_ENABLED ? 'ON' : 'off'}`);
-  console.log(`    Utility Features: emoji-vault=${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}, force-react=${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}, tts-voice=${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'off'}`);
+  console.log(`    Utility Features: emoji-vault=${SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'ON' : 'off'}, force-react=${SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'ON' : 'off'}, auto-react=${SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? 'ON' : 'off'}, tts-voice=${SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'ON' : 'off'}`);
   console.log(`    Web Search     : auto-search=${webSearchEnabled ? 'on' : 'off'} (status: ${searxngStatus})`);
   console.log(`    Daily Digest   : ${process.env.SEEKDEEP_DAILY_DIGEST || 'off'}`);
   console.log('');
@@ -14571,8 +14577,17 @@ const SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED = String(process.env.SEEKDEEP_FEATURE
 //   command sync, the dispatcher refuses the route, and the picker
 //   component handler stays out of the interaction chain.
 const SEEKDEEP_FEATURE_FORCE_REACT_ENABLED = String(process.env.SEEKDEEP_FEATURE_FORCE_REACT || 'off').toLowerCase() === 'on';
+// SEEKDEEP_FEATURE_AUTO_REACT: gates persistent auto-reaction rules per guild
+//   (custom @SeekDeep reactrule add/list/remove + the 5 built-in stacking
+//   rules: long_message, forwarded, code_block, image_only, link_only).
+//   Defaulted off so SeekDeep doesn't react alongside demonbot in shared
+//   servers. When off: messageCreate skips the per-message rule scan
+//   (saves disk I/O on every message), the @SeekDeep reactrule command
+//   stays out of the dispatch chain, and built-in rule toggles are inert.
+//   Flip to "on" to own the auto-react flow.
+const SEEKDEEP_FEATURE_AUTO_REACT_ENABLED = String(process.env.SEEKDEEP_FEATURE_AUTO_REACT || 'off').toLowerCase() === 'on';
 
-if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED || SEEKDEEP_FEATURE_INPAINT_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED || SEEKDEEP_FEATURE_FORCE_REACT_ENABLED) {
+if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED || SEEKDEEP_FEATURE_INPAINT_ENABLED || SEEKDEEP_FEATURE_UPSCALE_ENABLED || SEEKDEEP_FEATURE_NSFW_GATE_ENABLED || SEEKDEEP_FEATURE_TTS_VOICE_ENABLED || SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED || SEEKDEEP_FEATURE_FORCE_REACT_ENABLED || SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) {
   console.log('[SeekDeep] Optional features flagged on:',
     SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? 'img2img' : '',
     SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLED ? 'instruct-pix2pix' : '',
@@ -14582,6 +14597,7 @@ if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLE
     SEEKDEEP_FEATURE_TTS_VOICE_ENABLED ? 'tts-voice' : '',
     SEEKDEEP_FEATURE_EMOJI_VAULT_ENABLED ? 'emoji-vault' : '',
     SEEKDEEP_FEATURE_FORCE_REACT_ENABLED ? 'force-react' : '',
+    SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? 'auto-react' : '',
   );
   console.log('[SeekDeep] These features require additional model downloads / Python endpoints — see README "Optional features".');
 }
@@ -14755,6 +14771,12 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
   const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
   // Only react on commands that start with "reactrule" or "react rule".
   if (!/^react\s*rule\b/i.test(stripped)) return false;
+
+  // Feature-flagged off by default (same as Emoji Vault / Force React) so the
+  // reactrule admin surface stays inert when the auto-react feature isn't
+  // owned by this bot. Returning false keeps us out of the dispatch chain --
+  // no reply sent, no claim against demonbot's identical command.
+  if (!SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) return false;
 
   if (!message?.guild?.id) {
     await message.reply({ content: 'Reaction rules are server-only.', allowedMentions: { repliedUser: false } });
@@ -16238,8 +16260,11 @@ client.on('messageCreate', async (message) => {
   if (typeof seekdeepIsChannelAllowed === 'function' && !seekdeepIsChannelAllowed(message.channel?.id)) {
     return;
   }
-  // Fire-and-forget. Don't await.
-  try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
+  // Fire-and-forget. Don't await. Gated by SEEKDEEP_FEATURE_AUTO_REACT so the
+  // per-message disk read for rules is skipped entirely when the feature is off.
+  if (SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) {
+    try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
+  }
 
   // Auto-translate: fire-and-forget for non-Latin messages in the designated channel.
   // Runs before address-check so unaddressed foreign-language messages still get translated.

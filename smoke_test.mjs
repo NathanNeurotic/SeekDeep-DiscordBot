@@ -201,6 +201,15 @@ console.log('14. Help text integration (real seekdeepHelpText + slicer + chunker
 const fullHelp = T.seekdeepHelpText();
 check('help: full text non-empty', fullHelp.length > 100);
 check('help: full text mentions Archive', /Archive/.test(fullHelp));
+// Reaction feature gating -- with all three flags off (the smoke default),
+// the gated sections must NOT appear. Catches regressions where someone
+// adds a reactrule/emoji-vault hint outside the feature-flag wrapper.
+check('help: Auto-reactions section omitted when SEEKDEEP_FEATURE_AUTO_REACT=off',
+  !/## Auto-reactions/.test(fullHelp));
+check('help: Emoji vault section omitted when SEEKDEEP_FEATURE_EMOJI_VAULT=off',
+  !/## Emoji vault/.test(fullHelp));
+check('help: reactrule command lines omitted when AUTO_REACT=off',
+  !/@SeekDeep reactrule list\b/.test(fullHelp));
 const chatSlice = T.seekdeepHelpTopicSlice('chat');
 check('help slice: "chat" includes Chat section', /Chat \/ Web|Prompting/i.test(chatSlice));
 check('help slice: "chat" omits Vision section', !/## .*Vision/.test(chatSlice));

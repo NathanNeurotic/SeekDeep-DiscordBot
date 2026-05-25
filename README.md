@@ -495,6 +495,7 @@ Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All 
 |---|---|---|
 | `SEEKDEEP_FEATURE_EMOJI_VAULT` | off | `@SeekDeep emoji backup/import/count/list` commands. Off so SeekDeep doesn't fight demonbot for the same vault thread in shared servers. |
 | `SEEKDEEP_FEATURE_FORCE_REACT` | off | Right-click "Force React (SeekDeep)" context menu + paginated emoji picker. Same demonbot-coexistence reason. |
+| `SEEKDEEP_FEATURE_AUTO_REACT` | off | Persistent auto-reaction rules per guild (custom `@SeekDeep reactrule add/list/remove` + 5 built-in stacking rules: long_message, forwarded, code_block, image_only, link_only). Same demonbot-coexistence reason. When off, the per-message rule scan is skipped entirely (saves disk I/O on every guild message) and the `reactrule` admin commands stay out of the dispatch chain. |
 | `SEEKDEEP_FEATURE_IMG2IMG` | on | `@SeekDeep img2img <prompt>` and `/img2img`. Transform an attached/replied image with a text prompt. Reuses the Dreamshaper-XL pipeline — no extra model download. |
 | `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` | on | `@SeekDeep pix2pix <instruction>` and `/pix2pix`. Natural-language image editing ("make it darker", "add snow"). Uses `timbrooks/instruct-pix2pix`. |
 | `SEEKDEEP_FEATURE_INPAINT` | on | `@SeekDeep inpaint <target>` and `/inpaint`. Object removal via CLIPSeg auto-mask + SDXL inpainting. |
