@@ -9,134 +9,225 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 <style>
-  .hub-shell { max-width: 1280px; margin: 0 auto; padding: 64px 36px 120px; }
-  .hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 64px; align-items: center; margin-bottom: 80px; }
-  .hero .mark {
-    position: relative;
-    aspect-ratio: 1; max-width: 460px; margin-left: auto;
-    border-radius: 50%;
-    background: radial-gradient(circle at 50% 50%, rgba(45,212,255,0.18), transparent 60%);
-    display: grid; place-items: center;
-  }
-  .hero .mark::before, .hero .mark::after {
-    content: ""; position: absolute; inset: 0;
-    border-radius: 50%;
-    border: 1px solid color-mix(in oklab, var(--cyan-1) 25%, transparent);
-  }
-  .hero .mark::before {
-    inset: -8%;
-    border-style: dashed;
-    animation: spin 60s linear infinite;
-    opacity: 0.4;
-  }
-  .hero .mark::after {
-    inset: 8%;
-    border-color: color-mix(in oklab, var(--cyan-1) 12%, transparent);
-    animation: spin 100s linear infinite reverse;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .hero .mark img {
-    width: 75%; height: 75%;
-    object-fit: contain;
-    filter: drop-shadow(0 0 60px rgba(45,212,255,0.5));
-    animation: bob 6s ease-in-out infinite;
-  }
-  @keyframes bob {
-    0%, 100% { transform: translateY(0) rotate(-1deg); }
-    50%      { transform: translateY(-10px) rotate(1deg); }
-  }
-  .meta-strip {
-    display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap;
-  }
-  .meta-strip .pill { background: rgba(8,20,52,0.4); }
+  .hub-shell { max-width: 1240px; margin: 0 auto; padding: 56px 36px 96px; }
 
-  .grid {
+  /* ===== Header strip — measured, not heroic ===== */
+  .header {
     display: grid;
-    grid-template-columns: repeat(12, 1fr);
-    gap: 18px;
+    grid-template-columns: 1fr auto;
+    gap: 48px;
+    align-items: end;
+    padding-bottom: 28px;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
+    margin-bottom: 40px;
   }
+  .header h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 44px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin: 14px 0 0;
+    color: var(--hull);
+  }
+  .header .lead {
+    color: var(--hull-2);
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 18px 0 0;
+    max-width: 56ch;
+  }
+  .header .facts {
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 36px;
+    row-gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+    text-align: right;
+  }
+  .header .facts b {
+    color: var(--hull);
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--font-display);
+    font-size: 13px;
+  }
+
+  /* ===== Section heading ===== */
+  .sec-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin: 56px 0 16px;
+  }
+  .sec-head:first-of-type { margin-top: 0; }
+  .sec-head h2 {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--hull-2);
+    margin: 0;
+  }
+  .sec-head .count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    color: var(--hull-3);
+  }
+
+  /* ===== Card system ===== */
+  .grid { display: grid; gap: 14px; }
+  .grid.primary   { grid-template-columns: repeat(3, 1fr); }
+  .grid.secondary { grid-template-columns: repeat(3, 1fr); }
+  .grid.tertiary  { grid-template-columns: repeat(5, 1fr); }
+
   .card {
-    grid-column: span 4;
-    padding: 28px;
+    padding: 22px;
     border-radius: var(--r-lg);
-    background: linear-gradient(165deg, rgba(13,33,82,0.45), rgba(5,11,28,0.7));
+    background: linear-gradient(170deg, rgba(13,33,82,0.32), rgba(5,11,28,0.6));
     border: 1px solid var(--stroke);
-    position: relative;
-    overflow: hidden;
     text-decoration: none;
     color: inherit;
-    transition: transform 0.25s ease, border-color 0.2s ease, box-shadow 0.25s ease;
-    min-height: 240px;
-    display: flex; flex-direction: column; justify-content: space-between;
+    transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    display: flex; flex-direction: column; gap: 14px;
+    position: relative;
   }
   .card:hover {
-    border-color: var(--cyan-1);
-    box-shadow: 0 30px 80px rgba(0,0,0,0.5), 0 0 60px rgba(45,212,255,0.18);
-    transform: translateY(-3px);
+    border-color: color-mix(in oklab, var(--cyan-1) 45%, transparent);
+    transform: translateY(-1px);
   }
   .card .num {
     font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.2em;
+    font-size: 10px;
+    letter-spacing: 0.22em;
     color: var(--cyan-1);
-    opacity: 0.8;
+    opacity: 0.85;
   }
   .card h3 {
-    font-size: 28px;
-    margin: 14px 0 8px;
-    letter-spacing: -0.02em;
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    color: var(--hull);
+    margin: 0;
   }
   .card p {
     color: var(--hull-3);
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.55;
     margin: 0;
   }
-  .card .arrow {
-    align-self: flex-end;
+  .card .foot {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: auto; padding-top: 8px;
     font-family: var(--font-mono);
-    color: var(--cyan-1);
-    font-size: 18px;
+    font-size: 11px;
+    color: var(--hull-3);
   }
-  .card.tall { grid-column: span 8; min-height: 320px; }
-  .card.tall h3 { font-size: 42px; }
-  .card .ph-icon {
-    position: absolute; top: 24px; right: 24px;
-    width: 56px; height: 56px;
-    border: 1px solid var(--stroke);
-    border-radius: 12px;
-    display: grid; place-items: center;
-    color: var(--cyan-1);
-    background: rgba(2,6,15,0.5);
+  .card .foot .path { color: var(--cyan-1); opacity: 0.75; }
+
+  /* Primary cards a bit weightier */
+  .grid.primary .card { padding: 28px; min-height: 188px; }
+  .grid.primary .card h3 { font-size: 24px; margin-top: 4px; }
+
+  /* Tertiary cards: compact reference strip */
+  .grid.tertiary .card { padding: 18px; min-height: 120px; gap: 8px; }
+  .grid.tertiary .card h3 { font-size: 15px; }
+  .grid.tertiary .card p { font-size: 11.5px; line-height: 1.5; }
+  .grid.tertiary .card .foot { display: none; }
+
+  /* Status badge in corner of card (for parked / preview etc) */
+  .card .badge {
+    position: absolute; top: 18px; right: 18px;
     font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.12em;
+    font-size: 9.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+    padding: 3px 8px;
+    border: 1px solid color-mix(in oklab, var(--hull-3) 35%, transparent);
+    border-radius: var(--r-md);
+  }
+  .card .badge.warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 45%, transparent); }
+
+  /* ===== Status panels ===== */
+  .panels {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 14px;
+    margin-top: 24px;
+  }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .panel-head .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--hull-2);
+  }
+  .panel-head .tag {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.18em;
+    color: var(--warn);
+    padding: 2px 7px;
+    border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent);
+    border-radius: var(--r-md);
+    text-transform: uppercase;
   }
 
-  .session {
-    display: grid;
-    grid-template-columns: 1.4fr 0.6fr;
-    gap: 18px;
-    margin-top: 32px;
-  }
-  .session .panel { padding: 24px; }
   .stack-row {
-    display: grid; grid-template-columns: 1fr auto auto auto; gap: 14px;
-    padding: 10px 0;
-    border-bottom: 1px dashed color-mix(in oklab, var(--cyan-1) 12%, transparent);
+    display: grid; grid-template-columns: 1fr auto auto auto;
+    gap: 14px; align-items: center;
+    padding: 11px 0;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 8%, transparent);
     font-family: var(--font-mono);
     font-size: 12px;
-    align-items: center;
   }
   .stack-row:last-child { border-bottom: none; }
+  .stack-row .who { color: var(--hull); }
+  .stack-row .who small { color: var(--hull-3); margin-left: 6px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; }
+
+  .roadmap-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 8%, transparent);
+    font-size: 13px;
+    color: var(--hull-2);
+  }
+  .roadmap-row:last-child { border-bottom: none; }
+
+  /* ===== Footer ===== */
   .footer {
-    margin-top: 80px;
+    margin-top: 72px;
+    padding-top: 24px;
+    border-top: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
     display: flex; justify-content: space-between;
     color: var(--hull-3);
     font-family: var(--font-mono);
     font-size: 11px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
+  }
+
+  /* ===== Tone down ambient motion ===== */
+  .bubbles span { opacity: 0.5; }
+
+  @media (max-width: 1100px) {
+    .grid.primary   { grid-template-columns: 1fr; }
+    .grid.secondary { grid-template-columns: 1fr 1fr; }
+    .grid.tertiary  { grid-template-columns: 1fr 1fr 1fr; }
+    .panels { grid-template-columns: 1fr; }
+    .header { grid-template-columns: 1fr; }
+    .header .facts { text-align: left; grid-template-columns: auto auto; }
   }
 </style>
 </head>
@@ -144,24 +235,13 @@
 <div class="abyss"></div>
 <div class="rays"></div>
 <div class="bubbles">
-  <span style="left:4%;  animation-duration:24s; animation-delay:-3s;"></span>
-  <span class="cube sm" style="left:10%; animation-duration:38s; animation-delay:-8s;"></span>
-  <span style="left:14%; animation-duration:30s; animation-delay:-12s;"></span>
-  <span style="left:20%; animation-duration:18s; animation-delay:-6s;  width:3px; height:3px;"></span>
-  <span class="cube" style="left:28%; animation-duration:42s; animation-delay:-22s;"></span>
-  <span style="left:36%; animation-duration:34s; animation-delay:-18s;"></span>
-  <span class="cube sm" style="left:42%; animation-duration:36s; animation-delay:-5s;"></span>
-  <span style="left:48%; animation-duration:22s; animation-delay:-2s;  width:3px; height:3px;"></span>
-  <span class="cube big" style="left:54%; animation-duration:48s; animation-delay:-30s;"></span>
-  <span style="left:58%; animation-duration:28s; animation-delay:-9s;"></span>
-  <span class="cube" style="left:64%; animation-duration:40s; animation-delay:-14s;"></span>
-  <span style="left:67%; animation-duration:20s; animation-delay:-14s;"></span>
-  <span class="cube sm" style="left:73%; animation-duration:34s; animation-delay:-11s;"></span>
-  <span style="left:78%; animation-duration:32s; animation-delay:-7s;  width:4px; height:4px;"></span>
-  <span class="cube" style="left:84%; animation-duration:44s; animation-delay:-25s;"></span>
-  <span style="left:88%; animation-duration:26s; animation-delay:-21s;"></span>
-  <span class="cube sm" style="left:92%; animation-duration:36s; animation-delay:-16s;"></span>
-  <span style="left:95%; animation-duration:19s; animation-delay:-4s;  width:3px; height:3px;"></span>
+  <span style="left:8%;  animation-duration:34s; animation-delay:-3s;"></span>
+  <span style="left:20%; animation-duration:42s; animation-delay:-12s;"></span>
+  <span class="cube sm" style="left:32%; animation-duration:48s; animation-delay:-22s;"></span>
+  <span style="left:48%; animation-duration:38s; animation-delay:-9s;"></span>
+  <span class="cube sm" style="left:62%; animation-duration:44s; animation-delay:-18s;"></span>
+  <span style="left:78%; animation-duration:36s; animation-delay:-6s;"></span>
+  <span style="left:92%; animation-duration:40s; animation-delay:-14s;"></span>
 </div>
 
 <nav class="topnav">
@@ -171,283 +251,213 @@
   </div>
   <div class="links">
     <a href="index.html" class="active">Hub</a>
-    <a href="landing.html">Landing</a>
     <a href="app.html">Control Center</a>
-    <a href="chat.html">Chat Client</a>
+    <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>
     <a href="docs.html">Docs</a>
-    <a href="roadmap.html">Roadmap</a>
     <a href="api.html">API</a>
-    <a href="architecture.html">Arch</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
   </div>
   <div class="row">
-    <span class="pill on"><span class="dot"></span>v10.15 LOCAL</span>
+    <span class="pill"><span class="dot"></span>v10.35 · LOCAL</span>
   </div>
 </nav>
 
 <main class="hub-shell">
 
-  <section class="hero">
+  <!-- ===== HEADER ===== -->
+  <header class="header">
     <div>
-      <div class="eyebrow">Project hub · 2026.05.23</div>
-      <h1 class="h-display live" style="margin-top:16px;">Surface the<br/>local <em>abyss</em>.</h1>
-      <p style="color:var(--hull-2); font-size:17px; line-height:1.6; max-width:46ch; margin-top:24px;">
-        SeekDeep is a local-first Discord bot that runs Llama, Qwen-VL, SDXL and SearXNG entirely on your own machine.
-        This project turns the terminal-only stack into a full GUI — five linked surfaces, one visual identity.
+      <div class="eyebrow">Project hub</div>
+      <h1>SeekDeep</h1>
+      <p class="lead">
+        A local-first Discord assistant. Llama, Qwen-VL, SDXL, and SearXNG run on your own hardware; this project provides
+        the GUI surfaces that sit on top of the bot and its FastAPI side-car.
       </p>
-      <div class="meta-strip">
-        <span class="pill cyan"><span class="dot"></span>5 surfaces</span>
-        <span class="pill"><span class="dot"></span>10 GUI modules</span>
-        <span class="pill"><span class="dot"></span>Windows-first</span>
-        <span class="pill"><span class="dot"></span>Offline capable</span>
-      </div>
     </div>
-    <div class="mark">
-      <img src="assets/seekdeep-mark.webp" alt="SeekDeep mark" />
+    <div class="facts">
+      <span>Runtime</span><b>Node 20 · Python 3.11</b>
+      <span>Models</span><b>Llama · Qwen-VL · SDXL</b>
+      <span>Search</span><b>SearXNG (self-hosted)</b>
+      <span>Telemetry</span><b>None</b>
     </div>
-  </section>
+  </header>
 
-  <div class="grid">
-    <a class="card tall" href="app.html">
-      <div>
-        <div class="num">01 · CONTROL CENTER</div>
-        <h3>The GUI that replaces the .bat&nbsp;file.</h3>
-        <p>Launcher, GPU/VRAM monitor, model manager, config editor, logs tail, archive browser, image &amp; chat playgrounds, auto-react rules, server stats — every knob in one window.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">app.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">GUI</div>
+  <!-- ===== PRIMARY: the three surfaces people actually use ===== -->
+  <div class="sec-head">
+    <h2>Primary surfaces</h2>
+    <span class="count">03</span>
+  </div>
+  <div class="grid primary">
+    <a class="card" href="app.html">
+      <div class="num">01 / CONTROL CENTER</div>
+      <h3>Operator console</h3>
+      <p>Launcher, GPU and VRAM monitor, model manager, configuration editor, log tail, archive browser, and request playgrounds in one window.</p>
+      <div class="foot"><span class="path">app.html</span><span>→</span></div>
     </a>
 
     <a class="card" href="chat.html">
-      <div>
-        <div class="num">02 · CHAT CLIENT</div>
-        <h3>SeekDeep, our way.</h3>
-        <p>Original chat surface — servers, channels, threads, image attachments, persona overrides.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">chat.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">CHAT</div>
+      <div class="num">02 / CHAT</div>
+      <h3>Conversation client</h3>
+      <p>Server and channel navigation, threads, image attachments, and per-conversation persona overrides. Designed to feel native alongside Discord.</p>
+      <div class="foot"><span class="path">chat.html</span><span>→</span></div>
     </a>
 
-    <a class="card" href="landing.html">
-      <div>
-        <div class="num">03 · LANDING</div>
-        <h3>Marketing page.</h3>
-        <p>What it is, why local, install, the abyss vibe in one scroll.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">landing.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">WEB</div>
-    </a>
-
-        <a class="card" href="installer.html">
-      <div>
-        <div class="num">04 · INSTALLER</div>
-        <h3>First-run wizard.</h3>
-        <p>9-step setup walkthrough with live system checks, model picker, VRAM budget visualization, and a copy-paste <span class="mono">.env</span> at the end. Wired to <span class="mono">/health</span> + <span class="mono">/gpu</span>.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">installer.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">SETUP</div>
-    </a>
-
-    <a class="card" href="docs.html">
-      <div>
-        <div class="num">05 · DOCS</div>
-        <h3>Command reference.</h3>
-        <p>Searchable view of <span class="mono">COMMANDS.md</span> — every slash, mention, context-menu and reaction command, filterable by type and permission.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">docs.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">DOC</div>
-    </a>
-
-    <a class="card" href="roadmap.html">
-      <div>
-        <div class="num">06 · ROADMAP</div>
-        <h3>What's next.</h3>
-        <p>Live view of <span class="mono">PLANNED.md</span> — shipped, in-flight, parked, won't-do. Plus the segmentation upgrade path and the persistent-memory plan.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">roadmap.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">PLAN</div>
-    </a>
-
-    <a class="card" href="api.html">
-      <div>
-        <div class="num">07 · API EXPLORER</div>
-        <h3>Poke the endpoints.</h3>
-        <p>Live request builder for <span class="mono">/health</span>, <span class="mono">/gpu</span>, <span class="mono">/chat</span>, <span class="mono">/image</span>, <span class="mono">/vision</span>, <span class="mono">/inpaint</span>, <span class="mono">/upscale</span>, <span class="mono">/chart</span>, <span class="mono">/unload</span>. Falls back to canned mocks when the server is offline.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">api.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">API</div>
-    </a>
-
-    <a class="card" href="architecture.html">
-      <div>
-        <div class="num">08 · ARCHITECTURE</div>
-        <h3>System map.</h3>
-        <p>Interactive node diagram of the full stack — Discord gateway, route dispatchers, agents, FastAPI endpoints, persistence layer, SearXNG. Click any node to inspect.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">architecture.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">MAP</div>
-    </a>
-
-    <a class="card" href="boot.html">
-      <div>
-        <div class="num">09 · BOOT SEQUENCE</div>
-        <h3>Animated splash.</h3>
-        <p>The PS2-OSDSYS-inspired startup screen — logo materialization, 14-step boot log scrolling out in real time, progress bar, then flash transition to the hub.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">boot.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">BOOT</div>
-    </a>
-
-    <a class="card" href="changelog.html">
-      <div>
-        <div class="num">10 · CHANGELOG</div>
-        <h3>Release history.</h3>
-        <p>v10.1 through v10.35 · filtered timeline of shipped releases with tags (feat / fix / perf / docs) and per-version item lists.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">changelog.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">LOG</div>
-    </a>
-
-    <a class="card" href="memory.html">
-      <div>
-        <div class="num">11 · MEMORY</div>
-        <h3>Persistent-memory preview.</h3>
-        <p>Mockup of the proposed per-user/per-channel fact store · privacy toggles · injected-prompt preview · export/clear flow. <span style="color:var(--warn);">Preview only · feature parked in roadmap.</span></p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">memory.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">MEM</div>
-    </a>
-
-    <a class="card" href="mobile.html">
-      <div>
-        <div class="num">12 · MOBILE</div>
-        <h3>Phone-size mocks.</h3>
-        <p>Hub, Chat, and Control Center at 375 × 812 with iPhone-style notched frames. Design target for a companion PWA.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">mobile.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">PWA</div>
-    </a>
-
-    <a class="card" href="tour.html">
-      <div>
-        <div class="num">13 · TOUR</div>
-        <h3>Guided walkthrough.</h3>
-        <p>7-step onboarding overlay with spotlight cutout, dim backdrop, keyboard nav (←/→/Esc), and a finish-redirect to the hub.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">tour.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">TOUR</div>
-    </a>
-
-    <a class="card" href="pitch.html">
-      <div>
-        <div class="num">14 · PITCH DECK</div>
-        <h3>9 slides for sharing.</h3>
-        <p>Title · problem · solution · stats · architecture · models · surfaces · roadmap · close. 1920×1080 scaled-to-fit · ← / → / Space to navigate.</p>
-      </div>
-      <div class="row" style="justify-content:space-between;">
-        <span class="mono tiny" style="color:var(--cyan-1);">pitch.html</span>
-        <span class="arrow">→</span>
-      </div>
-      <div class="ph-icon">DECK</div>
+    <a class="card" href="installer.html">
+      <div class="num">03 / INSTALLER</div>
+      <h3>First-run setup</h3>
+      <p>Nine-step wizard with system checks, model picker, and a VRAM budget calculator. Emits a populated <span class="mono">.env</span> on completion.</p>
+      <div class="foot"><span class="path">installer.html</span><span>→</span></div>
     </a>
   </div>
 
-  <section class="session">
-    <div class="panel">
-      <div class="eyebrow" style="margin-bottom:14px;">Local stack · live<span class="cur"></span></div>
+  <!-- ===== WORKING SURFACES ===== -->
+  <div class="sec-head">
+    <h2>Working surfaces</h2>
+    <span class="count">06</span>
+  </div>
+  <div class="grid secondary">
+    <a class="card" href="docs.html">
+      <div class="num">04 / DOCS</div>
+      <h3>Command reference</h3>
+      <p>Filterable view of <span class="mono">COMMANDS.md</span> — slash, mention, context-menu, and reaction commands.</p>
+      <div class="foot"><span class="path">docs.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="api.html">
+      <div class="num">05 / API</div>
+      <h3>Endpoint explorer</h3>
+      <p>Request builder for <span class="mono">/health</span>, <span class="mono">/gpu</span>, <span class="mono">/chat</span>, <span class="mono">/image</span>, <span class="mono">/vision</span>, <span class="mono">/inpaint</span>, <span class="mono">/upscale</span>, <span class="mono">/chart</span>, <span class="mono">/unload</span>. Falls back to local mocks when the server is offline.</p>
+      <div class="foot"><span class="path">api.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="architecture.html">
+      <div class="num">06 / ARCHITECTURE</div>
+      <h3>System diagram</h3>
+      <p>Interactive map of the stack — Discord gateway, route dispatchers, agents, FastAPI side-car, persistence, and SearXNG.</p>
+      <div class="foot"><span class="path">architecture.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="roadmap.html">
+      <div class="num">07 / ROADMAP</div>
+      <h3>Planned work</h3>
+      <p>Live view of <span class="mono">PLANNED.md</span> — shipped, in-flight, parked, and out-of-scope items grouped by area.</p>
+      <div class="foot"><span class="path">roadmap.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="changelog.html">
+      <div class="num">08 / CHANGELOG</div>
+      <h3>Release history</h3>
+      <p>Versioned timeline from v10.1 onward, tagged by category (feat / fix / perf / docs) with per-release item lists.</p>
+      <div class="foot"><span class="path">changelog.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="memory.html">
+      <span class="badge warn">Preview</span>
+      <div class="num">09 / MEMORY</div>
+      <h3>Persistent memory</h3>
+      <p>Design surface for the proposed per-user fact store — review, edit, export, and clear flows. Backend work is parked in the roadmap.</p>
+      <div class="foot"><span class="path">memory.html</span><span>→</span></div>
+    </a>
+  </div>
+
+  <!-- ===== REFERENCE & MARKETING ===== -->
+  <div class="sec-head">
+    <h2>Reference &amp; marketing</h2>
+    <span class="count">05</span>
+  </div>
+  <div class="grid tertiary">
+    <a class="card" href="landing.html">
+      <div class="num">10 / LANDING</div>
+      <h3>Public landing page</h3>
+      <p>External-facing overview of the project.</p>
+    </a>
+    <a class="card" href="pitch.html">
+      <div class="num">11 / PITCH</div>
+      <h3>Nine-slide deck</h3>
+      <p>1920×1080, scaled to fit. ← / → to navigate.</p>
+    </a>
+    <a class="card" href="tour.html">
+      <div class="num">12 / TOUR</div>
+      <h3>Guided walkthrough</h3>
+      <p>Seven-step overlay with spotlight and keyboard navigation.</p>
+    </a>
+    <a class="card" href="mobile.html">
+      <div class="num">13 / MOBILE</div>
+      <h3>Phone-size mocks</h3>
+      <p>Hub, Chat, and Control Center at 375×812.</p>
+    </a>
+    <a class="card" href="boot.html">
+      <div class="num">14 / BOOT</div>
+      <h3>Startup animation</h3>
+      <p>14-step boot log with logo materialization.</p>
+    </a>
+  </div>
+
+  <!-- ===== STATUS PANELS ===== -->
+  <section class="panels">
+    <div class="panel" style="padding: 22px 24px;">
+      <div class="panel-head">
+        <span class="label">Local stack</span>
+        <span class="tag">Example readout · awaiting live wiring</span>
+      </div>
       <div class="stack-row">
-        <span>SeekDeep bot · node index.js</span>
-        <span class="muted">:48ms ping</span>
+        <span class="who">SeekDeep bot <small>node index.js</small></span>
+        <span class="muted">48ms ping</span>
         <span class="muted">9% CPU</span>
         <span class="pill on"><span class="dot"></span>UP</span>
       </div>
       <div class="stack-row">
-        <span>Local AI server · uvicorn 7865</span>
-        <span class="muted">queue: 0</span>
-        <span class="muted">14.2 / 24 GB VRAM</span>
+        <span class="who">AI side-car <small>uvicorn :7865</small></span>
+        <span class="muted">queue 0</span>
+        <span class="muted">14.2 / 24 GB</span>
         <span class="pill on"><span class="dot"></span>UP</span>
       </div>
       <div class="stack-row">
-        <span>SearXNG · 8080</span>
-        <span class="muted">last: 12s ago</span>
+        <span class="who">SearXNG <small>:8080</small></span>
+        <span class="muted">last 12s ago</span>
         <span class="muted">—</span>
         <span class="pill on"><span class="dot"></span>UP</span>
       </div>
       <div class="stack-row">
-        <span>Llama-3.1-8B-Instruct · 4bit</span>
-        <span class="muted">role: default_chat</span>
+        <span class="who">Llama-3.1-8B-Instruct <small>4-bit</small></span>
+        <span class="muted">default_chat</span>
         <span class="muted">5.1 GB</span>
         <span class="pill cyan"><span class="dot"></span>RESIDENT</span>
       </div>
       <div class="stack-row">
-        <span>Dreamshaper-XL · sdxl</span>
-        <span class="muted">role: image</span>
+        <span class="who">Dreamshaper-XL <small>sdxl</small></span>
+        <span class="muted">image</span>
         <span class="muted">6.8 GB</span>
         <span class="pill"><span class="dot"></span>WARM</span>
       </div>
       <div class="stack-row">
-        <span>Qwen2.5-VL-3B · vision</span>
-        <span class="muted">role: vision</span>
+        <span class="who">Qwen2.5-VL-3B <small>vision</small></span>
+        <span class="muted">vision</span>
         <span class="muted">3.4 GB</span>
         <span class="pill warn"><span class="dot"></span>EVICTABLE</span>
       </div>
     </div>
-    <div class="panel">
-      <div class="eyebrow" style="margin-bottom:14px;">Project roadmap</div>
-      <div class="col" style="font-size:13px;">
-        <div class="row" style="justify-content:space-between;"><span>Brand system</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Landing page</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Control Center</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Chat client</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Installer wizard</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Docs / commands</span><span class="pill on"><span class="dot"></span>DONE</span></div>
-        <div class="row" style="justify-content:space-between;"><span>Integration (Tauri shell)</span><span class="pill"><span class="dot"></span>LATER</span></div>
+
+    <div class="panel" style="padding: 22px 24px;">
+      <div class="panel-head">
+        <span class="label">GUI project status</span>
       </div>
+      <div class="roadmap-row"><span>Brand system</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+      <div class="roadmap-row"><span>Landing page</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+      <div class="roadmap-row"><span>Control Center</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+      <div class="roadmap-row"><span>Chat client</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+      <div class="roadmap-row"><span>Installer wizard</span><span class="pill on"><span class="dot"></span>DONE</span></div>
+      <div class="roadmap-row"><span>Token auth (GUI ↔ bot)</span><span class="pill warn"><span class="dot"></span>NEXT</span></div>
+      <div class="roadmap-row"><span>WebSocket event bridge</span><span class="pill warn"><span class="dot"></span>NEXT</span></div>
+      <div class="roadmap-row"><span>Tauri shell</span><span class="pill"><span class="dot"></span>LATER</span></div>
     </div>
   </section>
 
   <div class="footer">
-    <span>SEEKDEEP / v10.15 / LOCAL</span>
-    <span>NO TELEMETRY · NO CLOUD · YOUR MACHINE ONLY</span>
+    <span>SEEKDEEP · v10.35 · LOCAL</span>
+    <span>No telemetry · No cloud · Runs on your machine</span>
   </div>
 </main>
 <script src="nav.js" defer></script>

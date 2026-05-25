@@ -596,7 +596,8 @@
         <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20h16M7 17v-6M12 17V7M17 17v-10"/></svg></span>
         Server stats
       </a>
-      <div class="grp" style="margin-top:auto; padding-top: 24px;">v10.15</div>
+
+      <div class="grp" style="margin-top:auto; padding-top: 24px;">v10.35</div>
     </nav>
 
     <!-- MAIN PANES -->
@@ -2048,7 +2049,6 @@
   }
   document.querySelectorAll('.sidebar a[data-mod]').forEach(a => {
     a.addEventListener('click', (e) => {
-      if (a.dataset.mod === 'brand') return; // external link
       e.preventDefault();
       activate(a.dataset.mod);
     });

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — Local Discord, Locally Intelligent</title>
+<title>SeekDeep — Local-first Discord assistant</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -26,22 +26,16 @@
     display: grid; place-items: center;
   }
   .hero .stage img {
-    width: 78%; filter: drop-shadow(0 0 80px rgba(45,212,255,0.55));
-    animation: float 7s ease-in-out infinite;
+    width: 78%; filter: drop-shadow(0 0 60px rgba(45,212,255,0.45));
     position: relative; z-index: 2;
-  }
-  @keyframes float {
-    0%,100% { transform: translateY(0) rotate(-1deg); }
-    50%     { transform: translateY(-14px) rotate(1deg); }
   }
   .hero .ring {
     position: absolute; border-radius: 50%;
     border: 1px solid color-mix(in oklab, var(--cyan-1) 20%, transparent);
   }
-  .hero .ring.r1 { inset: 10%; animation: spin 80s linear infinite; border-style: dashed; opacity: 0.5; }
-  .hero .ring.r2 { inset: -2%; animation: spin 140s linear infinite reverse; opacity: 0.3; }
-  .hero .ring.r3 { inset: 22%; border-color: color-mix(in oklab, var(--cyan-1) 35%, transparent); animation: spin 60s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .hero .ring.r1 { inset: 10%; border-style: dashed; opacity: 0.35; }
+  .hero .ring.r2 { inset: -2%; opacity: 0.2; }
+  .hero .ring.r3 { inset: 22%; border-color: color-mix(in oklab, var(--cyan-1) 28%, transparent); }
   .hero .tick {
     position: absolute; font-family: var(--font-mono); font-size: 10px;
     color: var(--cyan-1); letter-spacing: 0.18em;
@@ -171,15 +165,15 @@
   <div class="links">
     <a href="index.html">Hub</a>
     <a href="landing.html" class="active">Landing</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
     <a href="installer.html">Installer</a>
     <a href="docs.html">Docs</a>
-    <a href="roadmap.html">Roadmap</a>
     <a href="api.html">API</a>
-    <a href="architecture.html">Arch</a>
-    <a href="app.html">Control Center</a>
-    <a href="chat.html">Chat Client</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
   </div>
-  <div class="row"><a class="btn btn-primary" href="app.html">Launch app</a></div>
+  <div class="row"><a class="btn btn-primary" href="app.html">Open Control Center</a></div>
 </nav>
 
 <div class="land">
@@ -187,16 +181,17 @@
   <!-- HERO -->
   <section class="hero">
     <div>
-      <div class="eyebrow">SEEKDEEP / V10.15 / LOCAL-FIRST DISCORD BOT</div>
-      <h1 style="margin-top:18px;">Surface the<br/><em style="background: linear-gradient(180deg, var(--cyan-0), var(--cyan-2)); -webkit-background-clip: text; background-clip: text; color: transparent; font-style: normal;">abyss.</em></h1>
-      <p class="sub">A Discord bot that runs Llama-3.1, Qwen-VL and SDXL entirely on your own GPU — with archive threads, persona overrides, role-routed chat, image edit pipelines, and live VRAM watching. Nothing leaves the box.</p>
+      <div class="eyebrow">SeekDeep · v10.35 · local-first Discord assistant</div>
+      <h1 style="margin-top:18px;">SeekDeep</h1>
+      <p class="sub">A Discord bot that runs Llama-3.1, Qwen-VL, and SDXL on your own GPU. Includes archive threads, persona overrides, role-routed chat, image-edit pipelines, and live VRAM monitoring — with no outbound API calls.</p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="app.html">▸ Launch SeekDeep</a>
+        <a class="btn btn-primary" href="app.html">Open Control Center</a>
+        <a class="btn btn-ghost" href="installer.html">Installer</a>
       </div>
       <div class="meta">
-        <span>OFFLINE CAPABLE</span>
-        <span>WINDOWS-FIRST</span>
-        <span>NO TELEMETRY</span>
+        <span>Offline capable</span>
+        <span>Windows-first</span>
+        <span>No telemetry</span>
         <span>MIT</span>
       </div>
     </div>
@@ -215,15 +210,15 @@
   <!-- VALUES -->
   <section class="values">
     <div class="values-head">
-      <h2>Three reasons it lives on <em style="color:var(--cyan-1); font-style:normal;">your</em> machine.</h2>
-      <span class="num">01 / WHY LOCAL</span>
+      <h2>Design principles</h2>
+      <span class="num">01 / why local</span>
     </div>
     <div class="values-grid">
       <div class="value">
         <div>
-          <div class="num">01 · PRIVATE BY DEFAULT</div>
-          <h3>Prompts never leave the GPU.</h3>
-          <p>No OpenAI, no Anthropic, no telemetry pings. Chat history, archive threads, generated images and search queries all stay on the box that runs them.</p>
+          <div class="num">01 · Private by default</div>
+          <h3>Prompts stay on the host.</h3>
+          <p>No OpenAI, no Anthropic, no telemetry. Chat history, archive threads, generated images, and search queries remain on the machine running the bot.</p>
         </div>
         <div>
           <div class="stat">0</div>
@@ -232,9 +227,9 @@
       </div>
       <div class="value">
         <div>
-          <div class="num">02 · MODEL-ROUTED</div>
-          <h3>Right model, right task.</h3>
-          <p>Different routes pin different models — quality chats run Mistral-Nemo, reasoning runs Phi-4, fallbacks run Granite. Task-LRU eviction keeps VRAM honest.</p>
+          <div class="num">02 · Routed by task</div>
+          <h3>One model per role.</h3>
+          <p>Routes pin specific models: quality chats run Mistral-Nemo, reasoning runs Phi-4, lightweight fallback runs Gemma-3n. A task-LRU policy bounds VRAM use.</p>
         </div>
         <div>
           <div class="stat">5</div>
@@ -243,9 +238,9 @@
       </div>
       <div class="value">
         <div>
-          <div class="num">03 · VRAM-AWARE</div>
-          <h3>Watches the silicon.</h3>
-          <p>Live GPU monitor with thrashing warnings, 4-bit quantization, system reserve budgets, singleflight lock for safe model swaps under load.</p>
+          <div class="num">03 · VRAM-aware</div>
+          <h3>Bounded by the GPU budget.</h3>
+          <p>Live GPU monitor, thrashing warnings, 4-bit quantization, configurable system reserve, and a single-flight lock for safe model swaps under load.</p>
         </div>
         <div>
           <div class="stat">24 GB</div>
@@ -259,9 +254,9 @@
   <section class="feature">
     <div class="feature-row">
       <div>
-        <div class="eyebrow">CHAT</div>
-        <h3 style="margin-top:14px;">Mentions, slash-commands, web-routed answers.</h3>
-        <p>Trigger SeekDeep with <span class="mono" style="color:var(--cyan-1);">@SeekDeep</span> or a slash. <span class="mono" style="color:var(--cyan-1);">web:auto</span> lets the router decide; <span class="mono" style="color:var(--cyan-1);">web:always</span> forces a SearXNG round-trip. Conversations stay in rolling memory, scoped per-user per-channel.</p>
+        <div class="eyebrow">Chat</div>
+        <h3 style="margin-top:14px;">Mentions, slash commands, and web-routed answers.</h3>
+        <p>Trigger with <span class="mono" style="color:var(--cyan-1);">@SeekDeep</span> or a slash command. <span class="mono" style="color:var(--cyan-1);">web:auto</span> defers to the router; <span class="mono" style="color:var(--cyan-1);">web:always</span> forces a SearXNG round-trip. Conversation context is held in a rolling buffer, scoped per user and per channel.</p>
         <ul>
           <li>@SeekDeep ask, refine, translate, persona</li>
           <li>/help · /status · /search · /recent · /stats</li>
@@ -308,9 +303,9 @@
   <section class="feature">
     <div class="feature-row reverse">
       <div>
-        <div class="eyebrow">IMAGE PIPELINE</div>
-        <h3 style="margin-top:14px;">SDXL on the desk, with edit chains.</h3>
-        <p>Dreamshaper-XL at 28 steps, dpmsolver++ scheduler, dynamic prompt refinement via the pinned chat model. Iterative edits chain naturally — img2img, InstructPix2Pix, CLIPSeg-masked inpaint, Lanczos upscale.</p>
+        <div class="eyebrow">Image pipeline</div>
+        <h3 style="margin-top:14px;">SDXL with chained edits.</h3>
+        <p>Dreamshaper-XL at 28 steps with the dpmsolver++ scheduler and prompt refinement via the pinned chat model. Edits chain through img2img, InstructPix2Pix, CLIPSeg-masked inpaint, and Lanczos upscale.</p>
         <ul>
           <li>@SeekDeep show me · draw · render · paint</li>
           <li>img2img · pix2pix · inpaint · upscale 2x/3x/4x</li>
@@ -338,9 +333,9 @@
   <section class="feature">
     <div class="feature-row">
       <div>
-        <div class="eyebrow">VRAM MONITOR</div>
-        <h3 style="margin-top:14px;">Watch the silicon breathe.</h3>
-        <p>Live GPU/VRAM read on every command. Thrashing warnings before they bite — when chat + image + vision can't all fit, the task-LRU sheds the coldest model and SeekDeep tells you why.</p>
+        <div class="eyebrow">VRAM monitor</div>
+        <h3 style="margin-top:14px;">Live GPU accounting.</h3>
+        <p>Every command reports GPU and VRAM use. When chat, image, and vision can't co-reside, the task-LRU evicts the coldest model and surfaces the decision in the response.</p>
         <ul>
           <li>@SeekDeep gpu watch [N] · live tail</li>
           <li>System reserve · safety margin · singleflight</li>
@@ -367,8 +362,8 @@
 
   <!-- INSTALL -->
   <section class="install">
-    <div class="eyebrow center">SETUP · WINDOWS 11 · ~6 MIN</div>
-    <h2>Four steps. <em style="color:var(--cyan-1); font-style:normal;">Then you own it.</em></h2>
+    <div class="eyebrow center">Setup · Windows 11 · ~6 minutes</div>
+    <h2>Four steps.</h2>
     <div class="steps">
       <div class="step">
         <div class="n">01</div>
@@ -399,8 +394,8 @@
 
   <!-- FOOTER -->
   <div class="foot">
-    <span>SEEKDEEP / v10.15 / LOCAL</span>
-    <span>MADE FOR THE DARK · OPEN SOURCE · MIT</span>
+    <span>SeekDeep · v10.35 · local</span>
+    <span>Open source · MIT licensed</span>
   </div>
 
 </div>
