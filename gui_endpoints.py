@@ -755,7 +755,8 @@ def register_gui_endpoints(
             # Empty success so the GUI's normalized panes can show empty-state
             # rather than reporting an error for files the bot hasn't written yet.
             if file in _DATA_NORMALIZERS:
-                return {"ok": True, "file": file, "data": _DATA_NORMALIZERS[file]({}), "empty": True}
+                return {"ok": True, "file": file, "data": _DATA_NORMALIZERS[file]({}),
+                        "normalized": True, "empty": True}
             raise HTTPException(404, f"{file} not found in {_data_dir}")
         # Only allow .json
         if target.suffix.lower() != ".json":
