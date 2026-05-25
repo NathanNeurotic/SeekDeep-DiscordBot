@@ -27,6 +27,7 @@ genuinely new pieces into it manually.
 | `gui/nav.js` events.js auto-load | The tail of `nav.js` dynamically appends `<script src="events.js">` so `window.SeekDeepEvents` exists on every page. Designer's nav.js does not do this. |
 | `gui/events.js` | Entire file is ours — designer doesn't ship this. WebSocket consumer for `/events` (pub/sub for `model.loaded` / `vram.sample` / `queue.depth` / `log.line` / etc). |
 | `gui/version.js` | Entire file is ours — designer doesn't ship this. Reads `version` from `/health` and rewrites every `[data-version]` element. Hardcoded version strings stay as the fallback if `/health` is unreachable. |
+| `gui/playground.js` | Entire file is ours — designer doesn't ship this. Turns the `chat.html` composer into a live local AI playground (drives `/chat`, `/image`, `/vision`, `/memory/*` via slash commands). Auto-injected by `nav.js` on every page; self-gates to chat.html only. Hooks designer's existing `#msgInput`, `.composer .send-btn`, and `#messages` selectors — if designer changes those, playground breaks silently (preflight `js` stage catches the parse error but not the selector mismatch). |
 
 When a zip arrives:
 

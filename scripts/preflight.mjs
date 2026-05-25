@@ -133,7 +133,7 @@ stage('js', () => {
   // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
   // interceptor + jump palette + SeekDeepPrompt API — a parse error there
   // silently breaks every page.
-  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js'];
+  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/playground.js'];
   for (const t of targets) {
     if (!existsSync(path.join(ROOT, t))) continue;
     const r = checkJsFile(t);

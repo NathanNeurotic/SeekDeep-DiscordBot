@@ -966,17 +966,17 @@
     }
   })();
 
-  // Auto-load sibling helper scripts (events.js + version.js) via dynamic
-  // <script> appends so designer-shipped HTMLs only need to include nav.js —
-  // they get window.SeekDeepEvents and window.SeekDeepVersion for free.
-  // Skipped if already loaded explicitly, or if we're on file:// (WS would
-  // 4xx anyway, and version.js needs the server too).
+  // Auto-load sibling helper scripts (events.js + version.js + playground.js)
+  // via dynamic <script> appends so designer-shipped HTMLs only need to
+  // include nav.js — they get window.SeekDeepEvents, window.SeekDeepVersion,
+  // and (on chat.html) the live playground composer for free.
+  // Skipped if already loaded explicitly, or if we're on file://.
   (function autoLoadSiblings() {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
     const navScript = document.querySelector('script[src$="nav.js"], script[src*="/nav.js"]');
     const base = navScript ? navScript.src.replace(/nav\.js(\?.*)?$/, '') : '';
     function inject(name, globalKey) {
-      if (window[globalKey]) return;
+      if (globalKey && window[globalKey]) return;
       const existing = document.querySelector(`script[src$="${name}"], script[src*="/${name}"]`);
       if (existing) return;
       const s = document.createElement('script');
@@ -986,5 +986,12 @@
     }
     inject('events.js',  'SeekDeepEvents');
     inject('version.js', 'SeekDeepVersion');
+    // playground.js targets chat.html only; auto-inject everywhere and let
+    // the script no-op on non-chat pages (the file checks location.pathname).
+    // Gated by SEEKDEEP_FEATURE_WEB_PLAYGROUND when the bot serves /gui
+    // (env-flag readable via <meta name="seekdeep-feature-web-playground">
+    // injected by gui_endpoints.py /token endpoint when ENABLED).
+    // For v1 we default to ON since playground.js is small + self-gating.
+    inject('playground.js', null);
   })();
 })();
