@@ -32,11 +32,20 @@ import time
 import secrets
 import asyncio
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC timestamp ending in 'Z'. Matches what writeJsonAtomic in
+    the bot produces via `new Date().toISOString()` so a row updated via
+    GUI looks identical to one updated via Discord command."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
+           f"{int(datetime.now(timezone.utc).microsecond / 1000):03d}Z"
 
 
 # ====================================================================
@@ -56,6 +65,26 @@ class EventPayload(BaseModel):
     'vram.sample'); `data` is an arbitrary JSON object the consumer interprets."""
     type: str
     data: dict[str, Any] = {}
+
+
+class FactBody(BaseModel):
+    """Body for POST /memory/user/{id}/fact and PATCH /memory/user/{id}/fact/{n}."""
+    text: str
+
+
+class PresetsBody(BaseModel):
+    """Body for POST /memory/presets/{id}. Mirrors SEEKDEEP_KNOWN_PRESETS from index.js."""
+    presets: list[str] = []
+
+
+# Constants mirror index.js. If you bump the bot-side env vars, mirror here too;
+# the bot remains source of truth -- these are just the validation ceilings on
+# the GUI write path so we don't silently accept facts the bot would reject.
+_MEMORY_FACTS_MAX = max(5, min(200, int(os.getenv("SEEKDEEP_USER_FACTS_MAX", "25"))))
+_MEMORY_FACT_MAX_CHARS = max(40, min(2000, int(os.getenv("SEEKDEEP_USER_FACT_MAX_CHARS", "500"))))
+_MEMORY_KNOWN_PRESETS = {
+    "brief", "expert", "no-emoji", "no-followup-questions", "formal", "casual",
+}
 
 
 # ====================================================================
@@ -912,6 +941,207 @@ def register_gui_endpoints(
     @app.get("/events/status")
     async def get_events_status():
         return {"ok": True, "subscribers": event_bus.subscriber_count, "server_time_ms": int(time.time() * 1000)}
+
+    # ====================================================================
+    # MEMORY  (read/write per-user facts + presets for memory.html GUI)
+    # ====================================================================
+    # The bot (index.js) is the canonical writer of data/user-facts.json and
+    # data/memory-presets.json via writeJsonAtomic + the Discord
+    # remember/recall/forget command handlers. These HTTP routes give the
+    # GUI a parallel read+write path so memory.html can flip from mock to
+    # live as soon as it sees GET /memory/users return 200. Writes use the
+    # same atomic temp-then-rename pattern as the bot, so concurrent writes
+    # are bounded to last-writer-wins (acceptable -- memory is low-frequency).
+    _user_facts_path = _data_dir / "user-facts.json"
+    _memory_presets_path = _data_dir / "memory-presets.json"
+
+    def _read_facts_store() -> dict:
+        if not _user_facts_path.is_file():
+            return {"users": {}}
+        try:
+            data = json.loads(_user_facts_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("users"), dict):
+                return {"users": {}}
+            return data
+        except Exception:
+            return {"users": {}}
+
+    def _read_presets_store() -> dict:
+        if not _memory_presets_path.is_file():
+            return {"users": {}}
+        try:
+            data = json.loads(_memory_presets_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("users"), dict):
+                return {"users": {}}
+            return data
+        except Exception:
+            return {"users": {}}
+
+    def _atomic_write_json(path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp." + str(os.getpid()))
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
+
+    def _user_row_bytes(facts: list) -> int:
+        try:
+            return len(json.dumps(facts, ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            return 0
+
+    @app.get("/memory/users")
+    def memory_list_users():
+        """Summary of every user with stored facts. No auth (read-only)."""
+        store = _read_facts_store()
+        out = []
+        for uid, row in (store.get("users") or {}).items():
+            facts = row.get("facts") if isinstance(row, dict) else None
+            if not isinstance(facts, list):
+                continue
+            out.append({
+                "user_id": str(uid),
+                "display": str(uid),   # bot writes raw IDs; GUI can resolve to names client-side
+                "fact_count": len(facts),
+                "bytes": _user_row_bytes(facts),
+                "updatedAt": (row.get("updatedAt") if isinstance(row, dict) else None),
+            })
+        # Newest-updated first; deterministic order for clients
+        out.sort(key=lambda u: (u["updatedAt"] or ""), reverse=True)
+        return {"ok": True, "users": out}
+
+    @app.get("/memory/user/{user_id}")
+    def memory_get_user(user_id: str):
+        """Full row for one user. 404 if no row."""
+        store = _read_facts_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+            raise HTTPException(404, f"no memory row for user {user_id!r}")
+        facts = row["facts"]
+        return {
+            "ok": True,
+            "user_id": str(user_id),
+            "facts": facts,
+            "updatedAt": row.get("updatedAt"),
+            "bytes": _user_row_bytes(facts),
+        }
+
+    @app.post("/memory/user/{user_id}/fact", dependencies=[Depends(_require_gui_token)])
+    def memory_add_fact(user_id: str, body: FactBody):
+        """Append one fact. 422 on >MAX_CHARS or when the user already has MAX_FACTS."""
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(422, "fact text is required")
+        if len(text) > _MEMORY_FACT_MAX_CHARS:
+            raise HTTPException(422, f"fact exceeds {_MEMORY_FACT_MAX_CHARS}-char cap")
+        store = _read_facts_store()
+        store["users"] = store.get("users") or {}
+        row = store["users"].get(str(user_id)) or {"facts": [], "updatedAt": None}
+        if not isinstance(row.get("facts"), list):
+            row["facts"] = []
+        if len(row["facts"]) >= _MEMORY_FACTS_MAX:
+            raise HTTPException(422, f"user already has {_MEMORY_FACTS_MAX} facts (cap reached)")
+        row["facts"].append({"text": text, "at": int(time.time() * 1000)})
+        row["updatedAt"] = _now_iso()
+        store["users"][str(user_id)] = row
+        _atomic_write_json(_user_facts_path, store)
+        return {"ok": True, "index": len(row["facts"])}
+
+    @app.patch("/memory/user/{user_id}/fact/{n}", dependencies=[Depends(_require_gui_token)])
+    def memory_update_fact(user_id: str, n: int, body: FactBody):
+        """Update fact at 1-based index n. 404 if out of range, 422 if too long."""
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(422, "fact text is required")
+        if len(text) > _MEMORY_FACT_MAX_CHARS:
+            raise HTTPException(422, f"fact exceeds {_MEMORY_FACT_MAX_CHARS}-char cap")
+        store = _read_facts_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+            raise HTTPException(404, f"no memory row for user {user_id!r}")
+        idx = n - 1
+        if idx < 0 or idx >= len(row["facts"]):
+            raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
+        existing = row["facts"][idx]
+        if isinstance(existing, dict):
+            existing["text"] = text
+        else:
+            row["facts"][idx] = {"text": text, "at": int(time.time() * 1000)}
+        row["updatedAt"] = _now_iso()
+        store["users"][str(user_id)] = row
+        _atomic_write_json(_user_facts_path, store)
+        return {"ok": True}
+
+    @app.delete("/memory/user/{user_id}/fact/{n}", dependencies=[Depends(_require_gui_token)])
+    def memory_delete_fact(user_id: str, n: int):
+        """Remove fact at 1-based index n. 404 if out of range."""
+        store = _read_facts_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+            raise HTTPException(404, f"no memory row for user {user_id!r}")
+        idx = n - 1
+        if idx < 0 or idx >= len(row["facts"]):
+            raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
+        removed = row["facts"].pop(idx)
+        row["updatedAt"] = _now_iso()
+        store["users"][str(user_id)] = row
+        _atomic_write_json(_user_facts_path, store)
+        return {"ok": True, "removed": removed if isinstance(removed, dict) else {"text": str(removed), "at": None}}
+
+    @app.delete("/memory/user/{user_id}", dependencies=[Depends(_require_gui_token)])
+    def memory_clear_user(user_id: str):
+        """Wipe every fact for a user. 404 if no row to begin with."""
+        store = _read_facts_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+            raise HTTPException(404, f"no memory row for user {user_id!r}")
+        removed_n = len(row["facts"])
+        del store["users"][str(user_id)]
+        _atomic_write_json(_user_facts_path, store)
+        return {"ok": True, "removed_facts": removed_n}
+
+    @app.get("/memory/user/{user_id}/export")
+    def memory_export_user(user_id: str):
+        """Download a single user's row as application/json with a Content-Disposition
+        attachment header so a browser triggers a save dialog. 404 if no row."""
+        store = _read_facts_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+            raise HTTPException(404, f"no memory row for user {user_id!r}")
+        payload = {"user_id": str(user_id), **row}
+        body = json.dumps(payload, indent=2).encode("utf-8")
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(user_id))[:64] or "user"
+        return JSONResponse(
+            content=payload,
+            headers={"Content-Disposition": f'attachment; filename="seekdeep-memory-{safe_id}.json"'},
+        )
+
+    @app.get("/memory/presets/{user_id}")
+    def memory_get_presets(user_id: str):
+        """Get the active preset keys for a user. Returns empty list if no row."""
+        store = _read_presets_store()
+        row = (store.get("users") or {}).get(str(user_id))
+        if isinstance(row, dict) and isinstance(row.get("presets"), list):
+            return {"ok": True, "presets": list(row["presets"]), "updatedAt": row.get("updatedAt")}
+        return {"ok": True, "presets": [], "updatedAt": None}
+
+    @app.post("/memory/presets/{user_id}", dependencies=[Depends(_require_gui_token)])
+    def memory_set_presets(user_id: str, body: PresetsBody):
+        """Replace a user's preset list. 400 on any unknown key."""
+        cleaned = [str(k).strip().lower() for k in (body.presets or []) if str(k).strip()]
+        unknown = [k for k in cleaned if k not in _MEMORY_KNOWN_PRESETS]
+        if unknown:
+            raise HTTPException(400, f"unknown preset key(s): {', '.join(sorted(set(unknown)))}")
+        # Dedupe while preserving order
+        seen, deduped = set(), []
+        for k in cleaned:
+            if k not in seen:
+                seen.add(k)
+                deduped.append(k)
+        store = _read_presets_store()
+        store["users"] = store.get("users") or {}
+        store["users"][str(user_id)] = {"presets": deduped, "updatedAt": _now_iso()}
+        _atomic_write_json(_memory_presets_path, store)
+        return {"ok": True}
 
     # ----- Heartbeat producer -----
     # Emits {"type":"heartbeat","data":{"server_time_ms":...,"subscribers":N}}

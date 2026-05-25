@@ -254,6 +254,107 @@ def main() -> int:
         except Exception as e:
             check("WS /events round-trip", False, str(e))
 
+    # ---- Memory endpoints (Item C: /memory/*) ----
+    # Round-trip the full lifecycle. Tests live on the same `app` TestClient
+    # but write to the SAME on-disk data/user-facts.json that the bot uses,
+    # so we use unique IDs in a numeric range that won't collide with any
+    # real Discord snowflake (which are 17-19 digits).
+    SMOKE_UID = "smoketestuser0000001"  # 21 chars, not a valid snowflake
+    SMOKE_UID2 = "smoketestuser0000002"
+
+    if token:
+        # Clean slate -- best-effort; ignore if no row exists yet
+        c.delete(f"/memory/user/{SMOKE_UID}", headers={_TOKEN_HEADER: token})
+        c.delete(f"/memory/user/{SMOKE_UID2}", headers={_TOKEN_HEADER: token})
+
+        r = c.get("/memory/users")
+        check("GET /memory/users -> 200", r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, users:[]} shape",
+              body.get("ok") is True and isinstance(body.get("users"), list),
+              f"keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
+
+        r = c.get(f"/memory/user/{SMOKE_UID}")
+        check("GET /memory/user/{absent} -> 404", r.status_code == 404, f"got {r.status_code}")
+
+        r = c.post(f"/memory/user/{SMOKE_UID}/fact", json={"text": "smoke fact 1"})
+        check("POST /memory/user/{id}/fact without token -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
+        r = c.post(f"/memory/user/{SMOKE_UID}/fact",
+                   json={"text": "I prefer concise answers"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST add fact -> 200", r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, index:1}",
+              body.get("ok") is True and body.get("index") == 1, f"body={body}")
+
+        r = c.post(f"/memory/user/{SMOKE_UID}/fact",
+                   json={"text": "x" * 501}, headers={_TOKEN_HEADER: token})
+        check("POST fact >500 chars -> 422",
+              r.status_code == 422, f"got {r.status_code}")
+
+        r = c.post(f"/memory/user/{SMOKE_UID}/fact",
+                   json={"text": ""}, headers={_TOKEN_HEADER: token})
+        check("POST empty fact -> 422", r.status_code == 422, f"got {r.status_code}")
+
+        r = c.get(f"/memory/user/{SMOKE_UID}")
+        check("GET /memory/user/{id} -> 200", r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...has facts list with 1 entry",
+              isinstance(body.get("facts"), list) and len(body["facts"]) == 1,
+              f"facts={body.get('facts')}")
+
+        r = c.patch(f"/memory/user/{SMOKE_UID}/fact/1",
+                    json={"text": "updated fact"}, headers={_TOKEN_HEADER: token})
+        check("PATCH fact #1 -> 200", r.status_code == 200, f"got {r.status_code}")
+
+        r = c.patch(f"/memory/user/{SMOKE_UID}/fact/99",
+                    json={"text": "x"}, headers={_TOKEN_HEADER: token})
+        check("PATCH out-of-range -> 404", r.status_code == 404, f"got {r.status_code}")
+
+        r = c.delete(f"/memory/user/{SMOKE_UID}/fact/1", headers={_TOKEN_HEADER: token})
+        check("DELETE fact #1 -> 200", r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns removed payload",
+              isinstance(body.get("removed"), dict) and "text" in body["removed"],
+              f"body={body}")
+
+        # Re-populate then DELETE the whole user
+        c.post(f"/memory/user/{SMOKE_UID}/fact", json={"text": "to be wiped"},
+               headers={_TOKEN_HEADER: token})
+        r = c.delete(f"/memory/user/{SMOKE_UID}", headers={_TOKEN_HEADER: token})
+        check("DELETE /memory/user/{id} -> 200", r.status_code == 200, f"got {r.status_code}")
+        check("  ...returns removed_facts count",
+              isinstance(r.json().get("removed_facts"), int) if r.status_code == 200 else False)
+
+        # Export 404 after deletion
+        r = c.get(f"/memory/user/{SMOKE_UID}/export")
+        check("GET /memory/user/{absent}/export -> 404",
+              r.status_code == 404, f"got {r.status_code}")
+
+        # Presets round-trip
+        r = c.post(f"/memory/presets/{SMOKE_UID2}",
+                   json={"presets": ["brief", "expert"]}, headers={_TOKEN_HEADER: token})
+        check("POST /memory/presets valid -> 200", r.status_code == 200, f"got {r.status_code}")
+
+        r = c.post(f"/memory/presets/{SMOKE_UID2}",
+                   json={"presets": ["brief", "TOTALLY_UNKNOWN_PRESET"]},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /memory/presets unknown key -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        r = c.get(f"/memory/presets/{SMOKE_UID2}")
+        check("GET /memory/presets/{id} -> 200", r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, presets:[brief, expert]}",
+              body.get("ok") is True and body.get("presets") == ["brief", "expert"],
+              f"body={body}")
+
+        # Cleanup: drop the presets row so we don't pollute real data
+        c.post(f"/memory/presets/{SMOKE_UID2}", json={"presets": []},
+               headers={_TOKEN_HEADER: token})
+
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
     # These endpoints live on the AI server (not on the bare GUI app),
