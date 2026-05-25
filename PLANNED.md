@@ -33,8 +33,11 @@ All four "ready anytime" items shipped 2026-05-25 in commits `3e4a0fa`, `3878ba4
 6. **`smoke_test.mjs` split** into `tests/smoke/{archive,image-pipeline,router,persona,reactrules,commands,gpu-health}.mjs` with an index runner. Designer's HANDOFF Task 7.
    - Effort: ~half-day. Easier after #5.
 
-7. **GIF history eviction** — `git lfs migrate import --include="*.gif"` OR `git filter-branch` to drop the 18 MB `seekdeep-mark.gif` from `.git` history (it's already deleted from the working tree at e13d361). Saves every fresh clone from downloading it.
-   - Effort: 30 min once you greenlight. Coordination cost: anyone else with a clone needs to re-pull from scratch.
+~~7. **GIF history eviction**~~ — DONE 2026-05-25. Used `git filter-repo --strip-blobs-with-ids` to evict blob `991d748b` (17.5 MB) from every commit reachable from `main` and every tag. Force-pushed `origin/main` from `3756e35` → `a0bbf93`. Fresh `git clone --depth=1` of `origin/main` is now **23 MB** (was ~36 MB before). Same blob appeared under 4 paths in history (`docs/uploads/`, `gui/uploads/`, `gui/assets/seekdeep-mark.gif`, `SeekDeepOnline/uploads/`) — stripping by blob ID killed all four at once. Safety net: remote tag `pre-gif-evict-2026-05-25` still pins the original main commit; safe to delete once you're confident.
+
+   Local `.git/` is still 42 MB because the local pack file doesn't fully reclaim unreachable blobs without a manual re-clone. Doesn't affect remote, doesn't affect fresh clones. If you want a smaller local repo, re-clone fresh from origin.
+
+   v10.x tags were left alone by filter-repo (they pointed at commits that already didn't contain the blob in their tree snapshot), so all tag SHAs match between local and remote.
 
 ### Designer queue (UI work)
 
@@ -79,7 +82,6 @@ All have backend ready unless noted.
 | Item | Decision needed |
 |---|---|
 | **Prompt template marketplace** | Where do shared templates live? gist / your domain / signed URLs / nothing remote (export-import .json only)? |
-| **GIF history eviction** | OK to rewrite git history? Anyone else with a clone needs to re-pull from scratch. |
 | **Streaming chat responses** | Big refactor (`/chat` → SSE, bot handler restructures, Discord edits token-by-token). Worth the win? |
 | **Per-message cost tracking for remote backends** | Useful to prevent surprise bills on `openai-compat` / `anthropic` / `gemini`. Where to store? How to display? |
 
