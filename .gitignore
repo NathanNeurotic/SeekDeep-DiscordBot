@@ -1,90 +1,18 @@
-# SeekDeep gitignore — keep large/local/secret artifacts out of git.
+# SeekDeep gitignore — keep local state, generated artifacts, model caches,
+# and secrets out of the public repository.
 
-# Secrets and local config
+# ---------------------------------------------------------------------------
+# Environment files / secrets
+# ---------------------------------------------------------------------------
 .env
 .env.local
+.env.*.local
 .env.backup*
 .env.bak*
 .env.broken*
-keys.txt
-
-# Python venv / bytecode
-.venv/
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Node
-node_modules/
-
-# Local data / runtime state
-models/
-outputs/
-outputs_old/
-saved_generations/
-temp/
-logs/
-backups/
-checkpoints/
-diagnostics/
-.previous_chat_model.txt
-data/server-stats.json
-data/archive-guild-config.json
-data/archive-guild-config.json.bak*
-data/memory-presets.json
-data/prompt-templates.json
-data/user-facts.json
-
-# Old broken git directory (renamed during init)
-.git.broken_*
-
-# Legacy patch / backup artifacts (pre-git development)
-patches/
-handoff/
-agents/
-patch_*.py
-apply_*.ps1
-repair_*.py
-fix_*.py
-force_fix_*.py
-*.bak
-*.bak.*
-*.bak-*
-*.backup*
-d2utmp*
-
-# Claude Code workspace (local-only settings + worktrees)
-.claude/
-
-# Editor / OS noise
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-desktop.ini
-*.swp
-*.swo
-
-# Python build / packaging
-*.egg-info/
-build/
-dist/
-
-# Misc
-*.log
-*.tmp
-
-# ============================================================
-# GitHub publish safety additions
-# ============================================================
-
-# Env/secrets
-.env
-.env.*
 !.env.example
-.env.default
+!.env.default
+
 keys.txt
 key.txt
 *keys*.txt
@@ -100,7 +28,34 @@ credentials*.json
 service-account*.json
 discord*.json
 
-# Local AI/model/cache bulk
+# ---------------------------------------------------------------------------
+# Python environments, bytecode, and build output
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# ---------------------------------------------------------------------------
+# Node / frontend build output
+# ---------------------------------------------------------------------------
+node_modules/
+out/
+.next/
+.turbo/
+
+# ---------------------------------------------------------------------------
+# Local AI model/cache bulk
+# ---------------------------------------------------------------------------
 models/
 model/
 huggingface/
@@ -108,20 +63,54 @@ huggingface/
 cache/
 ollama/
 
+# ---------------------------------------------------------------------------
 # Runtime/generated data
+# ---------------------------------------------------------------------------
 outputs/
 outputs_old/
 output/
 generated/
 generations/
 saved_generations/
-logs/
 tmp/
 temp/
+logs/
 backups/
 checkpoints/
 diagnostics/
 SeekDeep-publish-audit-*.txt
+.previous_chat_model.txt
+
+# Local Discord/server state. These are user/server-specific runtime files,
+# not distributable defaults.
+data/server-stats.json
+data/archive-guild-config.json
+data/archive-guild-config.json.bak*
+data/memory-presets.json
+data/prompt-templates.json
+data/user-facts.json
+!data/.gitkeep
+
+# ---------------------------------------------------------------------------
+# Agent/tool workspaces and one-off repair artifacts
+# ---------------------------------------------------------------------------
+.claude/
+.agents/
+.codex/
+.gemini/
+.antigravity/
+patches/
+handoff/
+agents/
+patch_*.py
+apply_*.ps1
+repair_*.py
+fix_*.py
+force_fix_*.py
+
+# ---------------------------------------------------------------------------
+# Archives / binary bundles created during release or local testing
+# ---------------------------------------------------------------------------
 *.zip
 *.7z
 *.rar
@@ -129,48 +118,26 @@ SeekDeep-publish-audit-*.txt
 *.tar
 *.tar.gz
 
-# Python/Node local installs
-.venv/
-venv/
-env/
-__pycache__/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-node_modules/
+# ---------------------------------------------------------------------------
+# Legacy broken git directory backups
+# ---------------------------------------------------------------------------
+.git.broken_*
 
-# Agent/tool workspaces
-.claude/
-.agents/
-.codex/
-.gemini/
-.antigravity/
-
-# Local Discord/server state
-data/server-stats.json
-data/archive-guild-config.json
-data/archive-guild-config.json.bak*
-data/memory-presets.json
-data/prompt-templates.json
-data/user-facts.json
-
-# Build/editor noise
-dist/
-build/
-out/
-.next/
-.turbo/
+# ---------------------------------------------------------------------------
+# Editor / OS noise / scratch files
+# ---------------------------------------------------------------------------
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 desktop.ini
+*.swp
+*.swo
 *.log
 *.tmp
 *.bak
-*.backup
-*.backup*
 *.bak.*
 *.bak-*
-*.swp
-*.swo
+*.backup
+*.backup*
+d2utmp*
