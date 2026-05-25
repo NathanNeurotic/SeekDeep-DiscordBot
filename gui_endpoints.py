@@ -891,6 +891,43 @@ def register_gui_endpoints(
             "needs_setup": bool(missing_required),
         }
 
+    # ----- GET /config -----
+    # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
+    # the Models / Search / Runtime cells against live config. Secret-tagged
+    # keys are redacted to '*****' so a public read can't leak Discord/HF
+    # tokens via DevTools / cached fetches. Open (no token) because the
+    # IIFE runs on the marketing About page where requiring auth would
+    # silently break the live data flow.
+    _SECRET_KEY_PATTERNS = re.compile(
+        r"(?:^|_)(TOKEN|KEY|PASSWORD|SECRET|PASS|API_KEY|PRIVATE_KEY)(?:$|_)",
+        re.IGNORECASE,
+    )
+
+    def _is_secret_key(name: str) -> bool:
+        # Be liberal about what counts as a secret -- false positives just
+        # redact a value that didn't need it; false negatives leak data.
+        n = (name or "").strip()
+        if not n:
+            return False
+        if _SECRET_KEY_PATTERNS.search(n):
+            return True
+        # Common Discord/HF/etc named keys that don't match the pattern
+        return n in {"HF_TOKEN", "DISCORD_TOKEN", "OPENAI_API_KEY",
+                     "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+                     "GROQ_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
+                     "XAI_API_KEY", "SEEKDEEP_GUI_TOKEN"}
+
+    @app.get("/config")
+    def get_config():
+        env = _read_env_kv(_env_path)
+        redacted = {}
+        for k, v in env.items():
+            if _is_secret_key(k):
+                redacted[k] = "*****" if v else ""
+            else:
+                redacted[k] = v
+        return {"ok": True, "env": redacted}
+
     # ----- WebSocket /events -----
     # Browsers can't set headers on the initial WS handshake, so auth is via
     # the ?token=<token> query param. Token check is the same compare_digest

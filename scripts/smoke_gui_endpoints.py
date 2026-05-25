@@ -355,6 +355,49 @@ def main() -> int:
         c.post(f"/memory/presets/{SMOKE_UID2}", json={"presets": []},
                headers={_TOKEN_HEADER: token})
 
+    # ---- GET /config (Item F: redacted env map for dynamic-facts IIFE) ----
+    r = c.get("/config")
+    check("GET /config -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, env: {...}} shape",
+          body.get("ok") is True and isinstance(body.get("env"), dict),
+          f"keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
+    if r.status_code == 200:
+        env_map = body.get("env", {})
+        # Secret keys present in the actual .env should be redacted to '*****'.
+        # Mirror the server's word-boundary regex so we only flag actual secret
+        # names (TOKEN, KEY, PASSWORD, SECRET) -- not config knobs like
+        # MAX_OUTPUT_TOKENS or CHAT_MAX_NEW_TOKENS that happen to contain
+        # 'TOKEN' as a substring.
+        import re as _re
+        secret_re = _re.compile(r"(?:^|_)(TOKEN|KEY|PASSWORD|SECRET|PASS|PRIVATE_KEY)(?:$|_)", _re.IGNORECASE)
+        named_secrets = {"HF_TOKEN", "DISCORD_TOKEN", "OPENAI_API_KEY",
+                         "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+                         "GROQ_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
+                         "XAI_API_KEY", "SEEKDEEP_GUI_TOKEN"}
+        leaked_secrets = []
+        for k, v in env_map.items():
+            if not v:
+                continue  # empty values are fine
+            looks_secret = bool(secret_re.search(k)) or k in named_secrets
+            if looks_secret and v != "*****":
+                leaked_secrets.append(f"{k}=({v[:10]}...)")
+        check("  ...secret-tagged keys redacted to '*****'",
+              not leaked_secrets,
+              f"leaked: {leaked_secrets}" if leaked_secrets else "")
+        # Config knobs like MAX_OUTPUT_TOKENS contain 'TOKEN' as substring but
+        # shouldn't be redacted (they're integers, not secrets).
+        if "MAX_OUTPUT_TOKENS" in env_map and env_map["MAX_OUTPUT_TOKENS"]:
+            check("  ...MAX_OUTPUT_TOKENS NOT redacted (config knob, not secret)",
+                  env_map["MAX_OUTPUT_TOKENS"] != "*****",
+                  f"got {env_map['MAX_OUTPUT_TOKENS']!r}")
+        # Non-secret keys (model ids, URLs) should NOT be redacted -- they're
+        # what the dynamic-facts IIFE actually needs to read.
+        if "LOCAL_CHAT_MODEL_ID" in env_map and env_map["LOCAL_CHAT_MODEL_ID"]:
+            check("  ...non-secret LOCAL_CHAT_MODEL_ID echoed back unredacted",
+                  env_map["LOCAL_CHAT_MODEL_ID"] != "*****",
+                  f"got {env_map['LOCAL_CHAT_MODEL_ID']!r}")
+
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
     # These endpoints live on the AI server (not on the bare GUI app),
