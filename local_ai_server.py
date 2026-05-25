@@ -390,7 +390,7 @@ if os.path.isdir(_GUI_DIR):
 # Token check via Depends(). Defaults to a no-op if gui_endpoints isn't
 # available, so the routes still work if someone runs the server without it.
 try:
-    from gui_endpoints import register_gui_endpoints, require_gui_token
+    from gui_endpoints import register_gui_endpoints, require_gui_token, event_bus
     register_gui_endpoints(
         app,
         log_dir="logs", data_dir="data", env_path=".env",
@@ -406,6 +406,70 @@ try:
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
     async def require_gui_token(request=None): return None  # no-op fallback
+    event_bus = None  # no-op fallback so producer hooks below don't crash
+
+
+def _emit_event(event_type: str, data: dict) -> None:
+    """Best-effort WebSocket event publish. Safe from sync code, no-op if the
+    bus isn't ready / nobody's listening. See gui_endpoints._EventBus.publish_sync."""
+    if event_bus is None:
+        return
+    try:
+        event_bus.publish_sync({"type": event_type, "data": data})
+    except Exception:
+        pass
+
+
+def _vram_event_payload() -> dict:
+    """Snapshot for vram.sample events. Mirrors gpu_stats() but trimmed to
+    the fields the GUI's Local-stack panel actually uses."""
+    try:
+        stats = gpu_stats()
+    except Exception:
+        return {}
+    return {
+        "used_mb":      stats.get("used_mb"),
+        "total_mb":     stats.get("total_mb"),
+        "free_mb":      stats.get("free_mb"),
+        "allocated_mb": stats.get("allocated_mb"),
+        "reserved_mb":  stats.get("reserved_mb"),
+        "device":       stats.get("device_name"),
+        "loaded_task":  stats.get("loaded_task"),
+        "loaded_chat_role":    stats.get("loaded_chat_role"),
+        "loaded_chat_model_id": stats.get("loaded_chat_model_id"),
+    }
+
+
+@app.on_event("startup")
+async def _start_vram_sampler():
+    """Emits a vram.sample event every 10 seconds while at least one GUI
+    websocket is connected. Skipped silently when no subscribers, so an idle
+    box doesn't pay the gpu_stats() cost or the publish overhead."""
+    if event_bus is None:
+        return
+    import asyncio as _asyncio
+    async def _loop():
+        while True:
+            try:
+                await _asyncio.sleep(10)
+                if event_bus.subscriber_count > 0:
+                    await event_bus.publish({
+                        "type": "vram.sample",
+                        "data": _vram_event_payload(),
+                    })
+            except _asyncio.CancelledError:
+                break
+            except Exception:
+                await _asyncio.sleep(10)
+    loop = _asyncio.get_running_loop()
+    app.state.seekdeep_vram_task = loop.create_task(_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_vram_sampler():
+    t = getattr(app.state, "seekdeep_vram_task", None)
+    if t and not t.done():
+        t.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +657,16 @@ def unload_all(force: bool = False) -> None:
     keep_chat = (not force) and KEEP_RESIDENT_CHAT
     keep_vision = (not force) and KEEP_RESIDENT_VISION
     keep_image = (not force) and KEEP_RESIDENT_IMAGE
+    # Snapshot what's about to be evicted so we can fire one event per actually-
+    # evicted role (not just "we tried to unload everything").
+    evict_reason = "explicit-unload" if force else "task-lru"
+    evicting = []
+    if not keep_chat and chat_model is not None:
+        evicting.append(("chat", loaded_chat_role, loaded_chat_model_id))
+    if not keep_vision and vision_model is not None:
+        evicting.append(("vision", "vision", VISION_MODEL_ID))
+    if not keep_image and image_pipe is not None:
+        evicting.append(("image", "image", IMAGE_MODEL_ID))
     if not keep_chat:
         chat_model = None
         chat_tokenizer = None
@@ -614,6 +688,13 @@ def unload_all(force: bool = False) -> None:
     if pinned:
         pin_note = f" (kept resident: {', '.join(pinned)})"
     print(f"[SeekDeep] unloaded models{pin_note}", flush=True)
+    for task_kind, role, model_id in evicting:
+        _emit_event("model.evicted", {
+            "task": task_kind,
+            "role": role or task_kind,
+            "model": model_id or "",
+            "reason": evict_reason,
+        })
 
 
 def _evict_for_budget(task: str, role: str = "") -> None:
@@ -1056,6 +1137,12 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
     last_loaded_at = time.time()
     _log_vram(f"after chat load role={resolved_role}")
     print(f"[SeekDeep] chat model loaded role={resolved_role} model={model_id}", flush=True)
+    _emit_event("model.loaded", {
+        "role": resolved_role,
+        "model": model_id,
+        "task": "chat",
+        "vram_allocated_mb": _vram_event_payload().get("allocated_mb"),
+    })
     return resolved_role, model_id
 
 
@@ -1275,6 +1362,12 @@ def load_vision_model() -> None:
     vision_model = vision_model.eval()
     last_loaded_at = time.time()
     print("[SeekDeep] vision model loaded", flush=True)
+    _emit_event("model.loaded", {
+        "role": "vision",
+        "model": VISION_MODEL_ID,
+        "task": "vision",
+        "vram_allocated_mb": _vram_event_payload().get("allocated_mb"),
+    })
 
 
 def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tuple[list[Image.Image], str]:
@@ -1441,6 +1534,12 @@ def load_image_pipe() -> None:
 
     last_loaded_at = time.time()
     print("[SeekDeep] image model loaded", flush=True)
+    _emit_event("model.loaded", {
+        "role": "image",
+        "model": IMAGE_MODEL_ID,
+        "task": "image",
+        "vram_allocated_mb": _vram_event_payload().get("allocated_mb"),
+    })
 
 @app.post("/image")
 def image(req: ImageRequest):

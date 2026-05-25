@@ -119,13 +119,16 @@ A 10s **heartbeat** event auto-emits while at least one subscriber is connected 
 
 Topics defined so far (`gui_endpoints.py` and `gui/events.js` agree on these — the set is open, any new `type` works automatically):
 
-- `hello` — sent once to each new subscriber on connect
-- `heartbeat` — every 10s while at least one subscriber connected
-- `model.loaded` / `model.evicted` — VRAM lifecycle
-- `vram.sample` — periodic VRAM telemetry
-- `queue.depth` — per-pipeline queue counts
-- `request.start` / `request.done` — per-request lifecycle
-- `log.line` — structured log lines for the Logs viewer
+| Topic | Source | Wired? | Payload |
+|---|---|---|---|
+| `hello` | bus on connect | yes | `{server_time_ms, subscribers}` |
+| `heartbeat` | bus, every 10s with subscribers | yes | `{server_time_ms, subscribers}` |
+| `model.loaded` | `load_chat_model` / `load_vision_model` / `load_image_pipe` in `local_ai_server.py` | yes | `{role, model, task, vram_allocated_mb}` |
+| `model.evicted` | `unload_all` in `local_ai_server.py` | yes | `{task, role, model, reason}` |
+| `vram.sample` | startup task in `local_ai_server.py`, every 10s with subscribers | yes | `{used_mb, total_mb, free_mb, allocated_mb, reserved_mb, device, loaded_task, loaded_chat_role, loaded_chat_model_id}` |
+| `queue.depth` | not wired yet | no | `{image, chat, vision}` |
+| `request.start` / `request.done` | not wired yet | no | `{id, kind, ...}` |
+| `log.line` | not wired yet | no | `{level, src, msg}` |
 
 ### Producer patterns
 

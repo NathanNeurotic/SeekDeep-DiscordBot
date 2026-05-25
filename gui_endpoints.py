@@ -73,6 +73,14 @@ class _EventBus:
     def __init__(self) -> None:
         self._subscribers: set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        # Reference to the event loop the FastAPI app runs on. Captured at
+        # startup so publish_sync() can schedule from sync code (e.g. the
+        # model loaders in local_ai_server.py that aren't async).
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Called once at server startup. Enables publish_sync()."""
+        self._loop = loop
 
     async def subscribe(self, ws: WebSocket) -> None:
         async with self._lock:
@@ -108,6 +116,23 @@ class _EventBus:
                 for ws in dead:
                     self._subscribers.discard(ws)
         return sent
+
+    def publish_sync(self, event: dict[str, Any]) -> None:
+        """Schedule a publish from sync code. Safe to call from anywhere --
+        a sync FastAPI handler, a threadpool worker, a load_chat_model()
+        completion site. No-op if the loop hasn't been attached yet (e.g.
+        during module import) or isn't running."""
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        # Cheap fast-path: skip the dispatch entirely if nothing is listening.
+        if not self._subscribers:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.publish(event), loop)
+        except Exception:
+            # Don't let event publishing crash the caller (model loaders etc.)
+            pass
 
 
 # Module-level singleton. Importable from local_ai_server.py so producers can
@@ -915,8 +940,12 @@ def register_gui_endpoints(
 
     @app.on_event("startup")
     async def _start_heartbeat():
+        # Capture the running loop so producers in OTHER modules (notably
+        # local_ai_server.py's sync model loaders) can publish via
+        # event_bus.publish_sync(...) without each one juggling its own loop.
+        loop = asyncio.get_running_loop()
+        event_bus.attach_loop(loop)
         # Stash the task on app.state so it can be cancelled on shutdown
-        loop = asyncio.get_event_loop()
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
 
     @app.on_event("shutdown")
