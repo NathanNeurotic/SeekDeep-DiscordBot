@@ -372,6 +372,61 @@
   }
   .resp-image img { max-width: 100%; max-height: 100%; }
 </style>
+<style>
+/* Task 10 · quiet ambient motion on text-dense pages */
+.abyss::before { opacity: 0.45; }
+.abyss::after  { opacity: 0.55; }
+.bubbles span { opacity: 0.20 !important; }
+.bubbles span.cube { opacity: 0.18 !important; }
+.rays::before, .rays::after { opacity: 0.55; }
+
+/* Task 13 · Route Inspector visualization */
+.route-inspector {
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(45,212,255,0.30);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, rgba(13,33,82,0.55), rgba(5,11,28,0.75));
+  position: relative;
+}
+.route-inspector::before {
+  content: ""; position: absolute; inset: 6px; pointer-events: none;
+  background:
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 12px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 12px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 12px 1px no-repeat,
+    linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 12px no-repeat;
+  filter: drop-shadow(0 0 3px rgba(109,240,255,0.6)); opacity: 0.6;
+}
+.route-inspector > * { position: relative; z-index: 2; }
+.ri-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.ri-head h3 { font-size: 14px; font-family: var(--font-mono); letter-spacing: 0.16em; color: var(--cyan-1); margin: 0 0 4px; font-weight: 500; }
+.ri-sub { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); letter-spacing: 0.08em; }
+.ri-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.ri-tile { padding: 10px 12px; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: rgba(0,0,0,0.35); }
+.ri-lbl { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.2em; color: var(--hull-3); text-transform: uppercase; margin-bottom: 5px; }
+.ri-v { font-size: 14px; color: var(--hull); }
+.ri-v.mono { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); word-break: break-all; }
+.ri-section { margin-top: 12px; padding-top: 12px; border-top: 1px dashed rgba(45,212,255,0.18); }
+.ri-section-h { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; margin-bottom: 8px; }
+.ri-chain { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.ri-node { flex: 1 1 200px; min-width: 180px; padding: 10px 12px; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: rgba(0,0,0,0.4); }
+.ri-node.primary { border-color: var(--cyan-1); box-shadow: inset 0 0 12px rgba(45,212,255,0.10); }
+.ri-node-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 5px; }
+.ri-role { font-family: var(--font-mono); font-size: 11px; color: var(--cyan-1); letter-spacing: 0.12em; text-transform: uppercase; }
+.ri-model { font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); word-break: break-all; line-height: 1.5; }
+.ri-arrow { display: flex; align-items: center; color: var(--cyan-1); font-size: 18px; opacity: 0.5; padding: 0 2px; }
+.ri-empty { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); padding: 8px 0; }
+.ri-note { margin-top: 10px; padding: 8px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.6; background: rgba(0,0,0,0.4); border-left: 2px solid var(--cyan-1); border-radius: 2px; }
+.ri-note.ri-warn { color: var(--warn); border-left-color: var(--warn); }
+.ri-note strong { color: var(--cyan-1); }
+.ri-pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--hull-2); padding: 10px 12px; background: rgba(0,0,0,0.55); border: 1px solid var(--stroke); border-radius: var(--r-sm); white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+
+/* Task 9 · per-rail-item offline indicator */
+.ep .ep-offline { display: none; margin-left: auto; font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.18em; padding: 1px 5px; color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent); border-radius: 2px; }
+.ep[data-offline] .ep-offline { display: inline-block; }
+.ep[data-offline] .path { color: var(--hull-3); }
+</style>
 </head>
 <body>
 <div class="abyss"></div>
@@ -461,6 +516,16 @@ const ENDPOINTS = [
     title: 'GPU Snapshot',
     desc: 'One-shot VRAM read. Returns allocated / reserved / free / total MB plus utilization percentages and device name.',
     fields: [],
+  },
+  {
+    group: 'STATUS',
+    id: 'route_debug', method: 'GET', path: '/route/debug',
+    title: 'Route Inspector',
+    desc: 'Read-only routing diagnostic. Returns the full plan for a given role: which backend serves it, which model ID resolves, fallback chain, and (for HF) whether the model is already loaded or would require an evict-and-swap. The bot\'s regex-based <span class="mono">seekdeepSelectChatModelRole</span> still happens upstream in <span class="mono">index.js</span> — this endpoint describes what happens <em>after</em> role selection. Pass an optional <span class="mono">prompt</span> just to visualize the first 240 chars in the response.',
+    fields: [
+      { key: 'role', label: 'Role', type: 'select', options: ['default_chat','lightweight_chat','quality_chat','reasoning_chat','fallback_chat'], default: 'default_chat' },
+      { key: 'prompt', label: 'Prompt (optional · echoes back the first 240 chars)', type: 'textarea', default: '' },
+    ],
   },
 
   // ======== CHAT ========
@@ -605,11 +670,39 @@ Object.entries(groups).forEach(([group, list]) => {
     const el = document.createElement('div');
     el.className = 'ep';
     el.dataset.id = ep.id;
-    el.innerHTML = `<span class="method ${ep.method.toLowerCase()}">${ep.method}</span><span class="path">${ep.path}</span>`;
+    el.innerHTML = `<span class="method ${ep.method.toLowerCase()}">${ep.method}</span><span class="path">${ep.path}</span><span class="ep-offline">OFFLINE · MOCK</span>`;
     el.addEventListener('click', () => selectEndpoint(ep.id));
     railEl.appendChild(el);
   });
 });
+
+// Task 9 · drive per-rail-item offline state from a single /health ping (plus the bus when present).
+async function probeBackendReachable() {
+  try {
+    const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+    return r.ok;
+  } catch { return false; }
+}
+function markAllOffline(off) {
+  document.querySelectorAll('.ep').forEach(el => {
+    if (off) el.setAttribute('data-offline', '');
+    else el.removeAttribute('data-offline');
+  });
+}
+async function refreshOfflineState() {
+  const reachable = await probeBackendReachable();
+  markAllOffline(!reachable);
+}
+// Initial + every 10s. Also flip on bus open/close when available.
+refreshOfflineState();
+setInterval(refreshOfflineState, 10_000);
+function _wireBus() {
+  if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
+  window.SeekDeepEvents.on('_open',  () => markAllOffline(false));
+  window.SeekDeepEvents.on('_close', () => markAllOffline(true));
+  return true;
+}
+if (!_wireBus()) { let n=0; const iv=setInterval(()=>{if(_wireBus()||++n>30)clearInterval(iv);},250); }
 
 // ===========================================================
 // STATE
@@ -723,10 +816,23 @@ function buildBody() {
   return body;
 }
 
+function buildQueryString(ep) {
+  // For GET endpoints that carry fields (e.g. /route/debug), serialize them as query params.
+  if (ep.method !== 'GET' || !ep.fields || !ep.fields.length) return '';
+  const params = [];
+  ep.fields.forEach(f => {
+    let v = (state.values[ep.id] && state.values[ep.id][f.key] != null) ? state.values[ep.id][f.key] : f.default;
+    if (v == null || v === '') return;
+    params.push(encodeURIComponent(f.key) + '=' + encodeURIComponent(v));
+  });
+  return params.length ? '?' + params.join('&') : '';
+}
+
 function refreshCurl() {
   const ep = currentEp();
   const body = buildBody();
-  let curl = `<span class="pmt">$</span> curl -X ${ep.method} ${BASE}${ep.path}`;
+  const qs = buildQueryString(ep);
+  let curl = `<span class="pmt">$</span> curl -X ${ep.method} ${BASE}${ep.path}${qs}`;
   if (body) {
     curl += ` \\\n      -H "Content-Type: application/json" \\\n      -d '${prettyJSON(body, true)}'`;
   }
@@ -787,7 +893,7 @@ async function sendRequest() {
       opts.headers = { 'Content-Type': 'application/json' };
       opts.body = JSON.stringify(body);
     }
-    const r = await fetch(BASE + ep.path, opts);
+    const r = await fetch(BASE + ep.path + buildQueryString(ep), opts);
     const dt = Math.round(performance.now() - t0);
     const ct = r.headers.get('Content-Type') || '';
     if (ct.includes('image/')) {
@@ -839,6 +945,12 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
     `;
   }
 
+  // Task 13 · Route Inspector — render a fallback-chain visualization above the raw JSON.
+  let inspectorHTML = '';
+  if (ep.id === 'route_debug' && body && body.role_resolved) {
+    inspectorHTML = renderRouteInspector(body);
+  }
+
   respPane.innerHTML = `
     <div class="resp-head">
       <h2>RESPONSE</h2>
@@ -846,6 +958,7 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
     </div>
     ${error ? `<div style="color:var(--bad); font-family:var(--font-mono); font-size:12px; padding:8px 12px; background: rgba(255,107,107,0.05); border:1px solid rgba(255,107,107,0.3); border-radius: var(--r-sm); margin-bottom: 14px;">▸ FETCH ERROR · ${error} · showing canned mock response below</div>` : ''}
     ${meta}
+    ${inspectorHTML}
     ${bodyHTML}
   `;
   // Wire copy button
@@ -860,6 +973,78 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
       });
     });
   }
+}
+
+// ===========================================================
+// ROUTE INSPECTOR — fallback chain visualization (Task 13)
+// ===========================================================
+function renderRouteInspector(r) {
+  const remote = r.endpoint && r.endpoint.external === true;
+  const swap   = r.endpoint && r.endpoint.would_swap === true;
+  const loaded = r.endpoint && r.endpoint.already_loaded === true;
+  const backendTag = (b) => {
+    const cls = b === 'hf' ? 'cyan' : b === 'ollama' ? '' : 'warn';
+    const label = b === 'hf' ? 'HF' : b === 'ollama' ? 'OLLAMA' : '⚠ ' + (b||'').toUpperCase();
+    return `<span class="pill ${cls}" style="padding:2px 8px;"><span class="dot"></span>${label}</span>`;
+  };
+  const stateTag = swap ? `<span class="pill warn" style="padding:2px 8px;"><span class="dot"></span>WOULD SWAP</span>`
+                : loaded ? `<span class="pill cyan" style="padding:2px 8px;"><span class="dot"></span>ALREADY LOADED</span>`
+                : remote ? `<span class="pill warn" style="padding:2px 8px;"><span class="dot"></span>REMOTE · PROMPTS LEAVE BOX</span>`
+                         : `<span class="pill" style="padding:2px 8px;"><span class="dot"></span>CACHED</span>`;
+
+  const fallbackHTML = (r.fallback_chain || []).length
+    ? `<div class="ri-section">
+         <div class="ri-section-h">FALLBACK CHAIN · ${r.auto_fallback_enabled ? 'auto' : 'manual only'}</div>
+         <div class="ri-chain">
+           <div class="ri-node primary">
+             <div class="ri-node-h">
+               <span class="ri-role">${r.role_resolved}</span>
+               ${backendTag(r.backend)}
+             </div>
+             <div class="ri-model">${escape(r.model_id || '—')}</div>
+           </div>
+           ${r.fallback_chain.map(fc => `
+             <div class="ri-arrow">▸</div>
+             <div class="ri-node">
+               <div class="ri-node-h">
+                 <span class="ri-role">${fc.role}</span>
+                 ${backendTag(fc.backend)}
+               </div>
+               <div class="ri-model">${escape(fc.model_id || '—')}</div>
+             </div>
+           `).join('')}
+         </div>
+       </div>`
+    : `<div class="ri-section"><div class="ri-section-h">FALLBACK CHAIN</div><div class="ri-empty">· no fallback configured · this role is the terminal stop</div></div>`;
+
+  const resolvedDiff = r.role_resolved !== r.role_requested
+    ? `<div class="ri-note ri-warn">▸ requested role <span class="mono">${r.role_requested}</span> resolved to <span class="mono">${r.role_resolved}</span> (the requested role isn’t configured · the AI server fell through)</div>`
+    : '';
+
+  const promptPreview = r.prompt_preview
+    ? `<div class="ri-section"><div class="ri-section-h">PROMPT PREVIEW · 240 char cap</div><div class="ri-pre">${escape(r.prompt_preview)}</div></div>`
+    : '';
+
+  return `
+    <div class="route-inspector">
+      <div class="ri-head">
+        <div>
+          <h3>ROUTE INSPECTOR</h3>
+          <div class="ri-sub">dispatch plan for role <span class="mono" style="color:var(--cyan-1)">${r.role_resolved}</span></div>
+        </div>
+        ${stateTag}
+      </div>
+      ${resolvedDiff}
+      <div class="ri-grid">
+        <div class="ri-tile"><div class="ri-lbl">BACKEND</div><div class="ri-v">${(r.backend||'').toUpperCase()}</div></div>
+        <div class="ri-tile"><div class="ri-lbl">MODEL ID</div><div class="ri-v mono">${escape(r.model_id || '—')}</div></div>
+        <div class="ri-tile"><div class="ri-lbl">EST VRAM</div><div class="ri-v">${Number.isFinite(r.endpoint?.estimated_vram_mb) ? r.endpoint.estimated_vram_mb + ' MB' : '—'}</div></div>
+      </div>
+      ${fallbackHTML}
+      ${promptPreview}
+      ${r.note ? `<div class="ri-note"><strong>NOTE ·</strong> ${escape(r.note)}</div>` : ''}
+    </div>
+  `;
 }
 
 // ===========================================================
@@ -927,6 +1112,28 @@ function mockResponse(ep, body) {
       return { ok: true, elapsed_ms: 480, format: 'png', bytes: 28400, note: 'mock — server offline' };
     case 'unload':
       return { ok: true, unloaded: 'default_chat', freed_mb: 5240 };
+    case 'route_debug':
+      return {
+        ok: true,
+        prompt_preview: (body?.prompt || '').slice(0, 240),
+        role_requested: body?.role || 'default_chat',
+        role_resolved:  body?.role || 'default_chat',
+        backend:        'hf',
+        model_id:       'meta-llama/Llama-3.1-8B-Instruct',
+        endpoint: {
+          external: false,
+          already_loaded: true,
+          would_swap: false,
+          currently_loaded_role: 'default_chat',
+          currently_loaded_model_id: 'meta-llama/Llama-3.1-8B-Instruct',
+          estimated_vram_mb: 5500,
+        },
+        fallback_chain: [
+          { role: 'fallback_chat', backend: 'hf', model_id: 'ibm-granite/granite-3.3-8b-instruct' },
+        ],
+        auto_fallback_enabled: true,
+        note: 'Role-selection regex heuristics live in index.js seekdeepSelectChatModelRole; this endpoint describes the dispatch plan for a pre-selected role.',
+      };
     default:
       return { note: 'no mock available' };
   }

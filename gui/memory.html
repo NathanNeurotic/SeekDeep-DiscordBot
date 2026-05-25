@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — Memory (preview)</title>
+<title>SeekDeep — Memory</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,62 +21,120 @@
   .win-titlebar .left img { width: 22px; height: 22px; }
   .win-titlebar .title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; color: var(--hull-2); text-transform: uppercase; }
   .win-titlebar .title em { font-style: normal; color: var(--cyan-1); }
-  .win-titlebar .right { justify-self: end; display: flex; gap: 4px; }
+  .win-titlebar .right { justify-self: end; display: flex; gap: 4px; align-items: center; }
   .win-titlebar .right a { display: flex; align-items: center; padding: 0 10px; height: 26px; color: var(--hull-3); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-decoration: none; border-radius: var(--r-sm); }
   .win-titlebar .right a:hover { color: var(--cyan-1); background: rgba(45,212,255,0.08); }
 
-  .body { display: grid; grid-template-columns: 280px 1fr 1fr; gap: 0; overflow: hidden; min-height: 0; }
-  .rail { background: rgba(2,6,15,0.55); border-right: 1px solid var(--stroke); padding: 18px 14px; overflow-y: auto; }
-  .rail .grp { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: var(--hull-3); text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--stroke); margin-bottom: 8px; }
+  .body { display: grid; grid-template-columns: 280px 1fr 360px; gap: 0; overflow: hidden; min-height: 0; }
+  .rail { background: rgba(2,6,15,0.55); border-right: 1px solid var(--stroke); padding: 18px 14px; overflow-y: auto; display: flex; flex-direction: column; }
+  .rail .grp { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: var(--hull-3); text-transform: uppercase; padding: 8px 10px; display: flex; justify-content: space-between; }
+  .rail .grp em { font-style: normal; color: var(--cyan-1); }
+  .rail .search { margin: 0 4px 10px; }
+  .rail .search input { width: 100%; font-size: 12px; }
   .user-item { display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; padding: 8px 10px; align-items: center; border-radius: var(--r-sm); cursor: pointer; transition: background 0.15s; margin: 2px 0; user-select: none; }
   .user-item:hover { background: rgba(45,212,255,0.06); }
   .user-item.active { background: rgba(45,212,255,0.10); border: 1px solid rgba(45,212,255,0.30); padding: 7px 9px; }
   .user-item .av { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--abyss-3), var(--cyan-3)); display: grid; place-items: center; font-family: var(--font-mono); font-size: 13px; color: var(--cyan-1); }
   .user-item .name { font-size: 13px; color: var(--hull); }
+  .user-item .id { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.04em; }
   .user-item .count { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.1em; }
 
-  .pane { padding: 24px 28px; overflow-y: auto; min-width: 0; border-right: 1px solid var(--stroke); }
+  .pane { padding: 22px 26px; overflow-y: auto; min-width: 0; border-right: 1px solid var(--stroke); }
   .pane:last-child { border-right: none; background: rgba(2,6,15,0.35); }
   .pane h2 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 6px; }
-  .pane .sub { color: var(--hull-3); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--stroke); }
+  .pane h3.section-h { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--hull-3); margin: 22px 0 10px; font-weight: 500; display: flex; justify-content: space-between; align-items: baseline; }
+  .pane h3.section-h em { color: var(--cyan-1); font-style: normal; }
+  .pane .sub { color: var(--hull-3); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--stroke); display: flex; justify-content: space-between; }
+
+  .live-tag {
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em;
+    padding: 2px 7px; border: 1px solid color-mix(in oklab, var(--good) 45%, transparent);
+    color: var(--good); border-radius: 2px; text-transform: uppercase;
+  }
+  .live-tag .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); display: inline-block; margin-right: 5px; vertical-align: 1px; }
 
   .fact { padding: 12px 14px; margin: 8px 0; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); position: relative; overflow: hidden; }
   .fact::before { content: ""; position: absolute; inset: 4px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 8px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 8px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 8px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 8px no-repeat; filter: drop-shadow(0 0 3px rgba(109,240,255,0.5)); opacity: 0.55; }
-  .fact-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+  .fact > * { position: relative; z-index: 2; }
+  .fact-head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .fact .idx { font-family: var(--font-mono); font-size: 9px; color: var(--cyan-1); letter-spacing: 0.18em; padding: 1px 6px; border: 1px solid rgba(45,212,255,0.30); border-radius: 2px; }
   .fact .when { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.12em; text-transform: uppercase; }
-  .fact .src { font-family: var(--font-mono); font-size: 10px; color: var(--cyan-1); letter-spacing: 0.08em; }
-  .fact .src.auto { color: var(--warn); }
-  .fact-text { color: var(--hull); font-size: 13px; line-height: 1.5; }
-  .fact-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .fact-text { color: var(--hull); font-size: 13px; line-height: 1.55; word-break: break-word; }
+  .fact-text[contenteditable="true"] { outline: 1px dashed var(--cyan-1); padding: 6px 8px; margin: 4px -8px; background: rgba(0,0,0,0.4); border-radius: 2px; }
+  .fact-actions { display: flex; gap: 6px; margin-top: 8px; }
   .mini-btn { background: transparent; border: 1px solid rgba(45,212,255,0.30); color: var(--cyan-1); font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--r-sm); cursor: pointer; }
   .mini-btn:hover { background: rgba(45,212,255,0.10); }
   .mini-btn.bad { color: var(--bad); border-color: rgba(255,107,107,0.30); }
+  .mini-btn.good { color: var(--good); border-color: color-mix(in oklab, var(--good) 35%, transparent); }
 
-  .meter-card { padding: 14px 16px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); margin-bottom: 12px; }
+  .meter-card { padding: 10px 14px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); margin-bottom: 10px; }
   .meter-card .lbl { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; display: flex; justify-content: space-between; }
   .meter-card .lbl em { font-style: normal; color: var(--cyan-1); }
-  .meter-card .bar { height: 6px; background: rgba(0,0,0,0.6); border: 1px solid rgba(45,212,255,0.20); margin-top: 8px; overflow: hidden; border-radius: 2px; }
-  .meter-card .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0)); box-shadow: 0 0 10px var(--cyan-0); }
-
-  .pref-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px dashed rgba(45,212,255,0.12); }
-  .pref-row:last-child { border-bottom: none; }
-  .pref-row .k { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); }
-  .pref-row .d { font-size: 11px; color: var(--hull-3); margin-top: 2px; }
-  .toggle { width: 36px; height: 20px; background: rgba(0,0,0,0.6); border: 1px solid rgba(45,212,255,0.20); border-radius: 10px; position: relative; cursor: pointer; transition: 0.2s; }
-  .toggle::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--hull-3); transition: 0.2s; }
-  .toggle.on { background: var(--cyan-2); border-color: var(--cyan-1); }
-  .toggle.on::after { left: 18px; background: var(--ink); box-shadow: 0 0 8px var(--cyan-0); }
+  .meter-card .bar { height: 5px; background: rgba(0,0,0,0.6); border: 1px solid rgba(45,212,255,0.20); margin-top: 7px; overflow: hidden; border-radius: 2px; }
+  .meter-card .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0)); box-shadow: 0 0 8px var(--cyan-0); }
+  .meter-card .bar i.warn { background: linear-gradient(90deg, var(--warn), #ff9d40); box-shadow: 0 0 8px var(--warn); }
 
   .composer { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed rgba(45,212,255,0.18); }
-  .composer input { flex: 1; }
+  .composer input { flex: 1; font-size: 13px; }
 
-  .preview-banner { padding: 10px 14px; margin-bottom: 14px; background: rgba(255,184,77,0.06); border: 1px dashed rgba(255,184,77,0.40); border-radius: var(--r-md); color: var(--warn); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; line-height: 1.5; }
-  .preview-banner strong { color: var(--warn); }
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .preset-chip {
+    padding: 9px 12px;
+    border: 1px solid rgba(45,212,255,0.20);
+    border-radius: var(--r-md);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--hull-3);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; justify-content: space-between; align-items: center;
+    user-select: none;
+  }
+  .preset-chip .ds { font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.08em; margin-top: 2px; display: block; }
+  .preset-chip:hover { border-color: var(--cyan-1); }
+  .preset-chip.on { border-color: var(--cyan-1); background: rgba(45,212,255,0.10); color: var(--cyan-1); }
+  .preset-chip.on .ds { color: var(--hull-2); }
+  .preset-chip .tick { width: 14px; height: 14px; border-radius: 3px; border: 1px solid currentColor; display: inline-block; position: relative; }
+  .preset-chip.on .tick::after { content: "✓"; position: absolute; top: -3px; left: 1px; font-size: 12px; color: var(--cyan-1); }
 
-  .sample-prompt { padding: 14px; background: rgba(0,4,12,0.65); border: 1px solid rgba(45,212,255,0.20); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 12px; color: var(--hull-2); line-height: 1.7; }
+  .empty {
+    padding: 40px 14px; text-align: center;
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em;
+    color: var(--hull-3); text-transform: uppercase;
+    border: 1px dashed var(--stroke);
+    border-radius: var(--r-md);
+    margin: 14px 0;
+  }
+
+  .sample-prompt { padding: 14px; background: rgba(0,4,12,0.65); border: 1px solid rgba(45,212,255,0.20); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 11.5px; color: var(--hull-2); line-height: 1.7; white-space: pre-wrap; }
   .sample-prompt .sys { color: var(--cyan-1); }
   .sample-prompt .inj { color: var(--good); }
   .sample-prompt .usr { color: var(--hull); }
+
+  .danger-zone {
+    margin-top: 22px; padding: 14px; border: 1px dashed rgba(255,107,107,0.35); border-radius: var(--r-md);
+    background: rgba(255,107,107,0.04);
+  }
+  .danger-zone h4 { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--bad); margin: 0 0 6px; text-transform: uppercase; font-weight: 500; }
+  .danger-zone .ds { font-size: 11px; color: var(--hull-3); margin-bottom: 10px; line-height: 1.55; }
+
+  /* Confirm modal */
+  .cf-back { position: fixed; inset: 0; z-index: 9990; background: rgba(2,6,15,0.85); backdrop-filter: blur(6px); display: none; }
+  .cf-back.open { display: block; }
+  .cf {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 9991; width: min(460px, calc(100vw - 40px));
+    background: linear-gradient(180deg, rgba(10,26,48,0.97), rgba(6,18,31,0.99));
+    border: 1px solid rgba(255,107,107,0.5);
+    border-radius: var(--r-md);
+    box-shadow: 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(255,107,107,0.25);
+    display: none;
+    padding: 22px 24px;
+  }
+  .cf.open { display: block; }
+  .cf h3 { color: var(--bad); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 6px; font-weight: 500; }
+  .cf p { color: var(--hull-2); font-size: 13px; line-height: 1.6; margin: 0 0 16px; }
+  .cf .row { display: flex; gap: 10px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -94,162 +152,528 @@
   <div class="win-titlebar">
     <div class="left">
       <img src="assets/seekdeep-mark.webp" alt="" />
-      <span class="title">SEEK<em>DEEP</em> · MEMORY · <em style="color:var(--warn);">PREVIEW</em><span class="cur"></span></span>
+      <span class="title">SEEK<em>DEEP</em> · MEMORY · <em>USER-FACTS</em><span class="cur"></span></span>
     </div>
     <div></div>
     <div class="right">
+      <span class="live-tag" id="memBackendTag" title="data/user-facts.json · live"><span class="dot"></span>BACKEND LIVE</span>
       <a href="index.html">↩ HUB</a>
-      <a href="roadmap.html">▦ ROADMAP</a>
       <a href="docs.html">▤ DOCS</a>
     </div>
   </div>
 
   <div class="body">
-    <nav class="rail">
-      <div class="grp" style="display:flex; justify-content:space-between;"><span>USERS</span><em style="color:var(--cyan-1); font-style:normal;">5</em></div>
-      <div class="user-item active"><div class="av">N</div><div class="name">nautilus</div><div class="count">18</div></div>
-      <div class="user-item"><div class="av">D</div><div class="name">deepdiver</div><div class="count">11</div></div>
-      <div class="user-item"><div class="av">K</div><div class="name">k-ray</div><div class="count">7</div></div>
-      <div class="user-item"><div class="av">A</div><div class="name">abyssalbot</div><div class="count">4</div></div>
-      <div class="user-item"><div class="av">L</div><div class="name">lanternjaw</div><div class="count">2</div></div>
 
-      <div class="grp" style="display:flex; justify-content:space-between; margin-top:18px;"><span>CHANNELS</span><em style="color:var(--cyan-1); font-style:normal;">3</em></div>
-      <div class="user-item"><div class="av">#</div><div class="name">abyss-talk</div><div class="count">12</div></div>
-      <div class="user-item"><div class="av">#</div><div class="name">dev-logs</div><div class="count">5</div></div>
-      <div class="user-item"><div class="av">#</div><div class="name">water-cooler</div><div class="count">3</div></div>
+    <!-- ===== LEFT RAIL · USER PICKER ===== -->
+    <nav class="rail">
+      <div class="grp"><span>USERS</span><em id="rUserCount">—</em></div>
+      <div class="search"><input id="rSearch" type="text" placeholder="filter users…" /></div>
+      <div id="rUsers" style="overflow-y:auto; flex:1;">
+        <div class="empty" style="padding: 16px 8px;">⋯ loading users…</div>
+      </div>
+
+      <div style="border-top: 1px solid var(--stroke); padding-top: 12px; margin-top: 12px;">
+        <div class="grp" style="padding: 4px 10px;"><span>SCHEMA</span><em>v1</em></div>
+        <div style="font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); line-height: 1.7; padding: 0 10px;">
+          ▸ <span style="color:var(--cyan-1)">data/user-facts.json</span><br>
+          users.{discord_id}.facts[]<br>
+          25 facts / user · 500 chars / fact<br>
+          <span style="color:var(--cyan-1)">data/memory-presets.json</span><br>
+          users.{discord_id}.presets[]
+        </div>
+      </div>
     </nav>
 
+    <!-- ===== CENTER PANE · FACTS LIST ===== -->
     <section class="pane">
-      <h2>nautilus · facts</h2>
-      <div class="sub">▸ user-memories.json · 18 / 25 facts · 6.8 / 10 KB</div>
-
-      <div class="preview-banner">
-        <strong>⚠ PREVIEW</strong> · this surface mocks the persistent-memory roadmap proposal. The feature is parked — see roadmap.html for the why-deferred reasoning. None of this is live; the bot still uses in-RAM rolling memory.
+      <div style="display: flex; justify-content: space-between; align-items: end; margin-bottom: 6px;">
+        <h2 id="hUserName">— select a user</h2>
+        <span style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; color: var(--hull-3);">
+          <span id="hUserId">—</span>
+        </span>
+      </div>
+      <div class="sub">
+        <span>▸ <span id="hPath">GET /memory/user/{id}</span></span>
+        <span><span id="hUpdated">never</span></span>
       </div>
 
-      <div class="meter-card">
-        <div class="lbl"><span>STORAGE · facts</span><em>18 / 25</em></div>
-        <div class="bar"><i style="width: 72%"></i></div>
-      </div>
-      <div class="meter-card">
-        <div class="lbl"><span>STORAGE · bytes</span><em>6.8 / 10 KB</em></div>
-        <div class="bar"><i style="width: 68%"></i></div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div class="meter-card">
+          <div class="lbl"><span>FACTS</span><em id="mFactsLbl">0 / 25</em></div>
+          <div class="bar"><i id="mFactsBar" style="width: 0%"></i></div>
+        </div>
+        <div class="meter-card">
+          <div class="lbl"><span>STORAGE</span><em id="mStorageLbl">0 B / 12.5 KB</em></div>
+          <div class="bar"><i id="mStorageBar" style="width: 0%"></i></div>
+        </div>
       </div>
 
-      <div class="fact">
-        <div class="fact-head"><span class="src">USER · REMEMBER</span><span class="when">14:21 · TODAY</span></div>
-        <div class="fact-text">prefers Python over JavaScript for backend work</div>
-        <div class="fact-actions"><button class="mini-btn">EDIT</button><button class="mini-btn bad">FORGET</button></div>
-      </div>
-      <div class="fact">
-        <div class="fact-head"><span class="src">USER · REMEMBER</span><span class="when">2 DAYS AGO</span></div>
-        <div class="fact-text">works on a homebrew PS2 loader called wOPL · loves talking about it</div>
-        <div class="fact-actions"><button class="mini-btn">EDIT</button><button class="mini-btn bad">FORGET</button></div>
-      </div>
-      <div class="fact">
-        <div class="fact-head"><span class="src auto">AUTO · INFERRED</span><span class="when">3 DAYS AGO</span></div>
-        <div class="fact-text">timezone: UTC-5 (consistent late-evening activity 22:00-02:00)</div>
-        <div class="fact-actions"><button class="mini-btn">PROMOTE</button><button class="mini-btn bad">FORGET</button></div>
-      </div>
-      <div class="fact">
-        <div class="fact-head"><span class="src">USER · REMEMBER</span><span class="when">5 DAYS AGO</span></div>
-        <div class="fact-text">runs SeekDeep on an RTX 4090 Laptop GPU (24GB VRAM)</div>
-        <div class="fact-actions"><button class="mini-btn">EDIT</button><button class="mini-btn bad">FORGET</button></div>
-      </div>
-      <div class="fact">
-        <div class="fact-head"><span class="src auto">AUTO · INFERRED</span><span class="when">1 WEEK AGO</span></div>
-        <div class="fact-text">prefers clinical persona for technical work, chaotic for shitposting</div>
-        <div class="fact-actions"><button class="mini-btn">PROMOTE</button><button class="mini-btn bad">FORGET</button></div>
-      </div>
-      <div class="fact">
-        <div class="fact-head"><span class="src">USER · REMEMBER</span><span class="when">2 WEEKS AGO</span></div>
-        <div class="fact-text">has 3 cats, all named after fish (Loach, Goby, Wrasse)</div>
-        <div class="fact-actions"><button class="mini-btn">EDIT</button><button class="mini-btn bad">FORGET</button></div>
+      <div id="factsList">
+        <div class="empty">⋯ pick a user from the rail</div>
       </div>
 
       <div class="composer">
-        <input placeholder="@SeekDeep remember that…" />
-        <button class="btn btn-primary">▸ Remember</button>
+        <input id="newFact" type="text" placeholder="@SeekDeep remember that…" maxlength="500" />
+        <button class="btn btn-primary" id="addFactBtn">▸ Remember</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-top:8px; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.08em;">
+        <span>POST /memory/user/{id}/fact · 500 char max</span>
+        <span id="newFactLen">0 / 500</span>
+      </div>
+
+      <div class="danger-zone">
+        <h4>⚠ DANGER · destructive</h4>
+        <div class="ds">These actions overwrite the user's row in <span class="mono" style="color:var(--cyan-1)">data/user-facts.json</span>. The write is atomic but irreversible — there's no soft-delete.</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn-ghost" id="exportBtn">⇩ Export as JSON</button>
+          <button class="btn btn-ghost" id="clearBtn" style="color: var(--bad); border-color: rgba(255,107,107,0.30);">✕ Clear all facts for this user</button>
+        </div>
       </div>
     </section>
 
+    <!-- ===== RIGHT PANE · PRESETS + INJECTION PREVIEW ===== -->
     <section class="pane">
-      <h2>Privacy &amp; controls</h2>
-      <div class="sub">▸ proposed knobs · stored in persona-overrides.json</div>
-
-      <div class="pref-row">
-        <div>
-          <div class="k">SEEKDEEP_MEMORY_FEATURE</div>
-          <div class="d">Server admin master switch · disable memory storage entirely for this guild.</div>
-        </div>
-        <div class="toggle on" onclick="this.classList.toggle('on')"></div>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div class="k">USER OPT-OUT · nautilus</div>
-          <div class="d">Per-user privacy switch · do not record any new facts about this user.</div>
-        </div>
-        <div class="toggle" onclick="this.classList.toggle('on')"></div>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div class="k">INFER AUTO-FACTS</div>
-          <div class="d">Detect timezone, persona preference, language from message patterns.</div>
-        </div>
-        <div class="toggle on" onclick="this.classList.toggle('on')"></div>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div class="k">SEMANTIC INJECTION</div>
-          <div class="d">When the prompt mentions a known topic, inject the relevant fact(s).</div>
-        </div>
-        <div class="toggle on" onclick="this.classList.toggle('on')"></div>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div class="k">MAX FACTS PER USER</div>
-          <div class="d">LRU prune kicks in when this is hit.</div>
-        </div>
-        <input type="number" value="25" style="width: 80px; font-size: 12px; font-family: var(--font-mono);" />
-      </div>
-      <div class="pref-row">
-        <div>
-          <div class="k">MAX KB PER PROFILE</div>
-          <div class="d">Hard cap on serialized JSON size.</div>
-        </div>
-        <input type="number" value="10" style="width: 80px; font-size: 12px; font-family: var(--font-mono);" />
+      <h3 class="section-h"><span>RESPONSE PRESETS</span><em id="psCount">0 active</em></h3>
+      <div class="sub" style="margin-bottom: 12px;"><span>▸ data/memory-presets.json</span><span><span class="mono" style="color:var(--cyan-1)">SEEKDEEP_KNOWN_PRESETS</span></span></div>
+      <div class="preset-grid" id="presetGrid">
+        <!-- chips rendered by JS -->
       </div>
 
-      <h2 style="font-size: 16px; margin-top: 22px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-1);">INJECTED PROMPT · PREVIEW</h2>
-      <div class="sub" style="margin-bottom: 10px; border:none; padding-bottom: 0;">▸ what the model would see when nautilus asks about Python</div>
-      <div class="sample-prompt"><span class="sys"># system prompt</span>
-You are SeekDeep. Answer in numbered, terse facts.
+      <h3 class="section-h" style="margin-top: 24px;"><span>INJECTED PROMPT · LIVE PREVIEW</span></h3>
+      <div class="sub" style="margin-bottom: 12px;"><span>▸ what the chat call sees for this user</span></div>
+      <div class="sample-prompt" id="injectionPreview"><span class="sys"># system prompt</span>
+You are SeekDeep. <span class="inj">(no presets active)</span>
 
-<span class="inj"># injected memory · 3 relevant facts</span>
-<span class="inj">- prefers Python over JavaScript for backend work</span>
-<span class="inj">- works on a homebrew PS2 loader called wOPL</span>
-<span class="inj">- runs SeekDeep on an RTX 4090 Laptop GPU (24GB VRAM)</span>
+<span class="inj"># injected memory · 0 facts</span>
+<span class="inj">(nothing yet — facts append here in /chat)</span>
 
 <span class="usr"># user</span>
-<span class="usr">@SeekDeep what's the fastest way to spin up a FastAPI server with WebSocket support?</span></div>
+<span class="usr">@SeekDeep …</span></div>
 
-      <h2 style="font-size: 16px; margin-top: 22px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-1);">EXPORT &amp; CLEAR</h2>
-      <div class="sub" style="margin-bottom: 10px; border:none; padding-bottom: 0;">▸ user-runnable commands</div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <button class="btn btn-ghost">@SeekDeep memory export</button>
-        <button class="btn btn-ghost" style="color: var(--bad);">@SeekDeep memory clear</button>
+      <h3 class="section-h" style="margin-top: 22px;"><span>BOT COMMAND PARITY</span></h3>
+      <div class="sub" style="margin-bottom: 10px;"><span>▸ everything here mirrors a Discord command</span></div>
+      <div style="font-family: var(--font-mono); font-size: 11.5px; color: var(--hull-2); line-height: 1.85;">
+        <div><span style="color: var(--cyan-1);">@SeekDeep remember</span> &lt;fact&gt;</div>
+        <div><span style="color: var(--cyan-1);">@SeekDeep recall</span></div>
+        <div><span style="color: var(--cyan-1);">@SeekDeep forget</span> #N | &lt;substring&gt; | all</div>
+        <div style="margin-top: 6px; color: var(--hull-3);">presets toggle via <span style="color: var(--cyan-1);">@SeekDeep preset</span> &lt;name&gt; on/off</div>
       </div>
     </section>
   </div>
 </div></div>
 
+<!-- Confirm modal -->
+<div class="cf-back" id="cfBack"></div>
+<div class="cf" id="cf" role="dialog">
+  <h3 id="cfTitle">CONFIRM</h3>
+  <p id="cfBody">—</p>
+  <div class="row">
+    <button class="btn btn-ghost" id="cfCancel">Cancel</button>
+    <button class="btn" id="cfOk" style="background: var(--bad); color: var(--ink); font-weight: 700;">Yes, do it</button>
+  </div>
+</div>
+
 <script>
-document.querySelectorAll('.user-item').forEach(u => {
-  u.addEventListener('click', () => {
-    document.querySelectorAll('.user-item').forEach(x => x.classList.remove('active'));
-    u.classList.add('active');
+/* ============================================================
+   Memory recall UI · Task 12
+   ============================================================
+   Backend contract (designed against, paired in HANDOFF_CLAUDE_CODE.md):
+
+     GET    /memory/users
+              → { ok, users: [ { user_id, display, fact_count, bytes, updatedAt } ] }
+     GET    /memory/user/{id}
+              → { ok, user_id, facts: [ { text, at } ], updatedAt, bytes }
+     POST   /memory/user/{id}/fact
+              body: { text }          → append new fact (501-style 422 on > 500 chars / > 25 facts)
+     PATCH  /memory/user/{id}/fact/{n}
+              body: { text }          → edit fact at index n
+     DELETE /memory/user/{id}/fact/{n}
+              → remove fact n
+     DELETE /memory/user/{id}
+              → wipe row (sets facts: [])
+     GET    /memory/user/{id}/export
+              → application/json download of just this user's row
+     GET    /memory/presets/{id}
+              → { ok, presets: [string], updatedAt }
+     POST   /memory/presets/{id}
+              body: { presets: [string] }  → replace the user's preset list
+
+   All writes are X-SeekDeep-Token guarded · the nav.js interceptor adds it.
+
+   While the endpoints aren't shipped yet, the UI falls back to a local mock
+   so the design renders end-to-end. Mocked data is marked in the rail with
+   a small "MOCK" tag — flips off as soon as a real GET /memory/users 200s.
+*/
+(function () {
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+  const KNOWN_PRESETS = [
+    { k: 'brief',                  d: 'shorter, fewer caveats' },
+    { k: 'expert',                 d: 'assume domain knowledge' },
+    { k: 'no-emoji',               d: 'never use emoji in output' },
+    { k: 'no-followup-questions',  d: 'just answer, no clarifying' },
+    { k: 'formal',                 d: 'no contractions, hedged tone' },
+    { k: 'casual',                 d: 'looser register, contractions ok' },
+  ];
+
+  const MAX_FACTS = 25;
+  const MAX_FACT_CHARS = 500;
+  const MAX_USER_BYTES = 12800; // 25 × 500 chars + json overhead ≈ 12.5 KB
+
+  let state = {
+    isMock: false,
+    users:  [],
+    activeId: null,
+    facts: [],
+    updatedAt: null,
+    presets: [],
+  };
+
+  // --- mock seed ----------------------------------------------------
+  const MOCK_USERS = {
+    '337726847593414656': {
+      display: 'nautilus#0001',
+      facts: [
+        { text: 'works in PST timezone',                                                  at: Date.now() - 1*60*60*1000 },
+        { text: 'prefers Python over JavaScript for backend work',                        at: Date.now() - 4*60*60*1000 },
+        { text: 'runs SeekDeep on an RTX 4090 Laptop GPU (24 GB VRAM)',                   at: Date.now() - 26*60*60*1000 },
+        { text: 'maintains a homebrew PS2 loader called wOPL',                            at: Date.now() - 3*24*60*60*1000 },
+        { text: 'has three cats named after fish (Loach, Goby, Wrasse)',                  at: Date.now() - 8*24*60*60*1000 },
+        { text: 'is a yarn/wool spinning hobbyist — knits while reviewing PRs',           at: Date.now() - 11*24*60*60*1000 },
+      ],
+      presets: ['brief', 'no-followup-questions'],
+    },
+    '481118226214748162': {
+      display: 'deepdiver#3320',
+      facts: [
+        { text: 'works as a backend infra engineer · uses Rust for high-perf services',   at: Date.now() - 6*60*60*1000 },
+        { text: 'has strong opinions about kubernetes pod limits',                        at: Date.now() - 2*24*60*60*1000 },
+        { text: 'prefers terse, no-emoji responses',                                      at: Date.now() - 5*24*60*60*1000 },
+      ],
+      presets: ['no-emoji', 'expert'],
+    },
+    '128739247192847362': {
+      display: 'k-ray#1111',
+      facts: [
+        { text: 'into deep-sea documentaries · cites Blue Planet II constantly',          at: Date.now() - 10*60*60*1000 },
+        { text: 'wants markdown-only responses with no tables',                           at: Date.now() - 3*24*60*60*1000 },
+      ],
+      presets: ['casual'],
+    },
+    '999812374198273492': {
+      display: 'abyssalbot#0888',
+      facts: [{ text: 'is itself a bot · only relays messages from another channel',      at: Date.now() - 14*24*60*60*1000 }],
+      presets: [],
+    },
+    '742839472837492837': {
+      display: 'lanternjaw#7777',
+      facts: [],
+      presets: ['formal'],
+    },
+  };
+
+  // --- helpers ------------------------------------------------------
+  function base() {
+    return (location.protocol === 'http:' || location.protocol === 'https:')
+      ? location.origin
+      : 'http://127.0.0.1:7865';
+  }
+  function fmtAgo(ts) {
+    const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+    if (s < 60)   return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400)return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+  function bytesOf(facts) {
+    return new TextEncoder().encode(JSON.stringify(facts || [])).length;
+  }
+  function avInit(name) { return (name || '?').slice(0, 1).toUpperCase(); }
+
+  async function safeFetch(url, opts) {
+    try {
+      const r = await fetch(url, Object.assign({ signal: AbortSignal.timeout(5000) }, opts || {}));
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+
+  // --- API layer (live first, mock fallback) ------------------------
+  async function listUsers() {
+    const r = await safeFetch(base() + '/memory/users');
+    if (r && r.ok && Array.isArray(r.users)) { state.isMock = false; return r.users; }
+    state.isMock = true;
+    return Object.entries(MOCK_USERS).map(([uid, u]) => ({
+      user_id: uid, display: u.display,
+      fact_count: u.facts.length, bytes: bytesOf(u.facts),
+      updatedAt: u.facts[0]?.at || null,
+    }));
+  }
+  async function loadUser(uid) {
+    const r = await safeFetch(base() + '/memory/user/' + encodeURIComponent(uid));
+    if (r && r.ok) { state.isMock = false; return { facts: r.facts || [], updatedAt: r.updatedAt }; }
+    state.isMock = true;
+    const u = MOCK_USERS[uid];
+    return { facts: u ? u.facts.slice() : [], updatedAt: u?.facts[0]?.at || null };
+  }
+  async function loadPresets(uid) {
+    const r = await safeFetch(base() + '/memory/presets/' + encodeURIComponent(uid));
+    if (r && r.ok && Array.isArray(r.presets)) return r.presets;
+    return (MOCK_USERS[uid]?.presets || []).slice();
+  }
+  async function writeFact(uid, text)         { await safeFetch(base() + '/memory/user/' + uid + '/fact', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
+  async function editFact(uid, n, text)       { await safeFetch(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
+  async function deleteFact(uid, n)           { await safeFetch(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'DELETE' }); }
+  async function clearUser(uid)               { await safeFetch(base() + '/memory/user/' + uid, { method: 'DELETE' }); }
+  async function savePresets(uid, list)       { await safeFetch(base() + '/memory/presets/' + uid, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({presets: list}) }); }
+
+  // --- render -------------------------------------------------------
+  function renderUsersRail(users, query) {
+    const host = $('#rUsers');
+    const q = (query || '').toLowerCase();
+    const filtered = users.filter(u => !q || (u.display + ' ' + u.user_id).toLowerCase().includes(q));
+    if (!filtered.length) { host.innerHTML = '<div class="empty" style="padding:16px 8px;">no users match</div>'; return; }
+    host.innerHTML = filtered.map(u => `
+      <div class="user-item ${u.user_id === state.activeId ? 'active' : ''}" data-id="${u.user_id}">
+        <div class="av">${avInit(u.display)}</div>
+        <div>
+          <div class="name">${u.display || u.user_id}</div>
+          <div class="id">${u.user_id}</div>
+        </div>
+        <div class="count">${u.fact_count}</div>
+      </div>
+    `).join('');
+    host.querySelectorAll('.user-item').forEach(el =>
+      el.addEventListener('click', () => selectUser(el.dataset.id))
+    );
+    $('#rUserCount').textContent = filtered.length + (filtered.length !== users.length ? ' / ' + users.length : '');
+  }
+
+  function renderFacts() {
+    const host = $('#factsList');
+    if (!state.activeId) { host.innerHTML = '<div class="empty">⋯ pick a user from the rail</div>'; return; }
+    if (!state.facts.length) {
+      host.innerHTML = `<div class="empty">▸ no facts yet · type something in the composer below or run <span style="color:var(--cyan-1)">@SeekDeep remember</span> in Discord</div>`;
+      return;
+    }
+    host.innerHTML = state.facts.map((f, i) => `
+      <div class="fact" data-idx="${i}">
+        <div class="fact-head">
+          <span class="idx">#${i + 1}</span>
+          <span class="when">${fmtAgo(f.at)}</span>
+        </div>
+        <div class="fact-text" data-text>${escapeHtml(f.text)}</div>
+        <div class="fact-actions">
+          <button class="mini-btn" data-act="edit">EDIT</button>
+          <button class="mini-btn good" data-act="save" style="display:none;">SAVE</button>
+          <button class="mini-btn" data-act="cancel" style="display:none;">CANCEL</button>
+          <button class="mini-btn bad" data-act="forget">FORGET</button>
+        </div>
+      </div>
+    `).join('');
+    host.querySelectorAll('.fact').forEach(wireFactCard);
+  }
+
+  function wireFactCard(card) {
+    const idx = +card.dataset.idx;
+    const textEl = card.querySelector('[data-text]');
+    const editBtn = card.querySelector('[data-act="edit"]');
+    const saveBtn = card.querySelector('[data-act="save"]');
+    const cancelBtn = card.querySelector('[data-act="cancel"]');
+    const forgetBtn = card.querySelector('[data-act="forget"]');
+    let originalText = state.facts[idx].text;
+
+    editBtn.addEventListener('click', () => {
+      textEl.setAttribute('contenteditable', 'true');
+      textEl.focus();
+      editBtn.style.display = 'none';
+      saveBtn.style.display = ''; cancelBtn.style.display = '';
+    });
+    cancelBtn.addEventListener('click', () => {
+      textEl.removeAttribute('contenteditable');
+      textEl.textContent = originalText;
+      editBtn.style.display = ''; saveBtn.style.display = 'none'; cancelBtn.style.display = 'none';
+    });
+    saveBtn.addEventListener('click', async () => {
+      const newText = textEl.textContent.trim();
+      if (!newText || newText === originalText) { cancelBtn.click(); return; }
+      if (newText.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars (${newText.length})`); return; }
+      state.facts[idx].text = newText;
+      state.facts[idx].at   = Date.now();
+      await editFact(state.activeId, idx, newText);
+      textEl.removeAttribute('contenteditable');
+      editBtn.style.display = ''; saveBtn.style.display = 'none'; cancelBtn.style.display = 'none';
+      originalText = newText;
+      if (state.isMock) MOCK_USERS[state.activeId].facts = state.facts.slice();
+      renderMeters(); renderInjection();
+    });
+    forgetBtn.addEventListener('click', async () => {
+      confirmModal(`Forget fact #${idx + 1}?`, state.facts[idx].text, async () => {
+        state.facts.splice(idx, 1);
+        await deleteFact(state.activeId, idx);
+        if (state.isMock) MOCK_USERS[state.activeId].facts = state.facts.slice();
+        renderFacts(); renderMeters(); renderInjection(); refreshUserRow();
+      });
+    });
+  }
+
+  function refreshUserRow() {
+    const row = state.users.find(u => u.user_id === state.activeId);
+    if (row) { row.fact_count = state.facts.length; row.bytes = bytesOf(state.facts); row.updatedAt = Date.now(); }
+    renderUsersRail(state.users, $('#rSearch').value);
+  }
+
+  function renderMeters() {
+    const fc = state.facts.length;
+    const bs = bytesOf(state.facts);
+    const fp = Math.min(100, (fc / MAX_FACTS) * 100);
+    const bp = Math.min(100, (bs / MAX_USER_BYTES) * 100);
+    $('#mFactsLbl').textContent = fc + ' / ' + MAX_FACTS;
+    $('#mStorageLbl').textContent = (bs < 1024 ? bs + ' B' : (bs/1024).toFixed(1) + ' KB') + ' / 12.5 KB';
+    const fbar = $('#mFactsBar'); fbar.style.width = fp + '%'; fbar.className = fp > 80 ? 'warn' : '';
+    const bbar = $('#mStorageBar'); bbar.style.width = bp + '%'; bbar.className = bp > 80 ? 'warn' : '';
+    if (state.updatedAt) $('#hUpdated').textContent = 'updated ' + fmtAgo(state.updatedAt);
+    else $('#hUpdated').textContent = 'no writes yet';
+  }
+
+  function renderPresets() {
+    const host = $('#presetGrid');
+    host.innerHTML = KNOWN_PRESETS.map(p => `
+      <div class="preset-chip ${state.presets.includes(p.k) ? 'on' : ''}" data-k="${p.k}">
+        <div>
+          <div>${p.k}</div>
+          <span class="ds">${p.d}</span>
+        </div>
+        <span class="tick"></span>
+      </div>
+    `).join('');
+    host.querySelectorAll('.preset-chip').forEach(el => {
+      el.addEventListener('click', async () => {
+        if (!state.activeId) return;
+        const k = el.dataset.k;
+        const i = state.presets.indexOf(k);
+        if (i >= 0) state.presets.splice(i, 1); else state.presets.push(k);
+        el.classList.toggle('on');
+        await savePresets(state.activeId, state.presets);
+        if (state.isMock && MOCK_USERS[state.activeId]) MOCK_USERS[state.activeId].presets = state.presets.slice();
+        renderInjection();
+        $('#psCount').textContent = state.presets.length + ' active';
+      });
+    });
+    $('#psCount').textContent = state.presets.length + ' active';
+  }
+
+  function renderInjection() {
+    const presetLine = state.presets.length
+      ? 'Apply: ' + state.presets.join(', ') + '.'
+      : '(no presets active)';
+    const factLines = state.facts.length
+      ? state.facts.map(f => '<span class="inj">- ' + escapeHtml(f.text) + '</span>').join('\n')
+      : '<span class="inj">(nothing yet — facts append here in /chat)</span>';
+    $('#injectionPreview').innerHTML =
+      '<span class="sys"># system prompt</span>\n' +
+      'You are SeekDeep. <span class="inj">' + escapeHtml(presetLine) + '</span>\n\n' +
+      '<span class="inj"># injected memory · ' + state.facts.length + ' fact' + (state.facts.length === 1 ? '' : 's') + '</span>\n' +
+      factLines + '\n\n' +
+      '<span class="usr"># user</span>\n' +
+      '<span class="usr">@SeekDeep …</span>';
+  }
+
+  async function selectUser(uid) {
+    state.activeId = uid;
+    const u = state.users.find(x => x.user_id === uid);
+    $('#hUserName').textContent = u?.display || uid;
+    $('#hUserId').textContent   = uid;
+    $('#hPath').textContent     = 'GET /memory/user/' + uid;
+    $('#factsList').innerHTML   = '<div class="empty">⋯ loading facts…</div>';
+    const [data, presets] = await Promise.all([loadUser(uid), loadPresets(uid)]);
+    state.facts     = data.facts;
+    state.updatedAt = data.updatedAt;
+    state.presets   = presets;
+    renderUsersRail(state.users, $('#rSearch').value);
+    renderFacts(); renderMeters(); renderPresets(); renderInjection();
+    updateMockTag();
+  }
+
+  function updateMockTag() {
+    const tag = $('#memBackendTag');
+    if (state.isMock) {
+      tag.style.color = 'var(--warn)';
+      tag.style.borderColor = 'color-mix(in oklab, var(--warn) 45%, transparent)';
+      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>MOCK · endpoints not shipped';
+      tag.title = 'GET /memory/users not implemented yet. UI reads from in-page mock until Claude Code ships the endpoints — see HANDOFF_CLAUDE_CODE.md';
+    }
+  }
+
+  function confirmModal(title, body, ok) {
+    $('#cfTitle').textContent = title;
+    $('#cfBody').textContent  = body;
+    $('#cf').classList.add('open');
+    $('#cfBack').classList.add('open');
+    const close = () => { $('#cf').classList.remove('open'); $('#cfBack').classList.remove('open'); };
+    $('#cfCancel').onclick = close;
+    $('#cfBack').onclick   = close;
+    $('#cfOk').onclick     = async () => { close(); await ok(); };
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  // --- compose new fact ---------------------------------------------
+  const newFactInput = $('#newFact');
+  newFactInput.addEventListener('input', () => {
+    $('#newFactLen').textContent = newFactInput.value.length + ' / ' + MAX_FACT_CHARS;
   });
-});
+  newFactInput.addEventListener('keydown', e => { if (e.key === 'Enter') $('#addFactBtn').click(); });
+  $('#addFactBtn').addEventListener('click', async () => {
+    const text = newFactInput.value.trim();
+    if (!text) return;
+    if (text.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars`); return; }
+    if (state.facts.length >= MAX_FACTS) { alert(`Already at the ${MAX_FACTS}-fact cap. Forget one first.`); return; }
+    if (!state.activeId) { alert('Pick a user first.'); return; }
+    state.facts.unshift({ text, at: Date.now() });
+    state.updatedAt = Date.now();
+    await writeFact(state.activeId, text);
+    if (state.isMock) MOCK_USERS[state.activeId].facts = state.facts.slice();
+    newFactInput.value = '';
+    $('#newFactLen').textContent = '0 / ' + MAX_FACT_CHARS;
+    renderFacts(); renderMeters(); renderInjection(); refreshUserRow();
+  });
+
+  // --- danger zone --------------------------------------------------
+  $('#clearBtn').addEventListener('click', () => {
+    if (!state.activeId) return;
+    if (!state.facts.length) { alert('Already empty.'); return; }
+    confirmModal('Wipe all facts?', `This will DELETE all ${state.facts.length} fact${state.facts.length===1?'':'s'} for ${$('#hUserName').textContent}. Atomic write · no soft-delete · cannot be undone.`, async () => {
+      state.facts = []; state.updatedAt = Date.now();
+      await clearUser(state.activeId);
+      if (state.isMock) MOCK_USERS[state.activeId].facts = [];
+      renderFacts(); renderMeters(); renderInjection(); refreshUserRow();
+    });
+  });
+
+  $('#exportBtn').addEventListener('click', () => {
+    if (!state.activeId) return;
+    const payload = { user_id: state.activeId, display: $('#hUserName').textContent, facts: state.facts, presets: state.presets, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `seekdeep-memory-${state.activeId}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  });
+
+  // --- search rail --------------------------------------------------
+  $('#rSearch').addEventListener('input', () => renderUsersRail(state.users, $('#rSearch').value));
+
+  // --- boot ---------------------------------------------------------
+  (async function () {
+    state.users = await listUsers();
+    renderUsersRail(state.users);
+    updateMockTag();
+    if (state.users.length) selectUser(state.users[0].user_id);
+  })();
+})();
 </script>
 <script src="nav.js" defer></script>
 </body>

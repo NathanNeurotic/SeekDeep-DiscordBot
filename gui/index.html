@@ -260,7 +260,7 @@
     <a href="roadmap.html">Roadmap</a>
   </div>
   <div class="row">
-    <span class="pill"><span class="dot"></span>v10.35 · LOCAL</span>
+    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
   </div>
 </nav>
 
@@ -315,7 +315,7 @@
   <!-- ===== WORKING SURFACES ===== -->
   <div class="sec-head">
     <h2>Working surfaces</h2>
-    <span class="count">06</span>
+    <span class="count">09</span>
   </div>
   <div class="grid secondary">
     <a class="card" href="docs.html">
@@ -349,16 +349,38 @@
     <a class="card" href="changelog.html">
       <div class="num">08 / CHANGELOG</div>
       <h3>Release history</h3>
-      <p>Versioned timeline from v10.1 onward, tagged by category (feat / fix / perf / docs) with per-release item lists.</p>
+      <p>Versioned timeline from <span data-version>v10.1</span> onward, tagged by category (feat / fix / perf / docs) with per-release item lists.</p>
       <div class="foot"><span class="path">changelog.html</span><span>→</span></div>
     </a>
 
     <a class="card" href="memory.html">
-      <span class="badge warn">Preview</span>
+      <span class="badge">Live</span>
       <div class="num">09 / MEMORY</div>
       <h3>Persistent memory</h3>
-      <p>Design surface for the proposed per-user fact store — review, edit, export, and clear flows. Backend work is parked in the roadmap.</p>
+      <p>Per-user fact store — review, edit, export, clear. Backend now live; data/user-facts.json schema with 25-fact / 500-char caps.</p>
       <div class="foot"><span class="path">memory.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="image-ab.html">
+      <div class="num">10 / IMAGE A/B</div>
+      <h3>Pipeline comparison</h3>
+      <p>Same prompt + seed across <span class="mono">/image</span>, <span class="mono">/img2img</span>, <span class="mono">/instruct-pix2pix</span>, <span class="mono">/inpaint</span>. Four panels, one click.</p>
+      <div class="foot"><span class="path">image-ab.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="prompts.html">
+      <div class="num">11 / PROMPTS</div>
+      <h3>Template marketplace</h3>
+      <p>Local prompt templates + share-to-#prompts channel embed. Discord <em>is</em> the storage — no cloud, no auth, server-scoped.</p>
+      <div class="foot"><span class="path">prompts.html</span><span>→</span></div>
+    </a>
+
+    <a class="card" href="tts.html">
+      <span class="badge warn">Mock</span>
+      <div class="num">12 / TTS</div>
+      <h3>Voice channel preview</h3>
+      <p>VC picker, Piper voice list, queue mockup. Backend (Piper / XTTS) deferred indefinitely; this is the integration target when it lands.</p>
+      <div class="foot"><span class="path">tts.html</span><span>→</span></div>
     </a>
   </div>
 
@@ -369,27 +391,27 @@
   </div>
   <div class="grid tertiary">
     <a class="card" href="landing.html">
-      <div class="num">10 / LANDING</div>
+      <div class="num">13 / LANDING</div>
       <h3>Public landing page</h3>
       <p>External-facing overview of the project.</p>
     </a>
     <a class="card" href="pitch.html">
-      <div class="num">11 / PITCH</div>
+      <div class="num">14 / PITCH</div>
       <h3>Nine-slide deck</h3>
       <p>1920×1080, scaled to fit. ← / → to navigate.</p>
     </a>
     <a class="card" href="tour.html">
-      <div class="num">12 / TOUR</div>
+      <div class="num">15 / TOUR</div>
       <h3>Guided walkthrough</h3>
       <p>Seven-step overlay with spotlight and keyboard navigation.</p>
     </a>
     <a class="card" href="mobile.html">
-      <div class="num">13 / MOBILE</div>
+      <div class="num">16 / MOBILE</div>
       <h3>Phone-size mocks</h3>
-      <p>Hub, Chat, and Control Center at 375×812.</p>
+      <p>Hub, Chat, and Control Center at 375×812. Chat.html is now a real PWA.</p>
     </a>
     <a class="card" href="boot.html">
-      <div class="num">14 / BOOT</div>
+      <div class="num">17 / BOOT</div>
       <h3>Startup animation</h3>
       <p>14-step boot log with logo materialization.</p>
     </a>
@@ -400,43 +422,37 @@
     <div class="panel" style="padding: 22px 24px;">
       <div class="panel-head">
         <span class="label">Local stack</span>
-        <span class="tag">Example readout · awaiting live wiring</span>
+        <span class="tag" id="hub-stack-tag" data-task="3">· connecting to /events…</span>
       </div>
-      <div class="stack-row">
+      <div class="stack-row" id="hub-row-vram">
+        <span class="who">VRAM <small>cuda:0</small></span>
+        <span class="muted" data-vram-used>—</span>
+        <span class="muted" data-vram-bar style="font-family:var(--font-mono); font-size: 11px;">────────</span>
+        <span class="pill" data-vram-pill><span class="dot"></span>WAITING</span>
+      </div>
+      <div class="stack-row" id="hub-row-loaded">
+        <span class="who" data-loaded-name>No model resident <small data-loaded-role>—</small></span>
+        <span class="muted" data-loaded-backend>—</span>
+        <span class="muted" data-loaded-vram>—</span>
+        <span class="pill" data-loaded-pill><span class="dot"></span>IDLE</span>
+      </div>
+      <div class="stack-row" id="hub-row-queue">
+        <span class="who">Request queue <small>in-flight</small></span>
+        <span class="muted" data-q-chat>chat 0</span>
+        <span class="muted" data-q-image>image 0</span>
+        <span class="pill" data-q-pill><span class="dot"></span>QUIET</span>
+      </div>
+      <div class="stack-row" id="hub-row-bus">
+        <span class="who">Event bus <small>/events</small></span>
+        <span class="muted" data-bus-events>0 events</span>
+        <span class="muted" data-bus-uptime>—</span>
+        <span class="pill" data-bus-pill><span class="dot"></span>OFFLINE</span>
+      </div>
+      <div class="stack-row" id="hub-row-bot">
         <span class="who">SeekDeep bot <small>node index.js</small></span>
-        <span class="muted">48ms ping</span>
-        <span class="muted">9% CPU</span>
-        <span class="pill on"><span class="dot"></span>UP</span>
-      </div>
-      <div class="stack-row">
-        <span class="who">AI side-car <small>uvicorn :7865</small></span>
-        <span class="muted">queue 0</span>
-        <span class="muted">14.2 / 24 GB</span>
-        <span class="pill on"><span class="dot"></span>UP</span>
-      </div>
-      <div class="stack-row">
-        <span class="who">SearXNG <small>:8080</small></span>
-        <span class="muted">last 12s ago</span>
-        <span class="muted">—</span>
-        <span class="pill on"><span class="dot"></span>UP</span>
-      </div>
-      <div class="stack-row">
-        <span class="who">Llama-3.1-8B-Instruct <small>4-bit</small></span>
-        <span class="muted">default_chat</span>
-        <span class="muted">5.1 GB</span>
-        <span class="pill cyan"><span class="dot"></span>RESIDENT</span>
-      </div>
-      <div class="stack-row">
-        <span class="who">Dreamshaper-XL <small>sdxl</small></span>
-        <span class="muted">image</span>
-        <span class="muted">6.8 GB</span>
-        <span class="pill"><span class="dot"></span>WARM</span>
-      </div>
-      <div class="stack-row">
-        <span class="who">Qwen2.5-VL-3B <small>vision</small></span>
-        <span class="muted">vision</span>
-        <span class="muted">3.4 GB</span>
-        <span class="pill warn"><span class="dot"></span>EVICTABLE</span>
+        <span class="muted" data-bot-requests>—</span>
+        <span class="muted" data-bot-uptime>—</span>
+        <span class="pill" data-bot-pill><span class="dot"></span>WAITING</span>
       </div>
     </div>
 
@@ -456,10 +472,137 @@
   </section>
 
   <div class="footer">
-    <span>SEEKDEEP · v10.35 · LOCAL</span>
+    <span>SEEKDEEP · <span data-version>v10.35</span> · LOCAL</span>
     <span>No telemetry · No cloud · Runs on your machine</span>
   </div>
 </main>
 <script src="nav.js" defer></script>
+<script>
+/* Task 3 · wire Hub “Local stack” panel to SeekDeepEvents bus.
+   Bus is provided by gui/events.js (auto-loaded by nav.js). Falls back
+   gracefully when the bus isn't available (panel reads “OFFLINE”). */
+(function () {
+  const $  = (sel, root=document) => root.querySelector(sel);
+  let evCount = 0;
+  let connectedAt = null;
+
+  function fmtMb(mb) {
+    if (!Number.isFinite(mb)) return '—';
+    return mb >= 1024 ? (mb/1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+  }
+  function vramBar(used, total) {
+    if (!total) return '────────';
+    const pct = Math.max(0, Math.min(1, used/total));
+    const w = 12, filled = Math.round(pct*w);
+    return '█'.repeat(filled) + '─'.repeat(w - filled) + ' ' + Math.round(pct*100) + '%';
+  }
+  function fmtUptime(sec) {
+    if (sec < 60) return Math.round(sec) + 's';
+    if (sec < 3600) return Math.floor(sec/60) + 'm';
+    return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+  }
+
+  function setBus(state) {
+    const tag = $('#hub-stack-tag');
+    const pill = document.querySelector('[data-bus-pill]');
+    if (state === 'live') {
+      if (tag) { tag.textContent = '• live'; tag.style.color = 'var(--good)'; tag.style.borderColor = 'color-mix(in oklab, var(--good) 45%, transparent)'; }
+      if (pill) { pill.className = 'pill on'; pill.innerHTML = '<span class="dot"></span>LIVE'; pill.dataset.busPill = ''; }
+      connectedAt = Date.now();
+    } else {
+      if (tag) { tag.textContent = '· /events offline'; tag.style.color = 'var(--bad)'; tag.style.borderColor = 'color-mix(in oklab, var(--bad) 45%, transparent)'; }
+      if (pill) { pill.className = 'pill bad'; pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.dataset.busPill = ''; }
+      connectedAt = null;
+    }
+  }
+
+  function bump() {
+    evCount++;
+    const el = document.querySelector('[data-bus-events]');
+    if (el) el.textContent = evCount + ' event' + (evCount === 1 ? '' : 's');
+  }
+  setInterval(() => {
+    if (!connectedAt) return;
+    const el = document.querySelector('[data-bus-uptime]');
+    if (el) el.textContent = 'up ' + fmtUptime((Date.now() - connectedAt)/1000);
+  }, 1000);
+
+  function onVram(d) {
+    bump();
+    document.querySelector('[data-vram-used]').textContent = fmtMb(d.used_mb) + ' / ' + fmtMb(d.total_mb);
+    document.querySelector('[data-vram-bar]').textContent  = vramBar(d.used_mb, d.total_mb);
+    const pill = document.querySelector('[data-vram-pill]');
+    const pct = d.used_mb / d.total_mb;
+    pill.className = 'pill ' + (pct > 0.85 ? 'bad' : pct > 0.6 ? 'warn' : 'on');
+    pill.innerHTML = '<span class="dot"></span>' + (pct > 0.85 ? 'PRESSURE' : pct > 0.6 ? 'HOT' : 'OK');
+    pill.dataset.vramPill = '';
+  }
+  function onLoaded(d) {
+    bump();
+    document.querySelector('[data-loaded-name]').firstChild.textContent = d.model || '—';
+    document.querySelector('[data-loaded-role]').textContent = d.role || '—';
+    document.querySelector('[data-loaded-vram]').textContent = fmtMb(d.vram_mb);
+    const pill = document.querySelector('[data-loaded-pill]');
+    pill.className = 'pill cyan';
+    pill.innerHTML = '<span class="dot"></span>RESIDENT';
+    pill.dataset.loadedPill = '';
+  }
+  function onEvicted(d) {
+    bump();
+    const pill = document.querySelector('[data-loaded-pill]');
+    pill.className = 'pill warn';
+    pill.innerHTML = '<span class="dot"></span>EVICTED';
+    pill.dataset.loadedPill = '';
+    document.querySelector('[data-loaded-name]').firstChild.textContent = '(no model resident)';
+  }
+  function onQueue(d) {
+    bump();
+    document.querySelector('[data-q-chat]').textContent  = 'chat ' + (d.chat ?? 0);
+    document.querySelector('[data-q-image]').textContent = 'image ' + (d.image ?? 0);
+    const total = (d.chat||0) + (d.image||0) + (d.vision||0);
+    const pill = document.querySelector('[data-q-pill]');
+    pill.className = 'pill ' + (total > 3 ? 'warn' : total > 0 ? 'cyan' : '');
+    pill.innerHTML = '<span class="dot"></span>' + (total > 0 ? 'BUSY ' + total : 'QUIET');
+    pill.dataset.qPill = '';
+  }
+  function onRequest(d) {
+    bump();
+    const pill = document.querySelector('[data-bot-pill]');
+    pill.className = 'pill cyan';
+    pill.innerHTML = '<span class="dot"></span>SERVING';
+    pill.dataset.botPill = '';
+    document.querySelector('[data-bot-requests]').textContent = 'req ' + (d.id || '').slice(-6);
+  }
+  function onRequestDone(d) {
+    bump();
+    const pill = document.querySelector('[data-bot-pill]');
+    pill.className = 'pill on';
+    pill.innerHTML = '<span class="dot"></span>READY';
+    pill.dataset.botPill = '';
+    if (Number.isFinite(d.elapsed_ms)) {
+      document.querySelector('[data-bot-uptime]').textContent = d.elapsed_ms + 'ms last';
+    }
+  }
+
+  function attach() {
+    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
+    window.SeekDeepEvents.on('_open',         () => setBus('live'));
+    window.SeekDeepEvents.on('_close',        () => setBus('offline'));
+    window.SeekDeepEvents.on('vram.sample',   onVram);
+    window.SeekDeepEvents.on('model.loaded',  onLoaded);
+    window.SeekDeepEvents.on('model.evicted', onEvicted);
+    window.SeekDeepEvents.on('queue.depth',   onQueue);
+    window.SeekDeepEvents.on('request.start', onRequest);
+    window.SeekDeepEvents.on('request.done',  onRequestDone);
+    setBus(window.SeekDeepEvents.connected ? 'live' : 'offline');
+    return true;
+  }
+  if (!attach()) {
+    let n = 0;
+    const iv = setInterval(() => { if (attach() || ++n > 30) clearInterval(iv); }, 250);
+    setTimeout(() => { if (!window.SeekDeepEvents) setBus('offline'); }, 5000);
+  }
+})();
+</script>
 </body>
 </html>

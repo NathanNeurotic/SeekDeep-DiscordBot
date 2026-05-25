@@ -392,6 +392,88 @@
   .btn-mini.warn { color: var(--warn); }
   .btn-mini.bad  { color: var(--bad); }
 
+  .m-backend {
+    display: inline-block;
+    font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.14em;
+    padding: 1px 6px;
+    border-radius: 2px;
+    margin-left: 8px;
+    vertical-align: 1px;
+    border: 1px solid currentColor;
+    text-transform: uppercase;
+  }
+  .m-backend.hf     { color: var(--cyan-1); }
+  .m-backend.ollama { color: #a78bfa; }
+  .m-backend.remote { color: var(--warn); }
+
+  /* Add-a-Model wizard modal */
+  .wiz-back { position: fixed; inset: 0; z-index: 10003; background: radial-gradient(circle at 50% 50%, rgba(2,6,15,0.86), rgba(2,6,15,0.96)); backdrop-filter: blur(8px); display: none; }
+  .wiz-back.open { display: block; }
+  .wiz {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 10004; width: min(720px, calc(100vw - 40px));
+    max-height: min(720px, calc(100vh - 60px));
+    display: none;
+    background: linear-gradient(180deg, rgba(10,26,48,0.97), rgba(6,18,31,0.99));
+    border: 1px solid rgba(45,212,255,0.5);
+    border-radius: var(--r-md);
+    box-shadow: 0 30px 90px rgba(0,0,0,0.7), 0 0 60px rgba(45,212,255,0.3);
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .wiz.open { display: flex; }
+  .wiz-head {
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid rgba(45,212,255,0.25);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .wiz-head h3 { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; margin: 0; }
+  .wiz-head .step-pill { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; }
+  .wiz-stepper { display: flex; gap: 8px; padding: 14px 22px 0; }
+  .wiz-stepper .s {
+    flex: 1; height: 3px; background: rgba(45,212,255,0.12); border-radius: 2px;
+    position: relative; overflow: hidden;
+  }
+  .wiz-stepper .s.done { background: var(--cyan-1); box-shadow: 0 0 8px rgba(45,212,255,0.5); }
+  .wiz-stepper .s.active { background: linear-gradient(90deg, var(--cyan-1), rgba(45,212,255,0.15)); box-shadow: 0 0 8px rgba(45,212,255,0.5); }
+  .wiz-body { padding: 20px 22px; overflow-y: auto; flex: 1; }
+  .wiz-body .step { display: none; }
+  .wiz-body .step.active { display: block; }
+  .wiz-body label.field { display: block; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--hull-3); margin: 14px 0 6px; }
+  .wiz-body label.field:first-child { margin-top: 0; }
+  .wiz-body input[type=text], .wiz-body input[type=password], .wiz-body select { width: 100%; }
+  .wiz-body .desc { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); line-height: 1.6; margin: 8px 0 0; }
+  .wiz-body .backend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .wiz-body .backend-card {
+    padding: 14px 16px; border: 1px solid var(--stroke); border-radius: var(--r-md);
+    cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    display: flex; flex-direction: column; gap: 6px;
+    background: rgba(2,6,15,0.45);
+  }
+  .wiz-body .backend-card:hover { border-color: var(--cyan-1); }
+  .wiz-body .backend-card.sel { border-color: var(--cyan-1); background: rgba(45,212,255,0.08); }
+  .wiz-body .backend-card .nm { font-family: var(--font-mono); font-size: 13px; color: var(--cyan-1); letter-spacing: 0.06em; }
+  .wiz-body .backend-card .ds { font-size: 12px; color: var(--hull-3); line-height: 1.55; }
+  .wiz-body .backend-card .warn-strip { font-family: var(--font-mono); font-size: 10px; color: var(--warn); letter-spacing: 0.14em; }
+  .wiz-body .summary-row { display: grid; grid-template-columns: 140px 1fr; gap: 14px; padding: 9px 0; border-bottom: 1px dashed rgba(45,212,255,0.15); font-family: var(--font-mono); font-size: 12px; }
+  .wiz-body .summary-row b { color: var(--cyan-1); font-weight: 500; }
+  .wiz-body .summary-row span:first-child { color: var(--hull-3); letter-spacing: 0.12em; text-transform: uppercase; font-size: 10px; }
+  .wiz-foot { padding: 14px 22px; border-top: 1px solid rgba(45,212,255,0.25); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .wiz-foot .left, .wiz-foot .right { display: flex; gap: 8px; }
+  .wiz-privacy {
+    background: color-mix(in oklab, var(--warn) 8%, transparent);
+    border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent);
+    border-radius: var(--r-md);
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+    letter-spacing: 0.06em;
+    color: var(--warn);
+    margin: 8px 0 0;
+  }
+
+
   /* React rules */
   .rule-row {
     display: grid;
@@ -597,7 +679,7 @@
         Server stats
       </a>
 
-      <div class="grp" style="margin-top:auto; padding-top: 24px;">v10.35</div>
+      <div class="grp" style="margin-top:auto; padding-top: 24px;"><span data-version>v10.35</span></div>
     </nav>
 
     <!-- MAIN PANES -->
@@ -793,7 +875,7 @@
           <div class="actions">
             <input placeholder="Search models…" style="width: 240px;" />
             <button class="btn btn-ghost">Prune cache (4.2 GB)</button>
-            <button class="btn btn-primary">+ Pull model</button>
+            <button class="btn btn-primary" id="openAddModel">+ Add model</button>
           </div>
         </div>
 
@@ -815,20 +897,28 @@
           </div>
         </div>
 
+        
+        <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 12px; padding: 10px 14px; background: rgba(2,6,15,0.55); border: 1px solid var(--stroke); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; flex-wrap: wrap;">
+          <span><span class="m-backend hf" style="margin-right:4px;">HF</span> hugging face · local</span>
+          <span><span class="m-backend ollama" style="margin-right:4px;">OL</span> ollama daemon</span>
+          <span><span class="m-backend remote" style="margin-right:4px;">⚠ REMOTE</span> prompts leave the box</span>
+          <span style="margin-left:auto;"><span class="pill cyan" style="padding:1px 7px;"><span class="dot"></span>RESIDENT</span> · <span class="pill" style="padding:1px 7px;"><span class="dot"></span>PINNED</span> · <span class="pill" style="padding:1px 7px;"><span class="dot"></span>CACHED</span> · <span class="pill bad" style="padding:1px 7px;"><span class="dot"></span>NOT INSTALLED</span></span>
+        </div>
+
         <div class="panel-flat" style="padding: 6px 14px;">
           <div style="display: grid; grid-template-columns: 1fr 110px 100px 100px 130px auto; gap: 14px; padding: 12px 0; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; border-bottom: 1px solid var(--stroke);">
             <span>MODEL</span><span>ROLE</span><span>QUANT</span><span>SIZE</span><span>STATE</span><span></span>
           </div>
 
-          <div class="model-row" data-role="default_chat"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span><span class="role">default_chat</span><span>4bit</span><span>5.1 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row" data-role="image"><span class="name">Lykon/dreamshaper-xl-1-0</span><span class="role">image</span><span>fp16</span><span>6.8 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row" data-role="vision"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span><span class="role">vision</span><span>fp16</span><span>3.4 GB</span><span data-role-state><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button></div></div>
-          <div class="model-row" data-role="quality_chat"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span><span class="role">quality_chat</span><span>4bit</span><span>7.2 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>WARM</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row" data-role="reasoning_chat"><span class="name">microsoft/phi-4</span><span class="role">reasoning_chat</span><span>4bit</span><span>9.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row" data-role="fallback_chat"><span class="name">ibm-granite/granite-3.3-8b-instruct</span><span class="role">fallback_chat</span><span>4bit</span><span>4.9 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row" data-role="lightweight_chat"><span class="name">google/gemma-3n-E4B-it</span><span class="role">lightweight_chat</span><span>4bit</span><span>3.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row"><span class="name">timbrooks/instruct-pix2pix</span><span class="role">pix2pix</span><span>fp16</span><span>2.6 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
-          <div class="model-row"><span class="name">CIDAS/clipseg-rd64-refined</span><span class="role">inpaint mask</span><span>fp16</span><span>0.4 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini bad">DEL</button></div></div>
+          <div class="model-row" data-role="default_chat" data-backend="hf" data-model="meta-llama/Llama-3.1-8B-Instruct"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">default_chat</span><span>4bit</span><span>5.1 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="image" data-backend="hf" data-model="Lykon/dreamshaper-xl-1-0"><span class="name">Lykon/dreamshaper-xl-1-0</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">image</span><span>fp16</span><span>6.8 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="vision" data-backend="hf" data-model="Qwen/Qwen2.5-VL-3B-Instruct"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">vision</span><span>fp16</span><span>3.4 GB</span><span data-role-state><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="quality_chat" data-backend="hf" data-model="mistralai/Mistral-Nemo-Instruct-2407"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">quality_chat</span><span>4bit</span><span>7.2 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>WARM</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="reasoning_chat" data-backend="hf" data-model="microsoft/phi-4"><span class="name">microsoft/phi-4</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">reasoning_chat</span><span>4bit</span><span>9.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="fallback_chat" data-backend="hf" data-model="ibm-granite/granite-3.3-8b-instruct"><span class="name">ibm-granite/granite-3.3-8b-instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">fallback_chat</span><span>4bit</span><span>4.9 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="lightweight_chat" data-backend="hf" data-model="google/gemma-3n-E4B-it"><span class="name">google/gemma-3n-E4B-it</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">lightweight_chat</span><span>4bit</span><span>3.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-backend="hf" data-model="timbrooks/instruct-pix2pix"><span class="name">timbrooks/instruct-pix2pix</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">pix2pix</span><span>fp16</span><span>2.6 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-backend="hf" data-model="CIDAS/clipseg-rd64-refined"><span class="name">CIDAS/clipseg-rd64-refined</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">inpaint mask</span><span>fp16</span><span>0.4 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
         </div>
       </section>
 
@@ -855,10 +945,12 @@
             <a class="qj" href="#sec-discord"><span>Discord &amp; routing</span><span class="ct">9</span></a>
             <a class="qj" href="#sec-models"><span>Models &amp; roles</span><span class="ct">8</span></a>
             <a class="qj" href="#sec-vram"><span>VRAM &amp; cache</span><span class="ct">7</span></a>
+            <a class="qj" href="#sec-paths"><span>Paths &amp; backends</span><span class="ct">4</span></a>
+            <a class="qj" href="#sec-remote"><span>Remote chat keys</span><span class="ct">10</span></a>
             <a class="qj" href="#sec-memory"><span>Memory</span><span class="ct">5</span></a>
             <a class="qj" href="#sec-image"><span>Image generation</span><span class="ct">11</span></a>
             <a class="qj" href="#sec-chat"><span>Chat generation</span><span class="ct">4</span></a>
-            <a class="qj" href="#sec-features"><span>Feature flags</span><span class="ct">8</span></a>
+            <a class="qj" href="#sec-features"><span>Feature flags</span><span class="ct">9</span></a>
             <a class="qj" href="#sec-personas"><span>Personas</span><span class="ct">4</span></a>
             <a class="qj" href="#sec-search"><span>Web search</span><span class="ct">4</span></a>
             <a class="qj" href="#sec-admin"><span>Admin</span><span class="ct">3</span></a>
@@ -1022,6 +1114,110 @@
               </div>
             </details>
 
+            <!-- PATHS & BACKENDS (Task 2) -->
+            <details class="cfg-section" id="sec-paths">
+              <summary>
+                <span class="chev">▸</span>
+                <span class="sec-title">Paths &amp; backends <em>HF · Ollama · cache roots</em></span>
+                <span class="sec-dirty"></span>
+                <span class="sec-count">4</span>
+              </summary>
+              <div class="sec-body">
+                <div class="tiny muted" style="margin-bottom: 14px; font-family: var(--font-mono); letter-spacing: 0.1em;">▸ Where weights live on disk · how long Ollama keeps a model warm after the last request. Empty = use each tool's default.</div>
+                <div class="config-row">
+                  <div><div class="key">HF_HOME</div><div class="desc">Hugging Face cache root. Override to put weights on a fast SSD or a separate volume.</div></div>
+                  <input value="" class="mono" placeholder="(default · ~/.cache/huggingface)" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">OLLAMA_MODELS</div><div class="desc">Ollama models directory. Pulled tags live here.</div></div>
+                  <input value="" class="mono" placeholder="(default · ~/.ollama/models)" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">OLLAMA_KEEP_ALIVE</div><div class="desc">Duration a model stays warm in Ollama after the last request. <span class="mono">"0"</span> = evict immediately · <span class="mono">"5m"</span> = keep warm 5 minutes · <span class="mono">"-1"</span> = forever.</div></div>
+                  <input value="5m" class="mono" placeholder="5m" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_AI_BASE_URL</div><div class="desc">FastAPI side-car URL. Loopback only — never expose this beyond the local box.</div></div>
+                  <input value="http://127.0.0.1:7865" class="mono" />
+                  <span class="save">SAVED</span>
+                </div>
+              </div>
+            </details>
+
+            <!-- REMOTE CHAT BACKENDS (Task 2) -->
+            <details class="cfg-section" id="sec-remote">
+              <summary>
+                <span class="chev">▸</span>
+                <span class="sec-title">Remote chat keys <em>per-role API URL + key</em></span>
+                <span class="sec-dirty"></span>
+                <span class="sec-count">10</span>
+              </summary>
+              <div class="sec-body">
+                <div class="tiny" style="margin-bottom: 16px; padding: 12px 14px; background: rgba(255,184,77,0.06); border: 1px solid color-mix(in oklab, var(--warn) 35%, transparent); border-radius: var(--r-md); font-family: var(--font-mono); letter-spacing: 0.08em; color: var(--warn); line-height: 1.65;">
+                  ⚠ <strong>Prompts for these roles leave the local machine.</strong> Keys are stored in <span class="mono" style="color:var(--cyan-1)">.env</span> in plaintext — same threat model as any local dev tool. Loopback only.
+                </div>
+                <div class="tiny muted" style="margin-bottom: 14px; font-family: var(--font-mono); letter-spacing: 0.1em;">▸ Leave a row empty to keep the role on the local HF / Ollama path. Roles without a matching <span class="mono">_BACKEND</span> override stay local even if a key is set here.</div>
+
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_DEFAULT_API_URL</div><div class="desc">Base URL for the <span class="mono">default_chat</span> role when its backend is remote.</div></div>
+                  <input value="" class="mono" placeholder="https://api.openai.com/v1" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_DEFAULT_API_KEY</div><div class="desc">Bearer / x-api-key for the default_chat role.</div></div>
+                  <input type="password" value="" class="mono" placeholder="sk-…" />
+                  <span class="save">SAVED</span>
+                </div>
+
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_LIGHTWEIGHT_API_URL</div><div class="desc">Base URL for <span class="mono">lightweight_chat</span> — used for greetings, translations, trivial routing.</div></div>
+                  <input value="" class="mono" placeholder="(empty · stays local)" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_LIGHTWEIGHT_API_KEY</div><div class="desc">Key for the lightweight_chat role.</div></div>
+                  <input type="password" value="" class="mono" placeholder="(empty)" />
+                  <span class="save">SAVED</span>
+                </div>
+
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_QUALITY_API_URL</div><div class="desc">Base URL for <span class="mono">quality_chat</span> — synthesis-heavy queries. Anthropic uses <span class="mono">https://api.anthropic.com/v1/messages</span>.</div></div>
+                  <input value="" class="mono" placeholder="https://api.anthropic.com/v1/messages" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_QUALITY_API_KEY</div><div class="desc">Key for quality_chat.</div></div>
+                  <input type="password" value="" class="mono" placeholder="sk-ant-…" />
+                  <span class="save">SAVED</span>
+                </div>
+
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_REASONING_API_URL</div><div class="desc">Base URL for <span class="mono">reasoning_chat</span>. Groq / OpenRouter / DeepSeek all speak the openai-compat shape.</div></div>
+                  <input value="" class="mono" placeholder="https://api.groq.com/openai/v1" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_REASONING_API_KEY</div><div class="desc">Key for reasoning_chat.</div></div>
+                  <input type="password" value="" class="mono" placeholder="gsk_…" />
+                  <span class="save">SAVED</span>
+                </div>
+
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_FALLBACK_API_URL</div><div class="desc">Base URL for the cold-failover role.</div></div>
+                  <input value="" class="mono" placeholder="(empty · stays local)" />
+                  <span class="save">SAVED</span>
+                </div>
+                <div class="config-row">
+                  <div><div class="key">LOCAL_CHAT_FALLBACK_API_KEY</div><div class="desc">Key for fallback_chat.</div></div>
+                  <input type="password" value="" class="mono" placeholder="(empty)" />
+                  <span class="save">SAVED</span>
+                </div>
+              </div>
+            </details>
+
             <!-- MEMORY -->
             <details class="cfg-section" id="sec-memory">
               <summary>
@@ -1164,9 +1360,10 @@
                 <span class="chev">▸</span>
                 <span class="sec-title">Feature flags <em>SEEKDEEP_FEATURE_*</em></span>
                 <span class="sec-dirty"></span>
-                <span class="sec-count">8</span>
+                <span class="sec-count">9</span>
               </summary>
               <div class="sec-body">
+                <div class="tiny muted" style="margin-bottom: 12px; font-family: var(--font-mono); letter-spacing: 0.1em;">▸ The three reaction features (<span style="color:var(--cyan-1)">FORCE_REACT</span>, <span style="color:var(--cyan-1)">EMOJI_VAULT</span>, <span style="color:var(--cyan-1)">AUTO_REACT</span>) <strong style="color:var(--warn)">default off</strong> so SeekDeep doesn't fight demonbot in shared servers.</div>
                 <div class="cards-4" style="margin-top: 4px;">
                   <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">IMG2IMG</span><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
@@ -1199,6 +1396,10 @@
                   <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">FORCE_REACT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Manual react via paginated emoji picker.</div>
+                  </div>
+                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                    <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">AUTO_REACT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
+                    <div class="tiny muted">Per-message rule scan · <span class="mono">@SeekDeep reactrule</span> admin.</div>
                   </div>
                 </div>
               </div>
@@ -1306,8 +1507,9 @@
             <div class="sub">Tailing <span class="mono" style="color:var(--cyan-1)">./logs/seekdeep-2026-05-23.log</span> · 14,224 lines</div>
           </div>
           <div class="actions">
-            <button class="btn btn-ghost">Pause</button>
-            <button class="btn btn-ghost">Clear</button>
+            <span class="pill" id="logsModePill" title="live = SeekDeepEvents.log.line · poll = /logs/tail" style="padding: 3px 10px;"><span class="dot"></span>POLL MODE</span>
+            <button class="btn btn-ghost" id="logsPauseBtn">Pause</button>
+            <button class="btn btn-ghost" id="logsClearBtn">Clear</button>
             <button class="btn btn-ghost">Export</button>
           </div>
         </div>
@@ -1581,25 +1783,25 @@
             <span>EMOJI</span><span>PATTERN</span><span>SCOPE</span><span>HITS</span><span>STATE</span><span></span>
           </div>
 
-          <div id="reactRulesList"><div class="rule-row"><span class="emo">🔗</span><span class="pattern">/(https?|ftp):\/\/[^\s]+/</span><span class="scope">any channel · any user</span><span>1,184</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div id="reactRulesList"><div class="rule-row"><span class="emo">🔗</span><span class="pattern">/(https?|ftp):\/\/[^\s]+/</span><span class="scope">any channel · any user</span><span>1,184</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🐙</span><span class="pattern">octopus|squid|kraken</span><span class="scope">#abyss-talk</span><span>412</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🐙</span><span class="pattern">octopus|squid|kraken</span><span class="scope">#abyss-talk</span><span>412</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🛠️</span><span class="pattern">/(error|exception|stack ?trace)/i</span><span class="scope">#dev-logs</span><span>284</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🛠️</span><span class="pattern">/(error|exception|stack ?trace)/i</span><span class="scope">#dev-logs</span><span>284</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🎉</span><span class="pattern">shipped|deployed|launched</span><span class="scope">any channel</span><span>96</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🎉</span><span class="pattern">shipped|deployed|launched</span><span class="scope">any channel</span><span>96</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🥶</span><span class="pattern">cold|freeze|froze</span><span class="scope">any channel</span><span>71</span><span><div class="toggle"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🥶</span><span class="pattern">cold|freeze|froze</span><span class="scope">any channel</span><span>71</span><span><div class="toggle"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🐍</span><span class="pattern">/python|venv|requirements\.txt/i</span><span class="scope">#dev-logs</span><span>58</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">🐍</span><span class="pattern">/python|venv|requirements\.txt/i</span><span class="scope">#dev-logs</span><span>58</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">👀</span><span class="pattern">for @deepdiver</span><span class="scope">user: deepdiver</span><span>42</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">👀</span><span class="pattern">for @deepdiver</span><span class="scope">user: deepdiver</span><span>42</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">💀</span><span class="pattern">monday</span><span class="scope">#water-cooler</span><span>38</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">💀</span><span class="pattern">monday</span><span class="scope">#water-cooler</span><span>38</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">📸</span><span class="pattern">/\.(png|jpe?g|webp)$/i</span><span class="scope">any channel</span><span>1,012</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div>
+          <div class="rule-row"><span class="emo">📸</span><span class="pattern">/\.(png|jpe?g|webp)$/i</span><span class="scope">any channel</span><span>1,012</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
 
-          <div class="rule-row"><span class="emo">🌊</span><span class="pattern">seekdeep|abyss|deep</span><span class="scope">any channel</span><span>814</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div></div></div>
+          <div class="rule-row"><span class="emo">🌊</span><span class="pattern">seekdeep|abyss|deep</span><span class="scope">any channel</span><span>814</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div></div>
         </div>
 
         <div class="rule"></div>
@@ -1849,7 +2051,7 @@
             '<span class="scope">' + escapeHtml(scope) + '</span>' +
             '<span>' + ((rule.hits || 0).toLocaleString()) + '</span>' +
             '<span><div class="toggle' + (enabled ? ' on' : '') + '" data-rule-id="' + escapeHtml(rule.id || '') + '"></div></span>' +
-            '<div><button class="btn-mini">EDIT</button> <button class="btn-mini bad">DEL</button></div>';
+            '<div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div>';
           list.appendChild(row);
         });
       } catch (e) {
@@ -2917,6 +3119,518 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('tweaks-root'));
 root.render(<App />);
 </script>
+
+<!-- ============================================================
+     Task 1 · Add-a-Model wizard modal
+     ============================================================ -->
+<div class="wiz-back" id="wizBack"></div>
+<div class="wiz" id="wiz" role="dialog" aria-label="Add a model">
+  <div class="wiz-head">
+    <h3>Add a model</h3>
+    <span class="step-pill" id="wizStepPill">STEP 1 OF 4 · BACKEND</span>
+  </div>
+  <div class="wiz-stepper">
+    <div class="s active" data-s="1"></div>
+    <div class="s" data-s="2"></div>
+    <div class="s" data-s="3"></div>
+    <div class="s" data-s="4"></div>
+  </div>
+  <div class="wiz-body">
+
+    <!-- STEP 1 · BACKEND -->
+    <div class="step active" data-step="1">
+      <div class="desc" style="margin-bottom: 14px;">Pick where this model runs. The first two stay on your machine; the last three reach out to a remote API and carry a privacy disclosure.</div>
+      <div class="backend-grid">
+        <div class="backend-card" data-backend="hf">
+          <span class="nm">HF · LOCAL DOWNLOAD</span>
+          <span class="ds">Hugging Face <span class="mono">snapshot_download</span> into the cache. No daemon required, no key required.</span>
+        </div>
+        <div class="backend-card" data-backend="ollama">
+          <span class="nm">OLLAMA · LOCAL DAEMON</span>
+          <span class="ds">Pulls a tag via <span class="mono">POST /api/pull</span>. Needs the Ollama daemon listening on <span class="mono">:11434</span>.</span>
+        </div>
+        <div class="backend-card" data-backend="openai-compat">
+          <span class="nm">OPENAI-COMPAT · BYK</span>
+          <span class="ds">DeepSeek, OpenAI, Groq, OpenRouter, xAI Grok — anything that speaks the OpenAI Chat Completions shape.</span>
+          <span class="warn-strip">⚠ prompts leave the local machine</span>
+        </div>
+        <div class="backend-card" data-backend="anthropic">
+          <span class="nm">ANTHROPIC · BYK</span>
+          <span class="ds">Native <span class="mono">/v1/messages</span> with <span class="mono">x-api-key</span> + <span class="mono">anthropic-version</span> headers.</span>
+          <span class="warn-strip">⚠ prompts leave the local machine</span>
+        </div>
+        <div class="backend-card" data-backend="gemini">
+          <span class="nm">GEMINI · BYK</span>
+          <span class="ds">Native <span class="mono">:generateContent</span> with <span class="mono">x-goog-api-key</span>.</span>
+          <span class="warn-strip">⚠ prompts leave the local machine</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2 · MODEL ID -->
+    <div class="step" data-step="2">
+      <label class="field">Model ID</label>
+      <input type="text" id="wizModelId" class="mono" placeholder="meta-llama/Llama-3.1-8B-Instruct" />
+      <p class="desc" id="wizModelDesc">Pick a backend first.</p>
+
+      <div id="wizOllamaTags" style="display:none; margin-top: 14px;">
+        <label class="field">Installed Ollama tags <span style="color:var(--hull-3); letter-spacing: 0.08em; text-transform:none; margin-left: 6px;">(from /health.ollama.tags)</span></label>
+        <div id="wizOllamaTagsList" style="display:flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto;">
+          <span class="chip" data-tag="llama3.1:8b-instruct-q4_K_M">llama3.1:8b-instruct-q4_K_M</span>
+          <span class="chip" data-tag="qwen2.5:7b-instruct-q4_K_M">qwen2.5:7b-instruct-q4_K_M</span>
+          <span class="chip" data-tag="mistral-nemo:12b-instruct-2407-q4_K_M">mistral-nemo:12b-instruct-2407-q4_K_M</span>
+          <span class="chip" data-tag="phi-4:14b-q4_K_M">phi-4:14b-q4_K_M</span>
+          <span class="chip" style="color:var(--hull-3)">(none installed · ‘pull new’ above will fetch)</span>
+        </div>
+      </div>
+
+      <div id="wizAnthropicChoices" style="display:none; margin-top: 14px;">
+        <label class="field">Suggested models</label>
+        <div style="display:flex; flex-wrap: wrap; gap: 6px;">
+          <span class="chip" data-tag="claude-opus-4-7">claude-opus-4-7</span>
+          <span class="chip" data-tag="claude-sonnet-4-6">claude-sonnet-4-6</span>
+          <span class="chip" data-tag="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</span>
+        </div>
+      </div>
+
+      <div id="wizGeminiChoices" style="display:none; margin-top: 14px;">
+        <label class="field">Suggested models</label>
+        <div style="display:flex; flex-wrap: wrap; gap: 6px;">
+          <span class="chip" data-tag="gemini-2.5-pro">gemini-2.5-pro</span>
+          <span class="chip" data-tag="gemini-2.5-flash">gemini-2.5-flash</span>
+          <span class="chip" data-tag="gemini-2.0-flash">gemini-2.0-flash</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3 · API URL + KEY (remote only) -->
+    <div class="step" data-step="3">
+      <div class="wiz-privacy">
+        ⚠ <strong>Privacy disclosure.</strong> Prompts sent to this backend will leave your local machine. The remote provider receives the full prompt body in cleartext over TLS. Keep the key in <span class="mono">.env</span> only; never paste it into chat or commit it.
+      </div>
+      <label class="field">Base URL</label>
+      <input type="text" id="wizApiUrl" class="mono" placeholder="https://api.openai.com/v1" />
+      <p class="desc">Defaults vary by provider. DeepSeek = <span class="mono">https://api.deepseek.com/v1</span> · Groq = <span class="mono">https://api.groq.com/openai/v1</span> · Anthropic = <span class="mono">https://api.anthropic.com/v1/messages</span> · Gemini = <span class="mono">https://generativelanguage.googleapis.com/v1beta</span>.</p>
+
+      <label class="field">API key</label>
+      <input type="password" id="wizApiKey" class="mono" placeholder="(sk-… / sk-ant-… / AIza… / gsk_…)" autocomplete="off" />
+
+      <div id="wizAnthropicVersion" style="display:none;">
+        <label class="field">Anthropic API version</label>
+        <input type="text" id="wizApiVersion" class="mono" value="2023-06-01" />
+      </div>
+    </div>
+
+    <!-- STEP 4 · ASSIGN + CONFIRM -->
+    <div class="step" data-step="4">
+      <label class="field">Assign to chat role <span style="color:var(--hull-3); letter-spacing: 0.08em; text-transform:none; margin-left: 6px;">(optional · patches the <span class="mono">LOCAL_CHAT_&lt;ROLE&gt;_*</span> env keys)</span></label>
+      <select id="wizRole" class="mono">
+        <option value="">— don't assign · just install</option>
+        <option value="default_chat">default_chat</option>
+        <option value="lightweight_chat">lightweight_chat</option>
+        <option value="quality_chat">quality_chat</option>
+        <option value="reasoning_chat">reasoning_chat</option>
+        <option value="fallback_chat">fallback_chat</option>
+      </select>
+
+      <div style="margin-top: 18px;">
+        <label class="field">Review</label>
+        <div class="summary-row"><span>Backend</span><b id="sumBackend">—</b></div>
+        <div class="summary-row"><span>Model ID</span><b id="sumModel">—</b></div>
+        <div class="summary-row" id="sumApiRow" style="display:none;"><span>Base URL</span><b id="sumUrl">—</b></div>
+        <div class="summary-row" id="sumKeyRow" style="display:none;"><span>API key</span><b id="sumKey">—</b></div>
+        <div class="summary-row"><span>Role</span><b id="sumRole">(unassigned)</b></div>
+      </div>
+
+      <div id="wizResult" style="margin-top: 16px; display:none; padding: 12px 14px; border-radius: var(--r-md); font-family: var(--font-mono); font-size: 12px; line-height: 1.6;"></div>
+    </div>
+
+  </div>
+  <div class="wiz-foot">
+    <div class="left">
+      <button class="btn btn-ghost" id="wizCancel">Cancel</button>
+    </div>
+    <div class="right">
+      <button class="btn btn-ghost" id="wizBack2" style="display:none;">‹ Back</button>
+      <button class="btn btn-primary" id="wizNext">Next ›</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Task 1 · Add-a-Model wizard logic
+   ============================================================ */
+(function () {
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+  const wiz       = $('#wiz');
+  const wizBack   = $('#wizBack');
+  const stepPill  = $('#wizStepPill');
+  const nextBtn   = $('#wizNext');
+  const backBtn   = $('#wizBack2');
+
+  let step = 1;
+  const state = { backend: null, model_id: '', api_url: '', api_key: '', api_version: '2023-06-01', role: '' };
+
+  function open() {
+    wiz.classList.add('open');
+    wizBack.classList.add('open');
+    go(1);
+  }
+  function close() {
+    wiz.classList.remove('open');
+    wizBack.classList.remove('open');
+    $('#wizResult').style.display = 'none';
+    $('#wizResult').textContent = '';
+  }
+
+  function go(n) {
+    step = n;
+    $$('.wiz-body .step').forEach(el => el.classList.toggle('active', +el.dataset.step === n));
+    $$('.wiz-stepper .s').forEach((el, i) => {
+      el.classList.remove('active', 'done');
+      if (i + 1 === n) el.classList.add('active');
+      else if (i + 1 < n) el.classList.add('done');
+    });
+    const names = ['', 'BACKEND', 'MODEL ID', 'CREDENTIALS', 'ASSIGN + CONFIRM'];
+    stepPill.textContent = `STEP ${n} OF 4 · ${names[n]}`;
+    backBtn.style.display = n === 1 ? 'none' : '';
+    nextBtn.textContent = n === 4 ? '▸ Install' : 'Next ›';
+    // Skip credentials for local backends
+    if (n === 3 && (state.backend === 'hf' || state.backend === 'ollama')) {
+      return go(4);
+    }
+    if (n === 4) renderSummary();
+  }
+
+  function pickBackend(b) {
+    state.backend = b;
+    $$('.backend-card').forEach(c => c.classList.toggle('sel', c.dataset.backend === b));
+    const desc = {
+      'hf':            'Free-text repo ID. Browse <a href="https://huggingface.co/models" target="_blank" style="color:var(--cyan-1);">huggingface.co/models</a> for ideas.',
+      'ollama':        'Pick from installed tags below, or type a new tag to pull (e.g. <span class="mono">llama3.1:8b-instruct-q4_K_M</span>).',
+      'openai-compat': 'Provider-specific model name. e.g. <span class="mono">deepseek-chat</span>, <span class="mono">gpt-4</span>, <span class="mono">grok-4</span>, <span class="mono">moonshotai/kimi-k2</span>.',
+      'anthropic':     'Pick a Claude model below, or type any current <span class="mono">claude-*</span> ID.',
+      'gemini':        'Pick a Gemini model below, or type any current <span class="mono">gemini-*</span> ID.',
+    };
+    $('#wizModelDesc').innerHTML = desc[b] || '';
+    $('#wizOllamaTags').style.display       = b === 'ollama'    ? 'block' : 'none';
+    $('#wizAnthropicChoices').style.display = b === 'anthropic' ? 'block' : 'none';
+    $('#wizGeminiChoices').style.display    = b === 'gemini'    ? 'block' : 'none';
+    $('#wizAnthropicVersion').style.display = b === 'anthropic' ? 'block' : 'none';
+
+    const urlDefaults = {
+      'openai-compat': 'https://api.openai.com/v1',
+      'anthropic':     'https://api.anthropic.com/v1/messages',
+      'gemini':        'https://generativelanguage.googleapis.com/v1beta',
+    };
+    $('#wizApiUrl').value = urlDefaults[b] || '';
+  }
+
+  function renderSummary() {
+    $('#sumBackend').textContent = state.backend || '—';
+    $('#sumModel').textContent   = state.model_id || '—';
+    const remote = state.backend && state.backend !== 'hf' && state.backend !== 'ollama';
+    $('#sumApiRow').style.display = remote ? 'grid' : 'none';
+    $('#sumKeyRow').style.display = remote ? 'grid' : 'none';
+    $('#sumUrl').textContent = state.api_url || '—';
+    $('#sumKey').textContent = state.api_key ? state.api_key.slice(0, 4) + '••••' + state.api_key.slice(-2) : '—';
+    $('#sumRole').textContent = state.role || '(unassigned)';
+  }
+
+  async function submit() {
+    const body = { backend: state.backend, model_id: state.model_id };
+    if (state.role) body.role = state.role;
+    if (state.backend === 'ollama') body.auto_pull = true;
+    if (state.backend && state.backend !== 'hf' && state.backend !== 'ollama') {
+      body.api_url = state.api_url;
+      body.api_key = state.api_key;
+      if (state.backend === 'anthropic') body.api_version = state.api_version;
+    }
+    const r = $('#wizResult');
+    r.style.display = 'block';
+    r.style.color = 'var(--hull-2)';
+    r.style.background = 'rgba(45,212,255,0.05)';
+    r.style.border = '1px solid var(--stroke)';
+    r.innerHTML = '⋯ <span style="color:var(--cyan-1)">POST /model/install</span> · downloading and probing …';
+    nextBtn.disabled = true;
+    try {
+      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const res = await fetch(base + '/model/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(300_000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        r.style.color = 'var(--good)';
+        r.style.background = 'rgba(88,230,161,0.06)';
+        r.style.borderColor = 'color-mix(in oklab, var(--good) 40%, transparent)';
+        let extra = '';
+        if (data.files_downloaded) extra += ` · ${data.files_downloaded} files`;
+        if (data.local_dir)        extra += `\n  cached to ${data.local_dir}`;
+        if (data.note)             extra += `\n  note: ${data.note}`;
+        if (data.external)         extra += '\n  ⚠ external · prompts leave the local machine';
+        r.textContent = `✓ ${body.backend} · ${body.model_id} installed${extra}`;
+        r.style.whiteSpace = 'pre-wrap';
+        nextBtn.textContent = 'Done · close';
+        nextBtn.onclick = () => { close(); location.reload(); };
+      } else {
+        r.style.color = 'var(--bad)';
+        r.style.background = 'rgba(255,107,107,0.06)';
+        r.style.borderColor = 'color-mix(in oklab, var(--bad) 40%, transparent)';
+        r.textContent = `✕ ${res.status} · ${data.error || data.detail || res.statusText}`;
+        nextBtn.disabled = false;
+      }
+    } catch (e) {
+      r.style.color = 'var(--bad)';
+      r.style.background = 'rgba(255,107,107,0.06)';
+      r.style.borderColor = 'color-mix(in oklab, var(--bad) 40%, transparent)';
+      r.textContent = `✕ couldn't reach /model/install · ${e.message || e}`;
+      nextBtn.disabled = false;
+    }
+  }
+
+  function advance() {
+    if (step === 1) {
+      if (!state.backend) return;
+      return go(2);
+    }
+    if (step === 2) {
+      state.model_id = $('#wizModelId').value.trim();
+      if (!state.model_id) return;
+      const isLocal = state.backend === 'hf' || state.backend === 'ollama';
+      return go(isLocal ? 4 : 3);
+    }
+    if (step === 3) {
+      state.api_url = $('#wizApiUrl').value.trim();
+      state.api_key = $('#wizApiKey').value;
+      state.api_version = $('#wizApiVersion').value.trim() || '2023-06-01';
+      if (!state.api_url || !state.api_key) return;
+      return go(4);
+    }
+    if (step === 4) {
+      state.role = $('#wizRole').value;
+      return submit();
+    }
+  }
+  function regress() {
+    if (step === 4) {
+      const isLocal = state.backend === 'hf' || state.backend === 'ollama';
+      return go(isLocal ? 2 : 3);
+    }
+    if (step > 1) go(step - 1);
+  }
+
+  $('#openAddModel')?.addEventListener('click', open);
+  $('#wizCancel').addEventListener('click', close);
+  wizBack.addEventListener('click', close);
+  nextBtn.addEventListener('click', advance);
+  backBtn.addEventListener('click', regress);
+  $$('.backend-card').forEach(c => c.addEventListener('click', () => pickBackend(c.dataset.backend)));
+  $$('#wizOllamaTagsList .chip, #wizAnthropicChoices .chip, #wizGeminiChoices .chip').forEach(c => {
+    c.addEventListener('click', () => {
+      if (c.dataset.tag) $('#wizModelId').value = c.dataset.tag;
+    });
+  });
+  // Wire the per-row Remove buttons
+  document.querySelectorAll('.model-row [data-act="remove"]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const row = b.closest('.model-row');
+      const model = row.dataset.model || row.querySelector('.name')?.firstChild?.textContent?.trim();
+      const role = row.dataset.role || '';
+      const backend = row.dataset.backend || 'hf';
+      if (!confirm(`Remove ${model}?\nBackend: ${backend.toUpperCase()}\nRole: ${role || '(unassigned)'}`)) return;
+      try {
+        const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+        const r = await fetch(base + '/model/uninstall', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backend, model_id: model, role: role || undefined }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok) {
+          const freed = Number.isFinite(data.freed_bytes) ? ` · freed ${(data.freed_bytes/1024/1024).toFixed(1)} MB` : '';
+          row.style.opacity = '0.4';
+          row.querySelector('[data-role-state]')?.replaceChildren();
+          row.querySelector('[data-role-state]')?.append(Object.assign(document.createElement('span'), { className: 'pill bad', innerHTML: '<span class="dot"></span>NOT INSTALLED' }));
+          alert(`✓ uninstalled${freed}`);
+        } else {
+          alert(`✕ ${r.status} · ${data.error || r.statusText}`);
+        }
+      } catch (e) {
+        alert(`✕ couldn't reach /model/uninstall · ${e.message || e}`);
+      }
+    });
+  });
+})();
+</script>
+
+<!-- ============================================================
+     Task 4 · Models pane live wiring (SeekDeepEvents) +
+     Task 5 · Logs viewer live-stream + poll-mode pill
+     ============================================================ -->
+<script>
+(function () {
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+  // ---- Task 4 · model row state from model.loaded / model.evicted ----
+  function setRowState(role, label, cls) {
+    const row = document.querySelector(`.model-row[data-role="${role}"]`);
+    if (!row) return;
+    const slot = row.querySelector('[data-role-state]');
+    if (!slot) return;
+    slot.innerHTML = `<span class="pill ${cls}" style="padding: 2px 6px;"><span class="dot"></span>${label}</span>`;
+  }
+
+  function applyHealth(h) {
+    if (!h || !h.chat_backends) return;
+    for (const [role, backend] of Object.entries(h.chat_backends)) {
+      const row = document.querySelector(`.model-row[data-role="${role}"]`);
+      if (!row) continue;
+      row.dataset.backend = backend;
+      const chip = row.querySelector('.m-backend');
+      if (chip) {
+        chip.className = 'm-backend ' + (backend === 'hf' ? 'hf'
+                                       : backend === 'ollama' ? 'ollama'
+                                       : 'remote');
+        chip.textContent = backend === 'hf' ? 'HF'
+                          : backend === 'ollama' ? 'OL'
+                          : '⚠ ' + backend.toUpperCase();
+        chip.title = backend === 'hf' ? 'Local Hugging Face'
+                    : backend === 'ollama' ? 'Local Ollama daemon'
+                    : 'Remote · prompts leave the local machine';
+      }
+    }
+    // If chat_backends says a role is remote but model.loaded never fires, mark it CACHED-equivalent
+    const remoteRoles = Object.entries(h.chat_backends).filter(([, b]) => b !== 'hf' && b !== 'ollama').map(([r]) => r);
+    remoteRoles.forEach(r => {
+      const row = document.querySelector(`.model-row[data-role="${r}"]`);
+      if (row && row.querySelector('[data-role-state] .pill')?.textContent?.trim() === 'CACHED') {
+        setRowState(r, 'REMOTE', 'warn');
+      }
+    });
+  }
+
+  function probeHealth() {
+    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    fetch(base + '/health', { signal: AbortSignal.timeout(3000), cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(applyHealth)
+      .catch(() => {});
+  }
+  setTimeout(probeHealth, 800);
+  setInterval(probeHealth, 30_000);
+
+  function attachModelBus() {
+    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
+    window.SeekDeepEvents.on('model.loaded', (d) => {
+      if (d.role) setRowState(d.role, 'RESIDENT', 'cyan');
+    });
+    window.SeekDeepEvents.on('model.evicted', (d) => {
+      if (d.role) setRowState(d.role, 'CACHED', '');
+    });
+    return true;
+  }
+  if (!attachModelBus()) {
+    let n = 0; const iv = setInterval(() => { if (attachModelBus() || ++n > 30) clearInterval(iv); }, 250);
+  }
+
+  // ---- Task 5 · logs viewer ----
+  const logsWrap = $('#logs-wrap');
+  const pill     = $('#logsModePill');
+  const pauseBtn = $('#logsPauseBtn');
+  const clearBtn = $('#logsClearBtn');
+  if (!logsWrap || !pill) return;
+
+  let paused = false;
+  let liveMode = false;
+  let lineCount = 0;
+  const MAX_LINES = 500;
+
+  function setMode(mode) {
+    liveMode = mode === 'live';
+    pill.classList.remove('on', 'warn', 'cyan', 'bad');
+    if (mode === 'live') { pill.classList.add('cyan'); pill.innerHTML = '<span class="dot"></span>LIVE · /events'; pill.title = 'streaming from SeekDeepEvents.log.line'; }
+    else if (mode === 'poll') { pill.classList.add('warn'); pill.innerHTML = '<span class="dot"></span>POLL · /logs/tail'; pill.title = 'SEEKDEEP_EMIT_LOG_LINES=off — bus is silent, falling back to 3s poll on /logs/tail'; }
+    else { pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.title = 'no source available'; }
+  }
+  setMode('poll');
+
+  function appendLine(d) {
+    if (paused) return;
+    if (lineCount === 0) logsWrap.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'log-line';
+    const level = (d.level || 'info').toLowerCase();
+    const colorMap = { info: 'var(--cyan-1)', warn: 'var(--warn)', warning: 'var(--warn)', error: 'var(--bad)', err: 'var(--bad)', debug: 'var(--hull-3)' };
+    const time = d.ts ? new Date(d.ts).toLocaleTimeString('en-US', { hour12: false }) : new Date().toLocaleTimeString('en-US', { hour12: false });
+    row.style.fontFamily = 'var(--font-mono)';
+    row.style.fontSize = '12px';
+    row.style.padding = '5px 14px';
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '90px 60px 90px 1fr';
+    row.style.gap = '12px';
+    row.style.lineHeight = '1.6';
+    row.style.borderBottom = '1px solid color-mix(in oklab, var(--cyan-1) 5%, transparent)';
+    row.innerHTML =
+      `<span style="color: var(--hull-3);">${time}</span>` +
+      `<span style="color: ${colorMap[level] || 'var(--hull-2)'}; text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px;">${level}</span>` +
+      `<span style="color: var(--hull-3);">${d.src || '—'}</span>` +
+      `<span style="color: var(--hull-2);">${(d.msg || '').replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;')}</span>`;
+    logsWrap.appendChild(row);
+    lineCount++;
+    while (lineCount > MAX_LINES) { logsWrap.firstChild?.remove(); lineCount--; }
+    logsWrap.scrollTop = logsWrap.scrollHeight;
+  }
+
+  pauseBtn?.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  });
+  clearBtn?.addEventListener('click', () => {
+    logsWrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ cleared · waiting for new lines</div>';
+    lineCount = 0;
+  });
+
+  function attachLogBus() {
+    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
+    let liveSeen = false;
+    window.SeekDeepEvents.on('log.line', (d) => {
+      if (!liveSeen) { liveSeen = true; setMode('live'); }
+      appendLine(d);
+    });
+    window.SeekDeepEvents.on('_open',  () => { /* live status driven by first log.line */ });
+    window.SeekDeepEvents.on('_close', () => setMode('offline'));
+    // Probe: if we don't see a log.line in 6s, assume EMIT_LOG_LINES=off and fall back to poll mode
+    setTimeout(() => { if (!liveSeen) setMode('poll'); }, 6000);
+    return true;
+  }
+  // Fall back to /logs/tail polling when bus isn't pumping log.line
+  async function pollOnce() {
+    if (liveMode || paused) return;
+    try {
+      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const r = await fetch(base + '/logs/tail?n=20', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json().catch(() => null);
+      const lines = Array.isArray(data?.lines) ? data.lines : [];
+      for (const ln of lines.slice(-5)) {
+        appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
+      }
+    } catch {}
+  }
+  if (!attachLogBus()) {
+    let n = 0; const iv = setInterval(() => { if (attachLogBus() || ++n > 30) clearInterval(iv); }, 250);
+  }
+  setInterval(pollOnce, 3000);
+})();
+</script>
+
 <script src="nav.js" defer></script>
 </body>
 </html>

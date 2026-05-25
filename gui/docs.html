@@ -356,6 +356,14 @@
     box-shadow: inset 0 -1px 0 rgba(0,0,0,0.4);
   }
 </style>
+<style>
+/* Task 10 · quiet ambient motion on text-dense pages */
+.abyss::before { opacity: 0.45; }
+.abyss::after  { opacity: 0.55; }
+.bubbles span { opacity: 0.20 !important; }
+.bubbles span.cube { opacity: 0.18 !important; }
+.rays::before, .rays::after { opacity: 0.55; }
+</style>
 </head>
 <body>
 <div class="abyss"></div>
@@ -378,7 +386,7 @@
     <div class="win-titlebar">
       <div class="left">
         <img src="assets/seekdeep-mark.webp" alt="" />
-        <span class="title">SEEK<em>DEEP</em> · COMMAND REFERENCE · v10.35<span class="cur"></span></span>
+        <span class="title">SEEK<em>DEEP</em> · COMMAND REFERENCE · <span data-version>v10.35</span><span class="cur"></span></span>
       </div>
       <div></div>
       <div class="right">

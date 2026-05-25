@@ -1,0 +1,16 @@
+{
+  "name": "SeekDeep Chat",
+  "short_name": "SeekDeep",
+  "description": "Local-first Discord assistant — chat client companion app. Reaches the bot at 127.0.0.1:7865.",
+  "start_url": "chat.html",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#02060f",
+  "theme_color": "#2dd4ff",
+  "categories": ["utilities", "developer"],
+  "icons": [
+    { "src": "assets/seekdeep-mark.webp", "sizes": "512x512", "type": "image/webp", "purpose": "any maskable" },
+    { "src": "assets/seekdeep-mark.webp", "sizes": "192x192", "type": "image/webp", "purpose": "any" }
+  ]
+}

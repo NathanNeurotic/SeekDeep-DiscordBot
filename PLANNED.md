@@ -52,6 +52,22 @@ These have a "go" and only wait on designer's current 15-task queue wrapping up,
    - New code: ~200 lines in `index.js` for the share command + import button handler + `prompts channel here` admin command. Plus a help section + smoke checks.
    - Open edge cases: how to handle edits/deletes of a shared template (edit-in-place if Discord allows, otherwise post a new one and tombstone the old — mirror the archive pattern), how to handle a user sharing a template they later modified locally.
 
+**C. `/memory/*` endpoints for the live memory.html surface** — Claude Designer's zip 31 shipped `memory.html` rewritten against this exact JSON contract. UI degrades to a small mock dataset + a `MOCK · endpoints not shipped` pill until these land; flips live as soon as `GET /memory/users` returns 200. All write endpoints token-guarded (nav.js interceptor handles it automatically). Mirrors the on-disk schema already in `data/user-facts.json` + `data/memory-presets.json`.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET`    | `/memory/users` | — | `{ ok, users: [ { user_id, display, fact_count, bytes, updatedAt } ] }` |
+| `GET`    | `/memory/user/{id}` | — | `{ ok, user_id, facts: [ { text, at } ], updatedAt, bytes }` · 404 if no row |
+| `POST`   | `/memory/user/{id}/fact` | `{ text }` | `{ ok, index }` · 422 on `>500` chars / cap reached |
+| `PATCH`  | `/memory/user/{id}/fact/{n}` | `{ text }` | `{ ok }` · 422 / 404 |
+| `DELETE` | `/memory/user/{id}/fact/{n}` | — | `{ ok, removed: { text, at } }` |
+| `DELETE` | `/memory/user/{id}` | — | `{ ok, removed_facts: N }` |
+| `GET`    | `/memory/user/{id}/export` | — | `application/json` download |
+| `GET`    | `/memory/presets/{id}` | — | `{ ok, presets: [string], updatedAt }` |
+| `POST`   | `/memory/presets/{id}` | `{ presets: [string] }` | `{ ok }`; validate against `SEEKDEEP_KNOWN_PRESETS`, 400 on unknown |
+
+Effort: ~3-4 hr. All routes are thin wrappers over the existing read/write helpers in `index.js` (`seekdeepReadUserFacts` / `seekdeepWriteUserFacts` / etc.) — they probably belong in `gui_endpoints.py` since they're HTTP-facing config. The bot is the source of truth for the JSON files but the FastAPI side-car can read/write them safely via the same atomic-write pattern.
+
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.
    - **B.1 Context menu (always-on)**: register `Archive (SeekDeep)` as a Message context menu command alongside the existing `Force React (SeekDeep)`. Right-click any message → Apps → Archive (SeekDeep) → bot archives the attachments + embed images to the requesting user's archive, replies ephemerally with a confirmation. Works on user posts, bot posts, link previews, anything with an image. ~80 lines including registration + dispatch + the "no image to archive" empty-state.
    - **B.2 Reply-with-"archive"**: in `messageCreate`, detect when a message is a reply (`message.reference?.messageId`) AND the body matches a permissive `archive` trigger (`/^(?:@\S+\s+)?archive(?:\s+(?:this|that|it|please))?\s*$/i`). Fetch the referenced message, run the archive flow against it. ~60 lines. Liberal phrasing supports natural variants: "archive", "archive this", "archive please", "@SeekDeep archive". Won't conflict with the existing `archive` admin commands because those don't run in reply-to-image context.

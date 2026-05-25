@@ -97,20 +97,23 @@
 
   const PAGES = [
     { id: 'index',        title: 'Hub',                 path: 'index.html',        glyph: '⌂', meta: '01 · home' },
-    { id: 'landing',      title: 'Landing',             path: 'landing.html',      glyph: '◐', meta: '02 · marketing' },
-    { id: 'app',          title: 'Control Center',      path: 'app.html',          glyph: '⌘', meta: '03 · 10 modules · wired' },
-    { id: 'chat',         title: 'Chat Client',         path: 'chat.html',         glyph: '▸', meta: '04 · wired' },
-    { id: 'installer',    title: 'Installer',           path: 'installer.html',    glyph: '⚙', meta: '05 · 9-step wizard · wired' },
-    { id: 'docs',         title: 'Docs',                path: 'docs.html',         glyph: '▤', meta: '06 · 109 commands' },
-    { id: 'roadmap',      title: 'Roadmap',             path: 'roadmap.html',      glyph: '▦', meta: '07 · PLANNED.md' },
-    { id: 'api',          title: 'API Explorer',        path: 'api.html',          glyph: '⚡', meta: '08 · live + mock' },
-    { id: 'architecture', title: 'Architecture',        path: 'architecture.html', glyph: '⌬', meta: '09 · system map' },
-    { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '10 · splash' },
-    { id: 'changelog',    title: 'Changelog',           path: 'changelog.html',    glyph: '⊞', meta: '11 · v10.x history' },
-    { id: 'memory',       title: 'Memory · preview',    path: 'memory.html',       glyph: '⌗', meta: '12 · roadmap mock' },
-    { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '13 · phone mocks' },
-    { id: 'tour',         title: 'Tour',                path: 'tour.html',         glyph: '⊕', meta: '14 · guided' },
+    { id: 'app',          title: 'Control Center',      path: 'app.html',          glyph: '⌘', meta: '02 · wired · events bus' },
+    { id: 'chat',         title: 'Chat Client',         path: 'chat.html',         glyph: '▸', meta: '03 · PWA · service worker' },
+    { id: 'installer',    title: 'Installer',           path: 'installer.html',    glyph: '⚙', meta: '04 · 9-step wizard' },
+    { id: 'docs',         title: 'Docs',                path: 'docs.html',         glyph: '▤', meta: '05 · 109 commands' },
+    { id: 'api',          title: 'API Explorer',        path: 'api.html',          glyph: '⚡', meta: '06 · live + mock + route inspector' },
+    { id: 'architecture', title: 'Architecture',        path: 'architecture.html', glyph: '⌬', meta: '07 · system map' },
+    { id: 'roadmap',      title: 'Roadmap',             path: 'roadmap.html',      glyph: '▦', meta: '08 · PLANNED.md' },
+    { id: 'changelog',    title: 'Changelog',           path: 'changelog.html',    glyph: '⊞', meta: '09 · v10.x history' },
+    { id: 'memory',       title: 'Memory',              path: 'memory.html',       glyph: '⌗', meta: '10 · user-facts · live' },
+    { id: 'image_ab',     title: 'Image A/B',           path: 'image-ab.html',     glyph: '▩', meta: '11 · 4 pipelines side-by-side' },
+    { id: 'prompts',      title: 'Prompts',             path: 'prompts.html',      glyph: '◩', meta: '12 · #prompts channel marketplace' },
+    { id: 'tts',          title: 'TTS preview',         path: 'tts.html',          glyph: '♪', meta: '13 · mock · Piper voices' },
+    { id: 'landing',      title: 'Landing',             path: 'landing.html',      glyph: '◐', meta: '14 · marketing' },
     { id: 'pitch',        title: 'Pitch deck',          path: 'pitch.html',        glyph: '◊', meta: '15 · 9 slides' },
+    { id: 'tour',         title: 'Tour',                path: 'tour.html',         glyph: '⊕', meta: '16 · guided' },
+    { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '17 · phone mocks' },
+    { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '18 · splash' },
   ];
 
   // Detect current page from URL filename
@@ -390,13 +393,13 @@
     <div class="sd-jump-backdrop" id="sdJumpBack"></div>
     <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
       <div class="sd-jump-head">
-        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 15 SURFACES</em></div>
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 18 SURFACES</em></div>
         <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
       </div>
       <div class="sd-jump-list" id="sdJumpList"></div>
       <div class="sd-jump-foot">
         <span><kbd>⌘K</kbd> open · <kbd>Esc</kbd> close · <kbd>↵</kbd> jump</span>
-        <span>v10.35 · LOCAL</span>
+        <span><span data-version>v10.35</span> · LOCAL</span>
       </div>
     </div>
   `;
@@ -740,38 +743,140 @@
       }
     } catch {}
   }
-  // Explicit-only modal trigger. Callers (action handlers, user clicks)
-  // can invoke this when /config/status flags needs_setup. We deliberately
-  // do NOT auto-pop on every page load — the user finds that nagging.
-  //
-  // Surfaces can call it on demand, e.g.:
-  //   if ((await fetch('/config/status').then(r => r.json())).needs_setup) {
-  //     await window.SeekDeepPrompt.promptForMissing();
-  //   }
-  // or for a specific failure:
-  //   if (resp.status === 400 && resp.error === 'missing_keys') {
-  //     await window.SeekDeepPrompt.collect(resp.required_keys);
-  //   }
-  window.SeekDeepPrompt.promptForMissing = async function () {
+  // Auto-trigger missing-required-keys modal on first load if config/status flags it
+  async function checkConfigStatus() {
     const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
     try {
       const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
-      if (!r.ok) return null;
+      if (!r.ok) return;
       const s = await r.json();
-      if (!s.needs_setup) return {};
-      const fields = s.missing_required.map(m => ({
-        key: m.key, description: m.description, kind: m.kind, required: true, value: m.value || '',
-      }));
-      return await window.SeekDeepPrompt.open(fields, {
-        label: '▸ SETUP REQUIRED',
-        title: 'SeekDeep needs a few values before it can run',
-        desc: 'These keys are missing or still placeholders in your <span style="color:var(--cyan-1, #2dd4ff);">.env</span>. Save them here and the bot will be ready.',
-      });
-    } catch { return null; }
-  };
-  // GPU banner is informational + non-blocking; safe to run on load + every 60s.
-  setTimeout(checkGpuMode, 400);
+      if (s.needs_setup && !sessionStorage.getItem('sd-setup-prompted')) {
+        sessionStorage.setItem('sd-setup-prompted', '1');
+        const fields = s.missing_required.map(m => ({
+          key: m.key, description: m.description, kind: m.kind, required: true, value: m.value || '',
+        }));
+        await window.SeekDeepPrompt.open(fields, {
+          label: '▸ SETUP REQUIRED',
+          title: 'SeekDeep needs a few values before it can run',
+          desc: 'These keys are missing or still placeholders in your <span style="color:var(--cyan-1, #2dd4ff);">.env</span>. Save them here and the bot will be ready.',
+        });
+      }
+    } catch {}
+  }
+  setTimeout(() => { checkGpuMode(); checkConfigStatus(); }, 400);
   setInterval(checkGpuMode, 60_000);
+
+  // ====================================================================
+  // Title-bar LIVE / OFFLINE pill — Task 6.
+  // We inject a small pill into every page's titlebar (.win-titlebar or .topnav),
+  // then drive it off the SeekDeepEvents bus when present (added by the events.js
+  // auto-loader at the tail of this file — see TODO below). Falls back to the
+  // existing /health probe model when the bus isn't available.
+  // ====================================================================
+  const pillCSS = `
+    .sd-live-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 9px;
+      border-radius: var(--r-md, 2px);
+      font-family: var(--font-mono, monospace);
+      font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+      border: 1px solid rgba(125,146,184,0.35);
+      background: linear-gradient(180deg, rgba(10,26,48,0.85), rgba(6,18,31,0.85));
+      color: var(--hull-3, #7d92b8);
+      margin-left: 10px;
+      cursor: default;
+      vertical-align: middle;
+      transition: color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .sd-live-pill .sd-live-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 6px currentColor;
+    }
+    .sd-live-pill[data-state="live"] {
+      color: var(--good, #58e6a1);
+      border-color: color-mix(in oklab, var(--good, #58e6a1) 45%, transparent);
+      box-shadow: 0 0 12px color-mix(in oklab, var(--good, #58e6a1) 25%, transparent);
+    }
+    .sd-live-pill[data-state="live"] .sd-live-dot { animation: sdLivePulse 1.6s ease-in-out infinite; }
+    .sd-live-pill[data-state="offline"] {
+      color: var(--bad, #ff6b6b);
+      border-color: color-mix(in oklab, var(--bad, #ff6b6b) 45%, transparent);
+    }
+    .sd-live-pill[data-state="probing"] {
+      color: var(--warn, #ffb84d);
+      border-color: color-mix(in oklab, var(--warn, #ffb84d) 45%, transparent);
+    }
+    @keyframes sdLivePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.85); } }
+  `;
+  const pillStyle = document.createElement('style');
+  pillStyle.textContent = pillCSS;
+  document.head.appendChild(pillStyle);
+
+  function setLiveState(state) {
+    document.querySelectorAll('.sd-live-pill').forEach(p => {
+      p.dataset.state = state;
+      p.querySelector('.sd-live-label').textContent =
+        state === 'live'    ? 'LIVE' :
+        state === 'offline' ? 'OFFLINE' :
+                              'PROBING';
+    });
+  }
+
+  function injectLivePill() {
+    // Skip if a page already has its own #liveModePill (app.html, api.html)
+    if (document.getElementById('liveModePill')) {
+      // Adopt that pill — give it our class + dataset so the bus wiring below drives it too
+      const adopted = document.getElementById('liveModePill');
+      if (!adopted.classList.contains('sd-live-pill')) {
+        adopted.classList.add('sd-live-pill');
+        adopted.innerHTML = '<span class="sd-live-dot"></span><span class="sd-live-label">PROBING</span>';
+        adopted.dataset.state = 'probing';
+      }
+      return;
+    }
+    const host = document.querySelector('.win-titlebar .title, .topnav .row, .topnav');
+    if (!host || host.querySelector('.sd-live-pill')) return;
+    const pill = document.createElement('span');
+    pill.className = 'sd-live-pill';
+    pill.dataset.state = 'probing';
+    pill.title = 'WebSocket bus · /events';
+    pill.innerHTML = '<span class="sd-live-dot"></span><span class="sd-live-label">PROBING</span>';
+    host.appendChild(pill);
+  }
+
+  injectLivePill();
+  // Re-run in case the titlebar mounts late
+  setTimeout(injectLivePill, 200);
+  setTimeout(injectLivePill, 1200);
+
+  function wireLivePill() {
+    if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
+      try {
+        window.SeekDeepEvents.on('_open',  () => setLiveState('live'));
+        window.SeekDeepEvents.on('_close', () => setLiveState('offline'));
+        setLiveState(window.SeekDeepEvents.connected ? 'live' : 'offline');
+        return true;
+      } catch {}
+    }
+    return false;
+  }
+  if (!wireLivePill()) {
+    // Bus not loaded yet — poll briefly while events.js auto-loader mounts it
+    let tries = 0;
+    const iv = setInterval(() => {
+      if (wireLivePill() || ++tries > 20) clearInterval(iv);
+    }, 250);
+    // Fallback: probe /health for liveness if bus never arrives
+    setTimeout(async () => {
+      if (window.SeekDeepEvents) return;
+      try {
+        const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+        const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+        setLiveState(r.ok ? 'live' : 'offline');
+      } catch { setLiveState('offline'); }
+    }, 6000);
+  }
 
   // Auto-load sibling helper scripts (events.js + version.js) via dynamic
   // <script> appends so designer-shipped HTMLs only need to include nav.js —

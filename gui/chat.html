@@ -404,6 +404,23 @@
   /* Tweaks panel root */
   #tweaks-root { font-family: var(--font-display); }
 </style>
+<!-- Task 11 · PWA: chat.html is the only page that registers the SW + manifest. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/webp" href="assets/seekdeep-mark.webp" />
+<link rel="apple-touch-icon" href="assets/seekdeep-mark.webp" />
+<meta name="theme-color" content="#02060f" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="SeekDeep" />
+<script>
+  // Register service worker only when served over http(s) — file:// previews can't.
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js', { scope: './' })
+        .catch(err => console.warn('[SeekDeep] SW register failed:', err));
+    });
+  }
+</script>
 </head>
 <body>
 <div class="abyss"></div>
@@ -699,7 +716,7 @@
         <div class="bot-head">
           <img src="assets/seekdeep-mark.webp" alt="" />
           <span class="name">SeekDeep</span>
-          <span class="ver">v10.35</span>
+          <span class="ver"><span data-version>v10.35</span></span>
         </div>
         <div class="stats">
           <div class="row"><span style="color:var(--hull-3)">status</span><span class="v" id="cBotStatus">● healthy</span></div>
@@ -715,7 +732,7 @@
       <div class="member bot">
         <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /><span class="pres on"></span></div>
         <div class="who">SeekDeep</div>
-        <span class="role-tag">v10.35</span>
+        <span class="role-tag"><span data-version>v10.35</span></span>
       </div>
 
       <div class="section-h">ADMIN · 1</div>
