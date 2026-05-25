@@ -129,6 +129,31 @@ git for-each-ref --format='%(refname:short)' refs/heads/ | \
 
 ---
 
+## 4.4 · `.env.default` vs `.env.example`
+
+Two intentional roles, documented in the headers of each file:
+
+- **`.env.default`** — minimal first-run template. `setup_local.ps1` copies
+  this file to `.env` on first run if `.env` is missing. Keep it lean; only
+  the keys a user MUST set or that we want them to see immediately.
+- **`.env.example`** — full env reference. Every supported environment
+  variable with section headers and inline comments. Read it when you want
+  to know "is there a knob for X?". Setup does NOT copy it; users copy
+  individual sections into their `.env` (or into `.env.default` if they
+  want a knob shipped to fresh installs).
+
+Invariant: `.env.example` is a strict superset of `.env.default`. After
+adding a new key to either file, run:
+
+```bash
+grep -E "^[A-Z_]+=" .env.default | cut -d= -f1 | sort -u > /tmp/d.txt
+grep -E "^[A-Z_]+=" .env.example | cut -d= -f1 | sort -u > /tmp/e.txt
+comm -13 /tmp/e.txt /tmp/d.txt   # should print nothing
+```
+
+If it prints something, add those keys to `.env.example` so the reference
+stays complete.
+
 ## 4.5 · Version `[data-version]` pattern (for the designer to adopt)
 
 Every HTML page hardcodes the version in the titlebar / footer / sidebar
