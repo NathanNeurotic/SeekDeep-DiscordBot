@@ -7729,6 +7729,7 @@ function seekdeepHelpText(source = null) {
     '```',
     '',
     'You can also reply to any image message with `archive` (or `archive this` / `archive please`) to save it.',
+    'Opt out of archive notifies with `@SeekDeep archive opt-out` (and `archive opt-in` to re-enable).',
     '',
     'Unsupported near-commands return: `Did you mean ...?`',
   ].join('\n');
@@ -15967,18 +15968,120 @@ function seekdeepBuildUniversalArchiveStates(targetMessage) {
 
 const SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI = process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI || '\u{1F4E5}';  // 📥 inbox tray
 const SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY = String(process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY || 'on').toLowerCase() !== 'off';
+const SEEKDEEP_ARCHIVE_CONFIG_PATH = path.join(__dirname, 'data', 'archive-config.json');
+const SEEKDEEP_ARCHIVE_OPTOUT_PATH = path.join(__dirname, 'data', 'archive-optout.json');
+const SEEKDEEP_ARCHIVE_NOTIFY_MODES = new Set(['silent', 'dm', 'reply', 'react']);
+
+function seekdeepReadArchiveNotifyConfig() {
+  // Reads data/archive-config.json. Returns { mode, notify_self, channels }
+  // with defaults for any missing fields. Falls back to env-flag semantics
+  // when the file doesn't exist (backward compat with the v1 author-notify).
+  try {
+    if (!fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
+      // Env-flag fallback: 'on' → react, 'off' → silent
+      return {
+        mode: SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY ? 'react' : 'silent',
+        notify_self: false,
+        channels: {},
+        _source: 'env',
+      };
+    }
+    const data = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_CONFIG_PATH, 'utf8'));
+    if (!data || typeof data !== 'object') throw new Error('not an object');
+    const mode = SEEKDEEP_ARCHIVE_NOTIFY_MODES.has(String(data.mode || '')) ? String(data.mode) : 'silent';
+    return {
+      mode,
+      notify_self: !!data.notify_self,
+      channels: (data.channels && typeof data.channels === 'object') ? data.channels : {},
+      _source: 'file',
+    };
+  } catch (err) {
+    return { mode: 'silent', notify_self: false, channels: {}, _source: 'fallback' };
+  }
+}
+
+function seekdeepWriteArchiveNotifyConfig(cfg) {
+  try {
+    writeJsonAtomic(SEEKDEEP_ARCHIVE_CONFIG_PATH, cfg);
+    return true;
+  } catch (err) {
+    console.warn('Failed to write archive-config.json:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepIsArchiveOptedOut(userId) {
+  if (!userId) return false;
+  try {
+    if (!fs.existsSync(SEEKDEEP_ARCHIVE_OPTOUT_PATH)) return false;
+    const data = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_OPTOUT_PATH, 'utf8'));
+    if (!data || !Array.isArray(data.users)) return false;
+    return data.users.map(String).includes(String(userId));
+  } catch { return false; }
+}
+
+function seekdeepSetArchiveOptOut(userId, optOut) {
+  // optOut === true → add to list; false → remove. Returns final state.
+  const id = String(userId || '').trim();
+  if (!id) return false;
+  let data = { users: [] };
+  try {
+    if (fs.existsSync(SEEKDEEP_ARCHIVE_OPTOUT_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_OPTOUT_PATH, 'utf8'));
+      if (parsed && Array.isArray(parsed.users)) data.users = parsed.users.map(String);
+    }
+  } catch {}
+  const set = new Set(data.users);
+  if (optOut) set.add(id); else set.delete(id);
+  data.users = [...set];
+  data.updatedAt = new Date().toISOString();
+  try { writeJsonAtomic(SEEKDEEP_ARCHIVE_OPTOUT_PATH, data); } catch {}
+  return optOut;
+}
+
+function seekdeepArchiveResolveMode(channelId) {
+  const cfg = seekdeepReadArchiveNotifyConfig();
+  const cid = String(channelId || '');
+  const override = cid && cfg.channels && cfg.channels[cid];
+  return SEEKDEEP_ARCHIVE_NOTIFY_MODES.has(String(override)) ? String(override) : cfg.mode;
+}
+
+function seekdeepArchiveBumpSent24h() {
+  // Lightweight counter that decays after 24h. Best-effort; on failure
+  // just skip the increment.
+  try {
+    let data = { sent_24h: 0, window_start: Date.now() };
+    if (fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_CONFIG_PATH, 'utf8'));
+      if (parsed && typeof parsed === 'object') data = { ...parsed, ...data, ...parsed };
+    }
+    const now = Date.now();
+    const winStart = Number(data.window_start || 0) || now;
+    // Reset window if more than 24h elapsed since the first count in this window.
+    if (now - winStart > 24 * 60 * 60 * 1000) {
+      data.sent_24h = 1;
+      data.window_start = now;
+    } else {
+      data.sent_24h = Number(data.sent_24h || 0) + 1;
+    }
+    writeJsonAtomic(SEEKDEEP_ARCHIVE_CONFIG_PATH, data);
+  } catch {}
+}
 
 function seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage) {
   // Skip notifying when:
-  //   - feature flag off (env opt-out)
+  //   - mode is 'silent' (default; also covers v1's env-off case)
   //   - target is a bot message (bot-generated images already have an
   //     Archive button — reacting on those is redundant + clutters reply
   //     chains)
-  //   - target author == requester (you don't need to notify yourself
-  //     that you archived your own image)
-  if (!SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY) return false;
+  //   - target author == requester AND notify_self is false (default)
+  //   - target author has opted out via @SeekDeep archive opt-out
   if (!targetMessage) return false;
   if (targetMessage?.author?.bot) return false;
+  const cfg = seekdeepReadArchiveNotifyConfig();
+  const channelId = String(targetMessage?.channel?.id || '');
+  const mode = seekdeepArchiveResolveMode(channelId);
+  if (mode === 'silent') return false;
   const requesterId = String(
     requestSource?.user?.id
     || requestSource?.author?.id
@@ -15986,22 +16089,58 @@ function seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage) {
     || ''
   );
   const targetAuthorId = String(targetMessage?.author?.id || '');
-  if (requesterId && targetAuthorId && requesterId === targetAuthorId) return false;
+  if (!cfg.notify_self && requesterId && targetAuthorId && requesterId === targetAuthorId) return false;
+  if (targetAuthorId && seekdeepIsArchiveOptedOut(targetAuthorId)) return false;
   return true;
 }
 
-async function seekdeepUniversalArchiveNotifyAuthor(targetMessage) {
-  // Add a 📥 reaction on the source message so the original author sees
-  // someone saved their image. Silent failure on permission errors —
-  // not having Add Reactions permission is a normal Discord state and
-  // shouldn't fail the archive flow.
+async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource) {
+  // Routes through the active mode (react / dm / reply). Silent failure
+  // on permission errors. Returns { ok, mode } so callers can log what
+  // actually happened.
+  const cfg = seekdeepReadArchiveNotifyConfig();
+  const channelId = String(targetMessage?.channel?.id || '');
+  const mode = seekdeepArchiveResolveMode(channelId);
+  const archiverTag = String(
+    requestSource?.user?.tag
+    || requestSource?.author?.tag
+    || requestSource?.user?.username
+    || requestSource?.author?.username
+    || 'someone'
+  );
   try {
-    await targetMessage.react(SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI);
-    return true;
+    if (mode === 'react') {
+      await targetMessage.react(SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI);
+    } else if (mode === 'reply') {
+      // Reply on the message itself, no user-mention to avoid notification
+      // spam — Discord already shows the reply preview to the author.
+      await targetMessage.reply({
+        content: '\u{1F4C2} Your post was archived by **' + archiverTag + '**. It\'s now in their Universal Archive — kept locally, never re-shared without your permission. Opt out with `@SeekDeep archive opt-out`.',
+        allowedMentions: { repliedUser: false, parse: [] },
+      });
+    } else if (mode === 'dm') {
+      // DM the original author with an embed. Catches 50007 (cannot DM
+      // this user) silently — many users have DMs from non-friends off.
+      const author = targetMessage.author;
+      if (!author) return { ok: false, mode };
+      const chName = String(targetMessage.channel?.name || 'this channel');
+      const embed = {
+        title: '\u{1F4C2} Your post was archived',
+        description: 'Your post in #' + chName + ' was archived by **' + archiverTag + '**. It\'s now in their Universal Archive — kept locally, never re-shared without your permission.',
+        color: 0x2dd4ff,
+        footer: { text: 'Opt out with @SeekDeep archive opt-out' },
+        timestamp: new Date().toISOString(),
+      };
+      await author.send({ embeds: [embed] });
+    } else {
+      return { ok: false, mode };
+    }
+    seekdeepArchiveBumpSent24h();
+    return { ok: true, mode };
   } catch (err) {
-    // 50013 = Missing Permissions; 10008 = Unknown Message; 30010 = Max
-    // reactions reached. All non-fatal.
-    return false;
+    // 50013 = Missing Permissions; 50007 = Cannot send messages to this user;
+    // 10008 = Unknown Message; 30010 = Max reactions reached. All non-fatal.
+    return { ok: false, mode, error: err?.code || err?.message || String(err) };
   }
 }
 
@@ -16055,10 +16194,14 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
   if (!out.archived && !out.duplicates && out.errors.length) out.ok = false;
 
   // Author notify: only fire when we actually saved at least one NEW
-  // image (skip for pure duplicate-hits — author already got the
-  // reaction the first time someone archived it).
+  // image (skip for pure duplicate-hits — author already got notified
+  // the first time someone archived it). Mode resolved from
+  // data/archive-config.json (react / dm / reply / silent), with
+  // per-channel overrides and an opt-out check.
   if (out.archived > 0 && seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage)) {
-    out.notifiedAuthor = await seekdeepUniversalArchiveNotifyAuthor(targetMessage);
+    const result = await seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource);
+    out.notifiedAuthor = !!(result && result.ok);
+    if (result && result.mode) out.notifyMode = result.mode;
   }
   return out;
 }
@@ -16145,6 +16288,56 @@ async function seekdeepHandleReplyArchive(message) {
       });
     } catch {}
   }
+  return true;
+}
+async function seekdeepHandleArchiveOptOutCommand(message, raw = '') {
+  // `@SeekDeep archive opt-out` toggles the user's opt-out state.
+  // `@SeekDeep archive opt-in` re-enables notifies for this user.
+  // `@SeekDeep archive opt-out status` reports current state without changing it.
+  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const optOutMatch = /^archive\s+opt[-\s]?out(?:\s+(status|on|off))?\s*$/i.exec(stripped);
+  const optInMatch  = /^archive\s+opt[-\s]?in\s*$/i.exec(stripped);
+  if (!optOutMatch && !optInMatch) return false;
+
+  const userId = String(message?.author?.id || '');
+  if (!userId) {
+    await message.reply({ content: 'Could not identify your user id.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const currentlyOptedOut = seekdeepIsArchiveOptedOut(userId);
+
+  if (optInMatch || (optOutMatch && optOutMatch[1] && optOutMatch[1].toLowerCase() === 'off')) {
+    if (!currentlyOptedOut) {
+      await message.reply({ content: 'You\'re already opted IN to archive notifies (you receive them when someone archives your image).', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    seekdeepSetArchiveOptOut(userId, false);
+    await message.reply({ content: 'Opted back IN to archive notifies. You\'ll see when someone archives your image again.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (optOutMatch && optOutMatch[1] && optOutMatch[1].toLowerCase() === 'status') {
+    const cfg = seekdeepReadArchiveNotifyConfig();
+    const mode = cfg.mode || 'silent';
+    const state = currentlyOptedOut ? 'OPTED OUT' : 'opted IN (default)';
+    await message.reply({
+      content: 'Archive notify status\n  Server mode: `' + mode + '`\n  Your opt-out: **' + state + '**\n  Toggle: `@SeekDeep archive opt-out` (opt out) or `@SeekDeep archive opt-in`.',
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+
+  // Default: toggle opt-out on
+  if (currentlyOptedOut) {
+    await message.reply({ content: 'You\'re already opted OUT. Toggle back with `@SeekDeep archive opt-in`.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+  seekdeepSetArchiveOptOut(userId, true);
+  await message.reply({
+    content: 'Opted OUT of archive notifies. When someone archives your image, you won\'t get a DM/reply/reaction. Toggle back with `@SeekDeep archive opt-in`.',
+    allowedMentions: { repliedUser: false },
+  });
   return true;
 }
 // SEEKDEEP_UNIVERSAL_ARCHIVE_END
@@ -17452,6 +17645,13 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
 
     // Emoji vault admin command: "@SeekDeep emoji backup" / "@SeekDeep emoji import"
     if (typeof seekdeepHandleEmojiVaultCommand === 'function' && await seekdeepHandleEmojiVaultCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
+    // Archive opt-out (user-side): @SeekDeep archive opt-out / opt-in / opt-out status
+    // Must come BEFORE seekdeepHandleArchiveOpenMessage because "archive opt-out"
+    // would otherwise match the generic archive command parser.
+    if (typeof seekdeepHandleArchiveOptOutCommand === 'function' && await seekdeepHandleArchiveOptOutCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
     }
 
@@ -20755,13 +20955,18 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_USER_FACTS_PATH,
     SEEKDEEP_USER_FACTS_MAX,
     SEEKDEEP_USER_FACT_MAX_CHARS,
-    // Universal archive (Item B)
+    // Universal archive (Item B + D)
     seekdeepExtractImagesFromMessage,
     seekdeepBuildUniversalArchiveStates,
     seekdeepUniversalArchiveSummaryText,
     seekdeepUniversalArchiveShouldNotify,
+    seekdeepReadArchiveNotifyConfig,
+    seekdeepArchiveResolveMode,
+    seekdeepIsArchiveOptedOut,
+    seekdeepHandleArchiveOptOutCommand,
     SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE,
     SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI,
+    SEEKDEEP_ARCHIVE_NOTIFY_MODES,
     // Prompts marketplace (Item A)
     seekdeepPromptsCountVariables,
     seekdeepPromptsBuildEmbed,

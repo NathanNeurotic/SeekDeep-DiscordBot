@@ -398,6 +398,56 @@ def main() -> int:
                   env_map["LOCAL_CHAT_MODEL_ID"] != "*****",
                   f"got {env_map['LOCAL_CHAT_MODEL_ID']!r}")
 
+    # ---- /archive/config (Item D: multi-mode author-notify settings) ----
+    r = c.get("/archive/config")
+    check("GET /archive/config -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, config:{mode,notify_self,sent_24h,channels}}",
+          body.get("ok") is True
+          and isinstance(body.get("config"), dict)
+          and body["config"].get("mode") in {"silent", "dm", "reply", "react"}
+          and isinstance(body["config"].get("notify_self"), bool)
+          and isinstance(body["config"].get("channels"), dict),
+          f"body={body}")
+
+    # POST without token -> 401
+    r = c.post("/archive/config", json={"updates": {"mode": "dm"}})
+    check("POST /archive/config without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Valid mode update
+        r = c.post("/archive/config",
+                   json={"updates": {"mode": "dm", "notify_self": True}},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /archive/config valid mode+notify_self -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        cfg = r.json().get("config", {}) if r.status_code == 200 else {}
+        check("  ...returns updated config", cfg.get("mode") == "dm" and cfg.get("notify_self") is True)
+
+        # Invalid mode -> 400
+        r = c.post("/archive/config",
+                   json={"updates": {"mode": "MEGA_LOUD"}},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /archive/config invalid mode -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Per-channel overrides accepted
+        r = c.post("/archive/config",
+                   json={"updates": {"channels": {"123456": "reply", "789": "silent",
+                                                  "skip-this": "INVALID"}}},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /archive/config per-channel overrides -> 200", r.status_code == 200)
+        chans = (r.json().get("config", {}).get("channels") or {})
+        check("  ...valid per-channel modes accepted, invalid silently dropped",
+              chans.get("123456") == "reply" and chans.get("789") == "silent" and "skip-this" not in chans,
+              f"channels={chans}")
+
+        # Reset to silent so we leave clean state
+        c.post("/archive/config",
+               json={"updates": {"mode": "silent", "notify_self": False, "channels": {}}},
+               headers={_TOKEN_HEADER: token})
+
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
     # These endpoints live on the AI server (not on the bare GUI app),

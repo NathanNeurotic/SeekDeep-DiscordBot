@@ -77,6 +77,13 @@ class PresetsBody(BaseModel):
     presets: list[str] = []
 
 
+class ArchiveConfigPatch(BaseModel):
+    """Body for POST /archive/config. updates: { mode?, notify_self?, channels? }.
+    Module-level (not nested in register_gui_endpoints) because Pydantic v2 + FastAPI
+    treat closure-scoped BaseModel classes as query params, not request bodies."""
+    updates: dict
+
+
 # Constants mirror index.js. If you bump the bot-side env vars, mirror here too;
 # the bot remains source of truth -- these are just the validation ceilings on
 # the GUI write path so we don't silently accept facts the bot would reject.
@@ -916,6 +923,58 @@ def register_gui_endpoints(
                      "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
                      "GROQ_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY",
                      "XAI_API_KEY", "SEEKDEEP_GUI_TOKEN"}
+
+    # ----- /archive/config -----
+    # Backs the app.html archive pane's "Author notify" settings strip.
+    # See PLANNED.md item D for the spec.
+    _archive_config_path = _data_dir / "archive-config.json"
+    _ARCHIVE_MODES = {"silent", "dm", "reply", "react"}
+
+    def _read_archive_config() -> dict:
+        if not _archive_config_path.is_file():
+            return {"mode": "silent", "notify_self": False, "sent_24h": 0, "channels": {}}
+        try:
+            data = json.loads(_archive_config_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"mode": "silent", "notify_self": False, "sent_24h": 0, "channels": {}}
+            # Fill in defaults for missing keys
+            data.setdefault("mode", "silent")
+            data.setdefault("notify_self", False)
+            data.setdefault("sent_24h", 0)
+            data.setdefault("channels", {})
+            if data["mode"] not in _ARCHIVE_MODES:
+                data["mode"] = "silent"
+            return data
+        except Exception:
+            return {"mode": "silent", "notify_self": False, "sent_24h": 0, "channels": {}}
+
+    @app.get("/archive/config")
+    def get_archive_config():
+        return {"ok": True, "config": _read_archive_config()}
+
+    @app.post("/archive/config", dependencies=[Depends(_require_gui_token)])
+    def post_archive_config(patch: ArchiveConfigPatch):
+        cfg = _read_archive_config()
+        updates = patch.updates or {}
+        if "mode" in updates:
+            new_mode = str(updates["mode"]).strip().lower()
+            if new_mode not in _ARCHIVE_MODES:
+                raise HTTPException(400, f"mode must be one of: {', '.join(sorted(_ARCHIVE_MODES))}")
+            cfg["mode"] = new_mode
+        if "notify_self" in updates:
+            cfg["notify_self"] = bool(updates["notify_self"])
+        if "channels" in updates and isinstance(updates["channels"], dict):
+            # Per-channel overrides: validate each value is a valid mode
+            chans = {}
+            for cid, mode in updates["channels"].items():
+                if not str(cid).strip():
+                    continue
+                m = str(mode).strip().lower()
+                if m in _ARCHIVE_MODES:
+                    chans[str(cid)] = m
+            cfg["channels"] = chans
+        _atomic_write_json(_archive_config_path, cfg)
+        return {"ok": True, "config": cfg}
 
     @app.get("/config")
     def get_config():

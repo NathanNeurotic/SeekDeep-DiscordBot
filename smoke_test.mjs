@@ -1859,25 +1859,48 @@ check('context menu prompt extract: missing prompt line returns empty',
   check('universal-archive: summary text for no-image case', /No image attachments/.test(sum3));
 
   // Author-notify gate logic. Exercises the predicate that decides
-  // whether to add the 📥 reaction on the source. No actual Discord
-  // calls — just the bool gate.
+  // whether to notify the source author. No actual Discord calls —
+  // just the bool gate + config read.
   check('universal-archive notify: defaults to 📥', T.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI === '\u{1F4E5}');
   // Skip when target is a bot message (bot-generated images already have an Archive button)
-  const botTarget = { author: { id: '111', bot: true } };
+  const botTarget = { author: { id: '111', bot: true }, channel: { id: 'c1' } };
   const userReq   = { user: { id: '222' } };
   check('universal-archive notify: skips bot-source messages',
     T.seekdeepUniversalArchiveShouldNotify(userReq, botTarget) === false);
   // Skip when target author == requester (your own image)
-  const ownTarget = { author: { id: '222', bot: false } };
-  check('universal-archive notify: skips self-archives',
+  const ownTarget = { author: { id: '222', bot: false }, channel: { id: 'c1' } };
+  check('universal-archive notify: skips self-archives by default',
     T.seekdeepUniversalArchiveShouldNotify(userReq, ownTarget) === false);
-  // Fire when someone archives a non-bot, non-self message
-  const otherTarget = { author: { id: '999', bot: false } };
-  check('universal-archive notify: fires on other-user image',
+  // Mode set (gate true) when archiving someone else's non-bot message
+  // (default config from no archive-config.json: uses env-flag fallback,
+  // which is 'react' when env is 'on')
+  const otherTarget = { author: { id: '999', bot: false }, channel: { id: 'c1' } };
+  check('universal-archive notify: fires on other-user image (default mode)',
     T.seekdeepUniversalArchiveShouldNotify(userReq, otherTarget) === true);
   // No target → no notify
   check('universal-archive notify: skips when target missing',
     T.seekdeepUniversalArchiveShouldNotify(userReq, null) === false);
+
+  // Item D: multi-mode config + opt-out
+  check('archive notify: known modes are silent/dm/reply/react',
+    T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has('silent')
+    && T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has('dm')
+    && T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has('reply')
+    && T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has('react')
+    && T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.size === 4);
+  // Config loader returns sane defaults when file doesn't exist
+  const cfg = T.seekdeepReadArchiveNotifyConfig();
+  check('archive notify: config returns object with required keys',
+    typeof cfg === 'object'
+    && T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has(cfg.mode)
+    && typeof cfg.notify_self === 'boolean');
+  // Resolver returns the global mode when no per-channel override
+  const resolved = T.seekdeepArchiveResolveMode('some-channel-id');
+  check('archive notify: mode resolver returns one of the known modes',
+    T.SEEKDEEP_ARCHIVE_NOTIFY_MODES.has(resolved));
+  // Opt-out check on a never-seen user returns false (not opted out)
+  check('archive opt-out: unknown user is NOT opted out',
+    T.seekdeepIsArchiveOptedOut('user-id-that-never-existed-99999') === false);
 }
 
 // 56 - Prompts marketplace (Item A): variable counter + embed shape + buttons

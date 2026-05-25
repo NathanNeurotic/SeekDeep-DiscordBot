@@ -86,6 +86,8 @@ SeekDeep-publish-audit-*.txt
 data/server-stats.json
 data/archive-guild-config.json
 data/archive-guild-config.json.bak*
+data/archive-config.json
+data/archive-optout.json
 data/memory-presets.json
 data/prompt-templates.json
 data/user-facts.json
