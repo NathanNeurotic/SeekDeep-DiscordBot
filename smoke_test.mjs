@@ -1758,6 +1758,42 @@ check('context menu prompt extract: missing prompt line returns empty',
   T.seekdeepContextMenuExtractPromptLine('Some other text') === '');
 
 
+// 54 - User-facts module (remember/forget/recall) -- pure helpers only, no Discord.
+// We never write to the real data/user-facts.json -- we exercise the in-memory
+// composer + getter shapes. The Discord-touching command handler is covered
+// in CI via npm run preflight (parse + py-compile).
+{
+  const block = T.seekdeepComposeUserSystemBlock(['be brief'], ['I work in PST']);
+  check('user-facts: composer merges presets + facts into one block',
+    block.includes('User-specific preferences') && block.includes('Facts the user has explicitly told you')
+    && block.includes('be brief') && block.includes('I work in PST'));
+
+  const presetOnly = T.seekdeepComposeUserSystemBlock(['be brief'], []);
+  check('user-facts: composer with only presets has no Facts section',
+    presetOnly.includes('be brief') && !presetOnly.includes('Facts the user'));
+
+  const factOnly = T.seekdeepComposeUserSystemBlock([], ['I prefer Python']);
+  check('user-facts: composer with only facts has no Preferences section',
+    factOnly.includes('I prefer Python') && !factOnly.includes('User-specific preferences'));
+
+  const empty = T.seekdeepComposeUserSystemBlock([], []);
+  check('user-facts: composer with both empty returns empty string', empty === '');
+
+  // Getter on a never-seen user must return [] (no throw, no file write)
+  const ghostFacts = T.seekdeepGetUserFacts('never-existed-user-id-xyz-99999');
+  check('user-facts: getter on unknown user returns []',
+    Array.isArray(ghostFacts) && ghostFacts.length === 0);
+
+  const ghostLines = T.seekdeepGetUserFactsLines('never-existed-user-id-xyz-99999');
+  check('user-facts: getter-lines on unknown user returns []',
+    Array.isArray(ghostLines) && ghostLines.length === 0);
+
+  check('user-facts: max-facts cap is in sane range (5-200)',
+    T.SEEKDEEP_USER_FACTS_MAX >= 5 && T.SEEKDEEP_USER_FACTS_MAX <= 200);
+  check('user-facts: per-fact char cap is in sane range (40-2000)',
+    T.SEEKDEEP_USER_FACT_MAX_CHARS >= 40 && T.SEEKDEEP_USER_FACT_MAX_CHARS <= 2000);
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

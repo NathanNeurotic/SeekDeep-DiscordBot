@@ -7650,6 +7650,9 @@ function seekdeepHelpText(source = null) {
     prefix + ' translate channel here / off  (auto-translate non-Latin messages)',
     prefix + ' memory preset add brief | expert | no-emoji | formal | casual',
     prefix + ' memory preset list / remove <key> / clear',
+    prefix + ' remember <fact about you>     (persisted across restarts)',
+    prefix + ' recall                        (list what is remembered)',
+    prefix + ' forget #N | <substring> | all (remove fact(s) from recall)',
     '/say text:<text> channel:<#chan> image_url:<url>   (admin anonymous post)',
     '```',
     'Admin-only: persona + digest + translate + /say.',
@@ -8169,6 +8172,7 @@ function seekdeepKnownCommandSuggestions() {
     { command: '@SeekDeep translate channel here', aliases: ['translate channel', 'auto translate', 'auto-translate'] },
     { command: '@SeekDeep persona', aliases: ['persona', 'personality', 'bot persona', 'set persona'] },
     { command: '@SeekDeep memory preset list', aliases: ['preset', 'presets', 'memory preset', 'behavior preset'] },
+    { command: '@SeekDeep recall', aliases: ['recall', 'memories', 'facts', 'what do you remember', 'what do you remember about me'] },
   ];
 }
 
@@ -13290,6 +13294,181 @@ async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
 }
 // SEEKDEEP_USER_MEMORY_PRESETS_END
 
+// SEEKDEEP_USER_FACTS_START
+// Per-user explicit facts the bot should remember across restarts. Distinct
+// from rolling conversation memory (in-RAM, ephemeral) and memory presets
+// (canned preference toggles). Facts are free-text declarations the user
+// asserts about themselves -- e.g. "I'm a data scientist", "my timezone is
+// PST", "I prefer Python over JavaScript". Injected into the chat system
+// prompt for every chat call from that user.
+//
+// Commands:
+//   @SeekDeep remember <fact>        store a new fact
+//   @SeekDeep recall                 list current facts (with indices)
+//   @SeekDeep forget <substring>     remove any fact containing substring
+//   @SeekDeep forget #N              remove fact at 1-based index from recall
+//   @SeekDeep forget all             clear every fact for this user
+//
+// Storage: data/user-facts.json, atomic write, gitignored.
+const SEEKDEEP_USER_FACTS_PATH = path.join(__dirname, 'data', 'user-facts.json');
+const SEEKDEEP_USER_FACTS_MAX = Math.max(5, Math.min(200, Number(process.env.SEEKDEEP_USER_FACTS_MAX || 25)));
+const SEEKDEEP_USER_FACT_MAX_CHARS = Math.max(40, Math.min(2000, Number(process.env.SEEKDEEP_USER_FACT_MAX_CHARS || 500)));
+
+function seekdeepReadUserFacts() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_USER_FACTS_PATH)) return { users: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_USER_FACTS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { users: {} };
+    if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
+    return parsed;
+  } catch { return { users: {} }; }
+}
+
+function seekdeepWriteUserFacts(data) {
+  try {
+    writeJsonAtomic(SEEKDEEP_USER_FACTS_PATH, data);
+    return true;
+  } catch (err) {
+    console.warn('Failed to write user facts:', err?.message || err);
+    return false;
+  }
+}
+
+function seekdeepGetUserFacts(userId = '') {
+  if (!userId) return [];
+  const data = seekdeepReadUserFacts();
+  const entry = data.users[String(userId)];
+  if (!entry || !Array.isArray(entry.facts)) return [];
+  return entry.facts
+    .filter((f) => f && typeof f.text === 'string' && f.text.trim())
+    .slice(0, SEEKDEEP_USER_FACTS_MAX);
+}
+
+function seekdeepGetUserFactsLines(userId = '') {
+  return seekdeepGetUserFacts(userId).map((f) => f.text.trim());
+}
+
+// Compose the combined "User-specific preferences + Facts the user told you"
+// system block. Either or both may be empty; returns '' when both are.
+function seekdeepComposeUserSystemBlock(presetLines = [], factLines = []) {
+  const parts = [];
+  if (Array.isArray(presetLines) && presetLines.length) {
+    parts.push('User-specific preferences for this user:\n' + presetLines.map((l) => '- ' + l).join('\n'));
+  }
+  if (Array.isArray(factLines) && factLines.length) {
+    parts.push('Facts the user has explicitly told you to remember about themselves:\n' + factLines.map((l) => '- ' + l).join('\n'));
+  }
+  return parts.join('\n\n');
+}
+
+async function seekdeepHandleRememberCommand(message, raw = '') {
+  const p = String(raw || message?.content || '').trim();
+  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+
+  const recallMatch = /^(?:recall|memories|facts|what\s+do\s+you\s+remember(?:\s+about\s+me)?)\s*$/i.exec(stripped);
+  const rememberMatch = /^remember\s+(.+)$/is.exec(stripped);
+  const forgetMatch = /^forget\s+(.+)$/is.exec(stripped);
+
+  if (!recallMatch && !rememberMatch && !forgetMatch) return false;
+
+  const userId = String(message?.author?.id || '');
+  if (!userId) {
+    await message.reply({ content: 'Cannot identify user for memory commands.', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const data = seekdeepReadUserFacts();
+  const userKey = String(userId);
+  const entry = data.users[userKey] || { facts: [], updatedAt: null };
+  if (!Array.isArray(entry.facts)) entry.facts = [];
+
+  if (recallMatch) {
+    if (!entry.facts.length) {
+      await message.reply({
+        content: 'I have no facts remembered about you yet. Add one with `@SeekDeep remember <fact about yourself>`.',
+        allowedMentions: { repliedUser: false },
+      });
+      return true;
+    }
+    const lines = ['Facts I remember about you:'];
+    entry.facts.forEach((f, i) => lines.push(`  ${i + 1}. ${String(f.text || '').slice(0, 240)}`));
+    lines.push('', `Forget one with \`@SeekDeep forget #N\` or \`@SeekDeep forget <text>\`. Clear all with \`@SeekDeep forget all\`.`);
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (rememberMatch) {
+    const fact = normalizeUserText(rememberMatch[1] || '').trim().slice(0, SEEKDEEP_USER_FACT_MAX_CHARS);
+    if (!fact) {
+      await message.reply({ content: 'Tell me what to remember. Example: `@SeekDeep remember I work in PST timezone`.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    // Dedupe: if the exact (case-insensitive) fact is already there, no-op.
+    const lower = fact.toLowerCase();
+    if (entry.facts.some((f) => String(f.text || '').toLowerCase() === lower)) {
+      await message.reply({ content: 'Already remembered that. Run `@SeekDeep recall` to see the list.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    entry.facts.push({ text: fact, at: Date.now() });
+    // Cap oldest-out
+    while (entry.facts.length > SEEKDEEP_USER_FACTS_MAX) entry.facts.shift();
+    entry.updatedAt = new Date().toISOString();
+    data.users[userKey] = entry;
+    seekdeepWriteUserFacts(data);
+    await message.reply({
+      content: `Remembered. (${entry.facts.length}/${SEEKDEEP_USER_FACTS_MAX} facts stored.)`,
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+
+  if (forgetMatch) {
+    const target = String(forgetMatch[1] || '').trim();
+    if (!target) {
+      await message.reply({ content: 'Use `@SeekDeep forget <text>`, `@SeekDeep forget #N`, or `@SeekDeep forget all`.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    if (/^all$/i.test(target)) {
+      const removed = entry.facts.length;
+      delete data.users[userKey];
+      seekdeepWriteUserFacts(data);
+      await message.reply({ content: `Cleared ${removed} fact${removed === 1 ? '' : 's'}.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const indexMatch = /^#?(\d+)$/.exec(target);
+    if (indexMatch) {
+      const idx = Number(indexMatch[1]) - 1;
+      if (idx < 0 || idx >= entry.facts.length) {
+        await message.reply({ content: `No fact at index ${idx + 1}. You have ${entry.facts.length}. Run \`@SeekDeep recall\`.`, allowedMentions: { repliedUser: false } });
+        return true;
+      }
+      const dropped = entry.facts.splice(idx, 1)[0];
+      entry.updatedAt = new Date().toISOString();
+      data.users[userKey] = entry;
+      seekdeepWriteUserFacts(data);
+      await message.reply({ content: `Forgot: "${String(dropped?.text || '').slice(0, 140)}"`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    // Substring match (case-insensitive)
+    const needle = target.toLowerCase();
+    const before = entry.facts.length;
+    entry.facts = entry.facts.filter((f) => !String(f.text || '').toLowerCase().includes(needle));
+    const removed = before - entry.facts.length;
+    if (!removed) {
+      await message.reply({ content: `No facts matched "${target}". Run \`@SeekDeep recall\` to see what's stored.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    entry.updatedAt = new Date().toISOString();
+    data.users[userKey] = entry;
+    seekdeepWriteUserFacts(data);
+    await message.reply({ content: `Forgot ${removed} fact${removed === 1 ? '' : 's'} matching "${target}".`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  return false;
+}
+// SEEKDEEP_USER_FACTS_END
+
 // SEEKDEEP_PROMPT_TEMPLATES_START
 // Per-user saved prompt templates for quick image generation.
 // Persisted to data/prompt-templates.json. Commands:
@@ -16371,6 +16550,11 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
       return true;
     }
 
+    // User facts (remember/forget/recall): "@SeekDeep remember I work in PST"
+    if (typeof seekdeepHandleRememberCommand === 'function' && await seekdeepHandleRememberCommand(message, seekdeepArchiveOpenRawContent)) {
+      return true;
+    }
+
     // Server stats: "@SeekDeep stats" / "stats me"
     if (typeof seekdeepHandleStatsCommand === 'function' && await seekdeepHandleStatsCommand(message, seekdeepArchiveOpenRawContent)) {
       return true;
@@ -16922,9 +17106,10 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       const userPresetLines = typeof seekdeepGetUserMemoryPresetsLines === 'function'
         ? seekdeepGetUserMemoryPresetsLines(message.author?.id)
         : [];
-      const composedSystem = userPresetLines.length
-        ? `User-specific preferences for this user:\n${userPresetLines.map((l) => '- ' + l).join('\n')}`
-        : '';
+      const userFactLines = typeof seekdeepGetUserFactsLines === 'function'
+        ? seekdeepGetUserFactsLines(message.author?.id)
+        : [];
+      const composedSystem = seekdeepComposeUserSystemBlock(userPresetLines, userFactLines);
       const answer = await askChat(prompt, {
         web: 'auto',
         memoryKey: key,
@@ -17393,9 +17578,10 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     const userPresetLines = typeof seekdeepGetUserMemoryPresetsLines === 'function'
       ? seekdeepGetUserMemoryPresetsLines(message.author?.id)
       : [];
-    const composedSystem = userPresetLines.length
-      ? `User-specific preferences for this user:\n${userPresetLines.map((l) => '- ' + l).join('\n')}`
-      : '';
+    const userFactLines = typeof seekdeepGetUserFactsLines === 'function'
+      ? seekdeepGetUserFactsLines(message.author?.id)
+      : [];
+    const composedSystem = seekdeepComposeUserSystemBlock(userPresetLines, userFactLines);
     const answer = await askChat(prompt, {
       web: 'auto',
       memoryKey: key,
@@ -19763,6 +19949,16 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepPendingImageQueuePlan,
     seekdeepContextGenerateImageLooksLikeStatusMessage,
     seekdeepContextMenuExtractPromptLine,
+    // User-facts module (remember/forget/recall)
+    seekdeepReadUserFacts,
+    seekdeepWriteUserFacts,
+    seekdeepGetUserFacts,
+    seekdeepGetUserFactsLines,
+    seekdeepComposeUserSystemBlock,
+    seekdeepHandleRememberCommand,
+    SEEKDEEP_USER_FACTS_PATH,
+    SEEKDEEP_USER_FACTS_MAX,
+    SEEKDEEP_USER_FACT_MAX_CHARS,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

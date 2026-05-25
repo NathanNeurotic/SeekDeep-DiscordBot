@@ -192,6 +192,16 @@ Set `SEEKDEEP_MEMORY_MODE=followup` to return to conservative follow-up-only mem
 
 Optional per-user **memory presets** layer on top: `@SeekDeep memory preset add brief` / `expert` / `no-emoji` / `formal` / `casual`, or a custom line. They're rendered as system-prompt hints whenever that user is the requester. `@SeekDeep memory preset list | remove <key> | clear`.
 
+Free-form **user facts** are also available — distinct from presets in that they're arbitrary text the user asserts about themselves. Persisted to `data/user-facts.json` (gitignored) and injected into every chat call from that user:
+
+- `@SeekDeep remember <fact about you>` — store a fact (e.g. "I work in PST timezone", "I prefer Python")
+- `@SeekDeep recall` — list current facts with 1-based indices
+- `@SeekDeep forget #N` — remove fact at index N
+- `@SeekDeep forget <substring>` — remove any fact containing substring (case-insensitive)
+- `@SeekDeep forget all` — clear every fact for this user
+
+Caps: 25 facts per user, 500 chars per fact (configurable via `SEEKDEEP_USER_FACTS_MAX` and `SEEKDEEP_USER_FACT_MAX_CHARS`).
+
 ## Image Generation
 
 Image requests support:

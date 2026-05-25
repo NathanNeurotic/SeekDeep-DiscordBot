@@ -33,6 +33,9 @@ diagnostics/
 data/server-stats.json
 data/archive-guild-config.json
 data/archive-guild-config.json.bak*
+data/memory-presets.json
+data/prompt-templates.json
+data/user-facts.json
 
 # Old broken git directory (renamed during init)
 .git.broken_*
@@ -147,6 +150,9 @@ node_modules/
 data/server-stats.json
 data/archive-guild-config.json
 data/archive-guild-config.json.bak*
+data/memory-presets.json
+data/prompt-templates.json
+data/user-facts.json
 
 # Build/editor noise
 dist/
