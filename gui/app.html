@@ -959,42 +959,42 @@
                 <div class="config-row">
                   <div><div class="key">DISCORD_TOKEN</div><div class="desc">Bot token from the Discord developer portal · required.</div></div>
                   <input type="password" value="" class="mono" placeholder="(set in .env · redacted by /config)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_ALLOWED_CHANNELS</div><div class="desc">Comma-separated channel IDs · empty = answer everywhere.</div></div>
                   <input value="" class="mono" placeholder="(empty)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_BLOCKED_CHANNELS</div><div class="desc">Channels SeekDeep ignores even when mentioned.</div></div>
                   <input value="" class="mono" placeholder="(empty)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_ADMIN_IDS</div><div class="desc">User IDs that get queue priority + persona/digest perms.</div></div>
                   <input value="" class="mono" placeholder="(empty · comma-separated)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MAX_DISCORD_CHARS</div><div class="desc">Hard cap before SeekDeep splits an answer across messages.</div></div>
                   <input value="1900" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">CHAT_PROVIDER</div><div class="desc">Provider for chat completions.</div></div>
                   <select class="mono"><option>nvidia-local</option><option>openai</option><option>anthropic</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">IMAGE_PROVIDER</div><div class="desc">Provider for image generation.</div></div>
                   <select class="mono"><option>nvidia-local</option><option>openai</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">VISION_PROVIDER</div><div class="desc">Provider for vision / image-understanding.</div></div>
                   <select class="mono"><option>nvidia-local</option><option>openai</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MODEL_AUTO_FALLBACK</div><div class="desc">If a chat role's model fails to load, fall back to default_chat.</div></div>
@@ -1016,37 +1016,37 @@
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_MODEL_ID</div><div class="desc">Default chat model — fallback when no role-specific model fits.</div></div>
                   <input value="meta-llama/Llama-3.1-8B-Instruct" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_QUALITY_MODEL_ID</div><div class="desc">Used when /ask is invoked with quality:high or for complex synthesis.</div></div>
                   <input value="mistralai/Mistral-Nemo-Instruct-2407" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_REASONING_MODEL_ID</div><div class="desc">For math/logic queries · auto-routed by the intent classifier.</div></div>
                   <input value="microsoft/phi-4" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_FALLBACK_MODEL_ID</div><div class="desc">Soft fallback when the primary chat model can't load.</div></div>
                   <input value="ibm-granite/granite-3.3-8b-instruct" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID</div><div class="desc">For low-stakes routing under VRAM pressure.</div></div>
                   <input value="google/gemma-3n-E4B-it" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_IMAGE_MODEL_ID</div><div class="desc">SDXL base for txt2img / img2img.</div></div>
                   <input value="Lykon/dreamshaper-xl-1-0" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_VISION_MODEL_ID</div><div class="desc">Image-understanding · OCR mode + describe mode.</div></div>
                   <input value="Qwen/Qwen2.5-VL-3B-Instruct" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_QUANT</div><div class="desc">4bit fits 12-14B models on 24GB VRAM, ~1-2% quality drop.</div></div>
@@ -1068,37 +1068,37 @@
                 <div class="config-row">
                   <div><div class="key">VRAM_SYSTEM_RESERVE_MB</div><div class="desc">Reserve for OS + background apps · keeps the desktop responsive under load.</div></div>
                   <input value="4096" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">VRAM_SAFETY_MARGIN_MB</div><div class="desc">Headroom for KV cache / allocator fragmentation.</div></div>
                   <input value="1024" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MODEL_KEEP_MODE</div><div class="desc">task-lru = evict cold roles. always = keep all resident (needs 32GB+).</div></div>
                   <select class="mono"><option>task-lru</option><option>always</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_KEEP_RESIDENT</div><div class="desc">Keep chat model in VRAM across task switches (zero reload cost).</div></div>
                   <div><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_IMAGE_KEEP_RESIDENT</div><div class="desc">Pin SDXL · useful if you batch image gens.</div></div>
                   <div><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_VISION_KEEP_RESIDENT</div><div class="desc">Pin vision model · rarely needed.</div></div>
                   <div><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_MODEL_CACHE_DIR</div><div class="desc">Where HF stores pulled weights.</div></div>
                   <input value="./models/huggingface" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1116,22 +1116,22 @@
                 <div class="config-row">
                   <div><div class="key">HF_HOME</div><div class="desc">Hugging Face cache root. Override to put weights on a fast SSD or a separate volume.</div></div>
                   <input value="" class="mono" placeholder="(default · ~/.cache/huggingface)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">OLLAMA_MODELS</div><div class="desc">Ollama models directory. Pulled tags live here.</div></div>
                   <input value="" class="mono" placeholder="(default · ~/.ollama/models)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">OLLAMA_KEEP_ALIVE</div><div class="desc">Duration a model stays warm in Ollama after the last request. <span class="mono">"0"</span> = evict immediately · <span class="mono">"5m"</span> = keep warm 5 minutes · <span class="mono">"-1"</span> = forever.</div></div>
                   <input value="5m" class="mono" placeholder="5m" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_AI_BASE_URL</div><div class="desc">FastAPI side-car URL. Loopback only — never expose this beyond the local box.</div></div>
                   <input value="http://127.0.0.1:7865" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1153,56 +1153,56 @@
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_DEFAULT_API_URL</div><div class="desc">Base URL for the <span class="mono">default_chat</span> role when its backend is remote.</div></div>
                   <input value="" class="mono" placeholder="https://api.openai.com/v1" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_DEFAULT_API_KEY</div><div class="desc">Bearer / x-api-key for the default_chat role.</div></div>
                   <input type="password" value="" class="mono" placeholder="sk-…" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
 
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_LIGHTWEIGHT_API_URL</div><div class="desc">Base URL for <span class="mono">lightweight_chat</span> — used for greetings, translations, trivial routing.</div></div>
                   <input value="" class="mono" placeholder="(empty · stays local)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_LIGHTWEIGHT_API_KEY</div><div class="desc">Key for the lightweight_chat role.</div></div>
                   <input type="password" value="" class="mono" placeholder="(empty)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
 
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_QUALITY_API_URL</div><div class="desc">Base URL for <span class="mono">quality_text</span> — synthesis-heavy queries. Anthropic uses <span class="mono">https://api.anthropic.com/v1/messages</span>.</div></div>
                   <input value="" class="mono" placeholder="https://api.anthropic.com/v1/messages" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_QUALITY_API_KEY</div><div class="desc">Key for quality_text.</div></div>
                   <input type="password" value="" class="mono" placeholder="sk-ant-…" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
 
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_REASONING_API_URL</div><div class="desc">Base URL for <span class="mono">reasoning_code</span>. Groq / OpenRouter / DeepSeek all speak the openai-compat shape.</div></div>
                   <input value="" class="mono" placeholder="https://api.groq.com/openai/v1" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_REASONING_API_KEY</div><div class="desc">Key for reasoning_code.</div></div>
                   <input type="password" value="" class="mono" placeholder="gsk_…" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
 
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_FALLBACK_API_URL</div><div class="desc">Base URL for the cold-failover role.</div></div>
                   <input value="" class="mono" placeholder="(empty · stays local)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">LOCAL_CHAT_FALLBACK_API_KEY</div><div class="desc">Key for fallback_chat.</div></div>
                   <input type="password" value="" class="mono" placeholder="(empty)" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1219,27 +1219,27 @@
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_MEMORY_SCOPE</div><div class="desc">user = per-user context · channel = shared (small private servers).</div></div>
                   <select class="mono"><option>user</option><option>channel</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_MEMORY_MODE</div><div class="desc">rolling = sliding window · summarize = compact older turns.</div></div>
                   <select class="mono"><option>rolling</option><option>summarize</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MAX_CONTEXT_MESSAGES</div><div class="desc">How many messages SeekDeep stores per scope.</div></div>
                   <input value="50" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MAX_CONTEXT_CHARS</div><div class="desc">Storage cap. ~12K tokens at 40K chars.</div></div>
                   <input value="36000" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_MEMORY_RECENT_ENTRIES</div><div class="desc">Render cap · how many entries are actually sent to the model.</div></div>
                   <input value="40" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1261,52 +1261,52 @@
                 <div class="config-row">
                   <div><div class="key">IMAGE_STEPS</div><div class="desc">28 is standard · /image quality:low|standard|high → 12/28/40.</div></div>
                   <input value="28" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">IMAGE_SCHEDULER</div><div class="desc">dpmsolver++ (DPM++ 2M Karras) is tuned for Dreamshaper-XL.</div></div>
                   <select class="mono"><option>dpmsolver++</option><option>euler-a</option><option>ddim</option><option>default</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT</div><div class="desc">Refine prompts via the pinned chat model before SDXL.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS</div><div class="desc">Cap on refined-prompt length in words.</div></div>
                   <input value="45" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_IMAGE_PROMPT_MAX_CHARS</div><div class="desc">Hard cap on the prompt sent to SDXL.</div></div>
                   <input value="650" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_UPSCALE_METHOD</div><div class="desc">lanczos is local/offline · realesrgan requires the optional model.</div></div>
                   <select class="mono"><option>lanczos</option><option>realesrgan</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_UPSCALE_SHARPEN</div><div class="desc">Apply mild unsharp mask after upscale.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_UPSCALE_SHARPEN_RADIUS</div><div class="desc">Sharpen radius · higher = more pronounced edges.</div></div>
                   <input value="1.1" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_UPSCALE_SHARPEN_PERCENT</div><div class="desc">Sharpen intensity (0-200).</div></div>
                   <input value="115" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS</div><div class="desc">Safety ceiling · prevents accidental 8k explosions.</div></div>
                   <input value="20000000" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1323,22 +1323,22 @@
                 <div class="config-row">
                   <div><div class="key">CHAT_WEB_TEMPERATURE</div><div class="desc">Web-routed answers · lower = more coherent synthesis.</div></div>
                   <input value="0.45" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">CHAT_TOP_K</div><div class="desc">Top-K sampling cap · 0 = disabled.</div></div>
                   <input value="50" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">CHAT_WEB_MAX_NEW_TOKENS</div><div class="desc">Generation cap for web-backed answers (room for synthesis).</div></div>
                   <input value="1536" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">WEB_APPEND_SOURCES</div><div class="desc">Append "Sources:" line to web-routed answers.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1437,22 +1437,22 @@
                 <div class="config-row">
                   <div><div class="key">SEARXNG_BASE_URL</div><div class="desc">Local SearXNG instance · docker compose default.</div></div>
                   <input value="http://127.0.0.1:8080" class="mono" />
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">WEB_AUTO_SEARCH</div><div class="desc">Let SeekDeep auto-decide when to call SearXNG.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">WEB_SEARCH_STRICT_ROUTING</div><div class="desc">Require explicit web:always for force-search.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">WEB_SEARCH_FAIL_OPEN</div><div class="desc">If SearXNG is down, answer from model knowledge instead of erroring.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -1469,17 +1469,17 @@
                 <div class="config-row">
                   <div><div class="key">HF_HUB_OFFLINE</div><div class="desc">Lock Hugging Face to local cache only · run after first warmup.</div></div>
                   <select class="mono"><option>0</option><option>1</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">TRANSFORMERS_OFFLINE</div><div class="desc">Lock Transformers to local cache · pairs with HF_HUB_OFFLINE.</div></div>
                   <select class="mono"><option>0</option><option>1</option></select>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MODEL_ROUTER_LOG</div><div class="desc">Log every routing decision to logs/.</div></div>
                   <div><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
-                  <span class="save">SAVED</span>
+                  <span class="save">—</span>
                 </div>
               </div>
             </details>
@@ -3090,10 +3090,13 @@ const SEEKDEEP_BASE = (function() {
     const btn = [...document.querySelectorAll('.head-row .actions button')].find(b =>
       (b.textContent || '').toLowerCase().trim() === 'reload from disk');
     if (!btn) return;
-    btn.addEventListener('click', async () => {
+    // Extracted so we can also call it on first Config-pane activation,
+    // not only on button click. Previously the page loaded with every
+    // .save badge hardcoded "SAVED" and no actual /config fetch — the
+    // badges lied about persisted state until the user clicked Reload.
+    async function loadFromDisk(silent) {
       const orig = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Loading…';
+      if (!silent) { btn.disabled = true; btn.textContent = 'Loading…'; }
       try {
         const r = await fetch(SEEKDEEP_BASE + '/config', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -3121,16 +3124,44 @@ const SEEKDEEP_BASE = (function() {
         });
         if (typeof recountDirty === 'function') recountDirty();
         if (typeof validateAll === 'function') validateAll();
-        btn.textContent = `Loaded ${populated} · ${redacted} redacted`;
-        setTimeout(() => { btn.textContent = orig; }, 2400);
+        if (!silent) {
+          btn.textContent = `Loaded ${populated} · ${redacted} redacted`;
+          setTimeout(() => { btn.textContent = orig; }, 2400);
+        }
       } catch (err) {
-        btn.textContent = 'Offline · /config unreachable';
-        btn.style.color = 'var(--warn)';
-        setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+        if (!silent) {
+          btn.textContent = 'Offline · /config unreachable';
+          btn.style.color = 'var(--warn)';
+          setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+        }
+        // Silent path: if /config is unreachable on first mount, mark
+        // every .save badge as UNKNOWN so the user knows we never read
+        // the actual .env. Otherwise the hardcoded "SAVED" badges lie.
+        if (silent) {
+          document.querySelectorAll('.config-row .save').forEach(s => {
+            s.textContent = 'UNKNOWN';
+            s.style.color = 'var(--warn)';
+            s.title = 'Server unreachable — could not read .env. Click "Reload from disk" once it\'s back.';
+          });
+        }
       } finally {
-        btn.disabled = false;
+        if (!silent) btn.disabled = false;
       }
-    });
+    }
+    btn.addEventListener('click', () => loadFromDisk(false));
+    // Auto-load when the Config pane becomes active for the first time.
+    // Sentinel on window so we don't refetch on every sidebar click.
+    const autoload = () => {
+      const pane = document.querySelector('[data-pane="config"]');
+      if (!pane || !pane.classList.contains('active')) return;
+      if (window.__seekdeepConfigAutoLoaded) return;
+      window.__seekdeepConfigAutoLoaded = true;
+      loadFromDisk(true);
+    };
+    document.querySelectorAll('.sidebar a[data-mod="config"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(autoload, 60))
+    );
+    autoload();  // in case Config is the active pane on page load
   })();
 
   // Save button — POST /config with dirty values, fall back to local-only "saved" on offline
