@@ -149,6 +149,27 @@ def main() -> int:
         check("POST /config with correct token (empty updates) -> 200",
               r.status_code == 200, f"got {r.status_code}")
 
+    # ---- GET /launchers/status (open; backs app.html Control Center cards) ----
+    r = c.get("/launchers/status")
+    check("GET /launchers/status -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, services, generated_at}",
+          body.get("ok") is True
+          and isinstance(body.get("services"), dict)
+          and isinstance(body.get("generated_at"), str),
+          f"body keys={sorted((body or {}).keys())}")
+    # Whitelisted services should all appear (state may be 'not-running' in test).
+    services = body.get("services") or {}
+    check("  ...services dict contains ai-server, bot, searxng",
+          all(s in services for s in ("ai-server", "bot", "searxng")),
+          f"got {sorted(services.keys())}")
+    if services:
+        # Spot-check schema on the first entry
+        sample = next(iter(services.values()))
+        check("  ...per-service entry has state + (uptime_seconds, started_at) fields",
+              isinstance(sample, dict) and "state" in sample and "uptime_seconds" in sample and "started_at" in sample,
+              f"sample={sample}")
+
     # ---- Auth: POST /launcher/... without header -> 401 ----
     r = c.post("/launcher/bot/status")
     check("POST /launcher/bot/status without token -> 401",

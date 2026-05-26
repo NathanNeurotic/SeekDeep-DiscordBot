@@ -1020,5 +1020,9 @@
     // surfaces a notify.banner if a newer stable tag exists). Self-gates
     // to chat.html + Tauri context; harmless to inject everywhere.
     inject('updater.js', null);
+    // launcher.js · wires app.html's launcher cards + Quick Actions to
+    // the real /launcher/* + /unload + Tauri restart_sidecar paths. Polls
+    // GET /launchers/status every 5s. Self-gates to app.html.
+    inject('launcher.js', null);
   })();
 })();

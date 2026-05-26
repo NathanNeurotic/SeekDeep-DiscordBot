@@ -801,6 +801,48 @@ def register_gui_endpoints(
             time.sleep(0.5)
             return _start_service(service, root, _log_dir)
 
+    # ----- GET /launchers/status -----
+    # Per-service status snapshot for the Control Center launcher cards.
+    # Backs the previously-hardcoded PID 14882/14883/14884 + Uptime 4h 12m
+    # placeholders that lived in app.html. Open endpoint (read-only).
+    #
+    # Per-service shape: { service, state, pid?, uptime_seconds?, started_at? }
+    # state: 'running' | 'not-running' | 'exited' | 'unknown'
+    # uptime: best-effort, derived from PID file mtime when the process
+    #         was spawned via launcher.bat (we don't have a started_at
+    #         for in-process spawns without psutil).
+    @app.get("/launchers/status")
+    def get_launchers_status():
+        services_out = {}
+        for svc in sorted(ALLOWED_SERVICES):
+            base_status = _status_service(svc, _log_dir)
+            pid = base_status.get("pid")
+            uptime_s = None
+            started_at = None
+            if pid is not None:
+                # PID file mtime is a poor man's started_at — launcher.bat
+                # writes the file when it spawns, so file age ≈ uptime.
+                name = _PID_FILE_NAMES.get(svc)
+                if name:
+                    pid_path = _log_dir / name
+                    if pid_path.is_file():
+                        try:
+                            mtime = pid_path.stat().st_mtime
+                            uptime_s = int(max(0, time.time() - mtime))
+                            started_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                        except OSError:
+                            pass
+            services_out[svc] = {
+                **base_status,
+                "uptime_seconds": uptime_s,
+                "started_at":      started_at,
+            }
+        return {
+            "ok": True,
+            "services": services_out,
+            "generated_at": _now_iso(),
+        }
+
     # ----- GET /data/{file} -----
     @app.get("/data/{file}")
     async def get_data_file(file: str):

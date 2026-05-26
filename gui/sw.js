@@ -19,7 +19,7 @@
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35.0-7';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.0-8';
 const SHELL = [
   'chat.html',
   'styles.css',
@@ -38,6 +38,7 @@ const SHELL = [
   'ml-deps.js',
   'model-install.js',
   'updater.js',
+  'launcher.js',
   'seekdeep-loading.html',
   // add-model.html · 4-step wizard (designer zip 43); model-install.js's
   // banner deep-links into it for the "Open the full wizard" CTA.
@@ -69,7 +70,7 @@ self.addEventListener('activate', (event) => {
 });
 
 // Bypass list — anything matching these patterns is always network, never cache.
-const BYPASS_RE = /\/(chat|image|img2img|instruct-pix2pix|inpaint|upscale|vision|chart|unload|health|gpu|logs|launcher|config|model|route|events|token|memory|persona|stats|archive|ml_deps|deps|models)(\b|\/|\?)/;
+const BYPASS_RE = /\/(chat|image|img2img|instruct-pix2pix|inpaint|upscale|vision|chart|unload|health|gpu|logs|launcher|launchers|config|model|route|events|token|memory|persona|stats|archive|ml_deps|deps|models)(\b|\/|\?)/;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
