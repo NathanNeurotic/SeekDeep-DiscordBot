@@ -764,7 +764,7 @@
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Reload .env</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⤓ Flush model cache</button>
-              <button class="btn btn-ghost" style="justify-content: flex-start; opacity:0.5; cursor: not-allowed;" disabled title="Not implemented yet. Set HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 in .env and Reload .env to achieve the same effect for now.">⛚ Lock cache (offline)</button>
+              <button id="qaLockCacheBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Toggle HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE. Forces HF + Transformers to local cache only — no network calls for model loads. Restarts the sidecar so the env change takes effect.">⛚ Lock cache (offline)</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Smoke test</button>
               <button class="btn btn-ghost" style="justify-content: flex-start; color: var(--bad);">↯ Force kill all</button>
             </div>

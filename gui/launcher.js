@@ -598,6 +598,81 @@
         });
       }
     });
+
+    // ---- Lock cache (offline) toggle ----------------------------------
+    // Toggles HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE in .env via POST /config,
+    // then restarts the sidecar so the new env takes effect. The button's
+    // current state is read from /health.env_offline; pumpStatus polls so the
+    // label keeps up if .env is edited externally.
+    const lockBtn = document.getElementById('qaLockCacheBtn');
+    if (lockBtn) {
+      let lockBusy = false;
+      let lockState = null;  // null = unknown (will resolve on first /health)
+      function paintLock() {
+        if (lockBusy) {
+          lockBtn.textContent = '⏳ Working…';
+          lockBtn.style.color = 'var(--warn)';
+          return;
+        }
+        if (lockState === true)  { lockBtn.textContent = '⛓ Unlock cache (online)'; lockBtn.style.color = 'var(--cyan-1)'; lockBtn.title = 'HF_HUB_OFFLINE=1 right now. Click to flip back to 0 and let the sidecar fetch new model weights again.'; }
+        else if (lockState === false) { lockBtn.textContent = '⛚ Lock cache (offline)';  lockBtn.style.color = ''; lockBtn.title = 'Toggle HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE. Forces HF + Transformers to local cache only. Restarts the sidecar.'; }
+        else { lockBtn.textContent = '⛚ Lock cache (offline)'; lockBtn.style.color = ''; lockBtn.title = 'env_offline state unknown · /health pending'; }
+      }
+      async function pullLockState() {
+        try {
+          const r = await fetch(BASE + '/health', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+          if (!r.ok) return;
+          const h = await r.json();
+          if (typeof h.env_offline === 'boolean') {
+            lockState = h.env_offline;
+            paintLock();
+          }
+        } catch {}
+      }
+      pullLockState();
+      setInterval(pullLockState, 15000);
+      lockBtn.addEventListener('click', async () => {
+        if (lockBusy) return;
+        const desired = lockState === true ? '0' : '1';
+        const action = lockState === true ? 'Unlock' : 'Lock';
+        if (!confirm(`${action} HF cache?\n\nThis will:\n  1. Write HF_HUB_OFFLINE=${desired} + TRANSFORMERS_OFFLINE=${desired} to .env\n  2. Restart the AI server so it picks up the new env\n\nIn-flight requests will be dropped.`)) return;
+        lockBusy = true;
+        paintLock();
+        const sdn = notify();
+        try {
+          const r = await fetch(BASE + '/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: { HF_HUB_OFFLINE: desired, TRANSFORMERS_OFFLINE: desired } }),
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!r.ok) {
+            const txt = await r.text().catch(() => '');
+            throw new Error('HTTP ' + r.status + (txt ? ' · ' + txt.slice(0, 120) : ''));
+          }
+          // Now restart the sidecar so Python re-reads the env. Same pattern
+          // as Reload .env above: Tauri → restart_sidecar, else → /launcher/
+          // ai-server/restart (which 409s for self-hosted ai-server, in which
+          // case the user has to restart manually).
+          const tauri = window.__TAURI__;
+          if (tauri && tauri.core) {
+            try { await tauri.core.invoke('restart_sidecar'); }
+            catch (err) { if (sdn) sdn.toast({ tone: 'bad', title: 'Restart failed', body: String(err), ttl: 4000 }); }
+          } else {
+            await launcherCall('ai-server', 'restart');
+          }
+          if (sdn) sdn.toast({ tone: 'good', title: `${action}ed cache`, body: `HF_HUB_OFFLINE=${desired} · sidecar restarting`, ttl: 5000 });
+          // Optimistic state flip; real state confirmed on next pullLockState
+          lockState = desired === '1';
+          setTimeout(pullLockState, 3000);
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: `${action} failed`, body: String(err.message || err), ttl: 6000 });
+        } finally {
+          lockBusy = false;
+          paintLock();
+        }
+      });
+    }
   }
 
   // --- Boot --------------------------------------------------------------
