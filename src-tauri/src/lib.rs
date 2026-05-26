@@ -113,11 +113,12 @@ fn check_for_update() -> Result<serde_json::Value, String> {
         .to_string();
     // Naive semver compare — current/latest are both "X.Y.Z" so str cmp
     // works in 99% of cases. The "nightly" tag (no version, no .) is
-    // skipped explicitly.
+    // skipped explicitly. Compare as &str on both sides; PartialOrd
+    // between String and &str isn't blanket-implemented.
     let update_available = !latest_tag.is_empty()
-        && latest_tag != "nightly"
+        && latest_tag.as_str() != "nightly"
         && latest_tag != current
-        && latest_tag > current.as_str();
+        && latest_tag.as_str() > current.as_str();
     Ok(serde_json::json!({
         "current": current,
         "latest": latest_tag,
@@ -154,7 +155,7 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("SeekDeep")
                 .menu(&menu)
-                .menu_on_left_click(false)
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
