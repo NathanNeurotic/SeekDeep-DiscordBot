@@ -394,6 +394,31 @@ SEEKDEEP_VERSION = _read_pkg_version()
 
 app = FastAPI(title="SeekDeep Local AI Server", version=SEEKDEEP_VERSION)
 
+# ===== CORS =====
+# The Tauri 2 desktop shell serves bundled pages from http://tauri.localhost
+# (Windows + Linux) or http://tauri.localhost / tauri:// (macOS) — that's a
+# DIFFERENT origin from the local AI server at http://127.0.0.1:7865, so the
+# WebView's fetch() calls hit the cross-origin CORS path. Without permissive
+# CORS headers, every probe (/health, /ml_deps, /models/installed, etc.) gets
+# rejected by the browser DESPITE the server returning 200 — the response is
+# delivered but JS can't read it, so the loading overlay sees no answer and
+# never redirects to chat.html.
+#
+# We allow_origins=["*"] because this server only ever listens on 127.0.0.1
+# (no public exposure), AND every write endpoint already requires
+# X-SeekDeep-Token via require_gui_token — so opening CORS doesn't change the
+# auth posture. The token can't be exfiltrated by a hostile webpage because
+# GET /token is loopback-only (see gui_endpoints.py).
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,  # we use a header token, not cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
 # ===== SeekDeep GUI · static mount =====
 from fastapi.staticfiles import StaticFiles
 _GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
