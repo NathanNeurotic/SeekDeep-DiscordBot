@@ -35,7 +35,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Wipe stale assets off the rolling `nightly` tag BEFORE the matrix runs.
+  # tauri-action only overwrites assets with matching filenames — when our
+  # bundle version changes (e.g. `0.1.0` → `10.35.0` after wiring tauri.conf
+  # to package.json), the old filenames stay attached forever. Cleanup
+  # guarantees the nightly release always has exactly one version's
+  # worth of installers.
+  #
+  # Skipped on tag pushes (`v*.*.*`) because those publish to their own
+  # tag, not to `nightly`. The downstream `build` job uses `if: always()`
+  # so a skipped cleanup doesn't block it.
+  cleanup-nightly:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete prior nightly assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view nightly --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Found existing nightly release; clearing assets..."
+            gh release view nightly --repo "${{ github.repository }}" \
+              --json assets --jq '.assets[].name' \
+              | while IFS= read -r asset; do
+                  [ -n "$asset" ] || continue
+                  echo "  · delete-asset $asset"
+                  gh release delete-asset nightly "$asset" \
+                    --repo "${{ github.repository }}" --yes || true
+                done
+          else
+            echo "No existing nightly release — nothing to clean."
+          fi
+
   build:
+    needs: [cleanup-nightly]
+    # Run regardless of whether cleanup happened. On tag pushes cleanup is
+    # skipped (we publish to the tag, not to nightly); we still want build
+    # to run. On main pushes cleanup must succeed first.
+    if: always() && (needs.cleanup-nightly.result == 'success' || needs.cleanup-nightly.result == 'skipped')
     permissions:
       contents: write   # needed to create/update the nightly release
     strategy:
