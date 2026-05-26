@@ -32,6 +32,43 @@ fn install_python_deps(app: tauri::AppHandle) -> Result<String, String> {
     sidecar::pip_install(&python, &runtime)
 }
 
+/// Install heavy ML deps (torch, transformers, diffusers, accelerate, etc.).
+/// Kills the running sidecar first because pip can't overwrite .pyd / .py
+/// files that the live Python process has imported (WinError 32 on
+/// Windows). After pip completes (success or failure), respawns the
+/// sidecar so the user lands back in a working state.
+///
+/// Returns pip's combined stdout/stderr so the frontend can render it in
+/// the install modal. The respawn happens asynchronously after the pip
+/// call returns; the page should reload itself once /health is back.
+#[tauri::command]
+fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
+    let runtime = sidecar::app_runtime_dir(&app)?;
+    let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
+
+    // 1. Kill the running sidecar (releases file handles on torch/etc.)
+    let state = app.state::<SidecarState>();
+    sidecar::kill_child(state.inner());
+    sidecar::emit_status(&app, "RESTARTING");
+    // Give Windows a moment to release the file handles. Python's
+    // process exit doesn't always release immediately on AV-scanned
+    // installs.
+    std::thread::sleep(Duration::from_millis(800));
+
+    // 2. Run pip install (heavy; ~2 GB; 1-5 minutes on a decent connection)
+    let pip_result = sidecar::pip_install_ml(&python, &runtime);
+
+    // 3. Respawn the sidecar regardless of pip outcome — even if pip
+    //    failed, the user wants their previously-working server back.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        sidecar::boot_sequence(handle);
+    });
+
+    pip_result
+}
+
 #[tauri::command]
 fn retry_spawn(app: tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
@@ -150,6 +187,7 @@ pub fn run() {
         .manage(SidecarState::default())
         .invoke_handler(tauri::generate_handler![
             install_python_deps,
+            install_ml_deps,
             retry_spawn,
             open_external,
             restart_sidecar,

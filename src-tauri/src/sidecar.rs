@@ -30,6 +30,34 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
+// Windows: CREATE_NO_WINDOW (0x08000000) prevents spawned console apps
+// from opening a black cmd-window alongside the Tauri shell. Without it,
+// every python.exe / pip.exe call pops a stray terminal that floats on
+// top of the app — extremely ugly UX. Linux/macOS Command::spawn doesn't
+// have this problem (no auto-attached console).
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Wrap Command construction so all subprocess spawns get CREATE_NO_WINDOW
+/// on Windows. On other platforms this is a passthrough.
+fn quiet_command(program: &Path) -> Command {
+    let mut c = Command::new(program);
+    #[cfg(windows)]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c
+}
+
+/// Same as quiet_command but takes a &str (for `py`, `python3`, etc. that
+/// resolve via PATH lookup).
+fn quiet_command_str(program: &str) -> Command {
+    let mut c = Command::new(program);
+    #[cfg(windows)]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c
+}
+
 use tauri::{AppHandle, Emitter, Manager};
 
 // Held in tauri's app-state so the spawn handle survives across commands and
@@ -244,12 +272,12 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
     // skips that stub and finds a real Python 3.x installation.
     #[cfg(windows)]
     {
-        if let Ok(out) = Command::new("py").args(["-3", "--version"]).output() {
+        if let Ok(out) = quiet_command_str("py").args(["-3", "--version"]).output() {
             if out.status.success() {
                 // Resolve to the actual python.exe path so spawn_server can
                 // pass it directly. `py -3 -c "import sys; print(sys.executable)"`
                 // returns the real interpreter.
-                if let Ok(exec) = Command::new("py")
+                if let Ok(exec) = quiet_command_str("py")
                     .args(["-3", "-c", "import sys; print(sys.executable)"])
                     .output()
                 {
@@ -271,10 +299,10 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
     // isn't the Windows Store stub (which would otherwise pass --version
     // by launching the Store, then exit successfully with empty stdout).
     for name in &["python3", "python"] {
-        if let Ok(out) = Command::new(name).arg("--version").output() {
+        if let Ok(out) = quiet_command_str(name).arg("--version").output() {
             if out.status.success() {
                 // Resolve to actual path so we can stub-check.
-                if let Ok(exec) = Command::new(name)
+                if let Ok(exec) = quiet_command_str(name)
                     .args(["-c", "import sys; print(sys.executable)"])
                     .output()
                 {
@@ -313,7 +341,7 @@ fn is_windows_store_stub(_p: &Path) -> bool { false }
 /// Quick smoke test: does this Python have our minimum boot deps installed?
 /// If false, the user needs to run install_python_deps before we can spawn.
 pub fn deps_present(python: &Path) -> bool {
-    let out = Command::new(python)
+    let out = quiet_command(python)
         .arg("-c")
         .arg("import fastapi, uvicorn, httpx, pydantic")
         .output();
@@ -335,7 +363,7 @@ pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Chi
     let log_file = fs::File::create(&log_path).map_err(|e| format!("create log: {e}"))?;
     let log_clone = log_file.try_clone().map_err(|e| format!("clone log fd: {e}"))?;
 
-    let child = Command::new(python)
+    let child = quiet_command(python)
         .arg("local_ai_server.py")
         .current_dir(runtime)
         .env("SEEKDEEP_EMIT_LOG_LINES", "on")
@@ -380,7 +408,7 @@ pub fn pip_install(python: &Path, runtime: &Path) -> Result<String, String> {
         args.insert(3, "--user");
     }
 
-    let out = Command::new(python)
+    let out = quiet_command(python)
         .args(&args)
         .arg(&req)
         .current_dir(runtime)
@@ -400,6 +428,60 @@ pub fn pip_install(python: &Path, runtime: &Path) -> Result<String, String> {
     if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
         let _ = fs::create_dir_all(&log_dir);
         let _ = fs::write(log_dir.join("pip.log"), &combined);
+    }
+
+    if !out.status.success() {
+        return Err(combined);
+    }
+    Ok(combined)
+}
+
+/// Heavy-deps variant of pip_install. Used by the install_ml_deps Tauri
+/// command, which the chat-page banner triggers when the user accepts the
+/// "~2 GB ML libraries" install.
+///
+/// Crucial difference from pip_install: the local AI server may already be
+/// RUNNING when this fires (it must, in fact, since the banner appears on
+/// chat.html after a successful boot). The server has fastapi/pydantic/etc.
+/// imported, and ANY of those getting upgraded mid-flight is fine — but
+/// upgrading torch/transformers/diffusers means overwriting .pyd / .py
+/// files that Python has open, and on Windows that hard-errors with
+/// WinError 32 (process cannot access file because it is being used).
+///
+/// So we kill the sidecar BEFORE pip runs, then signal the caller to
+/// restart it after — both via the SidecarState the lib.rs command holds.
+pub fn pip_install_ml(python: &Path, runtime: &Path) -> Result<String, String> {
+    let req = runtime.join("requirements-ml.txt");
+    let py_str = python.to_string_lossy().to_lowercase();
+    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+
+    let mut args: Vec<&str> = vec!["-m", "pip", "install", "--upgrade",
+                                    "--no-cache-dir", "--disable-pip-version-check", "-r"];
+    if !in_venv {
+        args.insert(3, "--user");
+    }
+
+    let out = quiet_command(python)
+        .args(&args)
+        .arg(&req)
+        .current_dir(runtime)
+        .output()
+        .map_err(|e| format!("invoke pip: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!(
+        "$ {} {} {}\n\n---STDOUT---\n{}\n---STDERR---\n{}\n",
+        python.display(),
+        args.join(" "),
+        req.display(),
+        stdout, stderr,
+    );
+
+    // Write a separate pip-ml.log so the ML install's failure detail
+    // doesn't clobber the boot-deps pip.log if both happen in one session.
+    if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
+        let _ = fs::create_dir_all(&log_dir);
+        let _ = fs::write(log_dir.join("pip-ml.log"), &combined);
     }
 
     if !out.status.success() {

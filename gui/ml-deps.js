@@ -201,8 +201,51 @@
 
   async function triggerInstall() {
     ensureSubscriptions();
+
+    // Prefer the Tauri install_ml_deps command when available — it kills
+    // the sidecar before running pip so torch/transformers/diffusers can
+    // be overwritten without WinError 32 (Windows file-locks .pyd files
+    // that the running Python process has imported). The plain
+    // POST /deps/install path stays as a fallback for plain-browser usage
+    // (no Tauri shell) and for in-place upgrade attempts.
+    const tauri = window.__TAURI__;
+    if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+      if (modalRefs && modalRefs.statusEl) {
+        modalRefs.statusEl.textContent = 'STOPPING SERVER · then installing torch/transformers/diffusers';
+      }
+      appendLogLine('Stopping local AI server so pip can overwrite torch/diffusers without WinError 32 …');
+      try {
+        const combined = await tauri.core.invoke('install_ml_deps');
+        appendLogLine('');
+        appendLogLine('--- pip install completed ---');
+        if (typeof combined === 'string' && combined.length) appendLogLine(combined);
+        // Rust shell auto-respawns the sidecar after pip; bus events should
+        // resume once /health is back. Reload the page so the chat surface
+        // picks up the freshly-loadable libraries.
+        if (modalRefs && modalRefs.statusEl) {
+          modalRefs.statusEl.textContent = '✓ INSTALL COMPLETE · restarting AI server';
+          modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
+        }
+        appendLogLine('--- Reloading page in ~5 seconds. ---');
+        clearBanner();
+        setTimeout(() => { location.reload(); }, 5000);
+      } catch (err) {
+        // err is the pip output (combined stdout+stderr) from the Rust side
+        appendLogLine('--- pip install failed ---');
+        appendLogLine(String(err));
+        if (modalRefs && modalRefs.statusEl) {
+          modalRefs.statusEl.textContent = '⚠ INSTALL FAILED · see log above; server restarted regardless';
+          modalRefs.statusEl.style.color = 'var(--bad, #ff6b6b)';
+        }
+      }
+      return;
+    }
+
+    // Pure-browser fallback: use the existing server-side /deps/install
+    // endpoint with WebSocket progress events. Will hit WinError 32 if
+    // any of the heavy deps are already imported by the live server, but
+    // there's nothing we can do about that without Tauri's process control.
     if (!window.SeekDeepEvents) {
-      // Retry hookup once events.js has had a tick to load
       setTimeout(() => {
         ensureSubscriptions();
         if (!window.SeekDeepEvents && modalRefs && modalRefs.statusEl) {
