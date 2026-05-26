@@ -4223,11 +4223,18 @@ const SEEKDEEP_BASE = (function() {
       } catch {}
     })();
 
-    let sending = false;
+    let sendCtl = null;  // AbortController for in-flight /chat
     async function doSend() {
+      // Re-click while a request is in flight cancels it. Mirrors the
+      // image playground UX so concurrency behavior is consistent across
+      // the two playgrounds. Was: silently ignored second click; user
+      // had to wait the full 60s timeout.
+      if (sendCtl) {
+        try { sendCtl.abort(); } catch {}
+        return;
+      }
       const text = (input.value || '').trim();
-      if (!text || sending) return;
-      sending = true;
+      if (!text) return;
       input.value = '';
       const role    = getRole();
       const web     = getWeb();
@@ -4236,8 +4243,13 @@ const SEEKDEEP_BASE = (function() {
 
       appendMsg('user', text);
       const pending = appendMsg('bot', '<span style="opacity:0.6;">…</span>',
-        `${role.toUpperCase()} · WEB ${web.toUpperCase()} · SENDING…`);
+        `${role.toUpperCase()} · WEB ${web.toUpperCase()} · SENDING… · click Send to cancel`);
+      // Send button flips to cancel mode
+      const origSendLabel = send.textContent;
+      send.textContent = '✕ Cancel';
+      send.style.color = 'var(--warn)';
 
+      sendCtl = new AbortController();
       const t0 = performance.now();
       try {
         const r = await fetch(SEEKDEEP_BASE + '/chat', {
@@ -4249,7 +4261,7 @@ const SEEKDEEP_BASE = (function() {
             system_prompt: `You are SeekDeep. Persona: ${persona}.`,
             max_new_tokens: 1024,
           }),
-          signal: AbortSignal.timeout(60000),
+          signal: sendCtl.signal,
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const data = await r.json();
@@ -4288,13 +4300,22 @@ const SEEKDEEP_BASE = (function() {
         }
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
-        pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. ${e && e.message ? '<br/>Error: ' + escapeHtml(e.message) : 'Start the stack via the SeekDeep tray icon or <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.'}`;
-        // Diagnostics — show the error in the latency slot so the panel
-        // doesn't stay frozen on a stale successful send.
-        const el = document.getElementById('cpLastLatency');
-        if (el) { el.textContent = 'offline · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
+        const aborted = e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || e)));
+        if (aborted) {
+          pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · CANCELLED · ${ms}MS</span>▸ User cancelled the request.`;
+          const el = document.getElementById('cpLastLatency');
+          if (el) { el.textContent = 'cancelled · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
+        } else {
+          pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. ${e && e.message ? '<br/>Error: ' + escapeHtml(e.message) : 'Start the stack via the SeekDeep tray icon or <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.'}`;
+          // Diagnostics — show the error in the latency slot so the panel
+          // doesn't stay frozen on a stale successful send.
+          const el = document.getElementById('cpLastLatency');
+          if (el) { el.textContent = 'offline · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
+        }
       } finally {
-        sending = false;
+        sendCtl = null;
+        send.textContent = origSendLabel;
+        send.style.color = '';
       }
     }
     function escapeHtml(s) {
