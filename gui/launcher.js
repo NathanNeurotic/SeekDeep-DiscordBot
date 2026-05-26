@@ -242,6 +242,15 @@
       }
     }
 
+    // ---- Stats pane: Persona / Image-style / Chat-model breakdowns --------
+    // Live render IF the bot has bumped at least one entry. While empty
+    // (fresh install, or @SeekDeep hasn't been pinged yet), the panel keeps
+    // its "— per-X counters not tracked yet" placeholder so the page
+    // doesn't fake data.
+    renderBreakdown('personaBreakdown', bot.by_persona,     'persona');
+    renderBreakdown('styleBreakdown',   bot.by_image_style, 'image style');
+    renderBreakdown('modelBreakdown',   bot.by_chat_model,  'chat model');
+
     // ---- Sidebar Models badge --------------------------------------------
     const sbModels = document.getElementById('sbModelsBadge');
     if (sbModels && snap.cache && snap.cache.hf_repo_count != null) {
@@ -280,6 +289,47 @@
     const el = document.getElementById(id);
     if (!el || val == null) return;
     el.textContent = (typeof val === 'number') ? val.toLocaleString() : String(val);
+  }
+
+  // Render a small horizontal-bar breakdown (key -> count). Sorted desc,
+  // max 8 rows, total normalized to 100% across all keys for the bar widths.
+  // XSS-safe: keys come from server-stats.json which is bot-controlled, but
+  // we still go via textContent in case a persona/style/model label was
+  // stored with a hostile substring.
+  function renderBreakdown(hostId, dict, label) {
+    const host = document.getElementById(hostId);
+    if (!host || !dict) return;
+    const entries = Object.entries(dict).filter(([_, v]) => Number(v) > 0);
+    if (!entries.length) return;  // keep the empty-state placeholder
+    entries.sort((a, b) => b[1] - a[1]);
+    const top = entries.slice(0, 8);
+    const total = entries.reduce((s, [, v]) => s + Number(v || 0), 0) || 1;
+    host.innerHTML = '';  // clear placeholder
+    host.style.fontFamily = 'var(--font-mono)';
+    host.style.fontSize = '12px';
+    host.style.color = 'var(--hull-2)';
+    host.style.paddingTop = '6px';
+    for (const [k, v] of top) {
+      const pct = Math.round((Number(v) / total) * 100);
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.cssText = 'justify-content: space-between; padding: 6px 0;';
+      const name = document.createElement('span');
+      name.textContent = k;
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.style.cssText = 'flex: 1; margin: 0 12px;';
+      const fill = document.createElement('i');
+      fill.style.width = Math.max(2, pct) + '%';
+      bar.appendChild(fill);
+      const pctEl = document.createElement('span');
+      pctEl.style.color = 'var(--cyan-1)';
+      pctEl.textContent = pct + '%';
+      row.appendChild(name);
+      row.appendChild(bar);
+      row.appendChild(pctEl);
+      host.appendChild(row);
+    }
   }
 
   // Update one of the launcher-card .stats <span>'s <em> based on a label

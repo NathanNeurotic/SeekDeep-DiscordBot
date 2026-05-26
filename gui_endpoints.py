@@ -1324,8 +1324,16 @@ def register_gui_endpoints(
         bot: dict = {
             "total_chats": 0, "total_images": 0, "total_vision": 0,
             "guild_count": 0, "user_count": 0, "day_buckets": [],
+            # Per-{persona, style, model} breakdowns. Empty until the bot
+            # has bumped stats with persona/imageStyle/chatModel metadata
+            # (see seekdeepTrackStatEvent in index.js). Powers the Stats
+            # pane's three breakdown panels.
+            "by_persona": {}, "by_image_style": {}, "by_chat_model": {},
         }
         day_agg: dict[str, dict[str, int]] = {}
+        persona_agg:     dict[str, int] = {}
+        image_style_agg: dict[str, int] = {}
+        chat_model_agg:  dict[str, int] = {}
         if bot_stats_path.is_file():
             try:
                 raw = json.loads(bot_stats_path.read_text(encoding="utf-8"))
@@ -1345,7 +1353,16 @@ def register_gui_endpoints(
                         d["chats"]  += int(bucket.get("chats")  or 0)
                         d["images"] += int(bucket.get("images") or 0)
                         d["vision"] += int(bucket.get("vision") or 0)
-                bot["user_count"] = len(user_ids)
+                    for k, v in (g.get("byPersona") or {}).items():
+                        persona_agg[str(k)] = persona_agg.get(str(k), 0) + int(v or 0)
+                    for k, v in (g.get("byImageStyle") or {}).items():
+                        image_style_agg[str(k)] = image_style_agg.get(str(k), 0) + int(v or 0)
+                    for k, v in (g.get("byChatModel") or {}).items():
+                        chat_model_agg[str(k)] = chat_model_agg.get(str(k), 0) + int(v or 0)
+                bot["user_count"]     = len(user_ids)
+                bot["by_persona"]     = persona_agg
+                bot["by_image_style"] = image_style_agg
+                bot["by_chat_model"]  = chat_model_agg
             except Exception as e:
                 bot["error"] = str(e)
         out["bot"] = bot

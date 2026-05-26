@@ -14930,14 +14930,26 @@ function seekdeepWriteServerStats(data) {
   } catch (err) { console.warn('Failed to write server stats:', err?.message || err); }
 }
 function seekdeepStatsBucketForGuild(data, guildId) {
-  if (!data.guilds[guildId]) data.guilds[guildId] = { totalImages: 0, totalChats: 0, totalVision: 0, users: {}, dayBuckets: {} };
-  return data.guilds[guildId];
+  if (!data.guilds[guildId]) data.guilds[guildId] = {
+    totalImages: 0, totalChats: 0, totalVision: 0,
+    users: {}, dayBuckets: {},
+    // Per-{persona,style,model} lifetime counters. Used by the Control
+    // Center's Stats pane breakdown panels. Filled by seekdeepTrackStatEvent
+    // when a chat/image is dispatched with the corresponding metadata.
+    byPersona: {}, byImageStyle: {}, byChatModel: {},
+  };
+  // Heal older buckets that predate the byX maps.
+  const b = data.guilds[guildId];
+  if (!b.byPersona)    b.byPersona    = {};
+  if (!b.byImageStyle) b.byImageStyle = {};
+  if (!b.byChatModel)  b.byChatModel  = {};
+  return b;
 }
 function seekdeepStatsBucketForUser(bucket, userId) {
   if (!bucket.users[userId]) bucket.users[userId] = { images: 0, chats: 0, vision: 0 };
   return bucket.users[userId];
 }
-function seekdeepTrackStatEvent({ guildId, userId, kind }) {
+function seekdeepTrackStatEvent({ guildId, userId, kind, persona, imageStyle, chatModel }) {
   if (!guildId) return;
   const data = seekdeepReadServerStats();
   const bucket = seekdeepStatsBucketForGuild(data, String(guildId));
@@ -14958,6 +14970,15 @@ function seekdeepTrackStatEvent({ guildId, userId, kind }) {
   // Trim to last 30 days.
   const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
   for (const d of Object.keys(bucket.dayBuckets)) if (d < cutoff) delete bucket.dayBuckets[d];
+  // Per-{persona,style,model} bumps. Keys are normalized lowercase to keep
+  // the cardinality bounded — "Clinical" / "clinical" / "CLINICAL" all
+  // collapse to the same counter. Unknown/missing values bump 'unknown'.
+  const bumpKey = (m, k) => {
+    const key = String(k || 'unknown').toLowerCase().slice(0, 64);
+    m[key] = (m[key] || 0) + 1;
+  };
+  if (kind === 'chat')   { bumpKey(bucket.byPersona,    persona);    bumpKey(bucket.byChatModel,  chatModel); }
+  if (kind === 'image')  { bumpKey(bucket.byImageStyle, imageStyle); }
   seekdeepWriteServerStats(data);
 }
 
@@ -18329,7 +18350,10 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       remember(key, 'user', prompt);
       remember(key, 'assistant', answer);
       seekdeepSetResponseModel(message, seekdeepChatModelLabel());
-      try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'chat' }); } catch {}
+      try { seekdeepTrackStatEvent({
+        guildId: message.guild?.id, userId: message.author?.id, kind: 'chat',
+        persona: personaOverride, chatModel: seekdeepChatModelLabel?.(),
+      }); } catch {}
       await sendLongMessageReply(message, answer);
       return;
     }
@@ -18801,7 +18825,10 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     remember(key, 'user', prompt);
     remember(key, 'assistant', answer);
     seekdeepSetResponseModel(message, seekdeepChatModelLabel());
-    try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'chat' }); } catch {}
+    try { seekdeepTrackStatEvent({
+      guildId: message.guild?.id, userId: message.author?.id, kind: 'chat',
+      persona: personaOverride, chatModel: seekdeepChatModelLabel?.(),
+    }); } catch {}
     await sendLongMessageReply(message, answer);
   } catch (err) {
     console.error(err);
