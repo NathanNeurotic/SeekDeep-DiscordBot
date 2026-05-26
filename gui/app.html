@@ -1466,7 +1466,7 @@
         <div class="head-row">
           <div>
             <h1 class="live">Logs viewer</h1>
-            <div class="sub">Tailing <span class="mono" style="color:var(--cyan-1)">./logs/seekdeep-2026-05-23.log</span> · 14,224 lines</div>
+            <div class="sub">Tailing <span class="mono" style="color:var(--cyan-1)" id="logsFilePath">/logs/tail</span> · showing <span id="logsLineCount">—</span> lines (<span id="logsFileSize">—</span>)</div>
           </div>
           <div class="actions">
             <span class="pill" id="logsModePill" title="live = SeekDeepEvents.log.line · poll = /logs/tail" style="padding: 3px 10px;"><span class="dot"></span>POLL MODE</span>
@@ -2979,6 +2979,13 @@ const SEEKDEEP_BASE = (function() {
 
     let sse = null;
     let loaded = false;
+    function _fmtBytes(n) {
+      if (n == null) return '—';
+      if (n < 1024) return n + ' B';
+      if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+      if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + ' MB';
+      return (n/(1024*1024*1024)).toFixed(2) + ' GB';
+    }
     async function loadInitial() {
       if (loaded) return;
       loaded = true;
@@ -2990,7 +2997,18 @@ const SEEKDEEP_BASE = (function() {
         const data = await r.json();
         if (!data.ok && !Array.isArray(data.lines)) throw new Error(data.error || 'no lines');
         clear();
-        (data.lines || []).forEach(append);
+        const lineArr = data.lines || [];
+        lineArr.forEach(append);
+        // Truth-up the header subtitle: real filename + actual returned line
+        // count + file size. Was hardcoded "./logs/seekdeep-2026-05-23.log
+        // · 14,224 lines" which lied as soon as the date rolled over (or on
+        // any install that hadn't accumulated 14k lines yet).
+        const fileEl = document.getElementById('logsFilePath');
+        const cntEl  = document.getElementById('logsLineCount');
+        const sizeEl = document.getElementById('logsFileSize');
+        if (fileEl && data.file) fileEl.textContent = 'logs/' + data.file;
+        if (cntEl)  cntEl.textContent = lineArr.length.toLocaleString();
+        if (sizeEl) sizeEl.textContent = _fmtBytes(data.size_bytes);
         startStream();
       } catch (e) {
         loaded = false;
@@ -3017,6 +3035,80 @@ const SEEKDEEP_BASE = (function() {
       a.addEventListener('click', () => setTimeout(onLogsActive, 50));
     });
     onLogsActive();
+
+    // ---- Filter wiring: search input + level chips + source chips -------
+    // Visibility = matches search AND (level chip is ALL or matches) AND
+    // (source chip is unselected OR matches). Re-runs on any chip click or
+    // search keystroke. Hides .log-line nodes that don't match.
+    const logFilters = document.querySelector('.log-filters');
+    const searchInput = logFilters?.querySelector('input[placeholder*="Search"]');
+    let searchQ = '';
+    let activeLevel = 'all';        // 'all' / 'info' / 'warn' / 'err' / 'dbg'
+    let activeSources = new Set();  // 'bot' / 'ai-server' / 'searxng' / 'image' / 'vision'
+    function applyFilters() {
+      const q = searchQ.toLowerCase();
+      wrap.querySelectorAll('.log-line').forEach(line => {
+        const lvl = (line.querySelector('.lvl')?.textContent || '').toLowerCase();
+        const src = (line.querySelector('.src')?.textContent || '').toLowerCase();
+        const txt = (line.textContent || '').toLowerCase();
+        const okQ = !q || txt.includes(q);
+        const okLvl = activeLevel === 'all' || lvl === activeLevel;
+        const okSrc = !activeSources.size || [...activeSources].some(s => src.includes(s));
+        line.style.display = (okQ && okLvl && okSrc) ? '' : 'none';
+      });
+    }
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        searchQ = (e.target.value || '').trim();
+        applyFilters();
+      });
+    }
+    if (logFilters) {
+      const allChips = logFilters.querySelectorAll('.chip');
+      // First 5 chips are levels: ALL / INFO / WARN / ERROR / DEBUG.
+      // The rest are sources: bot / ai-server / searxng / image / vision.
+      // Multi-select on sources, single-select on levels.
+      const levelChips = [...allChips].slice(0, 5);
+      const sourceChips = [...allChips].slice(5);
+      levelChips.forEach(c => {
+        c.addEventListener('click', () => {
+          levelChips.forEach(x => x.classList.remove('active'));
+          c.classList.add('active');
+          const t = (c.textContent || '').trim().toLowerCase();
+          activeLevel = (t === 'all' ? 'all'
+                       : t === 'info' ? 'info'
+                       : t === 'warn' ? 'warn'
+                       : t === 'error' ? 'err'
+                       : t === 'debug' ? 'dbg' : 'all');
+          applyFilters();
+        });
+      });
+      sourceChips.forEach(c => {
+        c.addEventListener('click', () => {
+          const src = (c.textContent || '').trim().toLowerCase();
+          if (activeSources.has(src)) { activeSources.delete(src); c.classList.remove('active'); }
+          else { activeSources.add(src); c.classList.add('active'); }
+          applyFilters();
+        });
+      });
+    }
+    // Pause / Clear buttons (Clear was already only visually firing — wire
+    // it to actually drop everything; Pause swallows new SSE pushes by
+    // closing the EventSource without losing the loaded backlog).
+    const pauseBtn = document.getElementById('logsPauseBtn');
+    const clearBtn = document.getElementById('logsClearBtn');
+    if (pauseBtn) {
+      let paused = false;
+      pauseBtn.addEventListener('click', () => {
+        paused = !paused;
+        pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+        if (paused) { sse?.close(); sse = null; }
+        else        { startStream(); }
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => clear());
+    }
   })();
 
   // ===== Chat playground · live wiring (POST /chat) =====
