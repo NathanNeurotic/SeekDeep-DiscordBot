@@ -8,6 +8,9 @@
 //
 // Stages (skip a stage by passing --skip-<stage>):
 //   js         — node --check on every JS file we ship (index, smoke, preflight, gui/*.js)
+//   html-js    — node --check on every inline <script> block in gui/*.html
+//                (skips src=, type=text/babel, type=module). Catches inline-script
+//                parse errors that previously shipped without CI noticing.
 //   py         — python -m py_compile on every .py we ship (server, warmup, gui_endpoints)
 //   smoke      — node smoke_test.mjs (no Discord login, no model load)
 //   gui-smoke  — python scripts/smoke_gui_endpoints.py (token auth + /config/status
@@ -17,8 +20,9 @@
 // Exit code 0 only when EVERY stage passes (or was skipped).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -140,6 +144,62 @@ stage('js', () => {
     if (!r.ok) return r;
   }
   return { ok: true, detail: targets.filter((t) => existsSync(path.join(ROOT, t))).join(', ') };
+});
+
+stage('html-js', () => {
+  // Inline-script parse check. Every <script>...</script> block in gui/*.html
+  // that DOES NOT have a src= attribute and is NOT type="text/babel" (those
+  // are JSX transformed at runtime by @babel/standalone) gets extracted and
+  // run through `node --check`. AUD-013 — previously a parse error in an
+  // inline script shipped without CI noticing because preflight only checked
+  // top-level .js files.
+  const guiDir = path.join(ROOT, 'gui');
+  if (!existsSync(guiDir)) return { ok: true, detail: 'no gui/ dir' };
+  const htmlFiles = readdirSync(guiDir).filter((f) => f.endsWith('.html'));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'sd-html-js-'));
+  let checked = 0;
+  let failure = null;
+  try {
+    // Greedy regex over inline scripts. Skip the open tag if it has src= or
+    // type="text/babel"/"module" markers we can't node-check.
+    //
+    // CRITICAL: strip <style>…</style> blocks and <!-- … --> HTML comments
+    // first. Otherwise the word "<script>" appearing inside a CSS comment or
+    // an HTML doc-comment would match SCRIPT_RE and the scanner would
+    // happily try to parse hundreds of lines of CSS + HTML as JavaScript.
+    const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    const stripNonJs = (s) => s
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+    for (const file of htmlFiles) {
+      if (failure) break;
+      const html = stripNonJs(readFileSync(path.join(guiDir, file), 'utf8'));
+      let m;
+      let i = 0;
+      while ((m = SCRIPT_RE.exec(html)) !== null) {
+        const attrs = m[1] || '';
+        const body  = m[2] || '';
+        if (/\bsrc\s*=/i.test(attrs)) continue;
+        if (/\btype\s*=\s*["']?text\/babel/i.test(attrs)) continue;
+        if (/\btype\s*=\s*["']?module/i.test(attrs)) continue;
+        if (!body.trim()) continue;
+        i++;
+        const tmpJs = path.join(tmp, `${path.basename(file, '.html')}-${i}.js`);
+        writeFileSync(tmpJs, body, 'utf8');
+        const r = spawnSync(process.execPath, ['--check', tmpJs], { encoding: 'utf8' });
+        checked++;
+        if (r.status !== 0) {
+          const err = (r.stderr || '').split('\n').filter(Boolean)[0] || 'parse error';
+          failure = { ok: false, detail: `gui/${file} block #${i}: ${err.slice(0, 160)}` };
+          break;
+        }
+      }
+    }
+  } finally {
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
+  if (failure) return failure;
+  return { ok: true, detail: `${checked} inline blocks across ${htmlFiles.length} html files` };
 });
 
 stage('py', () => runPyCompile());
