@@ -815,10 +815,22 @@
         </div>
 
         <div class="chart-wrap">
-          <h3>VRAM · last 60s</h3>
-          <div class="tiny muted" style="padding: 24px 4px; font-family: var(--font-mono); text-align: center;">
-            — VRAM history sampler not shipped. /gpu returns instantaneous values only.
-          </div>
+          <h3>VRAM · last 10 minutes</h3>
+          <!-- SVG sparkline filled in client-side from vram.sample events on
+               the SeekDeepEvents bus. The AI server emits one every 10s
+               while at least one WS subscriber is connected, so the chart
+               shows roughly the last 60 ticks (~10 min). -->
+          <svg id="gpuVramSpark" viewBox="0 0 600 80" preserveAspectRatio="none" style="width: 100%; height: 80px; display: block;">
+            <defs>
+              <linearGradient id="vramSparkGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--cyan-1)" stop-opacity="0.55" />
+                <stop offset="100%" stop-color="var(--cyan-1)" stop-opacity="0.05" />
+              </linearGradient>
+            </defs>
+            <path id="gpuVramSparkFill" fill="url(#vramSparkGrad)" d="" />
+            <path id="gpuVramSparkLine" fill="none" stroke="var(--cyan-1)" stroke-width="1.5" d="" />
+          </svg>
+          <div class="tiny muted" id="gpuVramSparkMeta" style="padding: 6px 4px 0; font-family: var(--font-mono); text-align: center; font-size: 10px;">— waiting for first vram.sample event (server emits every 10s while WS is connected)</div>
         </div>
       </section>
 
@@ -4691,6 +4703,47 @@ root.render(<App />);
         const txt = String(n);
         if (sbQueue)  sbQueue.textContent = txt;
         if (svcQueue) svcQueue.textContent = txt;
+      });
+    }
+    // ---- GPU pane: VRAM sparkline ------------------------------------
+    // Buffer the last 60 vram.sample events (~10 minutes at 10s cadence)
+    // and redraw an SVG sparkline. Was "— VRAM history sampler not
+    // shipped" placeholder; the sampler IS shipped (server-side
+    // _start_vram_sampler in local_ai_server.py emits vram.sample every
+    // 10s while at least one WS subscriber is connected), the page just
+    // never bound it.
+    const sparkLine = document.getElementById('gpuVramSparkLine');
+    const sparkFill = document.getElementById('gpuVramSparkFill');
+    const sparkMeta = document.getElementById('gpuVramSparkMeta');
+    if (sparkLine && sparkFill) {
+      const SPARK_W = 600, SPARK_H = 80, SPARK_MAX = 60;
+      const samples = [];  // [{t, used_mb, total_mb}]
+      function redrawSpark() {
+        if (samples.length < 2) return;
+        const totalMb = samples[samples.length - 1].total_mb || 1;
+        // Slice + remap to SVG viewBox coords. used_mb / total_mb → 0..1, then * SPARK_H, inverted.
+        const w = SPARK_W / Math.max(1, SPARK_MAX - 1);
+        const pts = samples.slice(-SPARK_MAX).map((s, i) => {
+          const x = i * w;
+          const pct = Math.max(0, Math.min(1, (s.used_mb || 0) / (s.total_mb || totalMb || 1)));
+          const y = SPARK_H - pct * SPARK_H;
+          return [x, y];
+        });
+        const line = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+        const fill = line + ' L' + pts[pts.length - 1][0].toFixed(1) + ',' + SPARK_H + ' L0,' + SPARK_H + ' Z';
+        sparkLine.setAttribute('d', line);
+        sparkFill.setAttribute('d', fill);
+        if (sparkMeta) {
+          const peakMb = Math.max(...samples.slice(-SPARK_MAX).map(s => s.used_mb || 0));
+          const lastMb = samples[samples.length - 1].used_mb || 0;
+          sparkMeta.textContent = `samples ${samples.length} · last ${(lastMb/1024).toFixed(1)} GB · peak ${(peakMb/1024).toFixed(1)} GB of ${((samples[samples.length-1].total_mb||0)/1024).toFixed(0)} GB · ${samples.length * 10}s window`;
+        }
+      }
+      window.SeekDeepEvents.on('vram.sample', (d) => {
+        if (!d || d.used_mb == null || d.total_mb == null) return;
+        samples.push({ t: Date.now(), used_mb: Number(d.used_mb) || 0, total_mb: Number(d.total_mb) || 0 });
+        if (samples.length > SPARK_MAX) samples.splice(0, samples.length - SPARK_MAX);
+        redrawSpark();
       });
     }
     return true;
