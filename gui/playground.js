@@ -228,7 +228,12 @@
       renderMessage({ who: '⌗', system: true, html: 'Drag-drop or paste an image first, then send a prompt (or use <code>/vision &lt;prompt&gt;</code>).' });
       return;
     }
-    const promptText = prompt || 'Describe this image.';
+    // No typed prompt → ask something more useful than "describe this":
+    // most attached-image flows are "what's this thing / can you read this /
+    // what do you see" rather than a description for archival. Empty
+    // prompt now defaults to a question that invites an answer rather
+    // than a paragraph.
+    const promptText = prompt || 'What is in this image?';
     renderMessage({
       who: 'you',
       html: '<code>/vision</code> ' + escapeHtml(promptText) +
@@ -380,6 +385,14 @@
   // ---- Dispatcher ----
   function dispatch(raw) {
     const text = String(raw || '').trim();
+    // If an image is attached and the user types a non-slash message, treat
+    // the text as the prompt FOR the image — that's what users actually
+    // want when they drop a picture. They shouldn't need to know about a
+    // /vision slash command. Empty text + attached image asks an
+    // action-oriented "what's in this image?" instead of "describe it."
+    if (pendingVisionFile && (!text || text[0] !== '/')) {
+      return sendVision(text, pendingVisionFile);
+    }
     if (!text) return;
     if (text[0] !== '/') return sendChat(text);
 
@@ -391,7 +404,7 @@
     if (cmd === 'image' || cmd === 'img' || cmd === 'gen') return sendImage(args);
     if (cmd === 'vision' || cmd === 'see' || cmd === 'look') {
       if (!pendingVisionFile) {
-        return renderMessage({ who: '⌗', system: true, html: 'Drop or paste an image first, then run <code>/vision &lt;prompt&gt;</code>.' });
+        return renderMessage({ who: '⌗', system: true, html: 'Drop or paste an image first, then type your question and send (or use <code>/vision &lt;prompt&gt;</code> after attaching).' });
       }
       return sendVision(args, pendingVisionFile);
     }
@@ -451,7 +464,7 @@
     renderMessage({
       who: '⌗',
       system: true,
-      html: '📎 attached <b>' + escapeHtml(file.name || 'image') + '</b> (' + (file.size / 1024).toFixed(1) + ' KB). Run <code>/vision &lt;prompt&gt;</code> to describe it.',
+      html: '📎 attached <b>' + escapeHtml(file.name || 'image') + '</b> (' + (file.size / 1024).toFixed(1) + ' KB). Type your question about the image and hit send.',
     });
   }
   // Drop anywhere on the chat surface

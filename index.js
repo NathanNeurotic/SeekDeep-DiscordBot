@@ -1606,6 +1606,16 @@ function buildSystem(system = '', useWeb = false, personaOverride = '') {
       base.push('Tone: dry, direct, slightly sardonic. Dissect, don\'t decorate.');
     } else if (personaMode === 'chaotic') {
       base.push('Tone: punchy and irreverent, but still useful and coherent.');
+    } else {
+      // Custom persona path — look up data/custom-personas.json. Falls
+      // through to no-tone-line if the slug doesn't exist (which can
+      // happen if someone deletes a custom persona that's still set as
+      // an override; better to drop the line than crash). Tone clamped
+      // by the create-command's input cap.
+      try {
+        const customTone = (typeof seekdeepResolvePersonaTone === 'function') ? seekdeepResolvePersonaTone(personaMode) : '';
+        if (customTone) base.push('Tone: ' + String(customTone).slice(0, 280));
+      } catch {}
     }
 
     // ── Behavior: minimal set the model can actually follow ──
@@ -7657,7 +7667,10 @@ function seekdeepHelpText(source = null) {
     '',
     '## Admin / Customization',
     '```text',
-    prefix + ' persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]',
+    prefix + ' persona [channel|server] [neurotic|unsettling|clinical|chaotic|<custom>|reset|show]',
+    prefix + ' persona create <slug> <tone description>     (define a new persona)',
+    prefix + ' persona remove <slug>                        (delete a custom persona)',
+    prefix + ' persona list                                 (built-in + custom)',
     '/persona                               (opens persona editor modal)',
     prefix + ' digest channel here / off     (daily activity digest)',
     prefix + ' translate channel here / off  (auto-translate non-Latin messages)',
@@ -12843,8 +12856,60 @@ function seekdeepConversationSearchQueryFromMessage(raw = '') {
 // or guild. Persisted to data/persona-overrides.json. Admins are detected via
 // SEEKDEEP_ADMIN_IDS or the user holding Manage Server / Manage Channels.
 const SEEKDEEP_PERSONA_OVERRIDES_PATH = path.join(__dirname, 'data', 'persona-overrides.json');
-const SEEKDEEP_VALID_PERSONAS = new Set(['neurotic', 'unsettling', 'clinical', 'chaotic']);
+const SEEKDEEP_CUSTOM_PERSONAS_PATH   = path.join(__dirname, 'data', 'custom-personas.json');
+const SEEKDEEP_BUILTIN_PERSONAS = new Set(['neurotic', 'unsettling', 'clinical', 'chaotic']);
 const SEEKDEEP_VALID_CENSORSHIP = new Set(['off', 'loose', 'minimal']);
+
+// Custom persona slug must be lowercase, 2-32 chars, alphanumeric+dash/underscore,
+// and NOT collide with a built-in. Tone string is the single-line flavor that
+// gets injected into the system prompt (similar to "Tone: clinical, concise…").
+// Bounded so the system prompt doesn't bloat to the moon.
+const SEEKDEEP_CUSTOM_PERSONA_SLUG_MAX = 32;
+const SEEKDEEP_CUSTOM_PERSONA_TONE_MAX = 280;
+const SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT = 50;
+const SEEKDEEP_RESERVED_PERSONA_KEYWORDS = new Set(['reset', 'show', 'create', 'remove', 'list', 'channel', 'server', 'guild']);
+
+function seekdeepReadCustomPersonas() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_CUSTOM_PERSONAS_PATH)) return { personas: {} };
+    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_CUSTOM_PERSONAS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { personas: {} };
+    if (!parsed.personas || typeof parsed.personas !== 'object') parsed.personas = {};
+    return parsed;
+  } catch {
+    return { personas: {} };
+  }
+}
+
+function seekdeepWriteCustomPersonas(data) {
+  try {
+    writeJsonAtomic(SEEKDEEP_CUSTOM_PERSONAS_PATH, data);
+    return true;
+  } catch (err) {
+    console.warn('Failed to write custom personas:', err?.message || err);
+    return false;
+  }
+}
+
+// Centralized validation: built-in OR shipped custom persona slug.
+function seekdeepIsValidPersonaSlug(slug) {
+  const s = String(slug || '').toLowerCase();
+  if (SEEKDEEP_BUILTIN_PERSONAS.has(s)) return true;
+  const data = seekdeepReadCustomPersonas();
+  return !!(data.personas && data.personas[s]);
+}
+
+// Return the tone-line string for the system prompt. Built-in slugs map to
+// their hardcoded one-liners (kept in the prompt builder below). Custom
+// slugs return their stored `tone`. Unknown slugs return '' so the prompt
+// builder skips the persona line entirely instead of crashing.
+function seekdeepResolvePersonaTone(slug) {
+  const s = String(slug || '').toLowerCase();
+  if (SEEKDEEP_BUILTIN_PERSONAS.has(s)) return null; // signal: use built-in branch
+  const data = seekdeepReadCustomPersonas();
+  const row = data.personas?.[s];
+  return (row && typeof row.tone === 'string') ? row.tone : '';
+}
 
 function seekdeepReadPersonaOverrides() {
   try {
@@ -12875,14 +12940,14 @@ function seekdeepGetEffectivePersona(channelId = '', guildId = '') {
   try {
     const data = seekdeepReadPersonaOverrides();
     const ch = data.channels[String(channelId || '')];
-    if (ch?.persona && SEEKDEEP_VALID_PERSONAS.has(String(ch.persona).toLowerCase())) return String(ch.persona).toLowerCase();
+    if (ch?.persona && seekdeepIsValidPersonaSlug(String(ch.persona).toLowerCase())) return String(ch.persona).toLowerCase();
     const g = data.guilds[String(guildId || '')];
-    if (g?.persona && SEEKDEEP_VALID_PERSONAS.has(String(g.persona).toLowerCase())) return String(g.persona).toLowerCase();
+    if (g?.persona && seekdeepIsValidPersonaSlug(String(g.persona).toLowerCase())) return String(g.persona).toLowerCase();
     // Global override (settable via web playground POST /persona scope='global').
     // Falls below channel + guild but above env default so Discord per-channel
     // overrides still take priority.
     const gl = data.global;
-    if (gl?.persona && SEEKDEEP_VALID_PERSONAS.has(String(gl.persona).toLowerCase())) return String(gl.persona).toLowerCase();
+    if (gl?.persona && seekdeepIsValidPersonaSlug(String(gl.persona).toLowerCase())) return String(gl.persona).toLowerCase();
   } catch {}
   return env;
 }
@@ -12902,7 +12967,88 @@ function seekdeepUserCanChangePersona(message) {
 async function seekdeepHandlePersonaCommand(message, raw = '') {
   const p = String(raw || message?.content || '').trim();
   const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
-  const m = stripped.match(/^persona(?:\s+(channel|server|guild))?\s+(neurotic|unsettling|clinical|chaotic|reset|show)\s*$/i);
+
+  // Custom-persona subcommands. Handled before the standard switch so the
+  // slug regex doesn't have to enumerate every user-defined name.
+  //   @SeekDeep persona create <slug> <tone description>
+  //   @SeekDeep persona remove <slug>
+  //   @SeekDeep persona list
+  const createMatch = stripped.match(/^persona\s+create\s+([a-z0-9_-]{2,32})\s+([\s\S]{2,280})\s*$/i);
+  if (createMatch) {
+    if (!seekdeepUserCanChangePersona(message)) {
+      await message.reply({ content: 'Only server admins / Manage Server / Manage Channels can manage personas.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const slug = createMatch[1].toLowerCase();
+    const tone = createMatch[2].trim();
+    if (SEEKDEEP_BUILTIN_PERSONAS.has(slug)) {
+      await message.reply({ content: `"${slug}" is a built-in persona slug; pick a different name.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    if (SEEKDEEP_RESERVED_PERSONA_KEYWORDS.has(slug)) {
+      await message.reply({ content: `"${slug}" is reserved (used by the persona command itself); pick a different name.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const data = seekdeepReadCustomPersonas();
+    if (!data.personas) data.personas = {};
+    if (Object.keys(data.personas).length >= SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT && !data.personas[slug]) {
+      await message.reply({ content: `Custom persona cap reached (${SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT}). Remove one with \`@SeekDeep persona remove <slug>\` first.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const existed = !!data.personas[slug];
+    data.personas[slug] = {
+      tone,
+      createdBy: message.author?.id || '',
+      createdAt: data.personas[slug]?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    seekdeepWriteCustomPersonas(data);
+    await message.reply({ content: `Persona "${slug}" ${existed ? 'updated' : 'created'}. Activate with \`@SeekDeep persona ${slug}\` (channel) or \`@SeekDeep persona server ${slug}\`.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const removeMatch = stripped.match(/^persona\s+remove\s+([a-z0-9_-]{2,32})\s*$/i);
+  if (removeMatch) {
+    if (!seekdeepUserCanChangePersona(message)) {
+      await message.reply({ content: 'Only server admins / Manage Server / Manage Channels can manage personas.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const slug = removeMatch[1].toLowerCase();
+    if (SEEKDEEP_BUILTIN_PERSONAS.has(slug)) {
+      await message.reply({ content: `"${slug}" is built-in and can't be removed. Use \`@SeekDeep persona reset\` to clear an override.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const data = seekdeepReadCustomPersonas();
+    if (!data.personas?.[slug]) {
+      await message.reply({ content: `No custom persona named "${slug}".`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    delete data.personas[slug];
+    seekdeepWriteCustomPersonas(data);
+    await message.reply({ content: `Removed custom persona "${slug}". Any channel/guild override that was pointing at it will fall back to the env default on next message.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (/^persona\s+list\s*$/i.test(stripped)) {
+    const custom = seekdeepReadCustomPersonas().personas || {};
+    const lines = ['Built-in personas: neurotic, unsettling, clinical, chaotic'];
+    const customKeys = Object.keys(custom).sort();
+    if (customKeys.length) {
+      lines.push('Custom personas (data/custom-personas.json):');
+      for (const k of customKeys) {
+        const t = String(custom[k]?.tone || '').slice(0, 80);
+        lines.push(`  • ${k} — ${t}${(custom[k]?.tone || '').length > 80 ? '…' : ''}`);
+      }
+    } else {
+      lines.push('No custom personas yet. Create one with `@SeekDeep persona create <slug> <tone description>`.');
+    }
+    await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // Standard set/reset/show. Match either a built-in slug or any custom slug
+  // (regex accepts 2-32 lowercase chars; validation runs after).
+  const m = stripped.match(/^persona(?:\s+(channel|server|guild))?\s+([a-z0-9_-]{2,32}|reset|show)\s*$/i);
   if (!m) return false;
 
   const scope = (m[1] || 'channel').toLowerCase();
@@ -12932,6 +13078,16 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
     else delete data.guilds[String(message.guild?.id || '')];
     seekdeepWritePersonaOverrides(data);
     await message.reply({ content: `Persona override removed (scope: ${scope}).`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // Validate the slug before persisting an override that points at it.
+  // Standard match regex accepts any 2-32 chars; this gate catches typos
+  // and removed-since-creation custom slugs before they get saved.
+  if (!seekdeepIsValidPersonaSlug(action)) {
+    const custom = Object.keys(seekdeepReadCustomPersonas().personas || {}).sort();
+    const customList = custom.length ? `, ${custom.join(', ')}` : '';
+    await message.reply({ content: `Unknown persona "${action}". Available: neurotic, unsettling, clinical, chaotic, reset${customList}. Create a new one with \`@SeekDeep persona create <slug> <tone>\`.`, allowedMentions: { repliedUser: false } });
     return true;
   }
 
@@ -13132,8 +13288,10 @@ async function seekdeepHandlePersonaModalSubmit(interaction) {
     return true;
   }
 
-  if (!SEEKDEEP_VALID_PERSONAS.has(persona)) {
-    await interaction.reply({ content: `Invalid persona "${persona}". Valid: neurotic, unsettling, clinical, chaotic, reset.`, flags: MessageFlags.Ephemeral });
+  if (!seekdeepIsValidPersonaSlug(persona)) {
+    const custom = Object.keys(seekdeepReadCustomPersonas().personas || {}).sort();
+    const customList = custom.length ? `, ${custom.join(', ')}` : '';
+    await interaction.reply({ content: `Invalid persona "${persona}". Valid: neurotic, unsettling, clinical, chaotic, reset${customList}. Create a new one in Discord via \`@SeekDeep persona create <slug> <tone>\`.`, flags: MessageFlags.Ephemeral });
     return true;
   }
 
