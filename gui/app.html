@@ -759,7 +759,7 @@
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Reload .env</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⤓ Flush model cache</button>
-              <button class="btn btn-ghost" style="justify-content: flex-start;">⛚ Lock cache (offline)</button>
+              <button class="btn btn-ghost" style="justify-content: flex-start; opacity:0.5; cursor: not-allowed;" disabled title="Not implemented yet. Set HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 in .env and Reload .env to achieve the same effect for now.">⛚ Lock cache (offline)</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Smoke test</button>
               <button class="btn btn-ghost" style="justify-content: flex-start; color: var(--bad);">↯ Force kill all</button>
             </div>
@@ -825,7 +825,7 @@
             <div class="sub">Browse, warm, quantize, pin and prune the local Hugging Face cache.</div>
           </div>
           <div class="actions">
-            <input placeholder="Search models…" style="width: 240px;" />
+            <input id="modelSearchInput" placeholder="Search models…" style="width: 240px;" />
             <button class="btn btn-ghost">Prune cache (—)</button>
             <button class="btn btn-primary" id="openAddModel">+ Add model</button>
           </div>
@@ -834,18 +834,18 @@
         <div class="cards-3" style="margin-bottom: 18px;">
           <div class="card-mini">
             <div class="lbl">Cache total</div>
-            <div class="val">— <span style="font-size:16px; color:var(--hull-3);">GB</span></div>
-            <div class="delta">— models pulled</div>
+            <div class="val"><span id="mmCacheTotal">—</span> <span style="font-size:16px; color:var(--hull-3);">GB</span></div>
+            <div class="delta" id="mmCacheDelta">— /stats/snapshot pending</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Currently resident</div>
-            <div class="val cyan">3</div>
-            <div class="delta">chat · image · vision</div>
+            <div class="val cyan" id="mmResidentCount">—</div>
+            <div class="delta" id="mmResidentDelta">— /health pending</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Offline lock</div>
-            <div class="val">OFF</div>
-            <div class="delta bad">HF_HUB_OFFLINE=0</div>
+            <div class="val" id="mmOfflineLock">—</div>
+            <div class="delta" id="mmOfflineLockDelta">— /health pending</div>
           </div>
         </div>
 
@@ -1572,12 +1572,13 @@
           <div class="actions"></div>
         </div>
 
-        <div class="mode-tabs" style="margin-bottom: 18px;">
+        <div class="mode-tabs" style="margin-bottom: 18px; align-items: center;">
           <span class="chip active">txt2img</span>
-          <span class="chip">img2img</span>
-          <span class="chip">pix2pix</span>
-          <span class="chip">inpaint</span>
-          <span class="chip">upscale</span>
+          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">img2img</span>
+          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">pix2pix</span>
+          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">inpaint</span>
+          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">upscale</span>
+          <span class="tiny muted" style="font-family: var(--font-mono); letter-spacing: 0.08em; margin-left: 8px;">▸ playground supports txt2img only · other pipelines via Discord or <code style="color:var(--cyan-1)">api.html</code></span>
         </div>
 
         <div class="ip-grid">
@@ -1657,8 +1658,8 @@
             <div class="sub">Visual browse for user &amp; shared archive threads.</div>
           </div>
           <div class="actions">
-            <input placeholder="Search prompts…" style="width: 240px;" />
-            <button class="btn btn-ghost">Sort: newest</button>
+            <input placeholder="Search prompts…" style="width: 240px; opacity:0.5; cursor: not-allowed;" disabled title="Activates once a local archive snapshot writer ships. See INTEGRATION.md." />
+            <button class="btn btn-ghost" style="opacity:0.5; cursor: not-allowed;" disabled title="Activates once a local archive snapshot writer ships.">Sort: newest</button>
           </div>
         </div>
 
@@ -1920,7 +1921,8 @@
         }
       } catch (e) {
         loaded = false;
-        // Soft fail — leave the mock visuals so the page still looks alive
+        // Soft fail — the leaderboard already has its empty-state in markup
+        // ("no data yet · launchers/data needs a fetch") so we just bail.
       }
     }
     function onActive() {
@@ -2253,9 +2255,12 @@
     });
   });
 
-  // toggle helpers (sidebar chips)
+  // toggle helpers (sidebar chips). data-disabled chips short-circuit so
+  // the user can't "activate" something the page can't fulfill (e.g. img2img
+  // in the txt2img-only playground).
   document.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => {
+      if (c.dataset.disabled === '1') return;
       const siblings = c.parentElement.querySelectorAll('.chip');
       const isExclusiveGroup = c.parentElement.classList.contains('mode-tabs') ||
                               c.parentElement.classList.contains('log-filters') ||
@@ -2285,8 +2290,8 @@ const SEEKDEEP_BASE = (function() {
 })();
 
   // ===== LIVE BACKEND PROBE — fetches /health + /gpu every 5s =====
-  // When the local AI server at :7865 is reachable, this swaps mocked
-  // numbers with real GPU/model data and flips the LIVE pill on.
+  // When the local AI server at :7865 is reachable, this swaps PROBING
+  // placeholders with real GPU/model data and flips the LIVE pill on.
   const LIVE = {
     timer: null,
     failures: 0,
@@ -2429,6 +2434,50 @@ const SEEKDEEP_BASE = (function() {
       if (h.model) {
         document.title = 'SeekDeep — ' + h.model;
       }
+
+      // Model manager "Currently resident" mini-card — count distinct
+      // resident roles from /health.gpu.loaded + loaded_chat_role. No
+      // hardcoded 3.
+      const residentRoles = [];
+      if (loadedChatRole) residentRoles.push('chat');
+      if (visionLoaded)   residentRoles.push('vision');
+      if (imageLoaded)    residentRoles.push('image');
+      const mmrCount = document.getElementById('mmResidentCount');
+      const mmrDelta = document.getElementById('mmResidentDelta');
+      if (mmrCount) mmrCount.textContent = String(residentRoles.length);
+      if (mmrDelta) mmrDelta.textContent = residentRoles.length
+        ? residentRoles.join(' · ')
+        : '— no models resident · /chat /image /vision will warm one';
+
+      // Model manager "Offline lock" mini-card — reads h.env_offline if
+      // /health exposes it (true if HF_HUB_OFFLINE=1 or TRANSFORMERS_OFFLINE=1).
+      // Falls back to "unknown" when the field is missing so we don't lie.
+      const mmOff = document.getElementById('mmOfflineLock');
+      const mmOffDelta = document.getElementById('mmOfflineLockDelta');
+      if (mmOff) {
+        if (h.env_offline === true) {
+          mmOff.textContent = 'ON';
+          mmOff.style.color = 'var(--good)';
+          if (mmOffDelta) {
+            mmOffDelta.textContent = 'HF_HUB_OFFLINE=1';
+            mmOffDelta.className = 'delta good';
+          }
+        } else if (h.env_offline === false) {
+          mmOff.textContent = 'OFF';
+          mmOff.style.color = '';
+          if (mmOffDelta) {
+            mmOffDelta.textContent = 'HF_HUB_OFFLINE=0';
+            mmOffDelta.className = 'delta';
+          }
+        } else {
+          mmOff.textContent = '—';
+          mmOff.style.color = '';
+          if (mmOffDelta) {
+            mmOffDelta.textContent = '— /health.env_offline not exposed yet';
+            mmOffDelta.className = 'delta muted';
+          }
+        }
+      }
     },
     applyGpu(g) {
       // /gpu (per local_ai_server.py): { allocated_mb, reserved_mb, free_mb, total_mb, used_mb, used_pct, reserved_pct, loaded, keep_resident, device_name }
@@ -2566,7 +2615,7 @@ const SEEKDEEP_BASE = (function() {
     } else {
       btn.classList.remove('btn-primary');
       btn.classList.add('btn-ghost');
-      btn.innerHTML = '<span id="cfg-dirty-count">0</span> ' + (errMsg || 'mock save');
+      btn.innerHTML = '<span id="cfg-dirty-count">0</span> ' + (errMsg || 'server reported failure');
       btn.style.color = 'var(--warn)';
     }
 
@@ -2904,9 +2953,10 @@ const SEEKDEEP_BASE = (function() {
   })();
 
   // ===== Chat playground · live wiring (POST /chat) =====
-  // When the local AI server is reachable, send button hits SEEKDEEP_BASE + '/chat'
-  // with the active role / persona / web mode / temperature. Falls back to a mock
-  // reply when offline so the page still feels alive.
+  // Send button hits SEEKDEEP_BASE + '/chat' with the active role / persona /
+  // web mode / temperature. On failure (server offline, timeout, HTTP error)
+  // the assistant bubble shows an honest "OFFLINE" error message — no mock
+  // replies, no canned text.
   (function wireChatPlayground() {
     const conv  = document.getElementById('cpConv');
     const input = document.getElementById('cpInput');
@@ -3489,6 +3539,22 @@ root.render(<App />);
   }
 
   $('#openAddModel')?.addEventListener('click', open);
+
+  // Search models filter — case-insensitive, matches name + role + backend.
+  // Hides rows that don't match so the user can find a model in a list of
+  // ~25 entries without scrolling. Empty query restores all rows.
+  $('#modelSearchInput')?.addEventListener('input', (e) => {
+    const q = (e.target.value || '').trim().toLowerCase();
+    document.querySelectorAll('.model-row').forEach(row => {
+      if (!q) { row.style.display = ''; return; }
+      const hay = ((row.dataset.model || '') + ' ' +
+                   (row.dataset.role  || '') + ' ' +
+                   (row.dataset.backend || '') + ' ' +
+                   (row.textContent || '')).toLowerCase();
+      row.style.display = hay.includes(q) ? '' : 'none';
+    });
+  });
+
   $('#wizCancel').addEventListener('click', close);
   wizBack.addEventListener('click', close);
   nextBtn.addEventListener('click', advance);

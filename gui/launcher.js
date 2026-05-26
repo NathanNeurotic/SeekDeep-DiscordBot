@@ -286,20 +286,27 @@
           btn.textContent = 'Prune cache (' + fmtBytes(cache.hf_size_bytes) + ')';
         }
       });
-      // "Cache total" mini-card — find the card whose .lbl is "Cache total"
-      document.querySelectorAll('.card-mini').forEach((card) => {
-        const lbl = card.querySelector('.lbl');
-        if (!lbl || !/cache total/i.test(lbl.textContent || '')) return;
-        const val = card.querySelector('.val');
-        if (val) {
-          const gb = (cache.hf_size_bytes / (1024 * 1024 * 1024));
-          val.innerHTML = gb.toFixed(1) + ' <span style="font-size:16px; color:var(--hull-3);">GB</span>';
-        }
-        const delta = card.querySelector('.delta');
-        if (delta && cache.hf_repo_count != null) {
-          delta.textContent = cache.hf_repo_count + ' model' + (cache.hf_repo_count === 1 ? '' : 's') + ' pulled';
-        }
-      });
+      // "Cache total" mini-card — id-tagged spans (mmCacheTotal/mmCacheDelta)
+      // first, falls back to label-match for older markup.
+      const gb = (cache.hf_size_bytes / (1024 * 1024 * 1024));
+      const totalEl = document.getElementById('mmCacheTotal');
+      const deltaEl = document.getElementById('mmCacheDelta');
+      if (totalEl) totalEl.textContent = gb.toFixed(1);
+      if (deltaEl && cache.hf_repo_count != null) {
+        deltaEl.textContent = cache.hf_repo_count + ' model' + (cache.hf_repo_count === 1 ? '' : 's') + ' pulled';
+      }
+      if (!totalEl && !deltaEl) {
+        document.querySelectorAll('.card-mini').forEach((card) => {
+          const lbl = card.querySelector('.lbl');
+          if (!lbl || !/cache total/i.test(lbl.textContent || '')) return;
+          const val = card.querySelector('.val');
+          if (val) val.innerHTML = gb.toFixed(1) + ' <span style="font-size:16px; color:var(--hull-3);">GB</span>';
+          const delta = card.querySelector('.delta');
+          if (delta && cache.hf_repo_count != null) {
+            delta.textContent = cache.hf_repo_count + ' model' + (cache.hf_repo_count === 1 ? '' : 's') + ' pulled';
+          }
+        });
+      }
     }
   }
 

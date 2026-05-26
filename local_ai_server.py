@@ -1906,6 +1906,12 @@ def health():
         },
         "cache_dir": str(MODEL_CACHE_DIR),
         "offline_model_loading": HF_LOCAL_FILES_ONLY,
+        # True when either env var locks the HF cache to local-only. Surfaces
+        # the "Offline lock" mini-card on the Model manager pane (app.html).
+        "env_offline": (
+            str(os.getenv("HF_HUB_OFFLINE", "")).strip().lower() in ("1", "true", "yes", "on")
+            or str(os.getenv("TRANSFORMERS_OFFLINE", "")).strip().lower() in ("1", "true", "yes", "on")
+        ),
     }
 
 
