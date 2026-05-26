@@ -91,6 +91,8 @@ data/archive-optout.json
 data/memory-presets.json
 data/prompt-templates.json
 data/user-facts.json
+data/persona-overrides.json
+data/custom-personas.json
 !data/.gitkeep
 
 # Tauri build artifacts (Rust target dir + generated schemas)
