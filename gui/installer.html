@@ -289,7 +289,10 @@
   }
   .check-row {
     display: grid;
-    grid-template-columns: 28px 1fr 130px auto;
+    /* 28px dot · 1fr name · 1.4fr read (was a 130px fixed col which
+       cramped CUDA/Docker hints into 3-word-wide ribbons — see screenshot
+       2026-05-26). · auto button. */
+    grid-template-columns: 28px 1fr 1.4fr auto;
     gap: 14px;
     align-items: center;
     padding: 12px 14px;
@@ -313,7 +316,17 @@
   .check-row.bad      .status-dot { background: var(--bad);  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 12px var(--bad); }
   .check-row .name { color: var(--hull); }
   .check-row .name .hint { display: block; font-size: 11px; color: var(--hull-3); margin-top: 3px; }
-  .check-row .read { color: var(--hull-3); }
+  .check-row .read {
+    color: var(--hull-3);
+    /* Long-form .read messages (CUDA reinstall URLs, multi-sentence
+       Docker hints) were getting truncated mid-word at the 130px column
+       boundary. Allow wrapping + break-word so the user can actually read
+       the diagnostic. Was: "...cu1..." mid-URL with the rest invisible. */
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    line-height: 1.45;
+  }
   .check-row.ok .read { color: var(--good); }
   .check-row.bad .read { color: var(--bad); }
   @keyframes livePulse {
@@ -1435,8 +1448,11 @@ const SEEKDEEP_BASE = (function() {
     // running / installed-but-stopped / not-installed. Replaces the old
     // "infer from SearXNG" path which lied because SearXNG being down
     // doesn't say anything about Docker (could be a stopped container).
+    // 14s client timeout: server probe is capped at 12s, plus 2s slack
+    // for the round-trip. Was 5s — false-positived "unresponsive" on
+    // normal WSL2 Docker Desktop warm-up which takes 10-15s.
     try {
-      const r = await fetch(SEEKDEEP_BASE + '/system/docker', { signal: AbortSignal.timeout(5000) });
+      const r = await fetch(SEEKDEEP_BASE + '/system/docker', { signal: AbortSignal.timeout(14000) });
       if (!r.ok) return null;
       return await r.json();
     } catch { return null; }
@@ -1483,14 +1499,26 @@ const SEEKDEEP_BASE = (function() {
       } else if (gpu && gpu.nvidia_smi && gpu.nvidia_smi.detected) {
         // GPU is here; PyTorch just can't see it. Either torch isn't
         // installed (typical pre-ML-deps state) or the user has a
-        // CPU-only torch wheel.
+        // CPU-only / wrong-CUDA-arch torch wheel. We can't reliably
+        // hardcode a "reinstall with cu123" hint because the right
+        // wheel depends on the user's GPU generation (cu121 for
+        // RTX 30/40 series; cu124+ for Blackwell/RTX 50; future
+        // generations get newer wheels). Route them to pytorch.org's
+        // official "Get Started" picker which always has the current
+        // correct command.
         const name = gpu.nvidia_smi.name || 'NVIDIA GPU';
         const totalGb = gpu.nvidia_smi.total_mb ? (gpu.nvidia_smi.total_mb / 1024).toFixed(1) : null;
         const totalTag = totalGb ? ` · ${totalGb} GB VRAM` : '';
         if (gpu.torch_present === false) {
-          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but PyTorch isn't installed yet → run "Install ML libraries" in the Control Center (or "pip install -r requirements-ml.txt") to unlock local chat/image/vision.`);
+          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but PyTorch isn't installed yet. Click "Install ML libraries" in the Control Center (or run "pip install -r requirements-ml.txt") to unlock local chat/image/vision.`);
         } else {
-          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but the installed PyTorch wheel doesn't include CUDA. Reinstall with: pip install --index-url https://download.pytorch.org/whl/cu121 torch.`);
+          // Blackwell GPU heuristic: name contains "50" (RTX 50 series) →
+          // needs cu124+. Otherwise generic guidance.
+          const looksBlackwell = /\bRTX\s*5\d{3}\b/i.test(name);
+          const hint = looksBlackwell
+            ? `Pick CUDA 12.4 or newer at pytorch.org/get-started/locally — the cu121 wheel won't see your ${name}.`
+            : `Visit pytorch.org/get-started/locally and pick the CUDA version that matches your driver, then reinstall.`;
+          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but torch.cuda.is_available() is False — PyTorch wheel isn't CUDA-enabled or the CUDA version doesn't match your GPU architecture. ${hint}`);
         }
       } else if (gpu && gpu.available === false) {
         // No GPU at all (nvidia-smi didn't find one). Honest yellow.

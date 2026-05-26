@@ -767,7 +767,44 @@
     };
     input.addEventListener('input', update);
     input.addEventListener('blur', () => setTimeout(() => menu.classList.remove('open'), 150));
+    // Also collapse on Escape so users have a non-mouse exit, and on
+    // submit (Enter without Shift) so the menu doesn't hang open over
+    // the conversation while playground.js dispatches.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') menu.classList.remove('open');
+      if (e.key === 'Enter' && !e.shiftKey) menu.classList.remove('open');
+    });
+    // Clicking a slash-item drops the leading "/" + command into the
+    // input and closes the menu, so users can discover commands by clicking
+    // (was: menu was a static help card — clicking did nothing).
+    menu.querySelectorAll('.slash-item').forEach((item) => {
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();  // don't blur the input before we update it
+        const cmd = item.querySelector('.cmd')?.textContent?.trim();
+        if (cmd) {
+          input.value = cmd + ' ';
+          input.focus();
+          try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+        }
+        menu.classList.remove('open');
+      });
+    });
   })();
+
+  // ===== Close persona popover on send too =====
+  // The persona popover (#personaPop) opens on personaBtn click and closes
+  // only on outside-click or option-select. Pressing Enter to send a chat
+  // message didn't close it, so it would hang open over the conversation.
+  // Listen for the send-related events on msgInput.
+  document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('msgInput');
+    const pop = document.getElementById('personaPop');
+    if (!input || !pop) return;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) pop.classList.remove('open');
+    });
+    document.querySelector('.composer .send-btn')?.addEventListener('click', () => pop.classList.remove('open'));
+  }, { once: true });
 
   // ===== Paperclip → file picker → forward to playground.js's drop handler =====
   (function attachWiring() {

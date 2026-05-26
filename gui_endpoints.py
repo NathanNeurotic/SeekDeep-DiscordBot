@@ -1179,19 +1179,26 @@ def register_gui_endpoints(
     # Docker running but never started the SearXNG container).
     @app.get("/system/docker")
     def get_system_docker():
-        # `docker info` blocks until the daemon responds; 3s is enough on a
-        # healthy install and short enough not to hang the installer page.
+        # `docker info` can take 10-15s on a fresh Docker Desktop boot
+        # (WSL2 backend negotiates with the Linux VM). 3s was too tight
+        # and produced "daemon unresponsive" false-positives during normal
+        # warm-up. 12s gives Docker Desktop time to answer; if it's truly
+        # hung past that the user can hit "Try start" to force a relaunch.
+        # First try a cheap "docker version --format ..." (no daemon
+        # round-trip) — if that succeeds AND fast info also succeeds,
+        # the daemon is up; if version works but info hangs, daemon's
+        # asleep.
         try:
             r = subprocess.run(
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True, text=True, timeout=12,
             )
         except FileNotFoundError:
             return {"ok": True, "state": "not_installed",
                     "detail": "`docker` not on PATH — install Docker Desktop"}
         except subprocess.TimeoutExpired:
             return {"ok": True, "state": "installed_not_running",
-                    "detail": "`docker info` timed out (daemon unresponsive — try restarting Docker Desktop)"}
+                    "detail": "`docker info` didn't answer in 12s — daemon is likely starting up (WSL2 backend takes a moment) OR not running. Click \"Try start\" to launch Docker Desktop, then re-run System Check."}
         except Exception as exc:
             return {"ok": False, "state": "error", "detail": str(exc)[:160]}
         if r.returncode == 0:

@@ -443,6 +443,11 @@
     const v = $input.value.trim();
     if (!v) return;
     $input.value = '';
+    // Programmatic value clears don't fire 'input' events, so listeners
+    // that gate on input contents (slash-menu open/close, autogrow height,
+    // helper hints) get stuck on the pre-send state. Dispatch an explicit
+    // input event so they see the cleared state and close themselves.
+    try { $input.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
     dispatch(v);
   }
   $send.addEventListener('click', (e) => { e.preventDefault(); trySend(); });
