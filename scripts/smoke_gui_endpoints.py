@@ -235,6 +235,24 @@ def main() -> int:
         check("  ...returns {rules: []} when file missing",
               isinstance(body.get("data", {}).get("rules"), list))
 
+    # archive-snapshot.json: token-gated + normalized. With our token header,
+    # we should get the empty-snapshot fallback when the bot hasn't written
+    # one yet — never a 404, since GUI's Archive pane queries this on every
+    # page load.
+    if token:
+        r = c.get("/data/archive-snapshot.json", headers={"X-SeekDeep-Token": token})
+        check("GET /data/archive-snapshot.json (with token) -> 200 (empty-fallback)",
+              r.status_code == 200, f"got {r.status_code}")
+        if r.status_code == 200:
+            body = r.json()
+            d = body.get("data") or body
+            check("  ...returns guilds:{} shape when file missing",
+                  isinstance(d.get("guilds"), dict))
+        # And without the token, it should refuse (sensitive file).
+        r = c.get("/data/archive-snapshot.json")
+        check("GET /data/archive-snapshot.json (no token) -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
     # Path traversal in /data should be blocked.
     r = c.get("/data/..%2F.env")
     check("GET /data/..%2F.env -> 400 or 404 (path traversal blocked)",

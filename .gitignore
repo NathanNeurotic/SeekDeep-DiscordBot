@@ -88,6 +88,7 @@ data/archive-guild-config.json
 data/archive-guild-config.json.bak*
 data/archive-config.json
 data/archive-optout.json
+data/archive-snapshot.json
 data/memory-presets.json
 data/prompt-templates.json
 data/user-facts.json

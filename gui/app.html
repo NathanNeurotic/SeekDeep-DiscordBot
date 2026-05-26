@@ -1715,11 +1715,17 @@
         <div class="head-row">
           <div>
             <h1>Archive browser</h1>
-            <div class="sub">Visual browse for user &amp; shared archive threads.</div>
+            <div class="sub">Visual browse for user &amp; shared archive threads. <span id="archSnapshotMeta" class="tiny muted" style="font-family: var(--font-mono);">— snapshot pending</span></div>
           </div>
           <div class="actions">
-            <input placeholder="Search prompts…" style="width: 240px; opacity:0.5; cursor: not-allowed;" disabled title="Activates once a local archive snapshot writer ships. See INTEGRATION.md." />
-            <button class="btn btn-ghost" style="opacity:0.5; cursor: not-allowed;" disabled title="Activates once a local archive snapshot writer ships.">Sort: newest</button>
+            <input id="archSearchInput" placeholder="Search prompts…" style="width: 240px;" title="Filter by prompt text, archive key, requester ID, or model" />
+            <select id="archSortSelect" class="mono" style="width: 160px; padding: 8px 10px; font-size: 12px;">
+              <option value="ts-desc">Sort: newest</option>
+              <option value="ts-asc">Sort: oldest</option>
+              <option value="prompt-asc">Sort: prompt a→z</option>
+              <option value="prompt-desc">Sort: prompt z→a</option>
+            </select>
+            <button id="archRefreshBtn" class="btn btn-ghost" title="Re-fetch /data/archive-snapshot.json (the bot's cron writes it every 6h; ask an admin to run '@SeekDeep archive snapshot' for an immediate refresh)">⟳ Refresh</button>
           </div>
         </div>
 
@@ -1768,13 +1774,13 @@
         </details>
 
         <div class="arch-tabs" id="archTabs">
-          <span class="chip active" data-thread="*">SHARED · —</span>
+          <span class="chip active" data-thread="*">ALL · —</span>
         </div>
 
         <div class="arch-grid" id="archGrid">
           <div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px; line-height: 1.7;">
-            ▸ no local archive index yet<br/>
-            <span style="opacity:0.7;">SeekDeep stores archives in your Discord archive channel, not on disk. A local snapshot writer is planned but not shipped — see <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/INTEGRATION.md" style="color:var(--cyan-1);">INTEGRATION.md</a>.</span>
+            ▸ snapshot not loaded yet<br/>
+            <span style="opacity:0.7;">data/archive-snapshot.json is written by the bot on a 6h cron. The first snapshot appears ~30s after bot ready. Run <span class="mono" style="color:var(--cyan-1)">@SeekDeep archive snapshot</span> in Discord for an immediate refresh.</span>
           </div>
         </div>
       </section>
@@ -2214,6 +2220,224 @@
   // The LIVE poller already updates VRAM in the sidebar status panel. This adds a
   // tiny extra: if /health exposes queue depth in future, we'll surface it here.
   // Currently a no-op placeholder so the wiring is in place when the field appears.
+
+  // ===== Archive browser · live wiring (GET /data/archive-snapshot.json) =====
+  // Reads the JSON the bot writes every 6h (see seekdeepBuildArchiveSnapshot
+  // in index.js). Builds one tab per thread (ALL + SHARED + each user
+  // thread), renders entries as cards, runs Search + Sort client-side.
+  // Token-gated by gui_endpoints.py — nav.js auto-injects X-SeekDeep-Token.
+  (function wireArchiveBrowser() {
+    const tabs = document.getElementById('archTabs');
+    const grid = document.getElementById('archGrid');
+    const meta = document.getElementById('archSnapshotMeta');
+    const searchInput = document.getElementById('archSearchInput');
+    const sortSelect = document.getElementById('archSortSelect');
+    const refreshBtn = document.getElementById('archRefreshBtn');
+    if (!tabs || !grid) return;
+
+    let snapshot = null;       // last loaded snapshot
+    let activeTab = '*';       // '*' = all entries; thread_id otherwise
+    let searchQ = '';
+    let sortKey = 'ts-desc';
+
+    function _escape(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+    function _fmtAgo(ts) {
+      if (!ts) return '—';
+      const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+      if (s < 60)    return s + 's ago';
+      if (s < 3600)  return Math.floor(s/60) + 'm ago';
+      if (s < 86400) return Math.floor(s/3600) + 'h ago';
+      return Math.floor(s/86400) + 'd ago';
+    }
+
+    // Walk snapshot → flat list of {entry, threadId, threadName, kind, guildId}
+    function flattenEntries(snap) {
+      const out = [];
+      if (!snap || !snap.guilds) return out;
+      for (const [gid, g] of Object.entries(snap.guilds)) {
+        if (g.shared && Array.isArray(g.shared.entries)) {
+          for (const e of g.shared.entries) out.push({ entry: e, threadId: g.shared.thread_id, threadName: g.shared.thread_name || 'shared', kind: 'shared', guildId: gid, guildName: g.guild_name });
+        }
+        if (g.users) {
+          for (const [uid, u] of Object.entries(g.users)) {
+            if (!Array.isArray(u.entries)) continue;
+            for (const e of u.entries) out.push({ entry: e, threadId: u.thread_id, threadName: u.thread_name || (u.nickname ? 'archive-' + u.nickname : 'archive-' + uid.slice(-6)), kind: 'user', guildId: gid, guildName: g.guild_name, userId: uid });
+          }
+        }
+      }
+      return out;
+    }
+
+    function renderTabs() {
+      if (!snapshot) { tabs.innerHTML = '<span class="chip active" data-thread="*">ALL · —</span>'; return; }
+      const all = flattenEntries(snapshot);
+      const byThread = new Map();  // threadId → { name, kind, count }
+      for (const item of all) {
+        if (!byThread.has(item.threadId)) byThread.set(item.threadId, { name: item.threadName, kind: item.kind, count: 0 });
+        byThread.get(item.threadId).count += 1;
+      }
+      tabs.innerHTML = '';
+      const allChip = document.createElement('span');
+      allChip.className = 'chip' + (activeTab === '*' ? ' active' : '');
+      allChip.setAttribute('data-thread', '*');
+      allChip.textContent = `ALL · ${all.length}`;
+      tabs.appendChild(allChip);
+      // Sort threads: shared first, then by entry count desc
+      const threadEntries = [...byThread.entries()].sort((a, b) => {
+        if (a[1].kind === 'shared' && b[1].kind !== 'shared') return -1;
+        if (b[1].kind === 'shared' && a[1].kind !== 'shared') return 1;
+        return b[1].count - a[1].count;
+      });
+      for (const [tid, info] of threadEntries) {
+        const chip = document.createElement('span');
+        chip.className = 'chip' + (activeTab === tid ? ' active' : '');
+        chip.setAttribute('data-thread', tid);
+        chip.textContent = `${info.kind === 'shared' ? 'SHARED' : (info.name || 'archive').replace(/^archive-/, '@')} · ${info.count}`;
+        chip.title = info.name + ' · ' + info.kind + ' · ' + info.count + ' entries';
+        tabs.appendChild(chip);
+      }
+      // Wire chip clicks
+      tabs.querySelectorAll('.chip[data-thread]').forEach(c => {
+        c.addEventListener('click', () => {
+          activeTab = c.dataset.thread;
+          tabs.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+          c.classList.add('active');
+          renderGrid();
+        });
+      });
+    }
+
+    function renderGrid() {
+      if (!snapshot) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px;">▸ snapshot not loaded yet · click ⟳ Refresh</div>';
+        return;
+      }
+      let items = flattenEntries(snapshot);
+      // Tab filter
+      if (activeTab !== '*') items = items.filter(it => it.threadId === activeTab);
+      // Search filter (prompt + key + requester + model)
+      const q = searchQ.toLowerCase();
+      if (q) {
+        items = items.filter(it => {
+          const e = it.entry;
+          const hay = ((e.prompt || '') + ' ' + (e.refined || '') + ' ' + (e.key || '') + ' ' + (e.requester || '') + ' ' + (e.model || '')).toLowerCase();
+          return hay.includes(q);
+        });
+      }
+      // Sort
+      const cmp = {
+        'ts-desc':     (a, b) => (b.entry.created_ts || 0) - (a.entry.created_ts || 0),
+        'ts-asc':      (a, b) => (a.entry.created_ts || 0) - (b.entry.created_ts || 0),
+        'prompt-asc':  (a, b) => String(a.entry.prompt || '').localeCompare(String(b.entry.prompt || '')),
+        'prompt-desc': (a, b) => String(b.entry.prompt || '').localeCompare(String(a.entry.prompt || '')),
+      }[sortKey] || ((a, b) => 0);
+      items.sort(cmp);
+
+      if (!items.length) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px;">▸ no entries match'
+          + (q ? ` "<span style="color:var(--cyan-1)">${_escape(q)}</span>"` : '')
+          + '</div>';
+        return;
+      }
+
+      // Render grid (XSS-safe via _escape on every server-provided string)
+      grid.innerHTML = '';
+      const MAX_RENDER = 200;  // keep DOM size sane
+      const slice = items.slice(0, MAX_RENDER);
+      for (const it of slice) {
+        const e = it.entry;
+        const card = document.createElement('a');
+        card.href = e.message_url || '#';
+        if (e.message_url) card.target = '_blank';
+        card.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:10px; background: rgba(8,20,52,0.45); border:1px solid var(--stroke); border-radius: var(--r-md); text-decoration: none; color: inherit; transition: border-color 0.15s, box-shadow 0.15s; min-height: 200px;';
+        card.addEventListener('mouseenter', () => { card.style.borderColor = 'var(--cyan-1)'; card.style.boxShadow = 'var(--cyan-glow)'; });
+        card.addEventListener('mouseleave', () => { card.style.borderColor = 'var(--stroke)'; card.style.boxShadow = ''; });
+        const thumbUrl = e.thumbnail || e.proxy_thumbnail || '';
+        const thumb = document.createElement('div');
+        thumb.style.cssText = 'width:100%; aspect-ratio: 1; border-radius: 4px; background: linear-gradient(135deg, var(--abyss-3), var(--cyan-3)); background-size: cover; background-position: center; flex-shrink: 0;';
+        if (thumbUrl) thumb.style.backgroundImage = `url("${_escape(thumbUrl)}")`;
+        card.appendChild(thumb);
+        const promptEl = document.createElement('div');
+        promptEl.style.cssText = 'font-size: 11px; color: var(--hull-2); line-height: 1.4; max-height: 56px; overflow: hidden; text-overflow: ellipsis;';
+        promptEl.textContent = (e.prompt || '(no prompt)').slice(0, 160);
+        card.appendChild(promptEl);
+        const meta1 = document.createElement('div');
+        meta1.style.cssText = 'font-size: 10px; color: var(--hull-3); font-family: var(--font-mono); letter-spacing: 0.08em; display: flex; justify-content: space-between; gap: 6px;';
+        const left = document.createElement('span');
+        left.textContent = (it.kind === 'shared' ? 'SHARED' : '@' + (it.threadName || '').replace(/^archive-/, ''));
+        left.style.color = 'var(--cyan-1)';
+        const right = document.createElement('span');
+        right.textContent = _fmtAgo(e.created_ts);
+        meta1.appendChild(left); meta1.appendChild(right);
+        card.appendChild(meta1);
+        if (e.model || e.seed || (e.width && e.height)) {
+          const meta2 = document.createElement('div');
+          meta2.style.cssText = 'font-size: 9px; color: var(--hull-3); font-family: var(--font-mono); opacity: 0.8;';
+          const bits = [];
+          if (e.model)  bits.push(String(e.model).split('/').pop().slice(0, 24));
+          if (e.width && e.height) bits.push(e.width + '×' + e.height);
+          if (e.seed != null) bits.push('seed ' + String(e.seed).slice(0, 10));
+          meta2.textContent = bits.join(' · ');
+          card.appendChild(meta2);
+        }
+        grid.appendChild(card);
+      }
+      if (items.length > MAX_RENDER) {
+        const more = document.createElement('div');
+        more.style.cssText = 'grid-column: 1/-1; padding: 14px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 11px;';
+        more.textContent = `▸ showing first ${MAX_RENDER} of ${items.length} · narrow the search to see more`;
+        grid.appendChild(more);
+      }
+    }
+
+    function renderMeta() {
+      if (!meta) return;
+      if (!snapshot) { meta.textContent = '— snapshot pending'; return; }
+      const total = (snapshot.total_shared_entries || 0) + (snapshot.total_user_entries || 0);
+      const when = snapshot.generated_at ? new Date(snapshot.generated_at).toLocaleString() : '—';
+      meta.textContent = `▸ ${total} entries across ${snapshot.guild_count} guild${snapshot.guild_count === 1 ? '' : 's'} · ${snapshot.shared_thread_count + snapshot.user_thread_count} threads · generated ${when}`;
+    }
+
+    async function load() {
+      if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '⏳ Loading…'; }
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/data/archive-snapshot.json', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+        if (r.status === 401) throw new Error('unauthorized · refresh page so nav.js can inject the token');
+        if (r.status === 404 || (r.ok && (await (async () => { const j = await r.clone().json().catch(() => null); return j && j.empty; })()))) {
+          // Empty snapshot (bot hasn't written one yet)
+          snapshot = null;
+          if (meta) meta.textContent = '— bot has not written a snapshot yet · run "@SeekDeep archive snapshot" in Discord';
+          renderTabs(); renderGrid();
+          return;
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const wrap = await r.json();
+        snapshot = wrap.data || wrap;
+        if (snapshot && snapshot.generated_at == null && snapshot.guilds == null) snapshot = null;
+        renderTabs(); renderGrid(); renderMeta();
+      } catch (err) {
+        if (meta) meta.textContent = '— snapshot load failed: ' + String(err.message || err);
+      } finally {
+        if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '⟳ Refresh'; }
+      }
+    }
+
+    searchInput?.addEventListener('input', e => { searchQ = (e.target.value || '').trim(); renderGrid(); });
+    sortSelect?.addEventListener('change', e => { sortKey = e.target.value; renderGrid(); });
+    refreshBtn?.addEventListener('click', () => load());
+
+    // Auto-load when the archive pane becomes active
+    function onActive() {
+      const pane = document.querySelector('[data-pane="archive"]');
+      if (pane && pane.classList.contains('active') && !snapshot) load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="archive"]').forEach(a => {
+      a.addEventListener('click', () => setTimeout(onActive, 50));
+    });
+    onActive();
+  })();
 
   // ===== Model row buttons · live wiring (POST /model/warm and /unload) =====
   document.querySelectorAll('.model-row[data-role]').forEach(row => {

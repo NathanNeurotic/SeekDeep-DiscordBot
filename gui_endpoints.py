@@ -713,11 +713,31 @@ def _normalize_auto_reactions(raw: Any) -> dict:
     return {"rules": rules_out}
 
 
+def _normalize_archive_snapshot(raw: Any) -> dict:
+    """Empty-state shape for data/archive-snapshot.json so the GUI Archive
+    pane can render its "no snapshot yet" message without a JSON parse
+    error before the bot has written its first snapshot."""
+    if not isinstance(raw, dict):
+        return {
+            "generated_at": None,
+            "guild_count": 0,
+            "shared_thread_count": 0,
+            "user_thread_count": 0,
+            "total_shared_entries": 0,
+            "total_user_entries": 0,
+            "guilds": {},
+            "empty": True,
+        }
+    raw.setdefault("guilds", {})
+    return raw
+
+
 # Map known data files to their normalizer functions. Anything not listed
 # is returned to the GUI as-is (raw bot schema).
 _DATA_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
-    "server-stats.json":   _normalize_server_stats,
-    "auto-reactions.json": _normalize_auto_reactions,
+    "server-stats.json":     _normalize_server_stats,
+    "auto-reactions.json":   _normalize_auto_reactions,
+    "archive-snapshot.json": _normalize_archive_snapshot,
 }
 
 
@@ -897,6 +917,7 @@ def register_gui_endpoints(
         "archive-config.json",     # author notify routing
         "archive-optout.json",     # per-user opt-out list
         "archive-guild-config.json",  # guild/channel routing IDs
+        "archive-snapshot.json",   # per-thread entry metadata + prompts + thumbnails
     }
 
     # ----- GET /data/{file} -----

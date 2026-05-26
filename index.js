@@ -9109,6 +9109,11 @@ client.once('clientReady', async () => {
   // Schedule the daily digest if enabled.
   try { if (typeof seekdeepScheduleDailyDigest === 'function') seekdeepScheduleDailyDigest(); } catch (err) { console.warn('Daily digest scheduler failed to start:', err?.message || err); }
 
+  // Schedule archive snapshot writes (data/archive-snapshot.json — the
+  // GUI's Archive pane reads this so search/sort actually filter real
+  // entries instead of staring at "no local archive index yet").
+  try { if (typeof seekdeepScheduleArchiveSnapshot === 'function') seekdeepScheduleArchiveSnapshot(); } catch (err) { console.warn('Archive snapshot scheduler failed to start:', err?.message || err); }
+
   // Start the rotating fun-status display.
   seekdeepStartStatusRotation();
   console.log(`[SeekDeep] status rotation started (${SEEKDEEP_STATUS_BANK.length} statuses, every ${SEEKDEEP_STATUS_INTERVAL_MS / 60000} min).`);
@@ -16954,6 +16959,191 @@ async function seekdeepScanThreadArchiveEntryStats(thread, marker = 'SeekDeep Sh
   return stats;
 }
 
+// ===== Archive snapshot writer =====
+// Walks every guild's archive threads (shared + user) and emits a flat JSON
+// of entry metadata to data/archive-snapshot.json. The GUI's Archive pane
+// reads this file via /data/archive-snapshot.json so the user can search,
+// sort, and click through archives without round-tripping to Discord per
+// entry. Runs 30s after clientReady, then every 6h (cheap on idle guilds
+// because thread.messages.fetch is paged and bounded).
+const SEEKDEEP_ARCHIVE_SNAPSHOT_PATH = path.join(__dirname, 'data', 'archive-snapshot.json');
+const SEEKDEEP_ARCHIVE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+
+function seekdeepExtractArchiveEntryFromMessage(message) {
+  // Returns null if the message isn't an archive entry; otherwise a flat
+  // metadata object the GUI can render directly.
+  const content = String(message?.content || '');
+  const isShared = /SeekDeep\s+Shared\s+Archive\s+Entry/i.test(content);
+  const isUser   = /SeekDeep\s+Image\s+Archive\s+Entry/i.test(content);
+  if (!isShared && !isUser) return null;
+
+  const keyMatch       = content.match(/^\s*Archive\s+Key\s*:\s*(.+?)\s*$/im);
+  const promptMatch    = content.match(/^\s*Prompt\s*:\s*(.+?)\s*$/im);
+  const refinedMatch   = content.match(/^\s*Refined\s*:\s*(.+?)\s*$/im);
+  const requesterMatch = content.match(/^\s*Requester\s*:\s*<@!?(\d+)>/im);
+  const modelMatch     = content.match(/^\s*Model\s*:\s*(.+?)\s*$/im);
+  const seedMatch      = content.match(/^\s*Seed\s*:\s*(.+?)\s*$/im);
+  const sizeMatch      = content.match(/^\s*Size\s*:\s*(\d+)x(\d+)/im);
+  const archivedMatch  = content.match(/^\s*Archived\s*:\s*(.+?)\s*$/im);
+  const jobMatch       = content.match(/^\s*Job\s+ID\s*:\s*(.+?)\s*$/im);
+
+  // First image attachment becomes the thumbnail; non-image attachments
+  // (zips, JSON dumps) are ignored.
+  const attachments = Array.from(message.attachments?.values() || []);
+  const firstImg = attachments.find((a) => /^image\//i.test(a.contentType || '') || /\.(png|jpg|jpeg|webp|gif)$/i.test(a.url || ''));
+
+  return {
+    msg_id:      String(message.id || ''),
+    kind:        isShared ? 'shared' : 'user',
+    key:         (keyMatch && keyMatch[1].trim()) || '',
+    prompt:      (promptMatch && promptMatch[1].trim()) || '',
+    refined:     (refinedMatch && refinedMatch[1].trim()) || null,
+    requester:   (requesterMatch && requesterMatch[1]) || null,
+    model:       (modelMatch && modelMatch[1].trim()) || null,
+    job_id:      (jobMatch && jobMatch[1].trim()) || null,
+    seed:        seedMatch ? seedMatch[1].trim() : null,
+    width:       sizeMatch ? Number(sizeMatch[1]) : null,
+    height:      sizeMatch ? Number(sizeMatch[2]) : null,
+    archived_at: (archivedMatch && archivedMatch[1].trim()) || null,
+    created_ts:  Number(message.createdTimestamp || 0) || null,
+    thumbnail:   firstImg ? firstImg.url : null,
+    proxy_thumbnail: firstImg ? firstImg.proxyURL : null,
+    bytes:       firstImg ? Number(firstImg.size || 0) : null,
+    message_url: message?.url || null,
+  };
+}
+
+async function seekdeepWalkArchiveThreadEntries(thread, maxEntries = 1000) {
+  // Paged scan from newest → oldest, stops at maxEntries or when Discord
+  // runs out of messages. Same batched-fetch pattern as
+  // seekdeepScanThreadArchiveEntryStats, with full metadata extraction.
+  const entries = [];
+  if (!thread?.messages?.fetch) return entries;
+  let before;
+  for (let page = 0; page < 25; page += 1) {
+    const messages = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!messages || !messages.size) break;
+    const sorted = Array.from(messages.values()).sort((a, b) => Number(b.createdTimestamp || 0) - Number(a.createdTimestamp || 0));
+    for (const message of sorted) {
+      const entry = seekdeepExtractArchiveEntryFromMessage(message);
+      if (entry) entries.push(entry);
+      if (entries.length >= maxEntries) break;
+    }
+    before = sorted[sorted.length - 1]?.id;
+    if (entries.length >= maxEntries || messages.size < 100 || !before) break;
+  }
+  return entries;
+}
+
+let _seekdeepArchiveSnapshotInFlight = false;
+async function seekdeepBuildArchiveSnapshot() {
+  // Skip if already running so the 6h tick + manual mention can't race and
+  // double the Discord API spend.
+  if (_seekdeepArchiveSnapshotInFlight) {
+    return { skipped: true, reason: 'snapshot already in flight' };
+  }
+  _seekdeepArchiveSnapshotInFlight = true;
+  const t0 = Date.now();
+  const snapshot = {
+    generated_at: new Date().toISOString(),
+    elapsed_ms: 0,
+    guild_count: 0,
+    shared_thread_count: 0,
+    user_thread_count: 0,
+    total_shared_entries: 0,
+    total_user_entries: 0,
+    guilds: {},
+  };
+
+  try {
+    if (!client?.guilds?.cache?.size) {
+      return snapshot;
+    }
+    const config = (typeof seekdeepArchiveThreadReadConfig === 'function')
+      ? seekdeepArchiveThreadReadConfig()
+      : { guilds: {} };
+
+    for (const [guildId, guild] of client.guilds.cache) {
+      const gConfig = (config.guilds && config.guilds[guildId]) || {};
+      const gEntry = {
+        guild_name: guild.name || '',
+        shared: null,
+        users: {},
+      };
+
+      // ---- Shared archive ----
+      const sharedProfile = gConfig.sharedArchive;
+      if (sharedProfile && sharedProfile.threadId) {
+        try {
+          const thread = await client.channels.fetch(sharedProfile.threadId).catch(() => null);
+          if (thread && thread.messages && typeof thread.messages.fetch === 'function') {
+            const entries = await seekdeepWalkArchiveThreadEntries(thread, 1500);
+            gEntry.shared = {
+              thread_id: thread.id,
+              thread_name: thread.name || '',
+              entry_count: entries.length,
+              entries,
+            };
+            snapshot.shared_thread_count += 1;
+            snapshot.total_shared_entries += entries.length;
+          }
+        } catch (err) {
+          console.warn(`[SeekDeep] archive snapshot · shared scan failed guild=${guildId}: ${err?.message || err}`);
+        }
+      }
+
+      // ---- Per-user archives ----
+      const userArchives = gConfig.userArchives || {};
+      for (const [userId, profile] of Object.entries(userArchives)) {
+        if (!profile?.threadId) continue;
+        try {
+          const thread = await client.channels.fetch(profile.threadId).catch(() => null);
+          if (!thread?.messages?.fetch) continue;
+          const entries = await seekdeepWalkArchiveThreadEntries(thread, 500);
+          gEntry.users[userId] = {
+            thread_id: thread.id,
+            thread_name: thread.name || '',
+            nickname: profile.lastNickname || null,
+            entry_count: entries.length,
+            entries,
+          };
+          snapshot.user_thread_count += 1;
+          snapshot.total_user_entries += entries.length;
+        } catch (err) {
+          console.warn(`[SeekDeep] archive snapshot · user scan failed guild=${guildId} user=${userId}: ${err?.message || err}`);
+        }
+      }
+
+      snapshot.guilds[guildId] = gEntry;
+      snapshot.guild_count += 1;
+    }
+
+    snapshot.elapsed_ms = Date.now() - t0;
+    try {
+      writeJsonAtomic(SEEKDEEP_ARCHIVE_SNAPSHOT_PATH, snapshot);
+      console.log(`[SeekDeep] archive snapshot written guilds=${snapshot.guild_count} shared_threads=${snapshot.shared_thread_count} user_threads=${snapshot.user_thread_count} entries=${snapshot.total_shared_entries + snapshot.total_user_entries} elapsed=${snapshot.elapsed_ms}ms`);
+    } catch (err) {
+      console.warn('[SeekDeep] archive snapshot write failed:', err?.message || err);
+    }
+    return snapshot;
+  } finally {
+    _seekdeepArchiveSnapshotInFlight = false;
+  }
+}
+
+function seekdeepScheduleArchiveSnapshot() {
+  // First run 30s after ready (let initial Discord cache settle), then
+  // every 6h. Errors are swallowed inside the tick so the interval keeps
+  // running across transient failures.
+  const tick = async () => {
+    try { await seekdeepBuildArchiveSnapshot(); }
+    catch (err) { console.warn('[SeekDeep] archive snapshot tick failed:', err?.message || err); }
+  };
+  setTimeout(tick, 30_000);
+  setInterval(tick, SEEKDEEP_ARCHIVE_SNAPSHOT_INTERVAL_MS);
+  console.log(`[SeekDeep] archive snapshot scheduled (every ${Math.round(SEEKDEEP_ARCHIVE_SNAPSHOT_INTERVAL_MS / 60_000)} min · path=${SEEKDEEP_ARCHIVE_SNAPSHOT_PATH})`);
+}
+
 async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
   const thread = archiveInfo?.thread || null;
   const guildId = String(thread?.guild?.id || thread?.parent?.guild?.id || archiveInfo?.channel?.guild?.id || target?.guild?.id || target?.message?.guild?.id || '').trim();
@@ -17156,6 +17346,65 @@ async function seekdeepHandleArchiveStatusMessage(message, prompt = '') {
     allowedMentions: { repliedUser: false },
   });
 
+  return true;
+}
+
+// "@SeekDeep archive snapshot" — manually trigger a fresh snapshot of every
+// guild's archive threads into data/archive-snapshot.json. The 6h cron picks
+// up on its own but this lets a user force a refresh after a big archive
+// session, then peek at the GUI Archive pane to see fresh entries.
+function seekdeepIsArchiveSnapshotPrompt(value = '') {
+  const cleaned = String(value || '')
+    .replace(/^\s*(?:<@(?:!|&)?\d+>\s*)+/g, '')
+    .trim()
+    .toLowerCase();
+  return /^(?:archive\s+)?(?:snapshot|rescan|refresh|reindex)$/.test(cleaned)
+      || /^archive\s+(?:snapshot|rescan|refresh|reindex)\b/.test(cleaned);
+}
+
+async function seekdeepHandleArchiveSnapshotMessage(message, prompt = '') {
+  if (!message || !seekdeepIsArchiveSnapshotPrompt(prompt || message.content || '')) {
+    return false;
+  }
+  if (typeof seekdeepLogRoute === 'function') {
+    seekdeepLogRoute('archive-snapshot-message', prompt || message.content || '');
+  }
+  // Admin-only — same gate as /say + persona create. Archive snapshot
+  // touches every thread in the guild and writes to data/, so non-admin
+  // users shouldn't be able to spam it.
+  const isAdmin = (typeof seekdeepIsAdminSource === 'function')
+    ? seekdeepIsAdminSource(message)
+    : false;
+  if (!isAdmin) {
+    await message.reply({
+      content: '⛔ Archive snapshot is admin-only. Add your Discord user ID to `SEEKDEEP_ADMIN_IDS` in `.env` and reload.',
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  }
+  const ack = await message.reply({
+    content: '📂 Building archive snapshot — walking every guild thread. This can take a moment on big servers…',
+    allowedMentions: { repliedUser: false },
+  }).catch(() => null);
+  try {
+    const snap = await seekdeepBuildArchiveSnapshot();
+    const entries = (snap.total_shared_entries || 0) + (snap.total_user_entries || 0);
+    const summary = (snap.skipped)
+      ? `⏳ ${snap.reason || 'snapshot in flight'} — try again in a few seconds.`
+      : `✅ archive snapshot written · guilds=${snap.guild_count} · shared_threads=${snap.shared_thread_count} · user_threads=${snap.user_thread_count} · entries=${entries} · ${snap.elapsed_ms}ms\nFile: \`data/archive-snapshot.json\` (the GUI Archive pane reads this).`;
+    if (ack && typeof ack.edit === 'function') {
+      await ack.edit({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
+    } else {
+      await message.reply({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
+    }
+  } catch (err) {
+    const summary = '❌ Archive snapshot failed: ' + (err?.message || String(err));
+    if (ack && typeof ack.edit === 'function') {
+      await ack.edit({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
+    } else {
+      await message.reply({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
+    }
+  }
   return true;
 }
 
@@ -17757,6 +18006,11 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
   // SEEKDEEP_ARCHIVE_STATUS_BEFORE_OPEN_V2_START
   try {
     const seekdeepArchiveStatusRawContentEarly = String(message?.content || '');
+    // Snapshot must run BEFORE archive-status because "archive snapshot"
+    // would otherwise satisfy seekdeepIsArchiveStatusPrompt's looser regex.
+    if (await seekdeepHandleArchiveSnapshotMessage(message, seekdeepArchiveStatusRawContentEarly)) {
+      return true;
+    }
     if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContentEarly)) {
       return true;
     }

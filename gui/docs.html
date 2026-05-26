@@ -514,13 +514,14 @@ const DATA = [
     ]
   },
   {
-    id: 'archive-setup', title: 'Archive — setup', meta: '4 commands',
+    id: 'archive-setup', title: 'Archive — setup', meta: '5 commands',
     note: 'Admin setup wires a single archive channel per server. SeekDeep needs <strong>Manage Threads</strong> + access to the chosen channel.',
     cmds: [
       { syntax: '@SeekDeep archive config', desc: 'Show archive configuration status.', type: 'mention', perm: 'Admin' },
       { syntax: '@SeekDeep archive setup here', desc: 'Configure the current channel as the server archive channel.', type: 'mention', perm: 'Admin' },
       { syntax: '@SeekDeep setup archive here', desc: 'Alias for archive setup in the current channel.', type: 'mention', perm: 'Admin' },
       { syntax: '@SeekDeep archive setup #channel', desc: 'Configure a mentioned channel as the server archive channel.', type: 'mention', perm: 'Admin' },
+      { syntax: '@SeekDeep archive snapshot', desc: 'Walk every guild thread (shared + per-user) and write a flat index to <span class="mono">data/archive-snapshot.json</span>. The GUI Archive pane (<span class="mono">app.html → Archive browser</span>) reads this — without a snapshot the pane shows "snapshot pending". A 6h cron writes it automatically; this command forces an immediate refresh. Aliases: <span class="mono">archive rescan</span> · <span class="mono">archive refresh</span> · <span class="mono">archive reindex</span>.', type: 'mention', perm: 'Admin' },
     ]
   },
   {
