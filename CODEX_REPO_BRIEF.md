@@ -16,8 +16,8 @@ Line numbers below are from the snapshot when this file was created and will dri
 
 - Repo root: `/mnt/c/Users/natha/SeekDeep-DiscordBot`
 - Branch at snapshot: `main`
-- Latest commit at snapshot: `7a73168 v10.31: context menus, mention commands, per-user memory, help rewrite`
-- Package version: `10.0.0-fresh-rebuild` in `package.json`, while docs/release notes describe the active v10.31 feature set.
+- Latest commit at snapshot: `7a73168 v10.31: context menus, mention commands, per-user memory, help rewrite` (historical; line/commit references in this brief are snapshot-time, not current)
+- Package version: now `10.35.0` in `package.json` (was `10.0.0-fresh-rebuild` at snapshot). Server `FastAPI(version=...)` reads from `package.json` via `_read_pkg_version()` rather than the old hard-coded literal.
 - Pre-existing dirty files before this brief was created:
   - `index.js`
   - `seekdeep_launcher.bat`
@@ -60,7 +60,7 @@ Docs:
 Large/runtime/local dirs:
 
 - `models/`, `outputs/`, `saved_generations/`, `temp/`, `logs/`, `backups/`, `checkpoints/`, `diagnostics/`, `.venv/`, `node_modules/` are local/runtime and gitignored.
-- `data/archive-guild-config.json` is tracked even though archive config is runtime-ish; `data/server-stats.json` is ignored. At snapshot, `data/` contains `.gitkeep`, `archive-guild-config.json`, and `server-stats.json`.
+- All runtime `data/*.json` files are gitignored (current policy — `archive-guild-config.json` was briefly tracked at snapshot but contains Discord IDs and is now ignored). What's actually tracked: `data/.gitkeep` and `data/archive-guild-config.sample.json` (schema reference only).
 
 Security-sensitive files present locally:
 
@@ -314,7 +314,7 @@ Note: Discord context menu command propagation can take up to about an hour afte
 
 Server app:
 
-- `FastAPI(title="SeekDeep Local AI Server", version="10.0.0-fresh-rebuild")`
+- `FastAPI(title="SeekDeep Local AI Server", version=_read_pkg_version())` — version is sourced from package.json at boot, not a hard-coded literal.
 - Defaults model cache to `./models/huggingface`, creates `outputs/` and `temp/`.
 - `MODEL_KEEP_MODE=task-lru` by default.
 - Keep-resident flags: `LOCAL_VISION_KEEP_RESIDENT`, `LOCAL_IMAGE_KEEP_RESIDENT`.
@@ -590,7 +590,7 @@ Image generation/edit changes:
 - `index.js` is intentionally huge and organized by top-level helpers plus comment markers. Avoid broad refactors unless explicitly requested.
 - Multiple `interactionCreate` listeners exist. The main router is not the only listener; there are emergency button listeners near the end.
 - Some docs say all data writes are atomic, but current observed write helpers use direct `fs.writeFileSync`. Verify if atomicity matters.
-- `archive-guild-config.json` is tracked even though most runtime data is ignored. Be cautious about Discord IDs.
+- `archive-guild-config.json` is gitignored to keep Discord IDs out of the repo (current policy); only `archive-guild-config.sample.json` is tracked.
 - Feature flags affect command registration and help text. If a command appears missing, check `.env` and whether registration has propagated.
 - `.env.default` has `SEEKDEEP_FEATURE_IMG2IMG=on`, but pix2pix and inpaint default off even though v10.31 shipped their implementation.
 - `LOCAL_CHAT_QUANT=4bit` is important on 24 GB laptop GPUs. Full precision 8B plus SDXL and overhead can push Windows into shared-memory thrashing.

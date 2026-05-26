@@ -60,14 +60,14 @@ Restart the server. Done. All of the following are now live:
 | `GET /logs/stream`                    | Logs Viewer pane · SSE tail-f                                 |
 | `POST /launcher/{svc}/{action}`       | Launcher Start / Stop / Restart                               |
 | `GET /data/{file}.json`               | Stats / Auto-react rules / Archive config                     |
-| `POST /model/warm`                    | Models pane "Warm" button (wire to your loader; stub by default) |
+| `POST /model/warm`                    | Models pane "Warm" button — wired to `local_ai_server.py`'s real loaders (`warm_chat_role` / `load_image_pipe` / `load_vision_model`); stub-only if `register_gui_endpoints` is called without `warmup_handlers=`. |
 
 ### Safety notes baked in
 
 - **`.env` merge** is atomic — writes to `.env.tmp` then `.replace()`s. Existing comments + ordering preserved.
 - **Log + data file reads** reject path traversal (`../`) and restrict to `.json` for `/data/`.
 - **Launcher** has a service whitelist (`ai-server` · `bot` · `searxng`) and action whitelist (`start` · `stop` · `restart` · `status`).
-- **`/model/warm`** ships as a stub — wire it to your existing model loader where commented.
+- **`/model/warm`** ships wired to the real chat/image/vision loaders in `local_ai_server.py` (passed via `warmup_handlers=`). If you import `register_gui_endpoints` without that kwarg (e.g. standalone test mode), the endpoint returns `{ok:true, stub:true, note:"no warmup handlers wired"}` instead of loading.
 
 ### Security — token auth is on by default
 
