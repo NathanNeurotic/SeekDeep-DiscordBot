@@ -69,6 +69,35 @@ fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
     pip_result
 }
 
+/// Reinstall torch + torchvision + torchaudio against a specific CUDA
+/// variant. Same kill-pip-respawn dance as install_ml_deps, but the
+/// pip args target only the torch trio + the variant index URL. Wired
+/// to the chat playground's "wrong wheel" Fix button — one click and
+/// the user is on the right wheel for their GPU.
+///
+/// `variant` is one of: cu118, cu121, cu124, cu126, cu128, cpu.
+/// (Validated in sidecar::pip_install_torch_variant.)
+#[tauri::command]
+fn install_torch_variant(app: tauri::AppHandle, variant: String) -> Result<String, String> {
+    let runtime = sidecar::app_runtime_dir(&app)?;
+    let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
+
+    let state = app.state::<SidecarState>();
+    sidecar::kill_child(state.inner());
+    sidecar::emit_status(&app, "RESTARTING");
+    std::thread::sleep(Duration::from_millis(800));
+
+    let pip_result = sidecar::pip_install_torch_variant(&python, &runtime, &variant);
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        sidecar::boot_sequence(handle);
+    });
+
+    pip_result
+}
+
 #[tauri::command]
 fn retry_spawn(app: tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
@@ -263,6 +292,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             install_python_deps,
             install_ml_deps,
+            install_torch_variant,
             retry_spawn,
             open_external,
             restart_sidecar,

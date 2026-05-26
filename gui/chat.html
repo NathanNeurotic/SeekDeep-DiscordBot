@@ -723,23 +723,46 @@
       function setVramCell(text, title) {
         if (!cell) return;
         cell.textContent = text;
+        cell.style.cursor = '';
+        cell.style.color = '';
+        cell.onclick = null;
         if (title) cell.setAttribute('title', title);
         else cell.removeAttribute('title');
+      }
+      // When torch can't see the GPU because of a wheel/arch mismatch,
+      // the fix is one pip command — and we have a Tauri command that
+      // runs it for the user (kill sidecar -> pip uninstall + install
+      // with cu124 index URL -> respawn). Attach that to the cell so
+      // clicking "wrong wheel · RTX 5090" actually fixes it.
+      function setVramCellClickableFix(text, title, gpuName, suggestedVariant) {
+        if (!cell) return;
+        cell.textContent = text + ' · click to fix';
+        cell.title = title;
+        cell.style.cursor = 'pointer';
+        cell.style.color = 'var(--warn, #ffb84d)';
+        cell.onclick = () => runTorchReinstallFlow(gpuName, suggestedVariant);
       }
       if (g.used_mb != null && g.total_mb != null) {
         setVramCell(`${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
       } else if (g.available === false) {
         const nv = g.nvidia_smi || {};
         if (nv.detected) {
-          // GPU is here; torch just can't see it.
           const gpuName = nv.name || 'NVIDIA GPU';
           const wheel = g.torch_cuda_built || (g.torch_present === false ? 'no torch' : 'cpu-only');
           if (g.torch_present === false) {
             setVramCell('no torch · ' + gpuName,
               `${gpuName} detected by driver but PyTorch isn't installed. Open the Installer or click Install ML libraries in Control Center.`);
           } else {
-            setVramCell(`wrong wheel · ${gpuName}`,
-              `${gpuName} detected by driver, but torch.cuda.is_available()=False — the loaded torch wheel (${wheel}) doesn't match this GPU. RTX 50-series (Blackwell) needs cu124+. See the Installer's GPU row for the fix.`);
+            // Suggested variant: cu124 covers Ampere/Ada/Hopper/Blackwell.
+            // Blackwell (RTX 50-series) is the case that REQUIRES it; older
+            // cards work fine on cu124 too.
+            const suggested = 'cu124';
+            setVramCellClickableFix(
+              `wrong wheel · ${gpuName}`,
+              `${gpuName} detected by driver, but torch.cuda.is_available()=False — the loaded torch wheel (${wheel}) doesn't match this GPU. RTX 50-series (Blackwell) needs cu124+. Click to reinstall torch with ${suggested} (~2 GB download, sidecar restarts when done).`,
+              gpuName,
+              suggested,
+            );
           }
         } else {
           setVramCell('cpu only · no gpu',
@@ -755,6 +778,72 @@
     start() { this.probe(); this.timer = setInterval(() => this.probe(), 5000); },
   };
   cLIVE.start();
+
+  // ===== Torch reinstall flow — wired to the "wrong wheel" cell click =====
+  // Two paths:
+  //   Tauri context  -> invoke install_torch_variant (kills sidecar,
+  //                     pip uninstall+install with cu124 index, respawns)
+  //   Browser/.bat   -> show a copy-paste modal with the exact pip command
+  //                     (we can't kill the .bat-launched .venv server from
+  //                     here without bouncing the shell)
+  async function runTorchReinstallFlow(gpuName, variant) {
+    const sdn = window.SeekDeepNotify;
+    const inTauri = !!(window.__TAURI__ && window.__TAURI__.core);
+    if (inTauri) {
+      const ok = window.confirm(
+        `Reinstall torch with ${variant} for ${gpuName}?\n\n`
+        + `This will:\n`
+        + `  • Stop the AI server\n`
+        + `  • pip uninstall torch torchvision torchaudio\n`
+        + `  • pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/${variant}\n`
+        + `  • Restart the AI server\n\n`
+        + `~2 GB download. Takes 1-5 minutes on a decent connection.\n`
+        + `Chat will be unavailable during the reinstall.`
+      );
+      if (!ok) return;
+      sdn?.toast?.({ tone: 'warn', title: 'Torch reinstall starting', body: `Pulling ${variant} wheels for ${gpuName}…`, ttl: 6000 });
+      try {
+        const out = await window.__TAURI__.core.invoke('install_torch_variant', { variant });
+        sdn?.toast?.({ tone: 'good', title: 'Torch reinstalled', body: `Sidecar restarting with ${variant} wheels. Refresh in ~10s if VRAM still shows CPU.`, ttl: 8000 });
+        console.log('[SeekDeep torch reinstall] pip output:\n' + (out || ''));
+      } catch (err) {
+        sdn?.toast?.({ tone: 'bad', title: 'Torch reinstall failed', body: String(err).slice(0, 300), ttl: 10000 });
+        console.error('[SeekDeep torch reinstall] failed:', err);
+      }
+      return;
+    }
+    // Non-Tauri fallback: show a modal with the exact command + copy button.
+    // We can't kill the .bat-launched server from a browser, so the user
+    // has to do this in the same shell their .bat is running.
+    const cmd = `pip uninstall -y torch torchvision torchaudio\npip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/${variant}`;
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
+    modal.innerHTML = `
+      <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:640px;color:var(--hull-2);font-family:var(--font-mono);">
+        <h3 style="margin:0 0 8px 0;color:var(--cyan-1);">Torch reinstall · ${gpuName}</h3>
+        <p style="color:var(--hull-3);font-size:13px;margin-bottom:12px;line-height:1.5;">
+          Browser mode can't bounce the .bat-launched AI server. Stop the server
+          (Ctrl+C in its PowerShell window), run these in the activated .venv,
+          then restart with <code>seekdeep_launcher.bat</code> option 4.
+        </p>
+        <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${cmd}</pre>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+          <button id="torchCopyBtn" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <button id="torchCloseBtn" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('#torchCopyBtn').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(cmd);
+        sdn?.toast?.({ tone: 'good', title: 'Copied', body: 'Paste into the AI server PowerShell window.', ttl: 4000 });
+      } catch {
+        // Fallback: select-all on the <pre> already; user can Ctrl+C
+      }
+    };
+    modal.querySelector('#torchCloseBtn').onclick = () => modal.remove();
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  }
 
   // ===== /route/debug helper-row badge =====
   async function refreshRoute() {

@@ -672,6 +672,88 @@ pub fn pip_install_ml(python: &Path, runtime: &Path) -> Result<String, String> {
     Ok(combined)
 }
 
+/// Reinstall torch + torchvision + torchaudio against a specific CUDA
+/// variant (cu118, cu121, cu124, cu126, cu128, or cpu). Used by the
+/// "wrong wheel" Fix button when the loaded torch wheel doesn't match
+/// the user's GPU architecture — most commonly an RTX 50-series
+/// (Blackwell) where a cu121 wheel installed by setup_local.ps1 can't
+/// see the GPU.
+///
+/// Pip's torch wheels live behind variant-specific index URLs:
+///   https://download.pytorch.org/whl/cu118
+///   https://download.pytorch.org/whl/cu121
+///   https://download.pytorch.org/whl/cu124
+///   https://download.pytorch.org/whl/cu126
+///   https://download.pytorch.org/whl/cu128
+///   https://download.pytorch.org/whl/cpu
+///
+/// Same kill-then-install-then-respawn dance as pip_install_ml — torch
+/// .pyd files lock on Windows when imported, so the sidecar MUST be
+/// down before pip runs. Caller (lib.rs install_torch_variant) handles
+/// that.
+pub fn pip_install_torch_variant(
+    python: &Path,
+    runtime: &Path,
+    variant: &str,
+) -> Result<String, String> {
+    let v = variant.trim().to_lowercase();
+    let allowed = ["cu118", "cu121", "cu124", "cu126", "cu128", "cpu"];
+    if !allowed.contains(&v.as_str()) {
+        return Err(format!(
+            "unknown cuda variant {v:?}; allowed: {}", allowed.join(", ")
+        ));
+    }
+    let index_url = format!("https://download.pytorch.org/whl/{}", v);
+
+    let py_str = python.to_string_lossy().to_lowercase();
+    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+
+    // First: explicitly uninstall the existing torch trio so pip --upgrade
+    // doesn't get confused about which wheel arch to resolve against. The
+    // common failure mode without this: pip thinks the installed cu121
+    // wheel "already satisfies" the spec because the version matches, and
+    // skips the cu124 reinstall entirely.
+    let _ = quiet_command(python)
+        .args(["-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"])
+        .current_dir(runtime)
+        .output();
+
+    // Second: install with the variant-specific index URL.
+    let mut args: Vec<&str> = vec![
+        "-m", "pip", "install",
+        "--upgrade", "--no-cache-dir", "--disable-pip-version-check",
+        "torch", "torchvision", "torchaudio",
+        "--index-url", &index_url,
+    ];
+    if !in_venv {
+        args.insert(3, "--user");
+    }
+
+    let out = quiet_command(python)
+        .args(&args)
+        .current_dir(runtime)
+        .output()
+        .map_err(|e| format!("invoke pip: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!(
+        "$ {} {}\n\n---STDOUT---\n{}\n---STDERR---\n{}\n",
+        python.display(),
+        args.join(" "),
+        stdout, stderr,
+    );
+
+    if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
+        let _ = fs::create_dir_all(&log_dir);
+        let _ = fs::write(log_dir.join("pip-torch.log"), &combined);
+    }
+
+    if !out.status.success() {
+        return Err(combined);
+    }
+    Ok(combined)
+}
+
 /// Best-effort: derive a log dir adjacent to the runtime dir. Used by
 /// pip_install which doesn't have the AppHandle in scope. Falls back
 /// gracefully so a write-failure here doesn't break the install flow.
