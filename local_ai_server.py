@@ -2525,6 +2525,13 @@ def model_uninstall(req: ModelUninstallRequest):
     if backend == "hf":
         uninstall_result = _hf_uninstall(model_id)
         uninstall_result["backend"] = "hf"
+        # The `purge` field is documented but huggingface_hub.scan_cache_dir()
+        # doesn't expose a safe "force-delete shared revision" knob today.
+        # Surface that the flag was accepted but ignored so callers don't
+        # silently assume aggressive behavior. AUD-014.
+        if req.purge:
+            uninstall_result["purge_ignored"] = True
+            uninstall_result["purge_note"] = "huggingface_hub cache API doesn't support safe force-delete of shared revisions; treat as reserved/future"
     elif backend == "ollama":
         ok, note = _ollama_delete(model_id)
         uninstall_result = {"ok": ok, "backend": "ollama", "model_id": model_id,

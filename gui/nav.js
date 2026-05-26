@@ -94,11 +94,20 @@
       if (!has) headers[name] = value;
       return headers;
     }
+    // GET requests to these paths require the X-SeekDeep-Token header on the
+    // backend (AUD-003 — sensitive reads policy). Without auto-attaching the
+    // header here every GUI page that fetches /memory/users / per-guild
+    // archive config would hit 401. AUD-003.
+    const SENSITIVE_READ_RE = /\/(memory|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config)\.json)(\/|$)/;
     window.fetch = async function patchedFetch(input, init) {
       init = init || {};
       const method = (init.method || (input && input.method) || 'GET').toUpperCase();
       const url = urlString(input);
-      if (method === 'POST' && url && isOurServer(url)) {
+      const needsToken =
+        url && isOurServer(url) &&
+        (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE' ||
+         (method === 'GET' && SENSITIVE_READ_RE.test(url)));
+      if (needsToken) {
         const tok = await fetchToken();
         if (tok) {
           init.headers = ensureHeader(init.headers, TOKEN_HEADER, tok);

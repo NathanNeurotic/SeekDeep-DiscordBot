@@ -877,13 +877,29 @@ def register_gui_endpoints(
             "generated_at": _now_iso(),
         }
 
+    # AUD-003: which data files contain user-identifying info and should be
+    # token-gated. Stats / built-in stacks stay public so the dashboard pane
+    # works without the GUI nav.js token interceptor being loaded.
+    _DATA_TOKEN_REQUIRED = {
+        "user-facts.json",         # discord IDs + remembered text
+        "memory-presets.json",     # per-user preset bindings
+        "archive-config.json",     # author notify routing
+        "archive-optout.json",     # per-user opt-out list
+        "archive-guild-config.json",  # guild/channel routing IDs
+    }
+
     # ----- GET /data/{file} -----
     @app.get("/data/{file}")
-    async def get_data_file(file: str):
+    async def get_data_file(file: str, request: Request):
         # Reject anything that escapes data_dir
         target = (_data_dir / file).resolve()
         if not _is_inside(target, _data_dir):
             raise HTTPException(400, "path traversal blocked")
+        # Sensitive data files: require token (AUD-003). nav.js's token
+        # interceptor injects X-SeekDeep-Token on every same-server fetch
+        # in the GUI; raw HTTP callers (curl from outside) get 401.
+        if file in _DATA_TOKEN_REQUIRED:
+            await _require_gui_token(request)
         if not target.is_file():
             # Empty success so the GUI's normalized panes can show empty-state
             # rather than reporting an error for files the bot hasn't written yet.
@@ -1624,9 +1640,11 @@ def register_gui_endpoints(
         except Exception:
             return 0
 
-    @app.get("/memory/users")
+    @app.get("/memory/users", dependencies=[Depends(_require_gui_token)])
     def memory_list_users():
-        """Summary of every user with stored facts. No auth (read-only)."""
+        """Summary of every user with stored facts. Token-gated (AUD-003 — user
+        facts contain Discord IDs + arbitrary remembered text and should not
+        be browsable by any local process)."""
         store = _read_facts_store()
         out = []
         for uid, row in (store.get("users") or {}).items():
@@ -1644,9 +1662,9 @@ def register_gui_endpoints(
         out.sort(key=lambda u: (u["updatedAt"] or ""), reverse=True)
         return {"ok": True, "users": out}
 
-    @app.get("/memory/user/{user_id}")
+    @app.get("/memory/user/{user_id}", dependencies=[Depends(_require_gui_token)])
     def memory_get_user(user_id: str):
-        """Full row for one user. 404 if no row."""
+        """Full row for one user. 404 if no row. Token-gated (AUD-003)."""
         store = _read_facts_store()
         row = (store.get("users") or {}).get(str(user_id))
         if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
@@ -1734,10 +1752,11 @@ def register_gui_endpoints(
         _atomic_write_json(_user_facts_path, store)
         return {"ok": True, "removed_facts": removed_n}
 
-    @app.get("/memory/user/{user_id}/export")
+    @app.get("/memory/user/{user_id}/export", dependencies=[Depends(_require_gui_token)])
     def memory_export_user(user_id: str):
         """Download a single user's row as application/json with a Content-Disposition
-        attachment header so a browser triggers a save dialog. 404 if no row."""
+        attachment header so a browser triggers a save dialog. 404 if no row.
+        Token-gated (AUD-003)."""
         store = _read_facts_store()
         row = (store.get("users") or {}).get(str(user_id))
         if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
@@ -1750,9 +1769,10 @@ def register_gui_endpoints(
             headers={"Content-Disposition": f'attachment; filename="seekdeep-memory-{safe_id}.json"'},
         )
 
-    @app.get("/memory/presets/{user_id}")
+    @app.get("/memory/presets/{user_id}", dependencies=[Depends(_require_gui_token)])
     def memory_get_presets(user_id: str):
-        """Get the active preset keys for a user. Returns empty list if no row."""
+        """Get the active preset keys for a user. Returns empty list if no row.
+        Token-gated (AUD-003)."""
         store = _read_presets_store()
         row = (store.get("users") or {}).get(str(user_id))
         if isinstance(row, dict) and isinstance(row.get("presets"), list):

@@ -288,14 +288,19 @@ def main() -> int:
         c.delete(f"/memory/user/{SMOKE_UID}", headers={_TOKEN_HEADER: token})
         c.delete(f"/memory/user/{SMOKE_UID2}", headers={_TOKEN_HEADER: token})
 
+        # AUD-003: /memory/* reads now require X-SeekDeep-Token (full user
+        # facts can contain Discord IDs + arbitrary remembered text).
         r = c.get("/memory/users")
-        check("GET /memory/users -> 200", r.status_code == 200, f"got {r.status_code}")
+        check("GET /memory/users without token -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+        r = c.get("/memory/users", headers={_TOKEN_HEADER: token})
+        check("GET /memory/users with token -> 200", r.status_code == 200, f"got {r.status_code}")
         body = r.json() if r.status_code == 200 else {}
         check("  ...returns {ok, users:[]} shape",
               body.get("ok") is True and isinstance(body.get("users"), list),
               f"keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
 
-        r = c.get(f"/memory/user/{SMOKE_UID}")
+        r = c.get(f"/memory/user/{SMOKE_UID}", headers={_TOKEN_HEADER: token})
         check("GET /memory/user/{absent} -> 404", r.status_code == 404, f"got {r.status_code}")
 
         r = c.post(f"/memory/user/{SMOKE_UID}/fact", json={"text": "smoke fact 1"})
@@ -319,7 +324,7 @@ def main() -> int:
                    json={"text": ""}, headers={_TOKEN_HEADER: token})
         check("POST empty fact -> 422", r.status_code == 422, f"got {r.status_code}")
 
-        r = c.get(f"/memory/user/{SMOKE_UID}")
+        r = c.get(f"/memory/user/{SMOKE_UID}", headers={_TOKEN_HEADER: token})
         check("GET /memory/user/{id} -> 200", r.status_code == 200, f"got {r.status_code}")
         body = r.json() if r.status_code == 200 else {}
         check("  ...has facts list with 1 entry",
@@ -350,7 +355,7 @@ def main() -> int:
               isinstance(r.json().get("removed_facts"), int) if r.status_code == 200 else False)
 
         # Export 404 after deletion
-        r = c.get(f"/memory/user/{SMOKE_UID}/export")
+        r = c.get(f"/memory/user/{SMOKE_UID}/export", headers={_TOKEN_HEADER: token})
         check("GET /memory/user/{absent}/export -> 404",
               r.status_code == 404, f"got {r.status_code}")
 
@@ -365,7 +370,7 @@ def main() -> int:
         check("POST /memory/presets unknown key -> 400",
               r.status_code == 400, f"got {r.status_code}")
 
-        r = c.get(f"/memory/presets/{SMOKE_UID2}")
+        r = c.get(f"/memory/presets/{SMOKE_UID2}", headers={_TOKEN_HEADER: token})
         check("GET /memory/presets/{id} -> 200", r.status_code == 200, f"got {r.status_code}")
         body = r.json() if r.status_code == 200 else {}
         check("  ...returns {ok, presets:[brief, expert]}",

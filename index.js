@@ -20831,7 +20831,17 @@ client.on('interactionCreate', async (interaction) => {
       try {
         const payload = { content: text || '', allowedMentions: { parse: ['users'] } };
         if (imageUrl) {
-          payload.files = [{ attachment: imageUrl, name: 'seekdeep-say.png' }];
+          // Validate the URL through the same fetch path /vision uses —
+          // content-length cap, magic-byte MIME check, image-type allowlist.
+          // Previously /say handed the URL directly to discord.js, which
+          // would fetch arbitrary URLs without any local validation. AUD-017.
+          try {
+            const resolved = await seekdeepResolveImageInput(imageUrl, { maxBytes: 20 * 1024 * 1024, source: 'url' });
+            payload.files = [{ attachment: resolved.buffer, name: resolved.name || 'seekdeep-say.png' }];
+          } catch (validateErr) {
+            await interaction.reply({ content: 'image_url rejected: ' + (validateErr?.message || 'invalid or unreachable').slice(0, 300), flags: MessageFlags.Ephemeral });
+            return;
+          }
         }
         await channelOpt.send(payload);
         await interaction.reply({ content: `Posted to <#${channelOpt.id}>.`, flags: MessageFlags.Ephemeral });
