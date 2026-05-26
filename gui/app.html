@@ -1578,26 +1578,81 @@
         </div>
 
         <div class="mode-tabs" style="margin-bottom: 18px; align-items: center;">
-          <span class="chip active">txt2img</span>
-          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">img2img</span>
-          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">pix2pix</span>
-          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">inpaint</span>
-          <span class="chip" data-disabled="1" style="opacity:0.45; cursor: not-allowed;" title="img2img/pix2pix/inpaint/upscale require source image upload — use Discord context menu or POST directly to /img2img · /instruct-pix2pix · /inpaint · /upscale">upscale</span>
-          <span class="tiny muted" style="font-family: var(--font-mono); letter-spacing: 0.08em; margin-left: 8px;">▸ playground supports txt2img only · other pipelines via Discord or <code style="color:var(--cyan-1)">api.html</code></span>
+          <span class="chip active" data-mode="txt2img">txt2img</span>
+          <span class="chip" data-mode="img2img">img2img</span>
+          <span class="chip" data-mode="pix2pix">pix2pix</span>
+          <span class="chip" data-mode="inpaint">inpaint</span>
+          <span class="chip" data-mode="upscale">upscale</span>
+          <span class="tiny muted" id="ipModeHint" style="font-family: var(--font-mono); letter-spacing: 0.08em; margin-left: 8px;">▸ SDXL txt2img · prompt only</span>
         </div>
 
         <div class="ip-grid">
           <div class="ip-controls">
+            <!-- Source image upload (drop / paste / file picker) — shown for
+                 every mode except txt2img. Toggle controlled by mode tabs. -->
+            <div class="ip-field" id="ipSrcField" style="display:none;">
+              <label>Source image</label>
+              <div id="ipSrcDrop"
+                   style="position:relative; border: 1px dashed color-mix(in oklab, var(--cyan-1) 35%, var(--stroke)); border-radius: var(--r-md); padding: 14px; min-height: 100px; display: grid; place-items: center; cursor: pointer; text-align: center; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); transition: border-color 0.15s, background 0.15s;"
+                   title="Click to choose · or drag-drop · or paste with Ctrl+V">
+                <div id="ipSrcEmpty">
+                  ▸ drop / paste / click to choose<br>
+                  <span style="font-size:10px; opacity:0.7;">PNG · JPG · WebP · up to 24 MB</span>
+                </div>
+                <div id="ipSrcPreview" style="display:none; width:100%;">
+                  <img id="ipSrcImg" style="max-width:100%; max-height:160px; border-radius: 4px; display:block; margin: 0 auto;" alt="source" />
+                  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:6px;">
+                    <span id="ipSrcMeta" style="font-size:10px; color:var(--hull-3);">—</span>
+                    <button type="button" id="ipSrcClear" class="btn-mini bad" style="padding: 2px 8px;">✕ Clear</button>
+                  </div>
+                </div>
+                <input type="file" id="ipSrcFile" accept="image/*" style="display:none;" />
+              </div>
+            </div>
+
             <div class="ip-field">
-              <label>Prompt</label>
+              <label id="ipPromptLabel">Prompt</label>
               <textarea id="ipPrompt">a colossal squid silhouetted at 10,000m, bioluminescent dapples through deep ocean haze, cinematic, photoreal</textarea>
             </div>
-            <div class="ip-field">
+
+            <!-- Inpaint-only: what to remove (CLIPSeg target) -->
+            <div class="ip-field" id="ipRemoveField" style="display:none;">
+              <label>Remove target <span class="tiny muted" style="font-family: var(--font-mono); font-size:10px; margin-left:6px;">CLIPSeg picks the mask</span></label>
+              <input id="ipRemoveTarget" class="mono" placeholder="e.g. 'the small houses' · 'the wizard' · 'the watermark'" />
+            </div>
+
+            <div class="ip-field" id="ipNegField">
               <label>Negative</label>
               <textarea id="ipNeg" style="min-height:50px;">blurry, low quality, watermark, signature</textarea>
             </div>
 
-            <div class="ip-field">
+            <!-- img2img/inpaint-only: strength slider (how much to deviate
+                 from the source). pix2pix uses guidance_scale instead. -->
+            <div class="ip-field" id="ipStrengthField" style="display:none;">
+              <label>Strength <span class="tiny muted" style="font-family: var(--font-mono); font-size:10px; margin-left:6px;">0 = unchanged · 1 = ignore source</span></label>
+              <div class="row">
+                <input id="ipStrength" type="range" min="0.05" max="1.0" step="0.05" value="0.6" style="flex: 1; accent-color: var(--cyan-1);" />
+                <span id="ipStrengthVal" class="mono" style="min-width: 40px; text-align: right; color: var(--cyan-1);">0.60</span>
+              </div>
+            </div>
+
+            <!-- Upscale-only: scale + method -->
+            <div class="ip-field" id="ipUpscaleField" style="display:none;">
+              <label>Scale &amp; method</label>
+              <div class="row">
+                <select id="ipUpscaleScale" class="mono" style="flex: 1;">
+                  <option value="2">2× scale</option>
+                  <option value="3">3× scale</option>
+                  <option value="4">4× scale</option>
+                </select>
+                <select id="ipUpscaleMethod" class="mono" style="flex: 1;">
+                  <option value="lanczos">lanczos (fast)</option>
+                  <option value="realesrgan">realesrgan (model)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="ip-field" id="ipRefineField">
               <label>Refinement</label>
               <div style="display: flex; gap: 4px;" id="ipRefine">
                 <span class="chip" data-refine="raw">raw</span>
@@ -1606,7 +1661,7 @@
               </div>
             </div>
 
-            <div class="ip-field">
+            <div class="ip-field" id="ipQualityField">
               <label>Quality &amp; style</label>
               <div class="row" style="margin-bottom: 8px;">
                 <select id="ipQuality" class="mono" style="flex: 1;"><option value="28">standard · 28 steps</option><option value="12">low · 12</option><option value="40">high · 40</option></select>
@@ -1614,7 +1669,7 @@
               </div>
             </div>
 
-            <div class="ip-field">
+            <div class="ip-field" id="ipDimField">
               <label>Dimensions &amp; seed</label>
               <div class="row">
                 <input id="ipW" value="1024" class="mono" />
@@ -1624,8 +1679,8 @@
               </div>
             </div>
 
-            <div class="ip-field">
-              <label>Guidance / steps</label>
+            <div class="ip-field" id="ipGuidField">
+              <label id="ipGuidLabel">Guidance / steps</label>
               <div class="row">
                 <input id="ipGuid" value="7.0" class="mono" />
                 <input id="ipSteps" value="28" class="mono" />
@@ -2904,7 +2959,14 @@ const SEEKDEEP_BASE = (function() {
     });
   }
 
-  // ===== Image playground · live wiring (POST /image) =====
+  // ===== Image playground · live wiring (POST /image|/img2img|/instruct-pix2pix|/inpaint|/upscale) =====
+  // Mode-aware. Each mode shows/hides the controls it needs and posts to the
+  // right endpoint with the right body shape:
+  //   txt2img → /image            prompt + dims + guidance + steps + seed
+  //   img2img → /img2img          prompt + source + strength + dims + guidance + steps + seed
+  //   pix2pix → /instruct-pix2pix instruction (=prompt) + source + guidance + image_guidance + steps + seed
+  //   inpaint → /inpaint          prompt + remove_target + source + strength + dims + guidance + steps + seed
+  //   upscale → /upscale          source + scale + method  (no prompt)
   (function wireImagePlayground() {
     const genBtn = document.getElementById('ipGenBtn');
     const regenBtn = document.getElementById('ipRegenBtn');
@@ -2913,25 +2975,130 @@ const SEEKDEEP_BASE = (function() {
 
     const refs = {
       prompt:  document.getElementById('ipPrompt'),
+      promptLabel: document.getElementById('ipPromptLabel'),
       neg:     document.getElementById('ipNeg'),
+      negField:document.getElementById('ipNegField'),
       w:       document.getElementById('ipW'),
       h:       document.getElementById('ipH'),
       seed:    document.getElementById('ipSeed'),
       guid:    document.getElementById('ipGuid'),
+      guidLabel: document.getElementById('ipGuidLabel'),
       steps:   document.getElementById('ipSteps'),
       quality: document.getElementById('ipQuality'),
       style:   document.getElementById('ipStyle'),
+      qualityField: document.getElementById('ipQualityField'),
+      dimField:document.getElementById('ipDimField'),
+      guidField:document.getElementById('ipGuidField'),
+      refineField:document.getElementById('ipRefineField'),
+      strengthField:document.getElementById('ipStrengthField'),
+      strength:document.getElementById('ipStrength'),
+      strengthVal:document.getElementById('ipStrengthVal'),
+      upscaleField:document.getElementById('ipUpscaleField'),
+      upscaleScale:document.getElementById('ipUpscaleScale'),
+      upscaleMethod:document.getElementById('ipUpscaleMethod'),
+      removeField:document.getElementById('ipRemoveField'),
+      removeTarget:document.getElementById('ipRemoveTarget'),
+      srcField:document.getElementById('ipSrcField'),
+      srcDrop: document.getElementById('ipSrcDrop'),
+      srcEmpty:document.getElementById('ipSrcEmpty'),
+      srcPreview:document.getElementById('ipSrcPreview'),
+      srcImg:  document.getElementById('ipSrcImg'),
+      srcMeta: document.getElementById('ipSrcMeta'),
+      srcClear:document.getElementById('ipSrcClear'),
+      srcFile: document.getElementById('ipSrcFile'),
       placeholder: document.getElementById('ipPlaceholder'),
       image:   document.getElementById('ipImage'),
       status:  document.getElementById('ipStatus'),
       history: document.getElementById('ipHistory'),
       download:document.getElementById('ipDownload'),
+      modeHint:document.getElementById('ipModeHint'),
     };
+
+    // ---- Mode state ----
+    // Active mode comes from .mode-tabs .chip[data-mode].active (default txt2img).
+    function activeMode() {
+      const c = document.querySelector('.mode-tabs .chip.active[data-mode]');
+      return (c && c.dataset.mode) || 'txt2img';
+    }
+
+    // Per-mode field visibility + button label + hint text. Driven by a single
+    // table so adding a mode is one entry instead of N if-branches.
+    const MODE_UI = {
+      txt2img: {
+        src:false, prompt:true,  remove:false, neg:true,  strength:false, upscale:false,
+        refine:true, quality:true, dim:true,  guid:true,
+        promptLabel:'Prompt', guidLabel:'Guidance / steps', btn:'▸ Generate',
+        hint:'▸ SDXL txt2img · prompt only',
+      },
+      img2img: {
+        src:true,  prompt:true,  remove:false, neg:true,  strength:true,  upscale:false,
+        refine:false, quality:false, dim:true,  guid:true,
+        promptLabel:'Prompt', guidLabel:'Guidance / steps', btn:'▸ Img2img',
+        hint:'▸ SDXL img2img · source + prompt · strength controls how far it drifts',
+      },
+      pix2pix: {
+        src:true,  prompt:true,  remove:false, neg:true,  strength:false, upscale:false,
+        refine:false, quality:false, dim:false, guid:true,
+        promptLabel:'Instruction', guidLabel:'Guidance / steps · image_guidance is hidden (defaults to 1.5)', btn:'▸ Pix2pix',
+        hint:'▸ InstructPix2Pix · "make it neon" · "remove the watermark"',
+      },
+      inpaint: {
+        src:true,  prompt:true,  remove:true,  neg:true,  strength:true,  upscale:false,
+        refine:false, quality:false, dim:true,  guid:true,
+        promptLabel:'Scene prompt · what fills the hole', guidLabel:'Guidance / steps', btn:'▸ Inpaint',
+        hint:'▸ CLIPSeg mask + SDXL inpainting · target = what to remove',
+      },
+      upscale: {
+        src:true,  prompt:false, remove:false, neg:false, strength:false, upscale:true,
+        refine:false, quality:false, dim:false, guid:false,
+        promptLabel:'Prompt', guidLabel:'Guidance / steps', btn:'▸ Upscale',
+        hint:'▸ Lanczos (fast) or Real-ESRGAN (model · slow but sharper)',
+      },
+    };
+
+    function show(el, on) {
+      if (!el) return;
+      el.style.display = on ? '' : 'none';
+    }
+    function applyModeUI() {
+      const m = activeMode();
+      const u = MODE_UI[m] || MODE_UI.txt2img;
+      show(refs.srcField,      u.src);
+      show(refs.promptLabel?.closest('.ip-field'), u.prompt);
+      show(refs.removeField,   u.remove);
+      show(refs.negField,      u.neg);
+      show(refs.strengthField, u.strength);
+      show(refs.upscaleField,  u.upscale);
+      show(refs.refineField,   u.refine);
+      show(refs.qualityField,  u.quality);
+      show(refs.dimField,      u.dim);
+      show(refs.guidField,     u.guid);
+      if (refs.promptLabel) refs.promptLabel.textContent = u.promptLabel;
+      if (refs.guidLabel)   refs.guidLabel.textContent   = u.guidLabel;
+      if (refs.modeHint)    refs.modeHint.textContent    = u.hint;
+      genBtn.textContent = u.btn;
+    }
+
+    // Mode tab click — single-select, then re-apply UI
+    document.querySelectorAll('.mode-tabs .chip[data-mode]').forEach(c => {
+      c.addEventListener('click', () => {
+        document.querySelectorAll('.mode-tabs .chip[data-mode]').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        applyModeUI();
+      });
+    });
+    applyModeUI();
+
+    // Strength slider readout
+    refs.strength?.addEventListener('input', () => {
+      if (refs.strengthVal) refs.strengthVal.textContent = parseFloat(refs.strength.value).toFixed(2);
+    });
 
     // Quality select drives the steps field
     refs.quality?.addEventListener('change', e => { refs.steps.value = e.target.value; });
 
-    // Refinement chips
+    // Refinement chips (only relevant for txt2img display, but the click
+    // handler is harmless when the field is hidden)
     document.querySelectorAll('#ipRefine .chip').forEach(c => {
       c.addEventListener('click', () => {
         document.querySelectorAll('#ipRefine .chip').forEach(x => x.classList.remove('active'));
@@ -2945,45 +3112,200 @@ const SEEKDEEP_BASE = (function() {
       refs.status.innerHTML = `<span class="dot"></span>${text}`;
     }
 
+    // ---- Source image handling (drop / paste / click) ----
+    // Bytes capped at 24 MB to mirror LOCAL_AI_MAX_IMAGE_BYTES on the server.
+    // We store the base64 once on accept so generate() is a sync read.
+    const MAX_SRC_BYTES = 24 * 1024 * 1024;
+    let srcB64 = null;
+    let srcType = null;
+    let srcBytes = 0;
+
+    function clearSrc() {
+      srcB64 = null; srcType = null; srcBytes = 0;
+      if (refs.srcImg) refs.srcImg.removeAttribute('src');
+      if (refs.srcEmpty) refs.srcEmpty.style.display = '';
+      if (refs.srcPreview) refs.srcPreview.style.display = 'none';
+      if (refs.srcFile) refs.srcFile.value = '';
+    }
+    function _fmtKb(n) {
+      if (n < 1024) return n + ' B';
+      if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+      return (n/(1024*1024)).toFixed(2) + ' MB';
+    }
+    async function acceptFile(file) {
+      if (!file) return;
+      if (!/^image\//.test(file.type || '')) {
+        setStatus('REJECTED · not an image', 'bad');
+        return;
+      }
+      if (file.size > MAX_SRC_BYTES) {
+        setStatus(`REJECTED · ${_fmtKb(file.size)} > 24 MB cap`, 'bad');
+        return;
+      }
+      const buf = await file.arrayBuffer();
+      // btoa wants a binary string; build it in 64KB chunks to avoid
+      // call-stack blowup on big images.
+      let bin = '';
+      const u8 = new Uint8Array(buf);
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, Math.min(u8.length, i + CHUNK)));
+      }
+      srcB64 = btoa(bin);
+      srcType = file.type;
+      srcBytes = file.size;
+      if (refs.srcImg) refs.srcImg.src = 'data:' + srcType + ';base64,' + srcB64;
+      if (refs.srcEmpty) refs.srcEmpty.style.display = 'none';
+      if (refs.srcPreview) refs.srcPreview.style.display = '';
+      if (refs.srcMeta) refs.srcMeta.textContent = file.name + ' · ' + _fmtKb(file.size) + ' · ' + srcType;
+    }
+
+    refs.srcDrop?.addEventListener('click', () => refs.srcFile?.click());
+    refs.srcFile?.addEventListener('change', e => { acceptFile(e.target.files && e.target.files[0]); });
+    refs.srcClear?.addEventListener('click', e => { e.stopPropagation(); clearSrc(); });
+    refs.srcDrop?.addEventListener('dragover', e => {
+      e.preventDefault();
+      refs.srcDrop.style.borderColor = 'var(--cyan-1)';
+      refs.srcDrop.style.background = 'rgba(45,212,255,0.04)';
+    });
+    refs.srcDrop?.addEventListener('dragleave', () => {
+      refs.srcDrop.style.borderColor = '';
+      refs.srcDrop.style.background = '';
+    });
+    refs.srcDrop?.addEventListener('drop', e => {
+      e.preventDefault();
+      refs.srcDrop.style.borderColor = '';
+      refs.srcDrop.style.background = '';
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) acceptFile(f);
+    });
+    // Paste from clipboard (Ctrl+V anywhere on the image pane).
+    document.addEventListener('paste', e => {
+      const pane = document.querySelector('[data-pane="image"]');
+      if (!pane || !pane.classList.contains('active')) return;
+      if (activeMode() === 'txt2img') return;
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.kind === 'file' && /^image\//.test(it.type)) {
+          acceptFile(it.getAsFile());
+          e.preventDefault();
+          return;
+        }
+      }
+    });
+
     let lastSeed = null, lastImageUrl = null;
 
     async function generate(useLastSeed) {
       if (genBtn.disabled) return;
-      const prompt = (refs.prompt.value || '').trim();
-      if (!prompt) return;
-      const style = refs.style.value;
-      const fullPrompt = `${prompt}, ${style}`;
-      const seedInput = parseInt(refs.seed.value, 10);
+      const mode = activeMode();
+      const u = MODE_UI[mode] || MODE_UI.txt2img;
+
+      // Source-image requirement (everything except txt2img)
+      if (u.src && !srcB64) {
+        setStatus('NEEDS SOURCE · drop an image first', 'bad');
+        return;
+      }
+
+      // Prompt requirement (everything except upscale)
+      const prompt = (refs.prompt?.value || '').trim();
+      if (u.prompt && !prompt && mode !== 'upscale') {
+        setStatus('NEEDS PROMPT', 'bad');
+        return;
+      }
+
+      // Seed pick — txt2img/img2img/inpaint/pix2pix all accept it. Upscale ignores.
+      const seedInput = parseInt(refs.seed?.value, 10);
       const seed = useLastSeed && lastSeed != null
         ? lastSeed
         : (isNaN(seedInput) || seedInput < 0 ? Math.floor(Math.random() * 1_000_000) : seedInput);
 
-      const body = {
-        prompt: fullPrompt,
-        negative_prompt: refs.neg.value || '',
-        width:  parseInt(refs.w.value, 10)  || 1024,
-        height: parseInt(refs.h.value, 10)  || 1024,
-        steps:  parseInt(refs.steps.value, 10) || 28,
-        guidance_scale: parseFloat(refs.guid.value) || 7.0,
-        seed,
-      };
+      // Build endpoint + body per mode
+      let endpoint, body;
+      if (mode === 'txt2img') {
+        const style = refs.style?.value || '';
+        endpoint = '/image';
+        body = {
+          prompt: style ? `${prompt}, ${style}` : prompt,
+          negative_prompt: refs.neg?.value || '',
+          width:  parseInt(refs.w.value, 10)  || 1024,
+          height: parseInt(refs.h.value, 10)  || 1024,
+          steps:  parseInt(refs.steps.value, 10) || 28,
+          guidance_scale: parseFloat(refs.guid.value) || 7.0,
+          seed,
+        };
+      } else if (mode === 'img2img') {
+        endpoint = '/img2img';
+        body = {
+          prompt,
+          negative_prompt: refs.neg?.value || '',
+          image_b64: srcB64,
+          strength: parseFloat(refs.strength.value) || 0.6,
+          width:  parseInt(refs.w.value, 10)  || 1024,
+          height: parseInt(refs.h.value, 10)  || 1024,
+          steps:  parseInt(refs.steps.value, 10) || 28,
+          guidance_scale: parseFloat(refs.guid.value) || 5.0,
+          seed,
+        };
+      } else if (mode === 'pix2pix') {
+        endpoint = '/instruct-pix2pix';
+        body = {
+          instruction: prompt,
+          image_b64: srcB64,
+          steps:  parseInt(refs.steps.value, 10) || 30,
+          guidance_scale: parseFloat(refs.guid.value) || 9.0,
+          image_guidance_scale: 1.5,
+          seed,
+          negative_prompt: refs.neg?.value || '',
+        };
+      } else if (mode === 'inpaint') {
+        endpoint = '/inpaint';
+        body = {
+          prompt,
+          remove_target: (refs.removeTarget?.value || '').trim(),
+          image_b64: srcB64,
+          strength: parseFloat(refs.strength.value) || 0.85,
+          width:  parseInt(refs.w.value, 10)  || 1024,
+          height: parseInt(refs.h.value, 10)  || 1024,
+          steps:  parseInt(refs.steps.value, 10) || 28,
+          guidance_scale: parseFloat(refs.guid.value) || 5.0,
+          seed,
+          negative_prompt: refs.neg?.value || '',
+        };
+      } else if (mode === 'upscale') {
+        endpoint = '/upscale';
+        body = {
+          image_b64: srcB64,
+          scale: parseInt(refs.upscaleScale.value, 10) || 2,
+          method: refs.upscaleMethod.value || 'lanczos',
+        };
+      } else {
+        setStatus('UNKNOWN MODE · ' + mode, 'bad');
+        return;
+      }
 
       genBtn.disabled = true;
       regenBtn.disabled = true;
-      setStatus(`GENERATING · SEED ${seed}`, 'warn');
+      const label = u.btn.replace('▸ ', '').toUpperCase();
+      setStatus(`${label}ING · SEED ${seed}`, 'warn');
       refs.placeholder.style.display = 'grid';
-      refs.placeholder.textContent = `[GENERATING · ${body.width}×${body.height} · ${body.steps} steps · seed ${seed}]`;
+      const dim = (body.width && body.height) ? `${body.width}×${body.height} · ` : '';
+      refs.placeholder.textContent = `[${label}ING · ${dim}${body.steps ? body.steps + ' steps · ' : ''}seed ${seed}]`;
       refs.image.style.display = 'none';
       const t0 = performance.now();
 
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/image', {
+        const r = await fetch(SEEKDEEP_BASE + endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(180000),
         });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          throw new Error('HTTP ' + r.status + (txt ? ' · ' + txt.slice(0, 160) : ''));
+        }
         const ct = r.headers.get('Content-Type') || '';
         let url;
         if (ct.startsWith('image/')) {
@@ -3002,7 +3324,7 @@ const SEEKDEEP_BASE = (function() {
         refs.image.style.display = 'block';
         refs.placeholder.style.display = 'none';
         const ms = Math.round(performance.now() - t0);
-        setStatus(`DONE · ${(ms/1000).toFixed(1)}s · SEED ${seed}`, 'on');
+        setStatus(`DONE · ${label} · ${(ms/1000).toFixed(1)}s · SEED ${seed}`, 'on');
 
         // Append to history
         const thumb = document.createElement('div');
@@ -3010,14 +3332,18 @@ const SEEKDEEP_BASE = (function() {
         thumb.style.backgroundImage = `url(${url})`;
         thumb.style.backgroundSize = 'cover';
         thumb.style.backgroundPosition = 'center';
-        thumb.title = `seed ${seed} · ${body.steps} steps`;
+        thumb.title = `${label} · seed ${seed}${body.steps ? ' · ' + body.steps + ' steps' : ''}`;
         refs.history.prepend(thumb);
         if (refs.history.children.length > 6) refs.history.lastChild.remove();
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
-        setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · /image unreachable`, 'bad');
+        const msg = String(e && e.message || e);
+        setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · ${endpoint} · ${msg.slice(0, 60)}`, 'bad');
         refs.placeholder.style.display = 'grid';
-        refs.placeholder.textContent = `[OFFLINE — ${SEEKDEEP_BASE}/image unreachable · start the AI server]`;
+        refs.placeholder.textContent = `[ERROR — ${SEEKDEEP_BASE}${endpoint}\n${msg}]`;
+        refs.placeholder.style.whiteSpace = 'pre-line';
+        refs.placeholder.style.textAlign = 'center';
+        refs.placeholder.style.fontSize = '11px';
       } finally {
         genBtn.disabled = false;
         regenBtn.disabled = false;
@@ -3030,7 +3356,7 @@ const SEEKDEEP_BASE = (function() {
       if (!lastImageUrl) return;
       const a = document.createElement('a');
       a.href = lastImageUrl;
-      a.download = `seekdeep-seed-${lastSeed || 'x'}.png`;
+      a.download = `seekdeep-${activeMode()}-${lastSeed || 'x'}.png`;
       a.click();
     });
   })();
