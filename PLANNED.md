@@ -86,6 +86,24 @@ Also fixed in the same pass (audit items resolvable without designer):
 - ✅ **E13 cBotVram placeholder** (`gui/chat.html` `cLIVE.apply()`) — added `else { set('cBotVram', 'cpu · no gpu'); }` so the static "14.2 / 24 GB" placeholder is overwritten when `/health.gpu` is absent (CPU-only mode). Was lying to the user about VRAM that doesn't exist.
 - ✅ **E12 sw.js relative-paths comment** — added a path-convention note to the file header so anyone moving sw.js knows to adjust SHELL entries.
 
+#### Tauri sidecar v2 — shipped 2026-05-25 (commit `06ad685`)
+
+Auto-spawn `local_ai_server.py` on .exe launch. The user double-clicks the installer, then double-clicks SeekDeep, and the playground comes up — no `setup_local.ps1` ritual, no "open install dir" anywhere in the UI. Architecture:
+
+- **Bundled in the installer** (resources): `local_ai_server.py`, `gui_endpoints.py`, `warmup_local_cache.py`, `package.json`, `requirements-local.txt`, `.env.default`, `gui/**/*`. Our code only — no Python runtime, no pre-installed deps.
+- **System dependency** (user installs once, surfaced in-app via the loading page): Python 3.11+. If missing, "Get Python 3.11+ ↗" button on the loading overlay opens python.org.
+- **In-app pip install**: "Install Python deps" button on the loading overlay runs `python -m pip install --user -r requirements-local.txt` via a Tauri command. No terminal, no manual filesystem ops.
+- **First-run extraction**: on every version change, Rust copies bundled resources to `%APPDATA%/SeekDeep/app/` (POSIX equivalent on mac/linux). User-mutable `data/` + `outputs/` subdirs are preserved across updates via file-by-file copy (not recursive blat).
+- **Spawn**: `python local_ai_server.py` with cwd = app_data, stdout/stderr to `%APPDATA%/SeekDeep/logs/server.log`. Killed on window-close + app-exit.
+- **No-op if external server is running**: probes :7865 first; if alive (e.g. user has the dev `.bat` running), the Tauri shell just navigates the WebView to chat.html without spawning.
+- **Loading UX**: `gui/seekdeep-loading.html` polls /health every 500ms with stage-aware hints ("STILL PROBING · cold model imports may take a minute" at 30s). After 60s of failure, shows three in-app buttons: Retry / Install Python deps / Get Python 3.11+ ↗.
+
+Deferred to a later pass:
+- **Bundled Python runtime**: not in scope. Python stays a system dep per Nathan's call (clean separation of "ours" vs "user's environment").
+- **Auto-download heavy ML deps** (torch / transformers / diffusers ~2 GB on first chat or image use). Currently the user has to install them via the same pip install path. Could be promoted to "first-use download" with consent UI later.
+- **System tray + minimize-to-tray**.
+- **Code signing** for Windows SmartScreen + macOS Gatekeeper.
+
 ---
 
 **B. Universal "Archive (SeekDeep)" surface — context menu + reply-with-"archive"** — make EVERY image in chat archivable, not just bot-generated ones. Two trigger surfaces, zero channel noise by default.
