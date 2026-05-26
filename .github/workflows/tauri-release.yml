@@ -51,21 +51,27 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Delete prior nightly assets
+      - name: Delete prior nightly release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Delete the ENTIRE nightly release (not just its assets) so
+          # tauri-action recreates it with the current releaseBody copy.
+          # When the release already exists, tauri-action only uploads
+          # new assets — it does NOT update the release body, which means
+          # the very first nightly's description sticks forever even after
+          # we edit the workflow YAML. Deleting + recreating is the only
+          # reliable way to keep the body in sync.
+          #
+          # We delete the underlying tag too (`--cleanup-tag`) so a fresh
+          # release.create includes a fresh tag at the new commit SHA.
+          # Existing tag refs like `nightly` on user machines still
+          # `git fetch` cleanly because the tag is recreated within ~10
+          # minutes of the matrix building.
           if gh release view nightly --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Found existing nightly release; clearing assets..."
-            gh release view nightly --repo "${{ github.repository }}" \
-              --json assets --jq '.assets[].name' \
-              | while IFS= read -r asset; do
-                  [ -n "$asset" ] || continue
-                  echo "  · delete-asset $asset"
-                  gh release delete-asset nightly "$asset" \
-                    --repo "${{ github.repository }}" --yes || true
-                done
+            echo "Deleting existing nightly release + tag…"
+            gh release delete nightly --repo "${{ github.repository }}" --yes --cleanup-tag || true
           else
             echo "No existing nightly release — nothing to clean."
           fi

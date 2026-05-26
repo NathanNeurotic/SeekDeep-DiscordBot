@@ -53,8 +53,13 @@
   async function fetchVersion() {
     if (state.fetched) return state.version;
     state.fetched = true;
-    const base = (location.protocol === 'http:' || location.protocol === 'https:')
-      ? location.origin : 'http://127.0.0.1:7865';
+    // Resolver lives in nav.js; falls back to inline detection that
+    // accounts for Tauri 2 on Windows (http://tauri.localhost origin).
+    const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function')
+      ? window.SeekDeepResolveBase()
+      : ((typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost'))
+          ? 'http://127.0.0.1:7865'
+          : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
     try {
       const r = await fetch(base + '/health', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
       if (r.ok) {

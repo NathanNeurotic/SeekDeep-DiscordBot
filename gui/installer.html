@@ -1244,8 +1244,14 @@ MODEL_ROUTER_LOG=true</pre>
   // Step config
   // Smart BASE — when served from local_ai_server.py via /gui mount, use same origin.
 // When opened directly (file://) or from another origin, fall back to :7865.
+// Tauri 2 on Windows serves bundled pages from http://tauri.localhost, so we
+// must NOT use location.origin in that case (would point at the WebView itself).
 const SEEKDEEP_BASE = (function() {
   if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+  if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+  if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') {
+    return 'http://127.0.0.1:7865';
+  }
   const sameOrigin = window.location.protocol === 'http:' || window.location.protocol === 'https:';
   if (sameOrigin && window.location.host) {
     // Drop the /gui prefix if present

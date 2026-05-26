@@ -67,9 +67,20 @@
   }
 
   function wsBase() {
-    const origin = (location.protocol === 'http:' || location.protocol === 'https:')
-      ? location.origin
-      : 'http://127.0.0.1:7865';
+    // Tauri 2 on Windows serves bundled pages from http://tauri.localhost.
+    // location.origin would be that, not the local AI server — force
+    // 127.0.0.1:7865 in Tauri context. Delegates to nav.js's resolver
+    // when present so the detection lives in one place.
+    let origin;
+    if (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') {
+      origin = window.SeekDeepResolveBase();
+    } else if (typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')) {
+      origin = 'http://127.0.0.1:7865';
+    } else {
+      origin = (location.protocol === 'http:' || location.protocol === 'https:')
+        ? location.origin
+        : 'http://127.0.0.1:7865';
+    }
     return origin.replace(/^http/, 'ws');
   }
 

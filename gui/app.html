@@ -2234,8 +2234,11 @@
     const preview = document.getElementById('archNotifyPreview');
     if (!mode || !selfTog) return;
 
-    const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
-      ? location.origin : 'http://127.0.0.1:7865';
+    const BASE = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function')
+      ? window.SeekDeepResolveBase()
+      : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')
+          ? 'http://127.0.0.1:7865'
+          : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
 
     let state = { mode: 'silent', notify_self: false, sent_24h: 0 };
 
@@ -3468,7 +3471,7 @@ root.render(<App />);
     r.innerHTML = '⋯ <span style="color:var(--cyan-1)">POST /model/install</span> · downloading and probing …';
     nextBtn.disabled = true;
     try {
-      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
       const res = await fetch(base + '/model/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3556,7 +3559,7 @@ root.render(<App />);
       const backend = row.dataset.backend || 'hf';
       if (!confirm(`Remove ${model}?\nBackend: ${backend.toUpperCase()}\nRole: ${role || '(unassigned)'}`)) return;
       try {
-        const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+        const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
         const r = await fetch(base + '/model/uninstall', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3628,7 +3631,7 @@ root.render(<App />);
   }
 
   function probeHealth() {
-    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
     fetch(base + '/health', { signal: AbortSignal.timeout(3000), cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
       .then(applyHealth)
@@ -3725,7 +3728,7 @@ root.render(<App />);
   async function pollOnce() {
     if (liveMode || paused) return;
     try {
-      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
       const r = await fetch(base + '/logs/tail?n=20', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
       if (!r.ok) return;
       const data = await r.json().catch(() => null);

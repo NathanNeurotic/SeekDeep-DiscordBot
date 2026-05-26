@@ -17,9 +17,22 @@
   (function installTokenInterceptor() {
     const TOKEN_HEADER = 'X-SeekDeep-Token';
     const origFetch = window.fetch.bind(window);
+    // Tauri 2 on Windows serves bundled pages from http://tauri.localhost,
+    // so location.origin would be 'http://tauri.localhost' — pointing the
+    // GUI at its own WebView instead of the local AI server. Always force
+    // 127.0.0.1:7865 when we detect Tauri context. Stash a single resolver
+    // on window so every other consumer (events.js, version.js, stats.js,
+    // ml-deps.js, model-install.js, playground.js, page inline scripts)
+    // can share it without duplicating the detection.
     function getBase() {
+      if (typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')) {
+        return 'http://127.0.0.1:7865';
+      }
       return (location.protocol === 'http:' || location.protocol === 'https:')
         ? location.origin : 'http://127.0.0.1:7865';
+    }
+    if (typeof window !== 'undefined' && !window.SeekDeepResolveBase) {
+      window.SeekDeepResolveBase = getBase;
     }
     let cached = null;          // '' = tried and got nothing; null = not tried yet
     let inflight = null;        // promise of in-flight /token fetch
@@ -671,7 +684,7 @@
     promptSave.disabled = true;
     promptSave.textContent = '⋯ saving…';
     try {
-      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
       const r = await fetch(base + '/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -697,7 +710,7 @@
     close: promptClose,
     // Convenience: collect by key names. Looks up descriptions from /config/status.
     collect: async (keys, opts) => {
-      const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+      const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
       let meta = null;
       try {
         const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
@@ -717,7 +730,7 @@
   // CPU-only mode banner — surfaces when /health says no CUDA.
   // Auto-detect on load, refresh every minute in case a GPU comes online.
   async function checkGpuMode() {
-    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
     try {
       const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
       if (!r.ok) return;
@@ -746,7 +759,7 @@
   }
   // Auto-trigger missing-required-keys modal on first load if config/status flags it
   async function checkConfigStatus() {
-    const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
     try {
       const r = await fetch(base + '/config/status', { signal: AbortSignal.timeout(3000) });
       if (!r.ok) return;
@@ -877,7 +890,7 @@
     setTimeout(async () => {
       if (window.SeekDeepEvents) return;
       try {
-        const base = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+        const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
         const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
         setLiveState(r.ok ? 'live' : 'offline');
       } catch { setLiveState('offline'); }

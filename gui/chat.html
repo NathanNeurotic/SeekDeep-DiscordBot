@@ -619,8 +619,15 @@
 
 <script>
   // Smart BASE — same-origin when served via /gui mount, else 127.0.0.1:7865.
+  // Tauri 2 on Windows serves bundled pages from http://tauri.localhost, so
+  // we must NOT use location.origin in that case (would point at the WebView
+  // itself). nav.js stashes a shared resolver we prefer if loaded.
   const SEEKDEEP_BASE = (function () {
     if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') {
+      return 'http://127.0.0.1:7865';
+    }
     const sameOrigin = window.location.protocol === 'http:' || window.location.protocol === 'https:';
     if (sameOrigin && window.location.host) return window.location.origin;
     return 'http://127.0.0.1:7865';

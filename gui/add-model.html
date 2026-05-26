@@ -768,8 +768,13 @@
 (function () {
   const $  = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-  const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
-    ? location.origin : 'http://127.0.0.1:7865';
+  // Tauri 2 on Windows serves bundled pages from http://tauri.localhost.
+  // Force 127.0.0.1:7865 in Tauri context; otherwise same-origin/fallback.
+  const BASE = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function')
+    ? window.SeekDeepResolveBase()
+    : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')
+        ? 'http://127.0.0.1:7865'
+        : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
 
   const state = {
     step: 1,

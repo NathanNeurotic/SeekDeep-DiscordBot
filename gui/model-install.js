@@ -29,6 +29,15 @@
   window.__seekdeepModelInstallLoaded = true;
 
   const BASE = (function () {
+    // Tauri 2 on Windows serves bundled pages from http://tauri.localhost.
+    // Force 127.0.0.1:7865 when running inside Tauri; nav.js stashes a
+    // shared resolver we prefer if available.
+    if (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') {
+      return window.SeekDeepResolveBase();
+    }
+    if (typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')) {
+      return 'http://127.0.0.1:7865';
+    }
     if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
     return 'http://127.0.0.1:7865';
   })();

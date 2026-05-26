@@ -333,8 +333,18 @@
      Once all four phases are green, redirects to chat.html (or whatever
      ?next= param is set). */
   (function () {
-    const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
-      ? location.origin : 'http://127.0.0.1:7865';
+    // Tauri 2 on Windows serves the bundled splash from http://tauri.localhost.
+    // location.origin would be that — pointing /health probes at the WebView
+    // itself instead of the local AI server. Force 127.0.0.1:7865 in Tauri
+    // context. The loading overlay runs BEFORE nav.js so we can't rely on
+    // window.SeekDeepResolveBase here; inline the detection.
+    const BASE = (function () {
+      if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') {
+        return 'http://127.0.0.1:7865';
+      }
+      return (location.protocol === 'http:' || location.protocol === 'https:')
+        ? location.origin : 'http://127.0.0.1:7865';
+    })();
     const params = new URLSearchParams(location.search);
     const NEXT = params.get('next') || 'chat.html';
 
