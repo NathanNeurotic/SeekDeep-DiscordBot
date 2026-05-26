@@ -1808,10 +1808,17 @@
         <div class="rule"></div>
 
         <h2 style="font-size: 18px; margin-bottom: 14px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--hull-3);">Built-in stacks</h2>
-        <div class="cards-3">
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">code_block_reactions</div><div class="tiny muted">stacks 💻 + 📦 on fenced code blocks</div></div><div class="toggle on"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">first_post_welcome</div><div class="tiny muted">stacks 👋 on a user's first message</div></div><div class="toggle on"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">archive_shortcut</div><div class="tiny muted">📂 to archive most recent image</div></div><div class="toggle on"></div></div>
+        <!-- 5 built-in keys per @SeekDeep reactrule builtin <key> on|off.
+             Toggles reflect data/auto-reactions.json[guild].builtins[key].
+             Use the Discord command to flip per-guild; this is a read-only
+             status grid. -->
+        <div class="cards-3" id="builtinReactStacks">
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="long_message"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">long_message</div><div class="tiny muted">🧶 on messages over the length threshold</div></div><div class="toggle" data-builtin-toggle="long_message"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="forwarded"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">forwarded</div><div class="tiny muted">📨 on forwarded messages (messageSnapshots)</div></div><div class="toggle" data-builtin-toggle="forwarded"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="code_block"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">code_block</div><div class="tiny muted">💻 on messages containing fenced code blocks</div></div><div class="toggle" data-builtin-toggle="code_block"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="image_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">image_only</div><div class="tiny muted">🖼 on messages whose only content is an image attachment</div></div><div class="toggle" data-builtin-toggle="image_only"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="link_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">link_only</div><div class="tiny muted">🔗 on messages whose only content is a URL</div></div><div class="toggle" data-builtin-toggle="link_only"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: center; align-items: center; opacity:0.6;"><div style="text-align:center;"><div class="tiny muted" style="font-family: var(--font-mono); letter-spacing: 0.08em;">▸ toggle with</div><div style="font-family: var(--font-mono); color:var(--cyan-1); margin-top:2px;">@SeekDeep reactrule builtin &lt;key&gt; on|off</div></div></div>
         </div>
       </section>
 
@@ -1989,9 +1996,21 @@
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const wrap = await r.json();
         const data = wrap.data || wrap;
+        // Paint the built-in toggles regardless of whether per-guild custom
+        // rules exist. The normalizer aggregates each builtin's enabled
+        // state across guilds (any guild has it on → on).
+        const builtins = data.builtins || {};
+        document.querySelectorAll('[data-builtin-toggle]').forEach(t => {
+          const key = t.getAttribute('data-builtin-toggle');
+          const b = builtins[key];
+          if (!b) { t.classList.remove('on'); return; }
+          t.classList.toggle('on', b.enabled === true);
+          const guildsOn = Array.isArray(b.guilds_on) ? b.guilds_on : [];
+          t.title = (b.enabled ? 'ON' : 'OFF') + (guildsOn.length ? ' in ' + guildsOn.length + ' guild' + (guildsOn.length === 1 ? '' : 's') : '') + (b.threshold ? ' · threshold ' + b.threshold : '');
+        });
         const rules = data.rules || (Array.isArray(data) ? data : []);
         if (!rules.length) {
-          list.innerHTML = '<div style="padding:20px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--hull-3); letter-spacing:0.06em;">▸ no rules defined · use <span style="color:var(--cyan-1);">@SeekDeep reactrule add</span> to create one</div>';
+          list.innerHTML = '<div style="padding:20px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--hull-3); letter-spacing:0.06em;">▸ no custom rules defined · use <span style="color:var(--cyan-1);">@SeekDeep reactrule add &lt;emoji&gt; when &lt;pattern&gt;</span> in Discord to create one</div>';
           return;
         }
         list.innerHTML = '';
@@ -2609,6 +2628,7 @@ const SEEKDEEP_BASE = (function() {
       if (usedGB != null && totalGB != null) {
         const txt = `${usedGB.toFixed(1)} / ${totalGB.toFixed(0)} GB`;
         this.setText('sb-vram', txt);
+        this.setText('svcVram', txt);  // launcher card ai-server VRAM cell
         this.setText('gpuVramUsed', usedGB.toFixed(1));
         this.setText('gpuVramTotal', totalGB.toFixed(1));
         const bar = document.getElementById('gpuVramBar');
@@ -2617,6 +2637,7 @@ const SEEKDEEP_BASE = (function() {
         // No CUDA / torch missing. Don't leave "— / —" hanging; tell the
         // user the truth ("CPU mode") so they don't stare at empty fields.
         this.setText('sb-vram', 'CPU');
+        this.setText('svcVram', 'CPU');
       }
       // Models pane — mark loaded + pinned roles.
       // /health returns loaded_chat_role (not "loaded") + a gpu.loaded
@@ -4576,15 +4597,19 @@ root.render(<App />);
     window.SeekDeepEvents.on('model.evicted', (d) => {
       if (d.role) setRowState(d.role, 'CACHED', '');
     });
-    // Footer sb-queue: tracks queue.depth events from the AI server's
-    // in-flight middleware. Was hardcoded "0" forever even when the
-    // server was processing requests. Sum chat+image+vision.
+    // Footer sb-queue + launcher card svcQueue: track queue.depth events
+    // from the AI server's in-flight middleware. Both were hardcoded "0"
+    // forever even when the server was processing requests. Sum chat+
+    // image+vision.
     const sbQueue = document.getElementById('sb-queue');
-    if (sbQueue) {
+    const svcQueue = document.getElementById('svcQueue');
+    if (sbQueue || svcQueue) {
       window.SeekDeepEvents.on('queue.depth', (d) => {
         if (!d) return;
         const n = (d.chat || 0) + (d.image || 0) + (d.vision || 0);
-        sbQueue.textContent = String(n);
+        const txt = String(n);
+        if (sbQueue)  sbQueue.textContent = txt;
+        if (svcQueue) svcQueue.textContent = txt;
       });
     }
     return true;

@@ -683,12 +683,19 @@ def _normalize_server_stats(raw: Any) -> dict:
 def _normalize_auto_reactions(raw: Any) -> dict:
     """
     Bot schema  : {guilds:{<gid>:{rules:[{id,emoji,pattern,scope,target,enabled,...}],
-                                  builtins:{...}}}}
-    GUI expects : {rules:[{id,emoji,pattern,channel?,user?,enabled,hits}]}
+                                  builtins:{<key>:{enabled,emoji,threshold?}}}}}
+    GUI expects : {rules:[{id,emoji,pattern,channel?,user?,enabled,hits}],
+                   builtins:{<key>:{enabled,emoji,threshold?,guilds_on:[...]}}}
+
+    builtins are surfaced as a per-key OR across guilds (enabled = any
+    guild has it on) so the Control Center can paint the global default
+    state. The full per-guild grid would need a guild selector — not yet
+    wired in the GUI.
     """
     if not isinstance(raw, dict):
-        return {"rules": []}
+        return {"rules": [], "builtins": {}}
     rules_out: list[dict[str, Any]] = []
+    builtins_out: dict[str, dict[str, Any]] = {}
     for gid, g in (raw.get("guilds") or {}).items():
         if not isinstance(g, dict):
             continue
@@ -710,7 +717,21 @@ def _normalize_auto_reactions(raw: Any) -> dict:
             elif scope == "user" and target:
                 flat["user"] = str(target)
             rules_out.append(flat)
-    return {"rules": rules_out}
+        for key, b in (g.get("builtins") or {}).items():
+            if not isinstance(b, dict):
+                continue
+            agg = builtins_out.setdefault(str(key), {
+                "enabled": False, "emoji": b.get("emoji") or "?",
+                "threshold": b.get("threshold"), "guilds_on": [],
+            })
+            if b.get("enabled") is not False:
+                agg["enabled"] = True
+                agg["guilds_on"].append(gid)
+            if b.get("emoji") and not agg.get("emoji"):
+                agg["emoji"] = b["emoji"]
+            if b.get("threshold") and not agg.get("threshold"):
+                agg["threshold"] = b["threshold"]
+    return {"rules": rules_out, "builtins": builtins_out}
 
 
 def _normalize_archive_snapshot(raw: Any) -> dict:
