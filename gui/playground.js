@@ -161,10 +161,18 @@
 
     const typing = renderTyping();
     try {
+      // Best-effort persona pickup so /chat can bump the per-persona
+      // counter in the Stats pane. chat.html stores it on the body via
+      // its sidebar tweaks panel; if the field doesn't exist, the server
+      // counts it as 'unknown' which is still useful.
+      const persona = (document.body.dataset.persona
+        || (document.getElementById('cBotPersona')?.textContent || '').trim().toLowerCase()
+        || '').replace(/[^a-z0-9_-]/g, '').slice(0, 64);
       const r = await postJSON('/chat', {
         prompt,
         messages: history,
         role: 'default_chat',
+        persona,
       });
       if (!r.ok) {
         typing.text.innerHTML = '<span class="err">[' + r.status + ']</span> ' +

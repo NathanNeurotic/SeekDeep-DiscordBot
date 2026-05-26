@@ -436,6 +436,13 @@ import threading as _seekdeep_req_threading
 _REQ_LOCK = _seekdeep_req_threading.Lock()
 _REQ_TOTAL = 0
 _REQ_BY_FAMILY: dict[str, int] = {}
+# Web-playground chat breakdowns. Bot-side counts live in
+# data/server-stats.json (written by index.js); these in-memory counters
+# capture the web-playground side so /stats/snapshot can merge both into
+# one "Persona usage" / "Chat model usage" view. Reset on server restart,
+# which is fine — these are complementary to the persistent bot totals.
+_WEB_CHAT_BY_PERSONA: dict[str, int] = {}
+_WEB_CHAT_BY_MODEL: dict[str, int] = {}
 # Last 24h of requests as (epoch_ts, latency_ms, path_family) tuples,
 # capped at 20k entries (~13/sec sustained for a day, well above realistic).
 _REQ_RECENT: _seekdeep_collections.deque = _seekdeep_collections.deque(maxlen=20_000)
@@ -464,6 +471,21 @@ async def _seekdeep_count_requests(request, call_next):
             _REQ_RECENT.append((t0, elapsed_ms, family))
     return response
 
+def _seekdeep_bump_web_chat(persona: str, model_id: str) -> None:
+    """Bump web-playground chat counters by persona + model_id. Called from
+    /chat after a successful generation. Empty strings collapse to 'unknown'
+    so we always see SOME distribution. AUD-006 follow-on (sufficient for
+    the Stats pane to show non-empty breakdowns from web-playground use)."""
+    p = (persona or "").strip().lower()[:64] or "unknown"
+    m = (model_id or "").strip().lower()[:128] or "unknown"
+    # Collapse to last path segment so meta-llama/Llama-3.1-8B-Instruct
+    # shares a bucket with the same role's local-cached version.
+    m_short = m.rsplit("/", 1)[-1]
+    with _REQ_LOCK:
+        _WEB_CHAT_BY_PERSONA[p] = _WEB_CHAT_BY_PERSONA.get(p, 0) + 1
+        _WEB_CHAT_BY_MODEL[m_short] = _WEB_CHAT_BY_MODEL.get(m_short, 0) + 1
+
+
 def _seekdeep_req_stats() -> dict:
     """Snapshot of the counters for /stats/snapshot consumers. Computes
     p50/p95 latency from the in-memory deque, plus 24h-window request
@@ -474,6 +496,8 @@ def _seekdeep_req_stats() -> dict:
         recent = list(_REQ_RECENT)
         total = _REQ_TOTAL
         by_family_lifetime = dict(_REQ_BY_FAMILY)
+        web_persona = dict(_WEB_CHAT_BY_PERSONA)
+        web_model   = dict(_WEB_CHAT_BY_MODEL)
         started = _REQ_STARTED_AT
     # Filter to 24h window
     last_24h = [r for r in recent if r[0] >= day_ago]
@@ -489,6 +513,11 @@ def _seekdeep_req_stats() -> dict:
         "requests_24h":     len(last_24h),
         "by_family_lifetime": by_family_lifetime,
         "by_family_24h":      by_family_24h,
+        # Web-playground chat breakdowns. /stats/snapshot merges these into
+        # bot.by_persona / bot.by_chat_model so the dashboard reflects total
+        # chat activity across both surfaces.
+        "web_chat_by_persona": web_persona,
+        "web_chat_by_model":   web_model,
         "latency_p50_ms":   round(p50, 1) if p50 is not None else None,
         "latency_p95_ms":   round(p95, 1) if p95 is not None else None,
     }
@@ -1675,6 +1704,9 @@ class ChatRequest(BaseModel):
     max_new_tokens: int   = Field(default=700, ge=32, le=4096)
     temperature: float    = Field(default=0.35, ge=0.0, le=2.0)
     role: str             = Field(default="default_chat", max_length=64)
+    # Optional metadata so the web playground can feed persona breakdowns
+    # in the Stats pane without going through the bot. Empty/None is fine.
+    persona: str          = Field(default="", max_length=64)
 
 
 class ImageRequest(BaseModel):
@@ -3145,6 +3177,12 @@ def chat(req: ChatRequest):
 
     try:
         answer, resolved_role, model_id = _run_chat_generation(req, requested_role)
+        # Bump web-playground breakdowns so the Stats pane shows non-empty
+        # persona/model usage even on installs that don't use the Discord bot.
+        try:
+            _seekdeep_bump_web_chat(getattr(req, 'persona', '') or '', model_id or resolved_role)
+        except Exception:
+            pass
         return {
             "text": answer or "(empty response)",
             "model_role": resolved_role,

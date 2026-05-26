@@ -1365,6 +1365,19 @@ def register_gui_endpoints(
                 bot["by_chat_model"]  = chat_model_agg
             except Exception as e:
                 bot["error"] = str(e)
+        # Merge web-playground chat counters into the bot's by_persona /
+        # by_chat_model so the dashboard breakdowns reflect total chat
+        # activity (Discord bot + web playground). AI server may be
+        # unimportable in standalone test mode — soft-fail.
+        try:
+            import local_ai_server as _lai
+            ai_stats = _lai._seekdeep_req_stats()
+            for k, v in (ai_stats.get("web_chat_by_persona") or {}).items():
+                bot["by_persona"][str(k)] = bot["by_persona"].get(str(k), 0) + int(v or 0)
+            for k, v in (ai_stats.get("web_chat_by_model") or {}).items():
+                bot["by_chat_model"][str(k)] = bot["by_chat_model"].get(str(k), 0) + int(v or 0)
+        except Exception:
+            pass
         out["bot"] = bot
 
         # Last-30-day buckets (newest last) with gap-filling
