@@ -132,12 +132,12 @@
     <main class="main">
       <div class="hero">
         <h1 class="live">Changelog</h1>
-        <div class="sub">▸ release history · v10.1 through v10.35</div>
+        <div class="sub">▸ release history · v10.1 through latest patch series</div>
       </div>
       <div class="stats">
         <div class="stat"><div class="lbl">RELEASES</div><div class="v" id="stReleases" data-stat-releases>—</div></div>
         <div class="stat"><div class="lbl">CURRENT</div><div class="v" id="stCurrent" data-version>v10.35</div></div>
-        <div class="stat"><div class="lbl">SMOKE TESTS</div><div class="v" data-stat-smoke_tests>274</div></div>
+        <div class="stat"><div class="lbl">SMOKE TESTS</div><div class="v" data-stat-smoke_tests>565</div></div>
         <div class="stat"><div class="lbl">FIRST GIT</div><div class="v" style="font-size:18px;">v10.0</div></div>
       </div>
       <div class="timeline" id="timeline"></div>
@@ -148,6 +148,17 @@
 
 <script>
 const RELEASES = [
+  { v: 'v10.35.1-6', kind: 'fresh', tagline: 'post-audit stabilization wave · stale-server guard · cache death · launcher/installer honesty', tags: ['fix','perf','feat'], items: [
+    '<strong>Stale-server guard (10.35.3):</strong> Tauri sidecar boot now does a <span class="mono">GET /health</span> identity check on :7865 instead of a raw TCP probe. Mismatched version → auto-kill the stale PID and respawn fresh. Was the root cause of "I installed v10.35.x but the title bar shows v10.35.0" — port-bound stale server was being reused forever.',
+    '<strong>GUI cache death (10.35.2):</strong> server stamps <span class="mono">Cache-Control: no-store</span> on every .html/.js/.css/.json under /gui. Service worker rewritten as a self-destruct (unregisters + wipes caches on next visit). Updates now land on page reload, no "clear site data" ever needed.',
+    '<strong>Reconnect tightening (10.35.4):</strong> events.js WS backoff capped 30s → 5s. nav.js token interceptor stops permanently caching empty strings after a transient /token failure. launcher.js retries network errors once before showing the toast. New <span class="mono">_probing</span> event keeps the LIVE pill from sticking to OFFLINE during sidecar respawns.',
+    '<strong>Installer page honesty (10.35.5):</strong> probeAiHealth timeout 1.2s → 6s (matches the ollama-probe stall). Tauri-skip banner moved out of step 1 so it persists across all 9 steps. Auto-runs System Check on load so red "install Node" dots flip green automatically for Tauri users.',
+    '<strong>Docker Try-start (10.35.6):</strong> new <span class="mono">try_start_docker_desktop</span> Tauri command probes <span class="mono">docker info</span>/<span class="mono">--version</span> and spawns Docker Desktop if installed but not running, instead of dead-ending at "Install Docker" for users who clearly already have it.',
+    '<strong>GPU probe fix (10.35.6):</strong> Installer was checking <span class="mono">gpu.detected</span> (doesn\'t exist) so CPU-only installs falsely showed green "detected (no detail)". Now honors <span class="mono">gpu.available === false</span> with "no GPU · CPU mode" yellow.',
+    '<strong>Last "MOCK" label sweep:</strong> killed remaining "MOCK · STANDALONE" / "MOCK (server offline)" / "LOCAL-MOCK" / "from MOCK to LIVE" copy across app.html, api.html, docs.html, tour.html — every state is now LIVE / PROBING / OFFLINE.',
+    '<strong>Codex audit fixes:</strong> Discord bot-wide allowedMentions:{parse:[]} (no more model output pinging @everyone); GUI XSS hardened across 6 renderers; sensitive read endpoints token-gated; b64 size caps + consistent 400/413; image filename collisions via time_ns; persona create/remove/list admin commands.',
+    '<strong>Image upload UX:</strong> drop an image + type your question → message becomes the prompt FOR the image automatically. No /vision command needed.',
+  ]},
   { v: 'v10.35', kind: 'fresh', tagline: 'archive integrity, prompt refinement reliability, image-reply intent', tags: ['feat','fix','perf'], items: [
     'Archive writes include stable <span class="mono">Archive Key</span> · dedupe across retries, restarts, and reaction shortcuts.',
     'Prompt refinement pinned to <span class="mono">default_chat</span> · reports AI-refine fallback reasons, clamps SDXL prompts.',

@@ -579,10 +579,13 @@ const DATA = [
     ]
   },
   {
-    id: 'admin', title: 'Admin / customization', meta: '10 commands',
-    note: 'Personas: <span class="mono">neurotic</span>, <span class="mono">unsettling</span>, <span class="mono">clinical</span>, <span class="mono">chaotic</span>. Memory presets stack on top of persona — <span class="mono">brief</span>, <span class="mono">expert</span>, <span class="mono">no-emoji</span>, <span class="mono">formal</span>, <span class="mono">casual</span>.',
+    id: 'admin', title: 'Admin / customization', meta: '13 commands',
+    note: 'Personas: built-in (<span class="mono">neurotic</span>, <span class="mono">unsettling</span>, <span class="mono">clinical</span>, <span class="mono">chaotic</span>) plus any custom personas you create with <span class="mono">persona create</span>. Memory presets stack on top of persona — <span class="mono">brief</span>, <span class="mono">expert</span>, <span class="mono">no-emoji</span>, <span class="mono">formal</span>, <span class="mono">casual</span>.',
     cmds: [
-      { syntax: '@SeekDeep persona [channel|server] [neurotic|unsettling|clinical|chaotic|reset|show]', desc: 'Set or display the persona.', type: 'mention', perm: 'Admin' },
+      { syntax: '@SeekDeep persona [channel|server] [neurotic|unsettling|clinical|chaotic|<custom>|reset|show]', desc: 'Set or display the persona. Accepts any built-in slug or one you defined via <span class="mono">persona create</span>.', type: 'mention', perm: 'Admin' },
+      { syntax: '@SeekDeep persona create <slug> <tone description>', desc: 'Define a custom persona. Slug 2-32 chars, [a-z0-9_-]. Tone 2-280 chars, becomes the system-prompt flavor line. Stored in <span class="mono">data/custom-personas.json</span>.', type: 'mention', perm: 'Admin' },
+      { syntax: '@SeekDeep persona remove <slug>', desc: 'Delete a custom persona. Channel/guild overrides pointing at it fall back to the env default on next message.', type: 'mention', perm: 'Admin' },
+      { syntax: '@SeekDeep persona list', desc: 'Show built-in + custom personas with their tone descriptions.', type: 'mention', perm: 'Everyone' },
       { syntax: '/persona', desc: 'Open the persona editor modal (interactive popup).', type: 'slash', perm: 'Manage Guild' },
       { syntax: '@SeekDeep memory preset add <preset-name>', desc: 'Layer a behavior preset.', type: 'mention', perm: 'Everyone' },
       { syntax: '@SeekDeep memory preset list', desc: 'Show your active presets.', type: 'mention', perm: 'Everyone' },
