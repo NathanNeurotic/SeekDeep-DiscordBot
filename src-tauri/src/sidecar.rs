@@ -297,35 +297,74 @@ pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Chi
     Ok(child)
 }
 
-/// Run `python -m pip install --user -r requirements-local.txt` synchronously
-/// and capture combined output. Called from the install_python_deps command
+/// Run `python -m pip install -r requirements-local.txt` and capture
+/// combined output. Called from the install_python_deps Tauri command
 /// when the user clicks "Install Python deps" on the loading screen.
 ///
-/// We use --user so the install doesn't need admin / sudo. The deps go to the
-/// user's site-packages which is shared across all SeekDeep invocations on
-/// this machine (a feature, not a bug).
+/// Flag selection:
+///   * `--user` is ONLY safe for system-Python — it puts site-packages
+///     in `%APPDATA%\Python\PythonXY\site-packages`. For a venv python
+///     it's an error (pip refuses to mix venv + user installs). We
+///     detect a venv by looking for `.venv` in the path and drop the
+///     flag in that case.
+///   * `--no-cache-dir` sidesteps the common "WARNING: Cache entry
+///     deserialization failed" failure mode on machines where the pip
+///     wheel cache got corrupted. We're installing 7 small wheels;
+///     re-fetching each is cheap vs. a mysterious cache-driven fail.
+///   * `--disable-pip-version-check` keeps the output clean.
+///
+/// Output is also written to `<log_dir>/pip.log` (best-effort) so the
+/// "View server log" button can surface it even when the loading-page
+/// status line truncates the inline display.
 pub fn pip_install(python: &Path, runtime: &Path) -> Result<String, String> {
     let req = runtime.join("requirements-local.txt");
+
+    // Venv detection. `.venv` segment anywhere in the python path means
+    // we're already inside one; --user would error.
+    let py_str = python.to_string_lossy().to_lowercase();
+    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+
+    let mut args: Vec<&str> = vec!["-m", "pip", "install", "--upgrade",
+                                    "--no-cache-dir", "--disable-pip-version-check", "-r"];
+    if !in_venv {
+        args.insert(3, "--user");
+    }
+
     let out = Command::new(python)
-        .args([
-            "-m",
-            "pip",
-            "install",
-            "--user",
-            "--upgrade",
-            "-r",
-        ])
+        .args(&args)
         .arg(&req)
         .current_dir(runtime)
         .output()
         .map_err(|e| format!("invoke pip: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let combined = format!("---STDOUT---\n{stdout}\n---STDERR---\n{stderr}");
+    let combined = format!(
+        "$ {} {} {}\n\n---STDOUT---\n{}\n---STDERR---\n{}\n",
+        python.display(),
+        args.join(" "),
+        req.display(),
+        stdout, stderr,
+    );
+
+    // Best-effort log dump for the View-server-log button.
+    if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
+        let _ = fs::create_dir_all(&log_dir);
+        let _ = fs::write(log_dir.join("pip.log"), &combined);
+    }
+
     if !out.status.success() {
-        return Err(format!("pip install failed (exit {}): {combined}", out.status));
+        return Err(combined);
     }
     Ok(combined)
+}
+
+/// Best-effort: derive a log dir adjacent to the runtime dir. Used by
+/// pip_install which doesn't have the AppHandle in scope. Falls back
+/// gracefully so a write-failure here doesn't break the install flow.
+fn app_log_dir_from_runtime(runtime: &Path) -> Result<PathBuf, String> {
+    // Runtime is <app_data_dir>/app — so logs is <app_data_dir>/logs.
+    let parent = runtime.parent().ok_or("runtime has no parent")?;
+    Ok(parent.join("logs"))
 }
 
 /// Status codes pushed to the loading page via the sidecar:status event.

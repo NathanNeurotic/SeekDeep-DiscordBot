@@ -506,7 +506,7 @@
         return;
       }
       setStatusLabel('INSTALLING', null);
-      setStage('pip install --user -r requirements-local.txt …');
+      setStage('pip install -r requirements-local.txt … (~30s)');
       try {
         await tauri.core.invoke('install_python_deps');
         setStage('deps installed · retrying boot…');
@@ -526,7 +526,21 @@
         run();
       } catch (err) {
         setStatusLabel('PIP FAILED', 'error');
-        setStage(String(err).slice(0, 80));
+        // Show full pip stdout/stderr in a scrollable region instead of
+        // truncating to 80 chars. The error string from Rust is the
+        // combined stdout + stderr with a leading invoked-command line.
+        setStage('pip exit ≠ 0 — full log below + saved to logs/pip.log');
+        let pre = document.getElementById('pipFullLog');
+        if (!pre) {
+          pre = document.createElement('pre');
+          pre.id = 'pipFullLog';
+          pre.style.cssText = 'margin: 14px auto 0; max-width: 540px; max-height: 280px; overflow:auto; background: rgba(0,0,0,0.45); border: 1px solid color-mix(in oklab, var(--bad) 35%, transparent); border-radius: var(--r-md); padding: 12px; text-align: left; font-family: var(--font-mono); font-size: 10.5px; color: var(--hull-2); white-space: pre-wrap; word-break: break-all; line-height: 1.5;';
+          // Insert above the phase ladder
+          const phases = document.getElementById('splashPhases');
+          if (phases && phases.parentNode) phases.parentNode.insertBefore(pre, phases);
+          else document.querySelector('.splash').appendChild(pre);
+        }
+        pre.textContent = String(err);
       }
     });
 
