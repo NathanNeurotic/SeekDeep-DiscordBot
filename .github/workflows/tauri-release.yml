@@ -84,7 +84,11 @@ jobs:
         include:
           - platform: ubuntu-22.04
             args: ''
-          - platform: windows-latest
+          # Pinned windows-2025 explicitly — GH Actions is redirecting
+          # 'windows-latest' to windows-2025-vs2026 starting 2026-06-15.
+          # Pinning sidesteps the auto-redirect + gives us reproducible
+          # builds across the migration window.
+          - platform: windows-2025
             args: ''
           - platform: macos-latest
             args: '--target universal-apple-darwin'
@@ -93,10 +97,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # v5 runs on Node.js 24. v4 still works but emits a deprecation
+        # warning since 2026-Q2 when GH Actions started forcing Node 24.
+        uses: actions/checkout@v5
 
       - name: Set up Node 20
-        uses: actions/setup-node@v4
+        # setup-node@v5 is the Node 24-based runner of this action;
+        # node-version is still 20 (what our app targets).
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
