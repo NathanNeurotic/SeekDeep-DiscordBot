@@ -784,8 +784,6 @@
             <div class="sub">Live read with thrashing detection. Updates every 2s.</div>
           </div>
           <div class="actions">
-            <button class="btn btn-ghost">Pause</button>
-            <button class="btn btn-ghost">Export CSV</button>
             <button class="btn">/unload all</button>
           </div>
         </div>
@@ -1542,10 +1540,7 @@
             <h1>Chat playground</h1>
             <div class="sub">Test chat roles &amp; personas without leaving the GUI. No Discord round-trip.</div>
           </div>
-          <div class="actions">
-            <button class="btn btn-ghost">Clear</button>
-            <button class="btn btn-ghost">Export transcript</button>
-          </div>
+          <div class="actions"></div>
         </div>
 
         <div class="cp-grid">
@@ -1591,24 +1586,20 @@
           <div class="cp-panel">
             <div class="eyebrow" style="margin-bottom: 12px;">Run diagnostics</div>
             <div style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.7;">
-              <div class="row" style="justify-content: space-between;"><span class="muted">last latency</span><span style="color:var(--cyan-1);">1.42s</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">tok/s</span><span style="color:var(--cyan-1);">184</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">prompt tokens</span><span>2,814</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">completion tokens</span><span>261</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">web search</span><span style="color:var(--cyan-1);">brave (4 src)</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">memory hit</span><span>12 entries</span></div>
-              <div class="row" style="justify-content: space-between;"><span class="muted">vram resident</span><span>5.1 GB</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">last latency</span><span style="color:var(--cyan-1);" id="cpLastLatency">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">tok/s</span><span style="color:var(--cyan-1);" id="cpTokRate">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">prompt tokens</span><span id="cpPromptTokens">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">completion tokens</span><span id="cpCompletionTokens">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">web search</span><span style="color:var(--cyan-1);" id="cpWebTrace">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">memory hit</span><span id="cpMemTrace">—</span></div>
+              <div class="row" style="justify-content: space-between;"><span class="muted">vram resident</span><span id="cpVramResident">—</span></div>
             </div>
 
             <div class="rule"></div>
 
             <div class="eyebrow" style="margin-bottom: 12px;">Routing trace</div>
-            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); line-height: 1.7;">
-              <div>→ classify intent: <span style="color: var(--cyan-1);">factual</span></div>
-              <div>→ web router: <span style="color: var(--cyan-1);">YES</span></div>
-              <div>→ model select: <span style="color: var(--cyan-1);">default_chat</span></div>
-              <div>→ persona: <span style="color: var(--cyan-1);">clinical</span></div>
-              <div>→ append sources: <span style="color: var(--cyan-1);">true</span></div>
+            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); line-height: 1.7;" id="cpRouteTrace">
+              <div class="tiny muted">— send a message to populate the trace</div>
             </div>
           </div>
         </div>
@@ -1621,10 +1612,7 @@
             <h1>Image playground</h1>
             <div class="sub">SDXL · txt2img · img2img · pix2pix · inpaint · upscale — local, queued, refined.</div>
           </div>
-          <div class="actions">
-            <span class="pill cyan"><span class="dot"></span>QUEUE: 1 / EST 28s</span>
-            <button class="btn btn-ghost">History (184)</button>
-          </div>
+          <div class="actions"></div>
         </div>
 
         <div class="mode-tabs" style="margin-bottom: 18px;">
@@ -1816,11 +1804,7 @@
             <h1>Auto-react rules</h1>
             <div class="sub">Substring + /regex/ patterns that trigger emoji reactions. Scoped to channel or user.</div>
           </div>
-          <div class="actions">
-            <button class="btn btn-ghost">⤓ Export</button>
-            <button class="btn btn-ghost">⤒ Import JSON</button>
-            <button class="btn btn-primary">+ New rule</button>
-          </div>
+          <div class="actions"></div>
         </div>
 
         <div class="panel-flat" style="padding: 4px 14px;">
@@ -1828,25 +1812,9 @@
             <span>EMOJI</span><span>PATTERN</span><span>SCOPE</span><span>HITS</span><span>STATE</span><span></span>
           </div>
 
-          <div id="reactRulesList"><div class="rule-row"><span class="emo">🔗</span><span class="pattern">/(https?|ftp):\/\/[^\s]+/</span><span class="scope">any channel · any user</span><span>1,184</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🐙</span><span class="pattern">octopus|squid|kraken</span><span class="scope">#abyss-talk</span><span>412</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🛠️</span><span class="pattern">/(error|exception|stack ?trace)/i</span><span class="scope">#dev-logs</span><span>284</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🎉</span><span class="pattern">shipped|deployed|launched</span><span class="scope">any channel</span><span>96</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🥶</span><span class="pattern">cold|freeze|froze</span><span class="scope">any channel</span><span>71</span><span><div class="toggle"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🐍</span><span class="pattern">/python|venv|requirements\.txt/i</span><span class="scope">#dev-logs</span><span>58</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">👀</span><span class="pattern">for @deepdiver</span><span class="scope">user: deepdiver</span><span>42</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">💀</span><span class="pattern">monday</span><span class="scope">#water-cooler</span><span>38</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">📸</span><span class="pattern">/\.(png|jpe?g|webp)$/i</span><span class="scope">any channel</span><span>1,012</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-
-          <div class="rule-row"><span class="emo">🌊</span><span class="pattern">seekdeep|abyss|deep</span><span class="scope">any channel</span><span>814</span><span><div class="toggle on"></div></span><div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div></div>
+          <div id="reactRulesList">
+            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— reaction-rule storage + editor backend pending. The bot's built-in stacks below ARE wired.</div>
+          </div>
         </div>
 
         <div class="rule"></div>
@@ -1866,10 +1834,7 @@
             <h1>Server stats</h1>
             <div class="sub">Activity rollups, top contributors, charts. Last 30 days.</div>
           </div>
-          <div class="actions">
-            <select class="mono"><option>last 30 days</option><option>last 7 days</option><option>this month</option></select>
-            <button class="btn btn-ghost">Export PNG</button>
-          </div>
+          <div class="actions"></div>
         </div>
 
         <div class="cards-4" style="margin-bottom: 18px;">
@@ -1934,13 +1899,7 @@
           </div>
 
           <div class="chart-wrap"><h3>Top contributors</h3><div id="statsLeaderboard">
-            <div class="lb-row"><span class="rk">01</span><span class="av">N</span><span>nautilus</span><span class="count">3,184</span><span class="pct">25%</span></div>
-            <div class="lb-row"><span class="rk">02</span><span class="av">D</span><span>deepdiver</span><span class="count">2,022</span><span class="pct">16%</span></div>
-            <div class="lb-row"><span class="rk">03</span><span class="av">A</span><span>abyssalbot</span><span class="count">1,488</span><span class="pct">12%</span></div>
-            <div class="lb-row"><span class="rk">04</span><span class="av">K</span><span>k-ray</span><span class="count">1,201</span><span class="pct">10%</span></div>
-            <div class="lb-row"><span class="rk">05</span><span class="av">L</span><span>lanternjaw</span><span class="count">988</span><span class="pct">8%</span></div>
-            <div class="lb-row"><span class="rk">06</span><span class="av">M</span><span>marianmariner</span><span class="count">714</span><span class="pct">6%</span></div>
-            <div class="lb-row"><span class="rk">07</span><span class="av">P</span><span>pelagic</span><span class="count">622</span><span class="pct">5%</span></div>
+            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— no contributor data yet · run /seekdeep stats in a guild to seed</div>
             </div>
           </div>
         </div>
