@@ -393,7 +393,7 @@
     <div class="sd-jump-backdrop" id="sdJumpBack"></div>
     <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
       <div class="sd-jump-head">
-        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 18 SURFACES</em></div>
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 17 + HUB</em></div>
         <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
       </div>
       <div class="sd-jump-list" id="sdJumpList"></div>
@@ -993,5 +993,7 @@
     // injected by gui_endpoints.py /token endpoint when ENABLED).
     // For v1 we default to ON since playground.js is small + self-gating.
     inject('playground.js', null);
+    // stats.js · /stats/counts → [data-stat-*] cells (designer-shipped)
+    inject('stats.js', null);
   })();
 })();

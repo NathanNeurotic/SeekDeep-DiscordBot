@@ -860,3 +860,48 @@ h2.live::after {
   background: var(--cyan-1);
   box-shadow: 0 0 6px var(--cyan-0);
 }
+
+/* ===== Design-time MOCK markers ===== */
+/* Inline banner — matches tts.html's existing pattern. Use on pages
+   with a standard topnav (inject right after </nav>). */
+.mock-banner {
+  margin: 14px 22px;
+  padding: 10px 14px;
+  background: rgba(255,184,77,0.07);
+  border: 1px dashed rgba(255,184,77,0.40);
+  border-radius: var(--r-md);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+}
+.mock-banner strong { color: var(--warn); font-weight: 700; }
+.mock-banner code {
+  background: rgba(255,184,77,0.12); color: var(--warn);
+  padding: 1px 5px; border-radius: 3px;
+  font-family: var(--font-mono);
+}
+
+/* Small fixed-corner tag — use on full-bleed pages (decks,
+   boot animation, tour overlay) where an inline banner would
+   disrupt the composition. */
+.mock-tag {
+  position: fixed;
+  top: 14px; right: 14px;
+  z-index: 100;
+  padding: 5px 10px;
+  background: rgba(2,6,15,0.85);
+  border: 1px dashed rgba(255,184,77,0.50);
+  border-radius: var(--r-md);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+  user-select: none;
+}
+.mock-tag strong { font-weight: 700; }

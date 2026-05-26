@@ -9,13 +9,18 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 <style>
-  body { overflow: hidden; }
-  .app-wrap { height: 100vh; padding: 24px; display: grid; place-items: center; }
+  /* Use the topnav-aware viewport height so the composer never gets clipped. */
+  .app-wrap {
+    height: calc(100vh - var(--topnav-h, 88px));
+    padding: 18px 22px 22px;
+    display: grid;
+    place-items: center;
+  }
   .win {
     width: 100%; max-width: 1500px;
-    height: calc(100vh - 48px);
+    height: 100%;
     display: grid;
-    grid-template-rows: 44px 1fr;
+    grid-template-rows: 1fr;
     border-radius: var(--r-md);
     overflow: hidden;
     border: 1px solid rgba(45,212,255,0.25);
@@ -49,136 +54,77 @@
     z-index: 0;
   }
   .win > * { position: relative; z-index: 1; }
-  .win-titlebar {
-    display: grid; grid-template-columns: 1fr auto 1fr;
-    align-items: center; padding: 0 16px;
-    background: linear-gradient(180deg, rgba(20,48,107,0.95), rgba(8,20,52,0.95));
-    border-bottom: 1px solid var(--stroke);
-  }
-  .win-titlebar .left { display: flex; align-items: center; gap: 14px; }
-  .win-titlebar .left img { width: 20px; height: 20px; }
-  .win-titlebar .title { display: flex; gap: 10px; align-items: center; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--hull-2); }
-  .win-titlebar .title em { font-style: normal; color: var(--cyan-1); }
-  .win-titlebar .right { display: flex; gap: 4px; justify-self: end; }
-  .win-titlebar .right a, .win-titlebar .right button {
-    display: flex; align-items: center; padding: 0 10px; height: 26px;
-    background: transparent; border: 1px solid transparent;
-    color: var(--hull-3); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em;
-    cursor: pointer; border-radius: 4px; text-decoration: none;
-  }
-  .win-titlebar .right a:hover, .win-titlebar .right button:hover { background: rgba(45,212,255,0.1); color: var(--cyan-1); }
 
   .chat-body {
     display: grid;
-    grid-template-columns: 72px 250px 1fr 280px;
+    grid-template-columns: 1fr 280px;
     overflow: hidden;
+    min-height: 0;
   }
 
-  /* ===== Server rail ===== */
-  .servers {
-    background: rgba(2,6,15,0.7);
-    border-right: 1px solid var(--stroke);
-    padding: 16px 0;
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-    overflow-y: auto;
-  }
-  .server-icon {
-    width: 44px; height: 44px;
-    border-radius: 14px;
-    background: linear-gradient(135deg, var(--abyss-3), var(--abyss-1));
-    border: 1px solid var(--stroke);
-    display: grid; place-items: center;
-    font-family: var(--font-mono); font-size: 14px; color: var(--cyan-1);
-    cursor: pointer;
-    transition: 0.2s;
-    position: relative;
-  }
-  .server-icon img { width: 100%; height: 100%; object-fit: contain; border-radius: 13px; padding: 4px; }
-  .server-icon:hover { border-radius: 10px; transform: translateY(-1px); }
-  .server-icon.active { border-color: var(--cyan-1); box-shadow: var(--cyan-glow); border-radius: 10px; }
-  .server-icon.active::before {
-    content: ""; position: absolute; left: -16px; top: 50%;
-    transform: translateY(-50%);
-    width: 4px; height: 24px;
-    background: var(--cyan-1); border-radius: 0 4px 4px 0;
-    box-shadow: 0 0 8px var(--cyan-0);
-  }
-  .server-icon.add { color: var(--hull-3); background: rgba(2,6,15,0.4); }
-  .server-divider { width: 28px; height: 1px; background: var(--stroke); margin: 4px 0; }
-
-  /* ===== Channel list ===== */
-  .channels {
-    background: rgba(5,11,28,0.55);
-    border-right: 1px solid var(--stroke);
-    display: grid; grid-template-rows: 60px 1fr 60px;
-    overflow: hidden;
-  }
-  .channels-head {
-    padding: 0 18px;
-    display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid var(--stroke);
-    font-family: var(--font-display); font-weight: 600; font-size: 15px;
-  }
-  .channels-head .meta { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.14em; }
-  .channels-list { padding: 12px 8px; overflow-y: auto; }
-  .ch-group { padding: 14px 10px 6px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; display: flex; justify-content: space-between; }
-  .ch {
-    display: flex; align-items: center; gap: 10px;
-    padding: 7px 10px;
-    border-radius: 6px;
-    color: var(--hull-2);
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 0.12s;
-    min-width: 0;
-  }
-  .ch .hash { font-family: var(--font-mono); color: var(--hull-3); font-size: 14px; flex-shrink: 0; }
-  .ch .cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .ch:hover { background: rgba(45,212,255,0.06); color: var(--hull); }
-  .ch.active { background: rgba(45,212,255,0.12); color: var(--cyan-1); }
-  .ch.active .hash { color: var(--cyan-1); }
-  .ch .unread { margin-left: auto; font-family: var(--font-mono); font-size: 10px; background: var(--cyan-1); color: var(--ink); padding: 1px 6px; border-radius: 999px; font-weight: 600; flex-shrink: 0; }
-
-  .user-card {
-    background: rgba(2,6,15,0.7);
-    border-top: 1px solid var(--stroke);
-    padding: 10px 12px;
-    display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; align-items: center;
-  }
-  .user-card .av { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, var(--cyan-2), var(--cyan-3)); display: grid; place-items: center; font-family: var(--font-mono); font-weight: 600; color: var(--ink); font-size: 13px; }
-  .user-card .who { font-size: 13px; font-weight: 500; }
-  .user-card .stat { font-family: var(--font-mono); font-size: 10px; color: var(--good); }
-  .user-card .icons { display: flex; gap: 6px; color: var(--hull-3); }
-  .user-card .icons svg { width: 14px; height: 14px; cursor: pointer; }
-  .user-card .icons svg:hover { color: var(--cyan-1); }
-
-  /* ===== Conversation ===== */
+  /* ===== Conversation column ===== */
   .conv {
     display: grid; grid-template-rows: 60px 1fr auto;
     overflow: hidden;
+    min-height: 0;
   }
   .conv-head {
-    padding: 0 22px;
+    padding: 0 24px;
     display: flex; align-items: center; gap: 14px;
     border-bottom: 1px solid var(--stroke);
     background: rgba(2,6,15,0.4);
   }
-  .conv-head .chname { font-family: var(--font-display); font-weight: 600; font-size: 16px; display: flex; gap: 8px; align-items: center; }
-  .conv-head .chname .hash { font-family: var(--font-mono); color: var(--hull-3); font-size: 18px; }
-  .conv-head .topic { color: var(--hull-3); font-size: 12px; padding-left: 14px; border-left: 1px solid var(--stroke); margin-left: 6px; }
-  .conv-head .right { margin-left: auto; display: flex; gap: 8px; }
+  .conv-head .chname {
+    font-family: var(--font-display); font-weight: 600; font-size: 16px;
+    display: flex; gap: 8px; align-items: center;
+    color: var(--hull);
+  }
+  .conv-head .chname .hash {
+    font-family: var(--font-mono); color: var(--cyan-1); font-size: 18px;
+  }
+  .conv-head .topic {
+    color: var(--hull-3); font-size: 12px;
+    padding-left: 14px; border-left: 1px solid var(--stroke); margin-left: 6px;
+    font-family: var(--font-mono); letter-spacing: 0.04em;
+  }
+  .conv-head .topic code {
+    font-family: var(--font-mono); font-size: 11px; color: var(--cyan-1);
+    padding: 1px 4px; background: rgba(45,212,255,0.06); border-radius: 3px;
+    margin: 0 2px;
+  }
 
   .messages {
     overflow-y: auto;
     padding: 24px 22px 12px;
     display: flex; flex-direction: column;
     gap: 18px;
+    min-height: 0;
   }
+  .messages-empty {
+    margin: auto;
+    text-align: center;
+    color: var(--hull-3);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    padding: 32px;
+    max-width: 480px;
+    line-height: 1.9;
+  }
+  .messages-empty strong {
+    display: block; color: var(--cyan-1); font-size: 13px;
+    letter-spacing: 0.22em; margin-bottom: 14px; text-transform: uppercase;
+    font-weight: 600;
+  }
+  .messages-empty code {
+    color: var(--cyan-1); background: rgba(45,212,255,0.08);
+    padding: 1px 5px; border-radius: 3px;
+  }
+
   .msg {
     display: grid;
     grid-template-columns: 40px 1fr;
     gap: 14px;
-    position: relative;
   }
   .msg .av {
     width: 40px; height: 40px;
@@ -192,96 +138,29 @@
     flex-shrink: 0;
   }
   .msg .av img { width: 100%; height: 100%; object-fit: contain; }
-  .msg.bot .av { background: linear-gradient(135deg, var(--cyan-3), var(--abyss-3)); border-color: var(--cyan-1); padding: 4px; }
+  .msg.bot .av {
+    background: linear-gradient(135deg, var(--cyan-3), var(--abyss-3));
+    border-color: var(--cyan-1);
+    padding: 4px;
+  }
   .msg .who-line { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
-  .msg .who { font-weight: 600; font-size: 14px; }
+  .msg .who { font-weight: 600; font-size: 14px; color: var(--hull); }
   .msg.bot .who { color: var(--cyan-1); display: inline-flex; align-items: center; gap: 6px; }
-  .msg.bot .who::after { content: "BOT"; font-family: var(--font-mono); font-size: 9px; padding: 1px 5px; background: var(--cyan-1); color: var(--ink); border-radius: 3px; letter-spacing: 0.12em; font-weight: 600; }
-  .msg .when { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); }
+  .msg.bot .who::after {
+    content: "BOT";
+    font-family: var(--font-mono); font-size: 9px;
+    padding: 1px 5px; background: var(--cyan-1); color: var(--ink);
+    border-radius: 3px; letter-spacing: 0.12em; font-weight: 600;
+  }
+  .msg .when {
+    font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);
+  }
   .msg .text { color: var(--hull-2); line-height: 1.55; font-size: 14px; }
-  .msg .text .mention { background: rgba(45,212,255,0.18); color: var(--cyan-1); padding: 1px 5px; border-radius: 4px; font-weight: 500; }
-  .msg .text code { background: rgba(2,6,15,0.7); padding: 1px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); }
-  .msg .text .source { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); display: block; margin-top: 6px; }
-  .msg .text .source a { color: var(--cyan-2); text-decoration: none; }
+  .msg .text code {
+    background: rgba(2,6,15,0.7); padding: 1px 6px; border-radius: 4px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1);
+  }
 
-  .msg .attachment {
-    margin-top: 10px;
-    border: 1px solid var(--stroke);
-    border-radius: var(--r-md);
-    overflow: hidden;
-    max-width: 420px;
-  }
-  .msg .attachment .img {
-    aspect-ratio: 1;
-    background: linear-gradient(165deg, #14306b, #2dd4ff20, #050b1c);
-    position: relative;
-  }
-  .msg .attachment .img::after {
-    content: "[ SDXL · 1024² · seed 8842 ]";
-    position: absolute; inset: 0; display: grid; place-items: center;
-    font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); letter-spacing: 0.14em;
-    background: repeating-linear-gradient(45deg, rgba(45,212,255,0.04) 0 10px, transparent 10px 20px);
-  }
-  .msg .attachment .controls {
-    padding: 10px 12px;
-    display: flex; gap: 6px; flex-wrap: wrap;
-    background: rgba(2,6,15,0.6);
-    border-top: 1px solid var(--stroke);
-    font-family: var(--font-mono); font-size: 11px;
-  }
-  .att-btn {
-    padding: 5px 10px; border-radius: 4px;
-    background: rgba(8,20,52,0.6); border: 1px solid var(--stroke);
-    color: var(--hull-2); cursor: pointer;
-    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
-  }
-  .att-btn:hover { border-color: var(--cyan-1); color: var(--cyan-1); }
-  .att-btn.primary { background: var(--cyan-1); color: var(--ink); border-color: var(--cyan-1); font-weight: 600; }
-
-  .msg .reactions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-  .rxn {
-    padding: 2px 8px; border-radius: 12px;
-    background: rgba(8,20,52,0.6);
-    border: 1px solid var(--stroke);
-    font-family: var(--font-mono); font-size: 11px;
-    color: var(--hull-2);
-    display: flex; gap: 4px; align-items: center;
-    cursor: pointer;
-  }
-  .rxn.mine { background: rgba(45,212,255,0.15); border-color: var(--cyan-1); color: var(--cyan-1); }
-
-  .msg .quick-actions {
-    position: absolute;
-    top: -8px; right: 0;
-    display: none;
-    gap: 2px;
-    background: rgba(2,6,15,0.95);
-    border: 1px solid var(--stroke);
-    border-radius: 6px;
-    padding: 2px;
-  }
-  .msg:hover .quick-actions { display: flex; }
-  .qa-btn { width: 26px; height: 26px; display: grid; place-items: center; color: var(--hull-3); cursor: pointer; border-radius: 4px; }
-  .qa-btn:hover { background: rgba(45,212,255,0.1); color: var(--cyan-1); }
-
-  /* Thread embed */
-  .thread-embed {
-    margin-top: 10px;
-    padding: 10px 14px;
-    border-left: 3px solid var(--cyan-1);
-    background: rgba(45,212,255,0.05);
-    border-radius: 0 6px 6px 0;
-    font-size: 13px;
-    color: var(--hull-2);
-    display: flex; align-items: center; gap: 10px;
-    cursor: pointer;
-  }
-  .thread-embed:hover { background: rgba(45,212,255,0.1); }
-  .thread-embed .icon { color: var(--cyan-1); font-family: var(--font-mono); font-size: 14px; }
-  .thread-embed .label { font-weight: 500; }
-  .thread-embed .count { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); margin-left: auto; }
-
-  /* Divider day */
   .day {
     display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px;
     align-items: center;
@@ -292,46 +171,106 @@
   }
   .day::before, .day::after { content: ""; height: 1px; background: var(--stroke); }
 
-  /* Composer */
+  /* ===== Composer ===== */
   .composer {
-    padding: 14px 22px 22px;
+    padding: 14px 22px 18px;
     border-top: 1px solid var(--stroke);
     background: rgba(2,6,15,0.4);
+    position: relative;
   }
   .composer-row {
     display: grid;
-    grid-template-columns: auto 1fr auto auto;
-    gap: 10px;
-    align-items: center;
+    grid-template-columns: 30px 1fr auto auto;
+    gap: 12px;
+    align-items: end;
     background: rgba(2,6,15,0.7);
     border: 1px solid var(--stroke);
     border-radius: 12px;
     padding: 10px 14px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
-  .composer-row:focus-within { border-color: var(--cyan-1); box-shadow: 0 0 0 3px rgba(45,212,255,0.12); }
-  .composer-row input.msg-input {
-    background: transparent; border: none; padding: 4px 0;
+  .composer-row:focus-within {
+    border-color: var(--cyan-1);
+    box-shadow: 0 0 0 3px rgba(45,212,255,0.12);
+  }
+  .composer-row textarea.msg-input {
+    background: transparent; border: none; padding: 6px 0 4px;
     color: var(--hull); font-size: 14px;
+    font-family: var(--font-display);
+    resize: none;
+    min-height: 22px; max-height: 200px;
+    line-height: 1.45;
+    outline: none;
+    width: 100%;
+    align-self: stretch;
   }
-  .composer-row input.msg-input:focus { box-shadow: none; }
+  .composer-row textarea.msg-input:focus { box-shadow: none; }
+  .composer-row textarea.msg-input::placeholder {
+    color: var(--hull-3); opacity: 0.7;
+  }
+
   .composer .attach {
-    width: 26px; height: 26px; display: grid; place-items: center;
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
     color: var(--hull-3); cursor: pointer;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    align-self: end;
+    margin-bottom: 2px;
   }
-  .composer .attach:hover { color: var(--cyan-1); }
+  .composer .attach:hover { color: var(--cyan-1); background: rgba(45,212,255,0.08); }
+  .composer .attach svg { display: block; }
+
+  .composer .persona-btn {
+    align-self: end;
+    margin-bottom: 3px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--stroke);
+    color: var(--cyan-1);
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease;
+    white-space: nowrap;
+  }
+  .composer .persona-btn:hover {
+    border-color: var(--cyan-1);
+    background: rgba(45,212,255,0.08);
+  }
+  .composer .persona-btn .pdot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+  }
+
   .composer .send-btn {
-    padding: 6px 14px; border-radius: 6px;
+    align-self: end;
+    margin-bottom: 3px;
+    padding: 7px 16px; border-radius: 6px;
     background: var(--cyan-1); color: var(--ink);
     border: none; cursor: pointer; font-weight: 600;
     font-family: var(--font-display); font-size: 12px; letter-spacing: 0.04em;
   }
   .composer .send-btn:hover { box-shadow: var(--cyan-glow); }
+
   .composer .helper {
-    display: flex; justify-content: space-between; margin-top: 8px;
+    display: flex; justify-content: space-between; margin-top: 10px;
     font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);
     letter-spacing: 0.14em; text-transform: uppercase;
+    gap: 14px; flex-wrap: wrap;
   }
   .composer .helper .badge { color: var(--cyan-1); }
+  .composer .helper .live-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--good); box-shadow: 0 0 6px var(--good);
+    margin-right: 6px; vertical-align: middle;
+  }
   .composer .helper .tips { display: flex; gap: 14px; }
   .composer .helper .tips kbd {
     background: rgba(8,20,52,0.7); border: 1px solid var(--stroke);
@@ -339,9 +278,11 @@
     font-family: var(--font-mono);
   }
 
-  /* Slash menu */
+  /* Slash hint menu */
   .slash-menu {
-    position: absolute; bottom: 80px; left: 22px; right: 22px;
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 22px; right: 22px;
     background: rgba(2,6,15,0.97); backdrop-filter: blur(20px);
     border: 1px solid var(--cyan-1);
     border-radius: 10px;
@@ -349,64 +290,145 @@
     padding: 8px;
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.2s ease;
+    transition: max-height 0.2s ease, padding 0.2s ease;
+    z-index: 5;
   }
-  .slash-menu.open { max-height: 320px; padding: 8px; }
+  .slash-menu.open { max-height: 360px; padding: 8px; overflow-y: auto; }
   .slash-item {
-    display: grid; grid-template-columns: 80px 1fr 100px; gap: 14px;
+    display: grid; grid-template-columns: 96px 1fr 120px; gap: 14px;
     padding: 8px 12px;
     align-items: center;
     border-radius: 6px;
-    cursor: pointer;
   }
-  .slash-item:hover, .slash-item.active { background: rgba(45,212,255,0.12); }
+  .slash-item:hover { background: rgba(45,212,255,0.10); }
   .slash-item .cmd { font-family: var(--font-mono); color: var(--cyan-1); font-size: 13px; }
   .slash-item .desc { font-size: 12px; color: var(--hull-2); }
-  .slash-item .args { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.1em; text-align: right; }
+  .slash-item .args {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--hull-3); letter-spacing: 0.1em; text-align: right;
+  }
 
-  /* ===== Right sidebar — members & info ===== */
-  .members {
+  /* Persona popover */
+  .persona-pop {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 100px;
+    background: rgba(2,6,15,0.97); backdrop-filter: blur(20px);
+    border: 1px solid var(--cyan-1);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 240px;
+    z-index: 6;
+    display: none;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 40px rgba(45,212,255,0.12);
+  }
+  .persona-pop.open { display: block; }
+  .persona-pop .head {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--hull-3);
+    padding: 8px 10px 8px;
+    border-bottom: 1px solid var(--stroke);
+    margin-bottom: 4px;
+  }
+  .persona-pop .opt {
+    display: grid; grid-template-columns: 1fr auto;
+    gap: 10px; align-items: center;
+    padding: 8px 10px; border-radius: 6px;
+    cursor: pointer; color: var(--hull-2); font-size: 13px;
+    font-family: var(--font-display);
+  }
+  .persona-pop .opt:hover { background: rgba(45,212,255,0.10); color: var(--cyan-1); }
+  .persona-pop .opt.active { background: rgba(45,212,255,0.14); color: var(--cyan-1); }
+  .persona-pop .opt .meta {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--hull-3); letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .persona-pop .opt.active .meta { color: var(--cyan-1); }
+  .persona-pop .sep { height: 1px; background: var(--stroke); margin: 6px 4px; }
+  .persona-pop .clear {
+    width: 100%; text-align: left;
+    padding: 8px 10px; border-radius: 6px;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--hull-3); font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .persona-pop .clear:hover { background: rgba(255,107,107,0.10); color: var(--bad); }
+
+  /* ===== Info rail ===== */
+  .info-rail {
     background: rgba(5,11,28,0.45);
     border-left: 1px solid var(--stroke);
     overflow-y: auto;
     padding: 18px;
+    min-height: 0;
   }
-  .members .section-h { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; margin: 14px 0 10px; }
-  .members .section-h:first-child { margin-top: 0; }
-  .member {
-    display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; align-items: center;
-    padding: 6px 0;
-    font-size: 13px;
-  }
-  .member .av { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--abyss-3), var(--abyss-1)); border: 1px solid var(--stroke); display: grid; place-items: center; font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); position: relative; }
-  .member .av img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
-  .member .av .pres { position: absolute; bottom: -2px; right: -2px; width: 10px; height: 10px; border-radius: 50%; background: var(--hull-3); border: 2px solid var(--abyss-1); }
-  .member .av .pres.on { background: var(--good); }
-  .member .av .pres.busy { background: var(--bad); }
-  .member .av .pres.idle { background: var(--warn); }
-  .member .who { color: var(--hull-2); }
-  .member.bot .who { color: var(--cyan-1); font-weight: 500; }
-  .member.bot .who::after { content: "BOT"; font-family: var(--font-mono); font-size: 8px; padding: 1px 4px; background: var(--cyan-1); color: var(--ink); border-radius: 2px; letter-spacing: 0.1em; font-weight: 600; margin-left: 6px; }
-  .member .role-tag { font-family: var(--font-mono); font-size: 9px; color: var(--hull-3); letter-spacing: 0.1em; text-transform: uppercase; }
-
   .bot-card {
-    margin-top: 24px;
     padding: 14px; border-radius: var(--r-md);
     border: 1px solid var(--stroke);
     background: linear-gradient(165deg, rgba(13,33,82,0.55), rgba(2,6,15,0.7));
   }
-  .bot-card .bot-head { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .bot-card .bot-head {
+    display: flex; gap: 10px; align-items: center; margin-bottom: 12px;
+  }
   .bot-card .bot-head img { width: 28px; height: 28px; }
   .bot-card .bot-head .name { font-weight: 600; font-size: 13px; color: var(--cyan-1); }
-  .bot-card .bot-head .ver { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); margin-left: auto; }
-  .bot-card .stats { font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); display: grid; gap: 4px; }
-  .bot-card .stats .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-  .bot-card .stats .row .v { color: var(--cyan-1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .bot-card .bot-head .ver {
+    font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);
+    margin-left: auto;
+  }
+  .bot-card .stats {
+    font-family: var(--font-mono); font-size: 11px; color: var(--hull-2);
+    display: grid; gap: 5px;
+  }
+  .bot-card .stats .row {
+    display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  }
+  .bot-card .stats .row .k { color: var(--hull-3); }
+  .bot-card .stats .row .v {
+    color: var(--cyan-1); text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+
+  .quick-tips {
+    margin-top: 14px;
+    padding: 12px 14px; border: 1px solid var(--stroke);
+    border-radius: var(--r-md);
+    background: rgba(2,6,15,0.45);
+    font-size: 12px; line-height: 1.65; color: var(--hull-2);
+  }
+  .quick-tips b { color: var(--cyan-1); font-weight: 600; }
+  .quick-tips code {
+    background: rgba(45,212,255,0.08); padding: 1px 5px; border-radius: 3px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--cyan-1);
+  }
 
   /* Tweaks panel root */
   #tweaks-root { font-family: var(--font-display); }
+
+  /* The global jump-button overlaps the right rail on chat — hide it here. */
+  .sd-jump-btn { display: none !important; }
+
+  /* ===== Narrow widths ===== */
+  @media (max-width: 880px) {
+    .app-wrap { padding: 12px; }
+    .chat-body { grid-template-columns: 1fr; }
+    .info-rail { display: none; }
+    .conv-head { padding: 0 14px; gap: 8px; }
+    .conv-head .topic { display: none; }
+    .messages { padding: 16px 14px 8px; }
+    .composer { padding: 12px 14px 14px; }
+    .composer .helper .tips { display: none; }
+    .persona-pop { right: 14px; }
+  }
+  @media (max-width: 520px) {
+    .composer-row { grid-template-columns: 26px 1fr auto; gap: 8px; padding: 8px 10px; }
+    .composer .persona-btn { display: none; }
+    .conv-head .chname { font-size: 14px; }
+  }
 </style>
-<!-- Task 11 · PWA: chat.html is the only page that registers the SW + manifest. -->
+
+<!-- PWA: chat.html is the start_url for the installable shell. -->
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" type="image/webp" href="assets/seekdeep-mark.webp" />
 <link rel="apple-touch-icon" href="assets/seekdeep-mark.webp" />
@@ -415,7 +437,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="SeekDeep" />
 <script>
-  // Register service worker only when served over http(s) — file:// previews can't.
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js', { scope: './' })
@@ -464,257 +485,100 @@
     <a href="roadmap.html">Roadmap</a>
   </div>
   <div class="row">
-    <span class="pill cyan" id="playgroundPill" title="Web playground is live — no Discord required"><span class="dot"></span>PLAYGROUND · LIVE</span>
-    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35</span> · LOCAL</span>
+    <span class="pill" id="playgroundPill" title="Web playground · probes /health every 5s">
+      <span class="dot"></span>PLAYGROUND · PROBING
+    </span>
+    <span class="pill" data-version><span class="dot"></span>v10.35 · LOCAL</span>
   </div>
 </nav>
 
 <div class="app-wrap">
 <div class="win">
-
-  <!-- TITLEBAR -->
-
   <div class="chat-body">
-
-    <!-- ===== SERVER RAIL ===== -->
-    <aside class="servers">
-      <div class="server-icon active" title="Abyss Guild"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-      <div class="server-divider"></div>
-      <div class="server-icon" title="Bathyscaphe Co">BC</div>
-      <div class="server-icon" title="Trench Watchers">TW</div>
-      <div class="server-icon" title="Kraken Lab">KL</div>
-      <div class="server-icon" title="Plankton DAO">PD</div>
-      <div class="server-divider"></div>
-      <div class="server-icon add" title="Add a server">+</div>
-      <div style="margin-top: auto;"></div>
-      <div class="server-icon" title="Discover servers" style="color: var(--cyan-1);">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12s4-7 9-7 9 7 9 7-4 7-9 7-9-7-9-7z"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>
-      </div>
-    </aside>
-
-    <!-- ===== CHANNELS ===== -->
-    <aside class="channels">
-      <div class="channels-head">
-        <span>Playground</span>
-        <span class="meta">SESSIONS</span>
-      </div>
-
-      <div class="channels-list">
-        <div class="ch-group"><span>This session</span><span title="New session">+</span></div>
-        <div class="ch active"><span class="hash">◆</span><span class="cname">tonga-trench-probe</span><span class="unread" title="unsaved turns">7</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">+ new chat</span></div>
-
-        <div class="ch-group"><span>Saved · local</span><span>☰</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">colossal-squid-refines</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">vision · sonar-screencaps</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">ocr · jamstec pdf p.14</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">persona test · unsettling</span></div>
-        <div class="ch"><span class="hash">◇</span><span class="cname">img2img bw passes</span></div>
-
-        <div class="ch-group"><span>Discord-mirrored</span><span title="Mirrors the same /chat surface on Discord">⇋</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">abyss-talk</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">water-cooler</span><span class="unread">14</span></div>
-        <div class="ch"><span class="hash">#</span><span class="cname">dev-logs</span><span class="unread">3</span></div>
-      </div>
-
-      <div class="user-card">
-        <div class="av">N</div>
-        <div>
-          <div class="who">nautilus</div>
-          <div class="stat">● online</div>
-        </div>
-        <div class="icons">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1v22M5 5l14 14M19 5L5 19"/></svg>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="6" width="18" height="12" rx="2"/></svg>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
-        </div>
-      </div>
-    </aside>
 
     <!-- ===== CONVERSATION ===== -->
     <main class="conv">
 
       <div class="conv-head">
-        <span class="chname"><span class="hash">◆</span>tonga-trench-probe</span>
-        <span class="topic">playground session · routes through <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/chat</code> · <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/image</code> · <code style="font-family:var(--font-mono);font-size:11px;color:var(--cyan-1);">/vision</code></span>
-        <div class="right">
-          <button class="btn btn-ghost" style="padding: 5px 10px;">🔎 Search</button>
-          <button class="btn btn-ghost" style="padding: 5px 10px;">↓ Export</button>
-        </div>
+        <span class="chname">
+          <span class="hash">◆</span>playground
+        </span>
+        <span class="topic">
+          web playground · routes through
+          <code>/chat</code><code>/image</code><code>/vision</code>
+        </span>
       </div>
 
       <section class="messages" id="messages">
-
-        <div class="day"><span>14:21 · today</span></div>
-
-        <div class="msg">
-          <div class="av">N</div>
-          <div>
-            <div class="who-line"><span class="who">nautilus</span><span class="when">14:21</span></div>
-            <div class="text"><span class="mention">@SeekDeep</span> what's the latest on the Tonga Trench colossal-class findings? <code>web:always</code></div>
-            <div class="quick-actions">
-              <div class="qa-btn">↪</div>
-              <div class="qa-btn">🐙</div>
-              <div class="qa-btn">⋯</div>
-            </div>
-          </div>
+        <div class="messages-empty" id="messagesEmpty">
+          <strong>SeekDeep playground</strong>
+          Type a message to chat with the local model.<br />
+          Drop or paste an image, then run <code>/vision &lt;prompt&gt;</code>.<br />
+          Try <code>/image &lt;prompt&gt;</code>, <code>/recall</code>, or <code>/help</code>
+          for the full list.
         </div>
-
-        <div class="msg bot">
-          <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-          <div>
-            <div class="who-line"><span class="who">SeekDeep</span><span class="when">14:21 · WEB ROUTED · 1.42s · default_chat / clinical</span></div>
-            <div class="text">
-              The 2026 NOAA-JAMSTEC joint survey logged <strong>47 new colossal-class specimens</strong> at the Tonga Trench between 8,400m and 10,200m. Three notable findings:
-              <br/><br/>
-              1. <code>Architeuthis pacifica</code> — first confirmed sighting south of 20°S.<br/>
-              2. Bioluminescent display sequences observed in courtship, previously theoretical.<br/>
-              3. One specimen at 9,840m exceeded 14m mantle length — current record.
-              <span class="source">Sources: <a href="#">&lt;noaa.gov/tonga-2026-report&gt;</a> <a href="#">&lt;nature.com/colossal-pacific&gt;</a> <a href="#">&lt;jamstec.go.jp/expeditions&gt;</a></span>
-            </div>
-            <div class="reactions">
-              <span class="rxn mine">🌊 3</span>
-              <span class="rxn">🐙 2</span>
-              <span class="rxn">👀 1</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="av">D</div>
-          <div>
-            <div class="who-line"><span class="who">deepdiver</span><span class="when">14:23</span></div>
-            <div class="text">14m?? holy crap. <span class="mention">@SeekDeep</span> show me one of those at depth, raw, cinematic, no refine</div>
-          </div>
-        </div>
-
-        <div class="msg bot">
-          <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-          <div>
-            <div class="who-line"><span class="who">SeekDeep</span><span class="when">14:23 · IMAGE QUEUE 1/1 · 28 STEPS</span></div>
-            <div class="text">▸ Original prompt or refined? Both costs 2× queue time.</div>
-            <div style="display: flex; gap: 6px; margin-top: 10px;">
-              <button class="att-btn">RAW</button>
-              <button class="att-btn primary">REFINED</button>
-              <button class="att-btn">BOTH</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg bot">
-          <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-          <div>
-            <div class="who-line"><span class="who">SeekDeep</span><span class="when">14:24 · GENERATED · 31s</span></div>
-            <div class="text">Refined prompt: <em>"a colossal squid silhouetted at 10,000m, bioluminescent dapples through deep ocean haze, cinematic, photoreal, 14m mantle, low-key lighting"</em></div>
-            <div class="attachment">
-              <div class="img"></div>
-              <div class="controls">
-                <button class="att-btn">⤓ DOWNLOAD</button>
-                <button class="att-btn">📂 ARCHIVE</button>
-                <button class="att-btn">🌐 SHARED ARCHIVE</button>
-                <button class="att-btn">⟳ RE-REFINE</button>
-              </div>
-            </div>
-            <div class="reactions">
-              <span class="rxn">🐙 4</span>
-              <span class="rxn mine">🌊 2</span>
-              <span class="rxn">😱 1</span>
-              <span class="rxn">📂 1</span>
-            </div>
-            <div class="thread-embed">
-              <span class="icon">↳</span>
-              <span class="label">nautilus · archive</span>
-              <span class="count">1 reply · 4m</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="av">K</div>
-          <div>
-            <div class="who-line"><span class="who">k-ray</span><span class="when">14:28</span></div>
-            <div class="text">↳ replying to seekdeep's image</div>
-            <div class="text" style="margin-top: 6px;">now make it black and white, same scene</div>
-          </div>
-        </div>
-
-        <div class="msg bot">
-          <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-          <div>
-            <div class="who-line"><span class="who">SeekDeep</span><span class="when">14:28 · IMG2IMG · STRENGTH 0.62</span></div>
-            <div class="text">▸ Iterative tweak detected — extending prior refined prompt. <code>img2img · strength 0.62</code></div>
-            <div class="attachment">
-              <div class="img" style="background: linear-gradient(165deg, #1a1a1a, #404040, #0a0a0a);"></div>
-              <div class="controls">
-                <button class="att-btn">⤓ DOWNLOAD</button>
-                <button class="att-btn">📂 ARCHIVE</button>
-                <button class="att-btn">⟳ AGAIN</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg">
-          <div class="av">A</div>
-          <div>
-            <div class="who-line"><span class="who">abyssalbot</span><span class="when">14:31</span></div>
-            <div class="text"><span class="mention">@SeekDeep</span> persona channel chaotic</div>
-          </div>
-        </div>
-
-        <div class="msg bot">
-          <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
-          <div>
-            <div class="who-line"><span class="who">SeekDeep</span><span class="when">14:31 · PERSONA SWITCH</span></div>
-            <div class="text">OH WE'RE DOING THIS NOW?? CHANNEL <code>#abyss-talk</code> IS NOW <strong>CHAOTIC</strong>. BUCKLE UP NAUTILUS GANG 🌊🐙⚡</div>
-            <div class="reactions">
-              <span class="rxn">💀 3</span>
-              <span class="rxn">🌊 2</span>
-            </div>
-          </div>
-        </div>
-
       </section>
 
       <!-- COMPOSER -->
-      <div class="composer" style="position: relative;">
+      <div class="composer">
 
-        <!-- slash menu -->
+        <!-- slash hint menu — shown while typing / -->
         <div class="slash-menu" id="slashMenu">
-          <div class="slash-item active"><span class="cmd">/chat</span><span class="desc">Send to <code>/chat</code> — role-routed text</span><span class="args">prompt, role, web</span></div>
-          <div class="slash-item"><span class="cmd">/image</span><span class="desc">SDXL txt2img — <code>/image</code></span><span class="args">prompt, style, w, h</span></div>
-          <div class="slash-item"><span class="cmd">/vision</span><span class="desc">Describe / OCR a dropped image — <code>/vision</code></span><span class="args">file, mode</span></div>
-          <div class="slash-item"><span class="cmd">/memory list</span><span class="desc">Show your stored facts</span><span class="args">— GET /memory/user/{id} —</span></div>
-          <div class="slash-item"><span class="cmd">/memory add</span><span class="desc">Append a fact (≤500 chars, 25 max)</span><span class="args">text</span></div>
-          <div class="slash-item"><span class="cmd">/memory forget</span><span class="desc">Delete fact at index</span><span class="args">n</span></div>
-          <div class="slash-item"><span class="cmd">/persona</span><span class="desc">Switch active persona for this session</span><span class="args">name</span></div>
-          <div class="slash-item"><span class="cmd">/status</span><span class="desc">Backend status — <code>/health</code> + <code>/gpu</code></span><span class="args">verbose</span></div>
+          <div class="slash-item"><span class="cmd">/image</span><span class="desc">SDXL txt2img — generate an image inline</span><span class="args">prompt</span></div>
+          <div class="slash-item"><span class="cmd">/vision</span><span class="desc">Describe a dropped or pasted image</span><span class="args">prompt</span></div>
+          <div class="slash-item"><span class="cmd">/remember</span><span class="desc">Store a persistent fact (≤500 chars, 25 max)</span><span class="args">fact</span></div>
+          <div class="slash-item"><span class="cmd">/recall</span><span class="desc">List remembered facts</span><span class="args">—</span></div>
+          <div class="slash-item"><span class="cmd">/forget</span><span class="desc">Remove a fact</span><span class="args">#N · text · all</span></div>
+          <div class="slash-item"><span class="cmd">/route</span><span class="desc">Show the routing decision for a prompt</span><span class="args">prompt</span></div>
+          <div class="slash-item"><span class="cmd">/help</span><span class="desc">Full command list</span><span class="args">—</span></div>
         </div>
+
+        <!-- persona popover -->
+        <div class="persona-pop" id="personaPop" role="menu" aria-label="Choose persona">
+          <div class="head">Persona override · global</div>
+          <div class="opt" data-persona="neurotic"><span>Neurotic</span><span class="meta">hedged</span></div>
+          <div class="opt" data-persona="unsettling"><span>Unsettling</span><span class="meta">pauses…</span></div>
+          <div class="opt" data-persona="clinical"><span>Clinical</span><span class="meta">terse</span></div>
+          <div class="opt" data-persona="chaotic"><span>Chaotic</span><span class="meta">CAPS</span></div>
+          <div class="sep"></div>
+          <button type="button" class="clear" id="personaClear">▸ Clear override</button>
+        </div>
+
+        <input type="file" id="filePicker" accept="image/*" hidden />
 
         <div class="composer-row">
-          <div class="attach">
+          <button type="button" class="attach" id="attachBtn" title="Attach image (drop or paste also works)" aria-label="Attach image">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 14l-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"/></svg>
-          </div>
-          <input class="msg-input" id="msgInput" placeholder="Type a message  ·  /  for commands  ·  drop an image for vision" />
-          <span class="pill cyan" style="padding: 2px 8px;"><span class="dot"></span>CLINICAL</span>
-          <button class="send-btn">▸ Send</button>
+          </button>
+          <textarea
+            class="msg-input"
+            id="msgInput"
+            rows="1"
+            placeholder="Type a message · / for commands · drop an image for /vision"
+            autocomplete="off"
+            spellcheck="true"
+          ></textarea>
+          <button type="button" class="persona-btn" id="personaBtn" title="Switch persona (global override)">
+            <span class="pdot"></span><span id="personaLabel">—</span>
+          </button>
+          <button type="button" class="send-btn">▸ Send</button>
         </div>
+
         <div class="helper">
           <div>
-            <span><span class="live-dot"></span>SEEKDEEP <span class="badge" id="helperRoute">ROUTING … · default_chat · web auto</span></span>
+            <span><span class="live-dot"></span>SEEKDEEP <span class="badge" id="helperRoute">PROBING …</span></span>
           </div>
           <div class="tips">
             <span><kbd>↵</kbd> send</span>
             <span><kbd>⇧↵</kbd> newline</span>
-            <span><kbd>↑</kbd> edit last</span>
             <span><kbd>/</kbd> commands</span>
           </div>
         </div>
       </div>
     </main>
 
-    <!-- ===== MEMBERS / INFO ===== -->
-    <aside class="members">
+    <!-- ===== INFO RAIL ===== -->
+    <aside class="info-rail">
 
       <div class="bot-card">
         <div class="bot-head">
@@ -723,67 +587,23 @@
           <span class="ver"><span data-version>v10.35</span></span>
         </div>
         <div class="stats">
-          <div class="row"><span style="color:var(--hull-3)">status</span><span class="v" id="cBotStatus">● healthy</span></div>
-          <div class="row"><span style="color:var(--hull-3)">latency</span><span class="v" id="cBotLatency">48ms</span></div>
-          <div class="row"><span style="color:var(--hull-3)">model</span><span class="v" id="cBotModel">llama-3.1-8B</span></div>
-          <div class="row"><span style="color:var(--hull-3)">persona</span><span class="v" id="bot-persona">clinical</span></div>
-          <div class="row"><span style="color:var(--hull-3)">vram</span><span class="v" id="cBotVram">14.2 / 24 GB</span></div>
-          <div class="row"><span style="color:var(--hull-3)">queue</span><span class="v" id="cBotQueue">0</span></div>
+          <div class="row"><span class="k">status</span><span class="v" id="cBotStatus">● probing</span></div>
+          <div class="row"><span class="k">latency</span><span class="v" id="cBotLatency">—</span></div>
+          <div class="row"><span class="k">model</span><span class="v" id="cBotModel">—</span></div>
+          <div class="row"><span class="k">persona</span><span class="v" id="bot-persona">—</span></div>
+          <div class="row"><span class="k">vram</span><span class="v" id="cBotVram">—</span></div>
+          <div class="row"><span class="k">queue</span><span class="v" id="cBotQueue">—</span></div>
         </div>
       </div>
 
-      <div class="section-h" style="margin-top: 24px;">SEEKDEEP — BOTS · 1</div>
-      <div class="member bot">
-        <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /><span class="pres on"></span></div>
-        <div class="who">SeekDeep</div>
-        <span class="role-tag"><span data-version>v10.35</span></span>
-      </div>
-
-      <div class="section-h">ADMIN · 1</div>
-      <div class="member">
-        <div class="av">N<span class="pres on"></span></div>
-        <div class="who">nautilus</div>
-        <span class="role-tag">admin</span>
-      </div>
-
-      <div class="section-h">ONLINE · 4</div>
-      <div class="member">
-        <div class="av">D<span class="pres on"></span></div>
-        <div class="who">deepdiver</div>
-      </div>
-      <div class="member">
-        <div class="av">K<span class="pres busy"></span></div>
-        <div class="who">k-ray</div>
-      </div>
-      <div class="member">
-        <div class="av">A<span class="pres on"></span></div>
-        <div class="who">abyssalbot</div>
-      </div>
-      <div class="member">
-        <div class="av">L<span class="pres idle"></span></div>
-        <div class="who">lanternjaw</div>
-      </div>
-
-      <div class="section-h">OFFLINE · 5</div>
-      <div class="member" style="opacity:0.5;">
-        <div class="av">M<span class="pres"></span></div>
-        <div class="who">marianmariner</div>
-      </div>
-      <div class="member" style="opacity:0.5;">
-        <div class="av">P<span class="pres"></span></div>
-        <div class="who">pelagic</div>
-      </div>
-      <div class="member" style="opacity:0.5;">
-        <div class="av">B<span class="pres"></span></div>
-        <div class="who">bioluminescent</div>
-      </div>
-      <div class="member" style="opacity:0.5;">
-        <div class="av">T<span class="pres"></span></div>
-        <div class="who">trench-tracer</div>
-      </div>
-      <div class="member" style="opacity:0.5;">
-        <div class="av">S<span class="pres"></span></div>
-        <div class="who">silt-walker</div>
+      <div class="quick-tips">
+        <b>Quick reference.</b> Default text routes to <code>/chat</code> with
+        rolling conversation memory.<br /><br />
+        Slash commands open a hint menu — pick from <code>/image</code>,
+        <code>/vision</code>, <code>/remember</code>, <code>/recall</code>,
+        <code>/forget</code>, <code>/route</code>, <code>/help</code>.<br /><br />
+        The <b>persona pill</b> sets a global override for the web playground.
+        Channel and server scopes still live on Discord.
       </div>
     </aside>
 
@@ -798,40 +618,22 @@
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 
 <script>
-  // Slash menu toggle
-  const input = document.getElementById('msgInput');
-  const slash = document.getElementById('slashMenu');
-  input.addEventListener('input', () => {
-    if (input.value.startsWith('/')) slash.classList.add('open');
-    else slash.classList.remove('open');
-  });
-  input.addEventListener('blur', () => setTimeout(() => slash.classList.remove('open'), 150));
-
-  // Channel switching (visual only)
-  document.querySelectorAll('.channels .ch').forEach(c => {
-    c.addEventListener('click', () => {
-      document.querySelectorAll('.channels .ch').forEach(x => x.classList.remove('active'));
-      c.classList.add('active');
-    });
-  });
-
-  // Smart BASE — when served from local_ai_server.py via /gui mount, use same origin.
-// When opened directly (file://) or from another origin, fall back to :7865.
-const SEEKDEEP_BASE = (function() {
-  if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
-  const sameOrigin = window.location.protocol === 'http:' || window.location.protocol === 'https:';
-  if (sameOrigin && window.location.host) {
-    // Drop the /gui prefix if present
-    return window.location.origin;
-  }
-  return 'http://127.0.0.1:7865';
-})();
+  // Smart BASE — same-origin when served via /gui mount, else 127.0.0.1:7865.
+  const SEEKDEEP_BASE = (function () {
+    if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+    const sameOrigin = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    if (sameOrigin && window.location.host) return window.location.origin;
+    return 'http://127.0.0.1:7865';
+  })();
 
   // ===== LIVE PROBE — /health every 5s =====
+  // Pill ships as PROBING; flips to LIVE on first successful probe,
+  // or MOCK if the first probe fails or two consecutive probes fail.
   const cLIVE = {
     timer: null,
     failures: 0,
     isLive: false,
+    everProbed: false,
     async probe() {
       const t0 = performance.now();
       try {
@@ -844,7 +646,10 @@ const SEEKDEEP_BASE = (function() {
         this.apply(h, ms);
       } catch {
         this.failures++;
-        if (this.isLive && this.failures >= 2) this.setMode('mock');
+        if (!this.everProbed) this.setMode('mock');
+        else if (this.isLive && this.failures >= 2) this.setMode('mock');
+      } finally {
+        this.everProbed = true;
       }
     },
     setMode(mode) {
@@ -853,9 +658,8 @@ const SEEKDEEP_BASE = (function() {
       if (st) st.textContent = (mode === 'live') ? '● healthy · live' : '● mock · standalone';
       const pp = document.getElementById('playgroundPill');
       if (pp) {
-        pp.innerHTML = (mode === 'live')
-          ? '<span class="dot"></span>PLAYGROUND · LIVE'
-          : '<span class="dot"></span>PLAYGROUND · MOCK';
+        const label = mode === 'live' ? 'LIVE' : 'MOCK';
+        pp.innerHTML = '<span class="dot"></span>PLAYGROUND · ' + label;
         pp.classList.toggle('cyan', mode === 'live');
       }
       const hr = document.getElementById('helperRoute');
@@ -869,21 +673,18 @@ const SEEKDEEP_BASE = (function() {
       if (g.used_mb != null && g.total_mb != null) {
         set('cBotVram', `${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
       } else {
-        // CPU-only or /health.gpu is empty — overwrite the static placeholder
-        // so we don't lie to the user about VRAM that isn't there.
+        // CPU-only or empty /health.gpu — say so instead of leaving a stale placeholder.
         set('cBotVram', 'cpu · no gpu');
       }
+      if (h.queue_depth != null) set('cBotQueue', String(h.queue_depth));
+      else if (h.queue != null) set('cBotQueue', String(h.queue));
+      else set('cBotQueue', '0');
     },
-    start() {
-      this.probe();
-      this.timer = setInterval(() => this.probe(), 5000);
-    }
+    start() { this.probe(); this.timer = setInterval(() => this.probe(), 5000); },
   };
   cLIVE.start();
 
-  // ===== /route/debug — refresh helper-row badge with the live routing plan =====
-  // Read-only diagnostic; safe to poll. Falls back silently when offline (cLIVE
-  // already paints "OFFLINE · mock" in that case).
+  // ===== /route/debug helper-row badge =====
   async function refreshRoute() {
     if (!cLIVE.isLive) return;
     const hr = document.getElementById('helperRoute');
@@ -895,13 +696,168 @@ const SEEKDEEP_BASE = (function() {
       if (!r.ok) throw 0;
       const d = await r.json();
       const backend = (d.backend || 'local').toLowerCase();
-      const model   = (d.model_id || d.model || 'default_chat').toString().split('/').pop();
-      const web     = d.web_mode || d.web || 'auto';
+      const model = (d.model_id || d.model || 'default_chat').toString().split('/').pop();
+      const web = d.web_mode || d.web || 'auto';
       hr.textContent = `${backend.toUpperCase()} ROUTED · ${model} · web ${web}`;
     } catch { /* keep last good label */ }
   }
   setInterval(refreshRoute, 8000);
   setTimeout(refreshRoute, 800);
+
+  // ===== Auto-grow textarea =====
+  (function autoGrow() {
+    const ta = document.getElementById('msgInput');
+    if (!ta) return;
+    const grow = () => {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(200, ta.scrollHeight) + 'px';
+    };
+    ta.addEventListener('input', grow);
+    setTimeout(grow, 0);
+  })();
+
+  // ===== Slash-hint menu =====
+  (function slashMenu() {
+    const input = document.getElementById('msgInput');
+    const menu = document.getElementById('slashMenu');
+    if (!input || !menu) return;
+    const update = () => {
+      const v = input.value;
+      if (v.startsWith('/') && !v.includes('\n')) menu.classList.add('open');
+      else menu.classList.remove('open');
+    };
+    input.addEventListener('input', update);
+    input.addEventListener('blur', () => setTimeout(() => menu.classList.remove('open'), 150));
+  })();
+
+  // ===== Paperclip → file picker → forward to playground.js's drop handler =====
+  (function attachWiring() {
+    const btn = document.getElementById('attachBtn');
+    const picker = document.getElementById('filePicker');
+    if (!btn || !picker) return;
+    btn.addEventListener('click', () => picker.click());
+    picker.addEventListener('change', () => {
+      const f = picker.files && picker.files[0];
+      if (!f) return;
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        const evt = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt });
+        document.dispatchEvent(evt);
+      } catch (err) {
+        console.warn('[SeekDeep] could not forward file via drop event:', err);
+      }
+      picker.value = '';
+    });
+  })();
+
+  // ===== Persona pill — GET /persona on load, popover on click, POST on choose =====
+  const Persona = {
+    valid: ['neurotic', 'unsettling', 'clinical', 'chaotic'],
+    fallback: 'neurotic',
+    current: null,
+    setUI(name) {
+      this.current = name;
+      const display = (name || this.fallback).toUpperCase();
+      const lbl = document.getElementById('personaLabel');
+      if (lbl) lbl.textContent = display;
+      const bl = document.getElementById('bot-persona');
+      if (bl) bl.textContent = (name || this.fallback);
+      document.querySelectorAll('#personaPop .opt').forEach(o => {
+        o.classList.toggle('active', o.dataset.persona === (name || this.fallback));
+      });
+      // Let Tweaks panel mirror the change.
+      window.dispatchEvent(new CustomEvent('seekdeep:persona-changed', {
+        detail: { persona: name || this.fallback },
+      }));
+    },
+    async load() {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/persona', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!r.ok) throw new Error('http ' + r.status);
+        const d = await r.json();
+        if (Array.isArray(d.valid_personas) && d.valid_personas.length) {
+          this.valid = d.valid_personas.slice();
+        }
+        if (d.env_default) this.fallback = String(d.env_default);
+        this.setUI(d.effective_global || d.global || this.fallback);
+      } catch {
+        // /persona unreachable (mock mode). Keep a sane placeholder.
+        this.setUI('clinical');
+      }
+    },
+    async post(body) {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/persona', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          console.warn('[SeekDeep] /persona POST failed:', r.status);
+          return null;
+        }
+        return await r.json();
+      } catch (err) {
+        console.warn('[SeekDeep] /persona POST error:', err);
+        return null;
+      }
+    },
+    async choose(name) {
+      if (!this.valid.includes(name)) return;
+      this.setUI(name);  // optimistic
+      const r = await this.post({ scope: 'global', persona: name });
+      if (r && r.persona) this.setUI(r.persona);
+    },
+    async clear() {
+      await this.post({ scope: 'global', action: 'reset' });
+      // After reset, re-fetch effective so we show whatever env / Discord override is in play.
+      await this.load();
+    },
+  };
+  window.Persona = Persona;
+  Persona.load();
+
+  // popover wiring
+  (function personaPop() {
+    const btn = document.getElementById('personaBtn');
+    const pop = document.getElementById('personaPop');
+    const clear = document.getElementById('personaClear');
+    if (!btn || !pop) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pop.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (!pop.classList.contains('open')) return;
+      if (pop.contains(e.target) || btn.contains(e.target)) return;
+      pop.classList.remove('open');
+    });
+    pop.querySelectorAll('.opt').forEach(opt => {
+      opt.addEventListener('click', () => {
+        Persona.choose(opt.dataset.persona);
+        pop.classList.remove('open');
+      });
+    });
+    if (clear) clear.addEventListener('click', () => {
+      Persona.clear();
+      pop.classList.remove('open');
+    });
+  })();
+
+  // Hide empty-state placard once playground.js paints a real message.
+  (function hideEmptyOnFirstMessage() {
+    const messages = document.getElementById('messages');
+    const empty = document.getElementById('messagesEmpty');
+    if (!messages || !empty) return;
+    const mo = new MutationObserver(() => {
+      if (messages.querySelector('.msg')) empty.style.display = 'none';
+    });
+    mo.observe(messages, { childList: true });
+  })();
 </script>
 
 <!-- Tweaks panel -->
@@ -910,7 +866,6 @@ const SEEKDEEP_BASE = (function() {
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "palette": ["#2dd4ff","#00a8e8","#0d2152"],
   "mode": "dark",
-  "persona": "clinical",
   "ambientMotion": true
 }/*EDITMODE-END*/;
 
@@ -950,13 +905,6 @@ function applyTweaks(t) {
     root.style.setProperty('--hull-2', '#c7d6f0');
     root.style.setProperty('--hull-3', '#7d92b8');
   }
-  // persona reflection
-  const p = document.getElementById('bot-persona');
-  if (p) p.textContent = t.persona;
-  const pill = document.querySelector('.composer-row .pill');
-  if (pill) {
-    pill.innerHTML = `<span class="dot"></span>${(t.persona||'').toUpperCase()}`;
-  }
 }
 function adjL(hex, delta) {
   const c = hex.replace('#','');
@@ -966,9 +914,41 @@ function adjL(hex, delta) {
   return '#' + toHex(r) + toHex(g) + toHex(b);
 }
 
+const PERSONA_OPTS = [
+  { value: 'neurotic',   label: 'Neurotic — hedged' },
+  { value: 'unsettling', label: 'Unsettling — pauses…' },
+  { value: 'clinical',   label: 'Clinical — terse' },
+  { value: 'chaotic',    label: 'Chaotic — CAPS' },
+];
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  React.useEffect(() => { applyTweaks(t); }, [t.palette, t.mode, t.persona, t.ambientMotion]);
+  // Persona is owned by the chat.html Persona controller; Tweaks reflects + drives it.
+  const [persona, setPersonaUI] = React.useState('clinical');
+
+  React.useEffect(() => {
+    const onChange = (e) => {
+      const p = e.detail && e.detail.persona;
+      if (p) setPersonaUI(p);
+    };
+    window.addEventListener('seekdeep:persona-changed', onChange);
+    return () => window.removeEventListener('seekdeep:persona-changed', onChange);
+  }, []);
+
+  React.useEffect(() => { applyTweaks(t); }, [t.palette, t.mode, t.ambientMotion]);
+
+  const pickPersona = (v) => {
+    setPersonaUI(v);
+    if (window.Persona && typeof window.Persona.choose === 'function') {
+      window.Persona.choose(v);
+    }
+  };
+  const clearPersona = () => {
+    if (window.Persona && typeof window.Persona.clear === 'function') {
+      window.Persona.clear();
+    }
+  };
+
   return (
     <TweaksPanel title="Tweaks">
       <TweakSection label="Palette">
@@ -979,15 +959,11 @@ function App() {
           options={[{value:'dark',label:'Dark'},{value:'light',label:'Light'}]}
           onChange={v => setTweak('mode', v)} />
       </TweakSection>
-      <TweakSection label="Persona">
-        <TweakSelect label="Active" value={t.persona}
-          options={[
-            {value:'clinical', label:'Clinical — terse'},
-            {value:'neurotic', label:'Neurotic — hedged'},
-            {value:'unsettling', label:'Unsettling — pauses…'},
-            {value:'chaotic', label:'Chaotic — CAPS'}
-          ]}
-          onChange={v => setTweak('persona', v)} />
+      <TweakSection label="Persona · global override">
+        <TweakSelect label="Active" value={persona}
+          options={PERSONA_OPTS}
+          onChange={pickPersona} />
+        <TweakButton label="▸ Clear override" onClick={clearPersona} />
       </TweakSection>
       <TweakSection label="Atmosphere">
         <TweakToggle label="Ambient drift" value={t.ambientMotion} onChange={v => setTweak('ambientMotion', v)} />
