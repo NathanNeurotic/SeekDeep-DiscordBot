@@ -752,15 +752,8 @@
         <div style="display:grid; grid-template-columns: 2fr 1fr; gap: 18px;">
           <div class="panel-flat" style="padding: 18px;">
             <div class="eyebrow" style="margin-bottom: 10px;">Boot sequence</div>
-            <div class="logs-wrap" style="height: 200px;">
-              <div class="log-line"><span class="ts">14:08:02</span><span class="lvl info">INFO</span><span class="src">launcher</span><span class="msg">▸ docker compose up searxng -d</span></div>
-              <div class="log-line"><span class="ts">14:08:08</span><span class="lvl info">INFO</span><span class="src">searxng</span><span class="msg">listening on <span class="hl">127.0.0.1:8080</span></span></div>
-              <div class="log-line"><span class="ts">14:08:09</span><span class="lvl info">INFO</span><span class="src">launcher</span><span class="msg">▸ python local_ai_server.py</span></div>
-              <div class="log-line"><span class="ts">14:08:14</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">loading <span class="hl">Llama-3.1-8B-Instruct</span> @ 4bit…</span></div>
-              <div class="log-line"><span class="ts">14:08:42</span><span class="lvl info">INFO</span><span class="src">ai-server</span><span class="msg">model resident · uvicorn ready</span></div>
-              <div class="log-line"><span class="ts">14:08:43</span><span class="lvl info">INFO</span><span class="src">launcher</span><span class="msg">▸ node index.js</span></div>
-              <div class="log-line"><span class="ts">14:08:46</span><span class="lvl info">INFO</span><span class="src">bot</span><span class="msg">connected as <span class="hl">@SeekDeep</span> · 3 guilds</span></div>
-              <div class="log-line"><span class="ts">14:08:46</span><span class="lvl info">INFO</span><span class="src">launcher</span><span class="msg">stack ready · all healthy</span></div>
+            <div class="logs-wrap" style="height: 200px;" id="bootSeqLog">
+              <div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ no boot.* events yet — the full live tail is on the Logs pane</div>
             </div>
           </div>
           <div class="panel-flat" style="padding: 18px;">
@@ -1504,7 +1497,6 @@
             <span class="pill" id="logsModePill" title="live = SeekDeepEvents.log.line · poll = /logs/tail" style="padding: 3px 10px;"><span class="dot"></span>POLL MODE</span>
             <button class="btn btn-ghost" id="logsPauseBtn">Pause</button>
             <button class="btn btn-ghost" id="logsClearBtn">Clear</button>
-            <button class="btn btn-ghost">Export</button>
           </div>
         </div>
 
