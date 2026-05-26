@@ -342,46 +342,22 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     presets: [],
   };
 
-  // --- mock seed ----------------------------------------------------
+  // --- demo seed (offline state only) -------------------------------
+  // ONE visibly-fake user so the page has something to render when the
+  // backend is unreachable. Previously had five fake users with realistic-
+  // looking Discord IDs + names ("nautilus#0001", "k-ray#1111", "abyssalbot
+  // #0888", etc.) which were easy to mistake for real users. Now there's
+  // one user named "(demo · server offline)" with explicitly-fake facts
+  // so nobody mistakes them for real memory data.
   const MOCK_USERS = {
-    '337726847593414656': {
-      display: 'nautilus#0001',
+    '000000000000000000': {
+      display: '(demo · server offline)',
       facts: [
-        { text: 'works in PST timezone',                                                  at: Date.now() - 1*60*60*1000 },
-        { text: 'prefers Python over JavaScript for backend work',                        at: Date.now() - 4*60*60*1000 },
-        { text: 'runs SeekDeep on an RTX 4090 Laptop GPU (24 GB VRAM)',                   at: Date.now() - 26*60*60*1000 },
-        { text: 'maintains a homebrew PS2 loader called wOPL',                            at: Date.now() - 3*24*60*60*1000 },
-        { text: 'has three cats named after fish (Loach, Goby, Wrasse)',                  at: Date.now() - 8*24*60*60*1000 },
-        { text: 'is a yarn/wool spinning hobbyist — knits while reviewing PRs',           at: Date.now() - 11*24*60*60*1000 },
+        { text: 'This is sample data shown while the AI server is unreachable.', at: Date.now() - 60*1000 },
+        { text: 'Start the SeekDeep stack to see real per-user facts here.',     at: Date.now() - 90*1000 },
+        { text: 'Add facts in Discord with `@SeekDeep remember <fact about me>`.', at: Date.now() - 120*1000 },
       ],
-      presets: ['brief', 'no-followup-questions'],
-    },
-    '481118226214748162': {
-      display: 'deepdiver#3320',
-      facts: [
-        { text: 'works as a backend infra engineer · uses Rust for high-perf services',   at: Date.now() - 6*60*60*1000 },
-        { text: 'has strong opinions about kubernetes pod limits',                        at: Date.now() - 2*24*60*60*1000 },
-        { text: 'prefers terse, no-emoji responses',                                      at: Date.now() - 5*24*60*60*1000 },
-      ],
-      presets: ['no-emoji', 'expert'],
-    },
-    '128739247192847362': {
-      display: 'k-ray#1111',
-      facts: [
-        { text: 'into deep-sea documentaries · cites Blue Planet II constantly',          at: Date.now() - 10*60*60*1000 },
-        { text: 'wants markdown-only responses with no tables',                           at: Date.now() - 3*24*60*60*1000 },
-      ],
-      presets: ['casual'],
-    },
-    '999812374198273492': {
-      display: 'abyssalbot#0888',
-      facts: [{ text: 'is itself a bot · only relays messages from another channel',      at: Date.now() - 14*24*60*60*1000 }],
-      presets: [],
-    },
-    '742839472837492837': {
-      display: 'lanternjaw#7777',
-      facts: [],
-      presets: ['formal'],
+      presets: ['(offline demo)'],
     },
   };
 
