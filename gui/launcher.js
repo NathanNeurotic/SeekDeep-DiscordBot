@@ -72,13 +72,38 @@
 
   // --- Card status pump ---------------------------------------------------
 
+  // Tracks consecutive /launchers/status failures so we can flip the cards
+  // to UNKNOWN after 3 misses instead of leaving them in PROBING forever
+  // (which would be a quiet lie when the AI server is genuinely down).
+  let _launchStatusMisses = 0;
   async function pumpStatus() {
     let data;
     try {
       const r = await fetch(BASE + '/launchers/status', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-      if (!r.ok) return;
+      if (!r.ok) throw new Error('http ' + r.status);
       data = await r.json();
-    } catch { return; }
+      _launchStatusMisses = 0;
+    } catch {
+      _launchStatusMisses++;
+      if (_launchStatusMisses >= 3) {
+        // Mark every card UNKNOWN so the user knows the launcher backend
+        // isn't reachable, instead of staring at "PROBING" indefinitely.
+        document.querySelectorAll('.launcher-card[data-svc]').forEach((card) => {
+          const pill = card.querySelector('.pill');
+          if (!pill) return;
+          pill.classList.remove('on');
+          pill.classList.add('warn');
+          pill.innerHTML = '<span class="dot"></span>UNKNOWN';
+          card.classList.remove('up');
+        });
+        const sbLauncher = document.getElementById('sbLauncherBadge');
+        if (sbLauncher) {
+          sbLauncher.textContent = '— OFFLINE';
+          sbLauncher.classList.add('bad');
+        }
+      }
+      return;
+    }
     if (!data || !data.services) return;
     // Sidebar Launcher badge: "N UP" / "N DOWN".
     let up = 0, total = 0;

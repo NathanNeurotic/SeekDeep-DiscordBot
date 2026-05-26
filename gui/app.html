@@ -698,7 +698,12 @@
         </div>
 
         <div class="launcher-grid">
-          <div class="launcher-card up" data-svc="searxng">
+          <!-- Initial state is PROBING (no .up class, no HEALTHY pill). The
+               5s pumpStatus() poll in launcher.js fills in pid/state/pill
+               from /launchers/status. Was hardcoded "HEALTHY · up" which
+               lied for the first ~5 seconds after page load — and forever
+               if /launchers/status was unreachable. -->
+          <div class="launcher-card" data-svc="searxng">
             <div>
               <div class="pid">PID — · :8080</div>
               <h4>SearXNG</h4>
@@ -706,14 +711,14 @@
               <div class="stats"><span>Uptime: <em>—</em></span><span>Reqs: <em>—</em></span></div>
             </div>
             <div>
-              <span class="pill on" style="margin-bottom: 12px;"><span class="dot"></span>HEALTHY</span>
+              <span class="pill" style="margin-bottom: 12px;"><span class="dot"></span>PROBING</span>
               <div class="ctl">
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px;">Restart</button>
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px; color: var(--bad);">Stop</button>
               </div>
             </div>
           </div>
-          <div class="launcher-card up" data-svc="ai-server">
+          <div class="launcher-card" data-svc="ai-server">
             <div>
               <div class="pid">PID — · :7865</div>
               <h4>Local AI Server</h4>
@@ -721,22 +726,22 @@
               <div class="stats"><span>VRAM: <em id="svcVram">—</em></span><span>Queue: <em id="svcQueue">—</em></span></div>
             </div>
             <div>
-              <span class="pill on" style="margin-bottom: 12px;"><span class="dot"></span>HEALTHY</span>
+              <span class="pill" style="margin-bottom: 12px;"><span class="dot"></span>PROBING</span>
               <div class="ctl">
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px;">Restart</button>
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px; color: var(--bad);">Stop</button>
               </div>
             </div>
           </div>
-          <div class="launcher-card up" data-svc="bot">
+          <div class="launcher-card" data-svc="bot">
             <div>
               <div class="pid">PID — · gateway</div>
               <h4>SeekDeep Bot</h4>
-              <div class="desc">node index.js · connected as @SeekDeep</div>
+              <div class="desc">node index.js · Discord gateway client</div>
               <div class="stats"><span>Latency: <em>—</em></span><span>Guilds: <em>—</em></span></div>
             </div>
             <div>
-              <span class="pill on" style="margin-bottom: 12px;"><span class="dot"></span>HEALTHY</span>
+              <span class="pill" style="margin-bottom: 12px;"><span class="dot"></span>PROBING</span>
               <div class="ctl">
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px;">Restart</button>
                 <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px; color: var(--bad);">Stop</button>
@@ -891,7 +896,7 @@
             <button class="btn btn-ghost" id="cfg-collapse-all">Collapse all</button>
             <button class="btn btn-ghost" id="cfg-expand-all">Expand all</button>
             <button class="btn btn-ghost">Reload from disk</button>
-            <button class="btn btn-primary" id="cfg-save"><span id="cfg-dirty-count">3</span> pending · save</button>
+            <button class="btn btn-primary" id="cfg-save"><span id="cfg-dirty-count">0</span> pending · save</button>
           </div>
         </div>
 
@@ -920,7 +925,7 @@
               <summary>
                 <span class="chev">▸</span>
                 <span class="sec-title">Discord &amp; routing <em>core</em></span>
-                <span class="sec-dirty">2 dirty</span>
+                <span class="sec-dirty"></span>
                 <span class="sec-count">9</span>
               </summary>
               <div class="sec-body">
@@ -1217,7 +1222,7 @@
               <summary>
                 <span class="chev">▸</span>
                 <span class="sec-title">Image generation <em>SDXL pipeline</em></span>
-                <span class="sec-dirty">1 dirty</span>
+                <span class="sec-dirty"></span>
                 <span class="sec-count">11</span>
               </summary>
               <div class="sec-body">
@@ -2544,6 +2549,18 @@ const SEEKDEEP_BASE = (function() {
       : 0;
     const counter = document.getElementById('cfg-dirty-count');
     if (counter) counter.textContent = dirtyCount;
+    // Per-section dirty tags — populate the .sec-dirty span inside each
+    // section's <summary> so the user can see at a glance which collapsed
+    // section has the unsaved changes (instead of hardcoded "2 dirty" /
+    // "1 dirty" that lied on cold start).
+    document.querySelectorAll('details.cfg-section').forEach(sec => {
+      const tag = sec.querySelector('summary > .sec-dirty');
+      if (!tag) return;
+      const n = sec.querySelectorAll('.config-row .save')
+        ? [...sec.querySelectorAll('.config-row .save')].filter(s => s.textContent.includes('DIRTY')).length
+        : 0;
+      tag.textContent = n > 0 ? (n + ' dirty') : '';
+    });
   }
   // dirty-flag tracking for native inputs/selects
   document.querySelectorAll('#sec-discord input, #sec-discord select, #sec-models input, #sec-models select, #sec-vram input, #sec-vram select, #sec-memory input, #sec-memory select, #sec-image input, #sec-image select, #sec-chat input, #sec-chat select, #sec-search input, #sec-search select, #sec-admin input, #sec-admin select').forEach(el => {
