@@ -96,6 +96,12 @@
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     manualClose = false;
+    // On every reconnect, FORCE-REFRESH the token. The previous one may be
+    // stale (server restart rotated it, or token expired in some future
+    // version). nav.js's SeekDeepAuth.reset() clears its cache so the
+    // next get() re-fetches /token. Without this we'd happily reconnect
+    // with a dead token and get rejected forever.
+    try { window.SeekDeepAuth?.reset?.(); } catch {}
     const tok = await getToken();
     const url = wsBase() + '/events' + (tok ? ('?token=' + encodeURIComponent(tok)) : '');
     try {
@@ -105,7 +111,7 @@
       return;
     }
     ws.onopen = () => {
-      reconnectMs = 1000;
+      reconnectMs = 250;
       emit('_open', {});
     };
     ws.onmessage = (e) => {
@@ -117,7 +123,14 @@
     };
     ws.onclose = (e) => {
       emit('_close', { code: e.code, reason: e.reason });
-      if (!manualClose) scheduleReconnect();
+      // Immediately emit _probing so the sd-live-pill shows PROBING
+      // (yellow) during the reconnect window instead of OFFLINE (red)
+      // for users who are actually fine — the server is local + always-up,
+      // a dropped WS almost always reconnects in under a second.
+      if (!manualClose) {
+        emit('_probing', { reason: e.reason || 'reconnecting' });
+        scheduleReconnect();
+      }
     };
     ws.onerror = () => { emit('_error', { message: 'websocket error' }); };
   }
@@ -125,7 +138,12 @@
   function scheduleReconnect() {
     if (reconnectTimer) return;
     const delay = reconnectMs;
-    reconnectMs = Math.min(30_000, Math.round(reconnectMs * 1.8));
+    // Cap at 5s instead of 30s. The server is on loopback — there's no
+    // bandwidth-conservation case for backing off to half-a-minute.
+    // Aggressive retry means a server restart (e.g. from a sidecar
+    // respawn after stale-version detection) reconnects almost
+    // immediately instead of leaving the sd-live-pill OFFLINE.
+    reconnectMs = Math.min(5_000, Math.round(reconnectMs * 1.8));
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
   }
 

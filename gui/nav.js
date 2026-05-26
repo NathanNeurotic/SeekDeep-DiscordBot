@@ -37,7 +37,13 @@
     let cached = null;          // '' = tried and got nothing; null = not tried yet
     let inflight = null;        // promise of in-flight /token fetch
     async function fetchToken() {
-      if (cached !== null) return cached;
+      // Cache hit: return immediately. But ONLY if cached is a non-empty
+      // string — an empty cache from a previous failed fetch should never
+      // permanently lock us out of trying again. Previously this returned
+      // '' forever after one transient /token failure during server
+      // restart, making every subsequent POST go unauthed → 401 →
+      // "TypeError: Failed to fetch" in launcher.js's catch.
+      if (typeof cached === 'string' && cached !== '') return cached;
       if (inflight) return inflight;
       inflight = (async () => {
         try {
@@ -49,7 +55,10 @@
             return cached;
           }
         } catch (_) { /* server unreachable; cache empty */ }
-        cached = '';
+        // Leave cached as null (not '') so the NEXT call tries again
+        // instead of returning '' instantly. Net effect: a failed token
+        // fetch isn't sticky.
+        cached = null;
         return '';
       })();
       const t = await inflight;
@@ -882,8 +891,14 @@
     if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
       try {
         window.SeekDeepEvents.on('_open',  () => setLiveState('live'));
-        window.SeekDeepEvents.on('_close', () => setLiveState('offline'));
-        setLiveState(window.SeekDeepEvents.connected ? 'live' : 'offline');
+        // _probing fires immediately on close before scheduleReconnect runs,
+        // so the pill shows PROBING (yellow) during the brief reconnect
+        // window instead of OFFLINE (red) — important for the "server
+        // restart from sidecar respawn" case, which used to leave the
+        // pill OFFLINE for up to 30s.
+        window.SeekDeepEvents.on('_probing', () => setLiveState('probing'));
+        window.SeekDeepEvents.on('_close', () => setLiveState('probing'));
+        setLiveState(window.SeekDeepEvents.connected ? 'live' : 'probing');
         return true;
       } catch {}
     }

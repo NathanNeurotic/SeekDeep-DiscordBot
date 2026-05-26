@@ -428,19 +428,34 @@
       });
       return;
     }
-    try {
-      const r = await fetch(BASE + '/launcher/' + svc + '/' + action, { method: 'POST' });
-      const sdn = notify();
-      const body = await r.json().catch(() => ({}));
-      if (sdn) {
-        if (r.ok) sdn.toast({ tone: 'good', title: svc + ' ' + action + ' OK', ttl: 3000 });
-        else sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' failed', body: 'HTTP ' + r.status + (body.detail ? ' · ' + body.detail : ''), ttl: 6000 });
+    // Helper: try the POST once, return {ok, status, body} or null on network error.
+    const tryOnce = async () => {
+      try {
+        const r = await fetch(BASE + '/launcher/' + svc + '/' + action, { method: 'POST' });
+        const body = await r.json().catch(() => ({}));
+        return { ok: r.ok, status: r.status, body };
+      } catch (_) {
+        return null;
       }
-      setTimeout(pumpStatus, 600);
-    } catch (err) {
-      const sdn = notify();
-      if (sdn) sdn.toast({ tone: 'bad', title: 'Network error', body: String(err), ttl: 5000 });
+    };
+    // Retry-on-network-error: TypeError: Failed to fetch was the user-visible
+    // result of the WebView racing against a server restart (sidecar respawn,
+    // ML deps install, etc.). One quiet retry after 400ms is enough — if the
+    // server's coming back it'll be back by then; if it's not, we surface
+    // the real error on the second attempt.
+    let result = await tryOnce();
+    if (result === null) {
+      await new Promise(r => setTimeout(r, 400));
+      result = await tryOnce();
     }
+    const sdn = notify();
+    if (result === null) {
+      if (sdn) sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' · server unreachable', body: 'Both attempts failed. The local AI server may be restarting — try again in a few seconds.', ttl: 6000 });
+    } else if (sdn) {
+      if (result.ok) sdn.toast({ tone: 'good', title: svc + ' ' + action + ' OK', ttl: 3000 });
+      else sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' failed', body: 'HTTP ' + result.status + (result.body.detail ? ' · ' + result.body.detail : ''), ttl: 6000 });
+    }
+    setTimeout(pumpStatus, 600);
   }
 
   async function unloadAll() {
