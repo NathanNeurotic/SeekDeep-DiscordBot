@@ -84,6 +84,14 @@ class ArchiveConfigPatch(BaseModel):
     updates: dict
 
 
+class DepsInstallBody(BaseModel):
+    """Body for POST /deps/install. requirements_file defaults to the heavy
+    ML stack; the only other valid value is requirements-local.txt. See
+    ArchiveConfigPatch above for why this is module-level (FastAPI + Pydantic
+    v2 treat closure-scoped BaseModels as query params, not request bodies)."""
+    requirements_file: str = "requirements-ml.txt"
+
+
 class PersonaPatch(BaseModel):
     """Body for POST /persona. Schema:
         { scope: 'channel'|'server'|'global', persona: 'neurotic'|'unsettling'|'clinical'|'chaotic' }
@@ -1184,6 +1192,91 @@ def register_gui_endpoints(
                 "commands":        "COMMANDS.md (table rows)",
                 "surfaces":        "gui/nav.js (PAGES array)",
             },
+        }
+
+    # ----- POST /deps/install -----
+    # Pairs with GET /ml_deps on the local_ai_server side. When the user
+    # clicks "Install ML libraries" in the GUI banner, this endpoint spawns
+    # `python -m pip install --user -r <requirements_file>` in a background
+    # thread and streams pip's stdout/stderr to the event bus as
+    # `deps.install.line` events. Front-end consumers (the install modal)
+    # subscribe to those events to show progress.
+    #
+    # Token-required because pip-install can take ~5 minutes and pull ~2 GB,
+    # so we don't want a random caller kicking it off.
+    #
+    # We deliberately don't tail-existing-install-job — if you POST twice,
+    # both threads run pip in parallel against the same site-packages.
+    # That's safe (pip itself locks) but wasteful. The frontend should gate
+    # its own button to prevent re-clicks; we don't enforce it server-side.
+    _ALLOWED_REQUIREMENTS_FILES = {"requirements-ml.txt", "requirements-local.txt"}
+
+    @app.post("/deps/install", dependencies=[Depends(_require_gui_token)])
+    def post_deps_install(body: DepsInstallBody):
+        import sys
+        import threading
+
+        req_name = (body.requirements_file or "requirements-ml.txt").strip()
+        if req_name not in _ALLOWED_REQUIREMENTS_FILES:
+            raise HTTPException(400,
+                f"requirements_file must be one of {sorted(_ALLOWED_REQUIREMENTS_FILES)}; got {req_name!r}")
+        req_path = root / req_name
+        if not req_path.is_file():
+            raise HTTPException(404, f"{req_name} not found at {req_path}")
+
+        def run_install():
+            try:
+                event_bus.publish_sync({
+                    "type": "deps.install.started",
+                    "data": {"requirements_file": req_name},
+                })
+                proc = subprocess.Popen(
+                    [
+                        sys.executable, "-m", "pip", "install",
+                        "--user", "--upgrade",
+                        "-r", str(req_path),
+                    ],
+                    cwd=str(root),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                # Stream pip output line-by-line so the frontend can show
+                # progress. pip emits "Downloading torch-X.Y.Z-cu128 ..." style
+                # lines that are useful to surface.
+                if proc.stdout is not None:
+                    for line in proc.stdout:
+                        event_bus.publish_sync({
+                            "type": "deps.install.line",
+                            "data": {"line": line.rstrip()},
+                        })
+                proc.wait()
+                if proc.returncode == 0:
+                    event_bus.publish_sync({
+                        "type": "deps.install.complete",
+                        "data": {"requirements_file": req_name},
+                    })
+                else:
+                    event_bus.publish_sync({
+                        "type": "deps.install.failed",
+                        "data": {
+                            "requirements_file": req_name,
+                            "exit_code": proc.returncode,
+                        },
+                    })
+            except Exception as exc:
+                event_bus.publish_sync({
+                    "type": "deps.install.failed",
+                    "data": {"requirements_file": req_name, "error": str(exc)},
+                })
+
+        threading.Thread(target=run_install, daemon=True).start()
+        return {
+            "ok": True,
+            "started": True,
+            "requirements_file": req_name,
+            "note": "subscribe to deps.install.line / deps.install.complete / deps.install.failed on /events",
         }
 
     # ----- WebSocket /events -----

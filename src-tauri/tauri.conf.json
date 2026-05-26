@@ -50,6 +50,7 @@
       "../warmup_local_cache.py",
       "../package.json",
       "../requirements-local.txt",
+      "../requirements-ml.txt",
       "../.env.default",
       "../gui/**/*"
     ],

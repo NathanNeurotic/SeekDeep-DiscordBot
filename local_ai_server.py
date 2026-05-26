@@ -1660,6 +1660,49 @@ def health():
     }
 
 
+@app.get("/ml_deps")
+def ml_deps_endpoint():
+    """Report whether the heavy ML libraries needed by /chat (local) /image
+    /vision are importable. Used by the in-app 'Install ML libraries' prompt
+    so the user can opt to install ~2 GB of torch/diffusers/transformers on
+    first use, instead of bloating the .exe installer.
+
+    The check is lightweight (one __import__ per module, no init), so /ml_deps
+    is safe to poll from the GUI on page load. Returns a structured payload
+    so the frontend can pre-populate the install consent dialog with the
+    missing-module list."""
+    # Modules the local AI features genuinely require. Remote-backend-only
+    # configs (openai-compat / anthropic / gemini) never trip this list
+    # because /chat routes to HTTP for those backends — torch is unused.
+    ML_MODULES = ("torch", "transformers", "diffusers", "accelerate", "safetensors")
+    missing = []
+    for mod in ML_MODULES:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+        except Exception:
+            # If a module imports but raises something other than ImportError
+            # (e.g. torch with mismatched CUDA), surface that as "present but
+            # broken" rather than "missing" so we don't trigger a reinstall.
+            pass
+    return {
+        "ok": True,
+        "available": len(missing) == 0,
+        "checked": list(ML_MODULES),
+        "missing": missing,
+        "requirements_file": "requirements-ml.txt",
+        "install_endpoint": "POST /deps/install (token required)",
+        "manual_command": "python -m pip install --user -r requirements-ml.txt",
+        "note": (
+            "Heavy ML deps (~2 GB) for /image, /vision, and local /chat. "
+            "Remote backends (openai-compat / anthropic / gemini) don't need this. "
+            "Install via POST /deps/install for the in-app flow, or run the pip "
+            "command manually."
+        ),
+    }
+
+
 @app.get("/vram")
 def vram_budget_endpoint():
     """Detailed VRAM budget breakdown for diagnostics."""

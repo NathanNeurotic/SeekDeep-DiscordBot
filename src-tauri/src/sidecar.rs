@@ -102,6 +102,7 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         "warmup_local_cache.py",
         "package.json",
         "requirements-local.txt",
+        "requirements-ml.txt",
         ".env.default",
     ];
     for f in files {

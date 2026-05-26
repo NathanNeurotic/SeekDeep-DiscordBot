@@ -995,5 +995,9 @@
     inject('playground.js', null);
     // stats.js · /stats/counts → [data-stat-*] cells (designer-shipped)
     inject('stats.js', null);
+    // ml-deps.js · GET /ml_deps probe + first-use install banner for
+    // torch/transformers/diffusers. Self-gated; safe to inject everywhere
+    // because the banner only shows if /ml_deps says available=false.
+    inject('ml-deps.js', null);
   })();
 })();

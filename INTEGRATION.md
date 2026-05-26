@@ -377,6 +377,58 @@ The bot's persona ("neurotic" / "unsettling" / "clinical" / "chaotic") is overri
 
 …then a small consumer (in `version.js` or a new `stats.js`) fetches `/stats/counts` once on load and rewrites every `[data-stat-X]` element. Until that consumer is wired, the existing literals remain visible.
 
+## 3.9 · First-use ML dependency downloader (`/ml_deps` + `/deps/install`)
+
+The Tauri shell bundles our Python code + the boot deps list (`requirements-local.txt` — fastapi/uvicorn/pydantic/pillow/etc, ~30 MB installed) but NOT the heavy ML stack (torch/transformers/diffusers/accelerate, ~2 GB installed). Bundling 2 GB into every installer would be hostile; instead the GUI offers to install it on first use of `/image`, `/vision`, or local `/chat`.
+
+### `GET /ml_deps` (open)
+
+Lives on `local_ai_server.py`. Lightweight import probe — one `__import__` per module, no init — so it's safe to poll on every GUI page load.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ok` | `true` | Always set when the endpoint responds. |
+| `available` | `bool` | `true` iff every module in `checked` imports successfully. |
+| `checked` | `[str]` | Canonical list: `torch / transformers / diffusers / accelerate / safetensors`. |
+| `missing` | `[str]` | Subset of `checked` that failed to import. |
+| `requirements_file` | `"requirements-ml.txt"` | The file `POST /deps/install` targets. |
+| `install_endpoint` | `"POST /deps/install (token required)"` | Reminder for the GUI. |
+| `manual_command` | `"python -m pip install --user -r requirements-ml.txt"` | Last-resort copy-paste for terminal users. |
+| `note` | `str` | One-line explanation suitable for the install consent dialog. |
+
+**Invariant:** `available === (missing.length === 0)`.
+
+### `POST /deps/install` (token-required)
+
+Lives on `gui_endpoints.py`. Spawns `python -m pip install --user --upgrade -r <requirements_file>` in a daemon thread. Returns immediately so the GUI can swap to a progress modal without blocking.
+
+| Field | Default | Validation |
+|---|---|---|
+| `requirements_file` | `"requirements-ml.txt"` | Must be one of `{requirements-ml.txt, requirements-local.txt}` — anything else returns 400. Whitelist is hardcoded to prevent path-traversal. |
+
+Response: `{ ok, started: true, requirements_file, note }`.
+
+**Progress events** — subscribe on `/events`:
+
+| Topic | Data |
+|---|---|
+| `deps.install.started` | `{ requirements_file }` |
+| `deps.install.line` | `{ line }` — one pip output line at a time |
+| `deps.install.complete` | `{ requirements_file }` |
+| `deps.install.failed` | `{ requirements_file, exit_code?, error? }` |
+
+**Reload requirement:** torch / diffusers / transformers cannot be hot-imported into an already-running Python process (they have native extension modules). After `deps.install.complete`, the user must restart the AI server before `/chat`, `/image`, `/vision` start working. The GUI surfaces this in the install modal.
+
+### Consumer wired in `gui/ml-deps.js`
+
+Auto-loaded by `nav.js`'s `autoLoadSiblings` alongside `events.js / version.js / playground.js / stats.js`. On page load:
+
+1. Probes `GET /ml_deps`.
+2. If `available: false`, injects a topnav banner naming the missing modules + offering "Install (~2 GB)" + a Dismiss button.
+3. On install click, opens a progress modal subscribed to `deps.install.*` and posts to `/deps/install`. The modal shows live pip output and the post-install "restart server" hint.
+
+Self-gated via `window.__seekdeepMlDepsLoaded` so multiple injections no-op. Pages that want to suppress the banner can set that flag before `nav.js` runs.
+
 ## 4 · Archive browser bot bridge
 
 The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.

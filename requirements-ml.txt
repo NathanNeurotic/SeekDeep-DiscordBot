@@ -1,0 +1,31 @@
+# SeekDeep · ML deps — heavy libraries for /chat (local), /image, /vision,
+# and the warmup_local_cache.py model puller.
+#
+# Installed on first use via the in-app "Install ML libraries" prompt
+# (POST /deps/install endpoint). NOT installed by the Tauri sidecar's
+# first-run flow — the boot deps in requirements-local.txt are enough to
+# bring the server up; ML deps are lazy because their install is ~2 GB
+# and ~5-10 minutes, which is a bad first-launch experience for users
+# who only want to play with the GUI / remote backends.
+#
+# Remote-only setups (openai-compat / anthropic / gemini) never need this
+# file — the /chat handler routes to HTTP for those backends without ever
+# importing torch / transformers / diffusers.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch
+torchvision
+torchaudio
+accelerate>=1.2.0
+bitsandbytes>=0.45.0
+transformers>=4.51.0
+diffusers>=0.33.0
+safetensors>=0.5.0
+sentencepiece>=0.2.0
+protobuf>=5.0.0
+einops>=0.8.0
+timm>=1.0.15
+open-clip-torch>=3.0.0
+qwen-vl-utils>=0.0.8
+imageio>=2.36.0
+imageio-ffmpeg>=0.5.1

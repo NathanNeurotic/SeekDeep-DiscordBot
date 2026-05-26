@@ -19,7 +19,7 @@
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35.0-3';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.0-4';
 const SHELL = [
   'chat.html',
   'styles.css',
@@ -32,6 +32,7 @@ const SHELL = [
   'version.js',
   'playground.js',
   'stats.js',
+  'ml-deps.js',
   'manifest.json',
   'assets/seekdeep-mark.webp',
   // Google Fonts CSS — the font files themselves come from fonts.gstatic.com and are
@@ -59,7 +60,7 @@ self.addEventListener('activate', (event) => {
 });
 
 // Bypass list — anything matching these patterns is always network, never cache.
-const BYPASS_RE = /\/(chat|image|img2img|instruct-pix2pix|inpaint|upscale|vision|chart|unload|health|gpu|logs|launcher|config|model|route|events|token|memory|persona|stats|archive)(\b|\/|\?)/;
+const BYPASS_RE = /\/(chat|image|img2img|instruct-pix2pix|inpaint|upscale|vision|chart|unload|health|gpu|logs|launcher|config|model|route|events|token|memory|persona|stats|archive|ml_deps|deps)(\b|\/|\?)/;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;

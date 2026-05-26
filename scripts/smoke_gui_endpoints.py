@@ -609,6 +609,33 @@ def main() -> int:
           body.get("surfaces") is None or (isinstance(body["surfaces"], int) and body["surfaces"] > 0),
           f"got {body.get('surfaces')!r}")
 
+    # ---- /deps/install validation paths (first-use ML dep downloader) ----
+    # We DO NOT exercise the happy path here — that would kick off a real
+    # `pip install -r requirements-ml.txt` in a daemon thread, which would
+    # try to download ~2 GB of torch wheels mid-smoke. The endpoint returns
+    # immediately so even if we did call it the test could move on, but
+    # leaving a stray pip subprocess in CI is rude. Just verify auth + 400s.
+
+    # POST without token -> 401
+    r = c.post("/deps/install", json={"requirements_file": "requirements-ml.txt"})
+    check("POST /deps/install without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Arbitrary requirements_file (path traversal attempt) -> 400
+        r = c.post("/deps/install",
+                   json={"requirements_file": "../etc/passwd"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /deps/install with non-whitelisted requirements_file -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Another disallowed value
+        r = c.post("/deps/install",
+                   json={"requirements_file": "anything.txt"},
+                   headers={_TOKEN_HEADER: token})
+        check("POST /deps/install with random requirements_file -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.
     # These endpoints live on the AI server (not on the bare GUI app),
@@ -646,6 +673,29 @@ def main() -> int:
           f"got {j.get('backend')}")
     check("  ...endpoint is a dict", isinstance(j.get("endpoint"), dict))
     check("  ...fallback_chain is a list", isinstance(j.get("fallback_chain"), list))
+
+    # ---- GET /ml_deps (no auth required; first-use ML installer probe) ----
+    r = cl.get("/ml_deps")
+    check("GET /ml_deps -> 200", r.status_code == 200, f"got {r.status_code}")
+    j = r.json() if r.status_code == 200 else {}
+    check("  ...response shape {ok, available, checked, missing, requirements_file, install_endpoint, manual_command, note}",
+          j.get("ok") is True
+          and isinstance(j.get("available"), bool)
+          and isinstance(j.get("checked"), list)
+          and isinstance(j.get("missing"), list)
+          and j.get("requirements_file") == "requirements-ml.txt"
+          and isinstance(j.get("install_endpoint"), str)
+          and isinstance(j.get("manual_command"), str)
+          and isinstance(j.get("note"), str),
+          f"body={j}")
+    check("  ...checked list contains the canonical ML modules",
+          set(j.get("checked") or []) == {"torch", "transformers", "diffusers", "accelerate", "safetensors"},
+          f"checked={j.get('checked')}")
+    # Invariant: available is true iff missing is empty
+    if isinstance(j.get("available"), bool) and isinstance(j.get("missing"), list):
+        check("  ...available <-> (missing == [])",
+              j["available"] == (len(j["missing"]) == 0),
+              f"available={j['available']} missing={j['missing']}")
 
     # Unknown role should fall back to default_chat resolution
     r = cl.get("/route/debug", params={"role": "totally_made_up_role_xyz"})
