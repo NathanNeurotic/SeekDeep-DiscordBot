@@ -732,6 +732,13 @@
 
         <!-- ============ STEP 1 — WELCOME ============ -->
         <section class="step-pane active" data-step="welcome">
+          <div id="tauriSkipBanner" style="display:none; margin-bottom: 20px; padding: 14px 18px; background: rgba(45,212,255,0.06); border: 1px solid color-mix(in oklab, var(--cyan-1) 35%, transparent); border-radius: var(--r-md);">
+            <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--cyan-1); text-transform: uppercase; margin-bottom: 6px;">▸ YOU CAN SKIP THIS WIZARD</div>
+            <div style="font-size: 13px; line-height: 1.6; color: var(--hull);">
+              You're running SeekDeep through the desktop shell, which already did steps 1-8 for you. The local AI server is up, Python deps are installed, and the launcher manages everything from the system tray.
+              This wizard is preserved for source-from-git installs — feel free to keep scrolling if you want to understand what was set up, but you don't need to run any commands.
+            </div>
+          </div>
           <p class="lede">SeekDeep runs entirely on your own machine. This wizard will check your system, install the bot, configure Discord, download models, and bring up the full local stack. <strong style="color:var(--hull);">Nothing leaves the box.</strong></p>
 
           <div class="welcome-grid">
@@ -1619,6 +1626,16 @@ const SEEKDEEP_BASE = (function() {
   applySelections();
   updateEnvPreview();
   render();
+
+  // Show the "you can skip this wizard" banner if we detect the Tauri shell.
+  // The .msi-installed desktop app already performs steps 1-8; users landing
+  // here are reading curiosity-mode, not running-the-commands-mode.
+  (function maybeShowTauriSkipBanner() {
+    const isTauri = !!(window.__TAURI__) || (window.location.hostname || '') === 'tauri.localhost';
+    if (!isTauri) return;
+    const banner = document.getElementById('tauriSkipBanner');
+    if (banner) banner.style.display = 'block';
+  })();
 </script>
 
 <script src="nav.js" defer></script>

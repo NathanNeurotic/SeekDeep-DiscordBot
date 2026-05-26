@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import gc
 import io
 import json
@@ -1308,16 +1309,65 @@ def _gemini_chat(messages: list[dict], model: str, base_url: str,
     return "".join(str(p.get("text") or "") for p in parts).strip()
 
 
-def b64_to_bytes(data: str) -> bytes:
+# Cap on decoded image bytes accepted by /vision, /img2img, /inpaint, /upscale,
+# etc. Base64 expansion ratio is ~1.33×, so a 24 MB cap maps to ~32 MB of
+# transmitted JSON. Realistic Discord uploads max at 25 MB on the free tier,
+# so 24 MB is the right ceiling — bigger inputs are almost certainly a buggy
+# caller or a DoS attempt rather than a real user image. Override with
+# LOCAL_AI_MAX_IMAGE_BYTES in .env if you genuinely need larger uploads.
+LOCAL_AI_MAX_IMAGE_BYTES = int(os.getenv("LOCAL_AI_MAX_IMAGE_BYTES", str(24 * 1024 * 1024)))
+
+def b64_to_bytes(data: str, *, max_bytes: int = None) -> bytes:
+    """Decode a base64 string (with optional data: URL prefix) to bytes.
+    Raises HTTPException(400) for invalid base64 or HTTPException(413) when
+    the decoded size would exceed `max_bytes` (default: LOCAL_AI_MAX_IMAGE_BYTES).
+
+    Previously this just called base64.b64decode() with no validation and no
+    size cap — a caller could post a 500 MB base64 blob and trigger an OOM
+    before any model code saw the bytes. AUD-005."""
+    if max_bytes is None:
+        max_bytes = LOCAL_AI_MAX_IMAGE_BYTES
+    if not isinstance(data, str):
+        raise HTTPException(400, "image_b64/media_b64 must be a string")
     if "," in data and data.strip().startswith("data:"):
         data = data.split(",", 1)[1]
-    return base64.b64decode(data)
+    # Cheap pre-decode size estimate: base64 expands ~4 bytes for every 3 input
+    # bytes, so decoded_len ≈ len(data) * 3 / 4. Reject obviously oversized
+    # blobs before paying the decode CPU.
+    approx_decoded = (len(data) * 3) // 4
+    if approx_decoded > max_bytes:
+        raise HTTPException(413, f"base64 payload exceeds {max_bytes} bytes (approx {approx_decoded})")
+    try:
+        out = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise HTTPException(400, f"invalid base64: {e}")
+    if len(out) > max_bytes:
+        raise HTTPException(413, f"decoded image is {len(out)} bytes; max is {max_bytes}")
+    return out
 
 
 def image_to_b64_png(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def open_image_b64(data: str, *, mode: str = "RGB", max_bytes: int = None) -> Image.Image:
+    """Decode base64 image_b64 → PIL.Image with consistent error handling.
+
+    Three image endpoints (/img2img, /instruct-pix2pix, /inpaint) previously
+    opened images without local 400 handling, so a non-image base64 blob
+    became a 500 with a traceback in the log. This helper raises
+    HTTPException(400) for both the decode and open failures so direct API
+    callers get a predictable response shape. AUD-005."""
+    src_bytes = b64_to_bytes(data, max_bytes=max_bytes)
+    try:
+        img = Image.open(io.BytesIO(src_bytes))
+        if mode:
+            img = img.convert(mode)
+        return img
+    except (UnidentifiedImageError, OSError) as e:
+        raise HTTPException(400, f"could not open image_b64: {e}")
 
 
 chat_model = None
@@ -1589,64 +1639,77 @@ def prepare_task(task: str, role: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
+#
+# Length caps applied below. Tunable via env if a workload genuinely exceeds:
+#   LOCAL_AI_MAX_PROMPT_CHARS    — single prompt / system / negative_prompt
+#   LOCAL_AI_MAX_CONTEXT_CHARS   — context blob (sources, retrieved memory)
+#   LOCAL_AI_MAX_MESSAGE_CHARS   — a single chat message in `messages`
+#   LOCAL_AI_MAX_B64_CHARS       — base64 string length (~1.33× decoded bytes)
+# Decoded bytes are separately capped by LOCAL_AI_MAX_IMAGE_BYTES inside
+# b64_to_bytes(). These two together fail-fast on oversized payloads before
+# any model code runs. AUD-005.
+_MAX_PROMPT_CHARS  = int(os.getenv("LOCAL_AI_MAX_PROMPT_CHARS",  "20000"))   # ~5k tokens
+_MAX_CONTEXT_CHARS = int(os.getenv("LOCAL_AI_MAX_CONTEXT_CHARS", "120000"))  # ~30k tokens
+_MAX_MESSAGE_CHARS = int(os.getenv("LOCAL_AI_MAX_MESSAGE_CHARS", "20000"))
+_MAX_B64_CHARS     = int(os.getenv("LOCAL_AI_MAX_B64_CHARS",     str(int(LOCAL_AI_MAX_IMAGE_BYTES * 1.4))))
 
 class ChatMessage(BaseModel):
-    role: str
-    content: str
+    role: str = Field(max_length=64)
+    content: str = Field(max_length=_MAX_MESSAGE_CHARS)
 
 
 class ChatRequest(BaseModel):
-    prompt: str
-    system: str = ""
-    context: str = ""
-    messages: list[ChatMessage] = Field(default_factory=list)
-    max_new_tokens: int = Field(default=700, ge=32, le=4096)
-    temperature: float = Field(default=0.35, ge=0.0, le=2.0)
-    role: str = "default_chat"
+    prompt:  str       = Field(max_length=_MAX_PROMPT_CHARS)
+    system:  str       = Field(default="", max_length=_MAX_PROMPT_CHARS)
+    context: str       = Field(default="", max_length=_MAX_CONTEXT_CHARS)
+    messages: list[ChatMessage] = Field(default_factory=list, max_length=200)
+    max_new_tokens: int   = Field(default=700, ge=32, le=4096)
+    temperature: float    = Field(default=0.35, ge=0.0, le=2.0)
+    role: str             = Field(default="default_chat", max_length=64)
 
 
 class ImageRequest(BaseModel):
-    prompt: str
-    width: int = Field(default=1024, ge=256, le=1536)
-    height: int = Field(default=1024, ge=256, le=1536)
-    steps: int = Field(default=28, ge=1, le=50)
-    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
-    seed: Optional[int] = None
-    negative_prompt: str = ""
+    prompt: str             = Field(max_length=_MAX_PROMPT_CHARS)
+    width: int              = Field(default=1024, ge=256, le=1536)
+    height: int             = Field(default=1024, ge=256, le=1536)
+    steps: int              = Field(default=28, ge=1, le=50)
+    guidance_scale: float   = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int]     = None
+    negative_prompt: str    = Field(default="", max_length=_MAX_PROMPT_CHARS)
 
 
 class VisionRequest(BaseModel):
-    prompt: str = "Describe this media clearly."
-    media_b64: str
-    filename: str = "upload.png"
+    prompt: str             = Field(default="Describe this media clearly.", max_length=_MAX_PROMPT_CHARS)
+    media_b64: str          = Field(max_length=_MAX_B64_CHARS)
+    filename: str           = Field(default="upload.png", max_length=512)
     media_kind: Literal["auto", "image", "video"] = "auto"
-    max_new_tokens: int = Field(default=700, ge=32, le=2048)
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    max_new_tokens: int     = Field(default=700, ge=32, le=2048)
+    temperature: float      = Field(default=0.0, ge=0.0, le=2.0)
 
 
 class Img2ImgRequest(BaseModel):
-    prompt: str
-    image_b64: str
-    strength: float = Field(default=0.6, ge=0.05, le=1.0)
-    width: int = Field(default=1024, ge=256, le=1536)
-    height: int = Field(default=1024, ge=256, le=1536)
-    steps: int = Field(default=28, ge=1, le=50)
-    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
-    seed: Optional[int] = None
-    negative_prompt: str = ""
+    prompt: str             = Field(max_length=_MAX_PROMPT_CHARS)
+    image_b64: str          = Field(max_length=_MAX_B64_CHARS)
+    strength: float         = Field(default=0.6, ge=0.05, le=1.0)
+    width: int              = Field(default=1024, ge=256, le=1536)
+    height: int             = Field(default=1024, ge=256, le=1536)
+    steps: int              = Field(default=28, ge=1, le=50)
+    guidance_scale: float   = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int]     = None
+    negative_prompt: str    = Field(default="", max_length=_MAX_PROMPT_CHARS)
 
 
 class InpaintRequest(BaseModel):
-    prompt: str
-    remove_target: str = ""
-    image_b64: str
-    strength: float = Field(default=0.85, ge=0.1, le=1.0)
-    width: int = Field(default=1024, ge=256, le=1536)
-    height: int = Field(default=1024, ge=256, le=1536)
-    steps: int = Field(default=28, ge=1, le=50)
-    guidance_scale: float = Field(default=5.0, ge=0.0, le=20.0)
-    seed: Optional[int] = None
-    negative_prompt: str = ""
+    prompt: str             = Field(max_length=_MAX_PROMPT_CHARS)
+    remove_target: str      = Field(default="", max_length=_MAX_PROMPT_CHARS)
+    image_b64: str          = Field(max_length=_MAX_B64_CHARS)
+    strength: float         = Field(default=0.85, ge=0.1, le=1.0)
+    width: int              = Field(default=1024, ge=256, le=1536)
+    height: int             = Field(default=1024, ge=256, le=1536)
+    steps: int              = Field(default=28, ge=1, le=50)
+    guidance_scale: float   = Field(default=5.0, ge=0.0, le=20.0)
+    seed: Optional[int]     = None
+    negative_prompt: str    = Field(default="", max_length=_MAX_PROMPT_CHARS)
 
 
 class InpaintMaskPreviewRequest(BaseModel):
@@ -3491,9 +3554,8 @@ def img2img(req: Img2ImgRequest):
     # to reuse loaded weights for a different pipeline type.
     i2i_pipe = AutoPipelineForImage2Image.from_pipe(image_pipe)
 
-    # Decode the source image
-    source_bytes = b64_to_bytes(req.image_b64)
-    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    # Decode the source image (400 on invalid base64 / non-image bytes)
+    source_img = open_image_b64(req.image_b64, mode="RGB")
 
     width = int(req.width)
     height = int(req.height)
@@ -3905,8 +3967,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     import torch
 
-    source_bytes = b64_to_bytes(req.image_b64)
-    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    source_img = open_image_b64(req.image_b64, mode="RGB")
     source_img = source_img.resize((512, 512), Image.LANCZOS)
 
     seed = req.seed
@@ -4007,8 +4068,7 @@ def inpaint_endpoint(req: InpaintRequest):
     import torch
     from diffusers import AutoPipelineForInpainting
 
-    source_bytes = b64_to_bytes(req.image_b64)
-    source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    source_img = open_image_b64(req.image_b64, mode="RGB")
 
     width = int(req.width)
     height = int(req.height)
