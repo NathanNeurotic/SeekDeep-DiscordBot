@@ -1,6 +1,12 @@
 [package]
 name = "seekdeep"
-version = "0.1.0"
+# Keep this in sync with package.json. Rust uses env!("CARGO_PKG_VERSION")
+# for the extraction stamp, the update-check current/latest compare, and
+# the stale-server identity check in boot_sequence. If this drifts from
+# package.json, the bundled FastAPI server (which reads package.json at
+# boot via _read_pkg_version) will report a different version than the
+# Rust shell — making the stale-server guard misfire on every launch.
+version = "10.35.3"
 description = "SeekDeep — local AI assistant (Discord bot + standalone GUI)"
 authors = ["NathanNeurotic"]
 edition = "2021"

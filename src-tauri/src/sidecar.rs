@@ -84,11 +84,104 @@ pub struct SidecarState {
     pub respawn_attempts: Mutex<u32>,
 }
 
-/// Probe 127.0.0.1:7865 with a short connect timeout. True = the AI server
-/// (or some other listener on that port) is already up; we should NOT spawn.
+/// Probe 127.0.0.1:7865 with a short connect timeout. True = some listener
+/// is on that port. Doesn't tell us WHO is listening — see server_identity()
+/// for the version-aware variant boot_sequence actually uses now.
 pub fn server_already_listening() -> bool {
     let addr = "127.0.0.1:7865".parse().expect("hardcoded loopback addr");
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+/// Server identity check. Whatever is on :7865, ask it `GET /health` and
+/// return its reported version string. None = nothing responded, or the
+/// response wasn't a valid SeekDeep server. Some(version) = SeekDeep is
+/// up and reports that version.
+///
+/// This replaces the raw TCP probe in boot_sequence so we can tell the
+/// difference between:
+///   - this same install's SeekDeep server (reuse safely)
+///   - a stale older SeekDeep server from a previous install (auto-kill
+///     + spawn the new one)
+///   - some unrelated process binding :7865 (refuse to clobber)
+/// Was the root cause of "I installed v10.35.3 but title bar shows
+/// v10.35.0" — the prior install's server kept its port and the new
+/// install's sidecar said "external server up, won't spawn" and reused
+/// the old code instead of extracting + spawning fresh.
+pub fn server_identity() -> Option<String> {
+    use std::io::{Read, Write};
+    let addr = "127.0.0.1:7865".parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
+    let req = "GET /health HTTP/1.1\r\nHost: 127.0.0.1:7865\r\nConnection: close\r\n\r\n";
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::with_capacity(8192);
+    let mut tmp = [0u8; 4096];
+    // Read up to 64 KB of response then stop — /health bodies fit comfortably.
+    while buf.len() < 64_000 {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // Split headers from body and parse the body as JSON. Trivial parser —
+    // no need to pull in reqwest/serde_json just for this one probe.
+    let body_start = text.find("\r\n\r\n")?;
+    let body = &text[body_start + 4..];
+    // Look for "version":"X.Y.Z" — robust to additional whitespace.
+    let v_key = "\"version\"";
+    let v_idx = body.find(v_key)?;
+    let after = &body[v_idx + v_key.len()..];
+    let colon = after.find(':')?;
+    let after_colon = &after[colon + 1..];
+    let quote_start = after_colon.find('"')?;
+    let after_quote = &after_colon[quote_start + 1..];
+    let quote_end = after_quote.find('"')?;
+    Some(after_quote[..quote_end].to_string())
+}
+
+/// Kill whatever process is bound to 127.0.0.1:7865. Used when we detect a
+/// stale SeekDeep server (version mismatch with the freshly-installed app)
+/// before we spawn the new one. Best-effort — if the kill fails the
+/// subsequent uvicorn bind will fail noisily and the user sees the real
+/// error in the loading overlay.
+///
+/// Windows path: `netstat -ano | findstr :7865` to grab the PID, then
+/// `taskkill /F /PID <pid>`. Unix path: `lsof -ti :7865 | xargs kill -9`.
+pub fn kill_listener_on_7865() {
+    #[cfg(windows)]
+    {
+        // netstat output looks like:
+        //   TCP    127.0.0.1:7865    0.0.0.0:0    LISTENING    12345
+        // We want the last column (PID).
+        let out = quiet_command_str("netstat")
+            .args(["-ano", "-p", "TCP"])
+            .output();
+        if let Ok(o) = out {
+            let text = String::from_utf8_lossy(&o.stdout);
+            for line in text.lines() {
+                if line.contains(":7865") && line.contains("LISTENING") {
+                    if let Some(pid) = line.split_whitespace().last() {
+                        if pid.chars().all(|c| c.is_ascii_digit()) {
+                            let _ = quiet_command_str("taskkill")
+                                .args(["/F", "/PID", pid])
+                                .status();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("lsof -ti :7865 | xargs -r kill -9")
+            .status();
+        let _ = out;
+    }
 }
 
 /// Resolve where extracted-on-first-run files live. We use Tauri's
@@ -340,10 +433,16 @@ fn is_windows_store_stub(_p: &Path) -> bool { false }
 
 /// Quick smoke test: does this Python have our minimum boot deps installed?
 /// If false, the user needs to run install_python_deps before we can spawn.
+///
+/// Must match what local_ai_server.py actually imports at module top, NOT a
+/// wishlist. httpx used to be in this probe but local_ai_server.py never
+/// imports it at boot — including httpx made the probe fail on systems
+/// where httpx wasn't installed and triggered a needless pip install loop.
+/// fastapi + uvicorn + pydantic + dotenv + PIL is the actual minimum.
 pub fn deps_present(python: &Path) -> bool {
     let out = quiet_command(python)
         .arg("-c")
-        .arg("import fastapi, uvicorn, httpx, pydantic")
+        .arg("import fastapi, uvicorn, pydantic, dotenv, PIL")
         .output();
     matches!(out, Ok(o) if o.status.success())
 }
@@ -629,9 +728,56 @@ pub fn start_crash_watchdog(app: AppHandle) {
 /// page while we do the slow stuff (find python, pip install, spawn server).
 pub fn boot_sequence(app: AppHandle) {
     let state = app.state::<SidecarState>();
+
+    // Stale-server guard. Previously this was a raw TCP probe — "if :7865
+    // accepts a connection, assume it's our server and reuse it". That
+    // caused the painful "I installed v10.35.3 but the title bar still
+    // shows v10.35.0" loop: a SeekDeep server from a prior install was
+    // still running, we attached to it, never extracted the new code,
+    // and the user saw the old GUI forever.
+    //
+    // New behavior:
+    //   1. Ask whatever's on :7865 for /health and parse its version.
+    //   2. If version matches CARGO_PKG_VERSION → reuse (this exact app
+    //      is already running, e.g. user double-clicked the tray icon).
+    //   3. If version doesn't match → it's a prior install. Kill it,
+    //      fall through to extract + spawn the new one.
+    //   4. If port is bound but /health doesn't speak SeekDeep → refuse
+    //      to clobber. Some unrelated process owns the port.
+    let our_version = env!("CARGO_PKG_VERSION");
     if server_already_listening() {
-        emit_status(&app, "EXTERNAL_SERVER_RUNNING");
-        return;
+        match server_identity() {
+            Some(remote_version) if remote_version == our_version => {
+                emit_status(&app, "EXTERNAL_SERVER_RUNNING");
+                return;
+            }
+            Some(remote_version) => {
+                let detail = format!(
+                    "stale SeekDeep server on :7865 reports v{remote_version}; this app is v{our_version}. Killing the stale process and respawning fresh."
+                );
+                let _ = app.emit(
+                    "sidecar:status",
+                    serde_json::json!({ "code": "STALE_SERVER_REPLACED", "detail": detail }),
+                );
+                kill_listener_on_7865();
+                // Give Windows a moment to actually release the port
+                // before uvicorn tries to bind it below.
+                std::thread::sleep(Duration::from_millis(800));
+            }
+            None => {
+                // Port is bound but whoever's there isn't speaking
+                // SeekDeep /health. Refuse to clobber a stranger.
+                emit_status(&app, "PORT_OCCUPIED_BY_UNKNOWN");
+                let _ = app.emit(
+                    "sidecar:status",
+                    serde_json::json!({
+                        "code": "PORT_OCCUPIED_BY_UNKNOWN",
+                        "detail": "127.0.0.1:7865 is bound by a non-SeekDeep process; refusing to take the port. Quit whatever's listening and retry.",
+                    }),
+                );
+                return;
+            }
+        }
     }
 
     if let Err(e) = maybe_extract_resources(&app) {

@@ -732,6 +732,7 @@ def register_gui_endpoints(
     env_path: str = ".env",
     repo_root: str | None = None,
     warmup_handlers: dict[str, Callable[..., Any]] | None = None,
+    stats_provider: Callable[[], dict] | None = None,
 ) -> None:
     """
     Attach every GUI-required endpoint to `app`. Idempotent.
@@ -740,6 +741,16 @@ def register_gui_endpoints(
     "vision") to a callable that warms it. The chat handler is called with
     a `role` kwarg; image/vision are called with no args. When omitted,
     /model/warm returns a clearly-flagged stub response.
+
+    stats_provider, if provided, is a zero-arg callable returning the
+    AI-server's live request-counter snapshot dict (the same shape as
+    local_ai_server._seekdeep_req_stats() returns). /stats/snapshot calls
+    this for the ai_server.* block. Without it, we'd have to dynamically
+    `import local_ai_server` here — and when local_ai_server is the
+    process's __main__ module (i.e. `python local_ai_server.py`), that
+    import resolves to a DIFFERENT module instance with its own zero-
+    initialized counters. Passing a callback at registration time pins
+    us to the live counters in the running process.
     """
     root = Path(repo_root or os.path.dirname(os.path.abspath(__file__))).resolve()
     _log_dir = (root / log_dir).resolve()
@@ -1312,10 +1323,15 @@ def register_gui_endpoints(
     def get_stats_snapshot():
         out: dict = {"ok": True, "generated_at": _now_iso()}
 
-        # AI server live counters
+        # AI server live counters — pinned via the stats_provider callback
+        # so we read the running process's counters (not a re-imported
+        # module instance with zeroed state). See register_gui_endpoints
+        # docstring for the __main__ vs import gotcha.
         try:
-            import local_ai_server as _lai
-            out["ai_server"] = _lai._seekdeep_req_stats()
+            if stats_provider is not None:
+                out["ai_server"] = stats_provider() or {}
+            else:
+                out["ai_server"] = {"error": "no stats_provider passed to register_gui_endpoints"}
         except Exception as e:
             out["ai_server"] = {"error": str(e)}
 
@@ -1367,11 +1383,11 @@ def register_gui_endpoints(
                 bot["error"] = str(e)
         # Merge web-playground chat counters into the bot's by_persona /
         # by_chat_model so the dashboard breakdowns reflect total chat
-        # activity (Discord bot + web playground). AI server may be
-        # unimportable in standalone test mode — soft-fail.
+        # activity (Discord bot + web playground). Reuses the same
+        # stats_provider callback (NOT a dynamic re-import) for the same
+        # __main__-module-instance-mismatch reason as above.
         try:
-            import local_ai_server as _lai
-            ai_stats = _lai._seekdeep_req_stats()
+            ai_stats = (stats_provider() if stats_provider else {}) or {}
             for k, v in (ai_stats.get("web_chat_by_persona") or {}).items():
                 bot["by_persona"][str(k)] = bot["by_persona"].get(str(k), 0) + int(v or 0)
             for k, v in (ai_stats.get("web_chat_by_model") or {}).items():

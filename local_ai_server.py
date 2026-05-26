@@ -577,6 +577,13 @@ try:
             "image":  lambda: load_image_pipe(),
             "vision": lambda: load_vision_model(),
         },
+        # Pin /stats/snapshot to THIS process's live counters. Without the
+        # callback, gui_endpoints would have to `import local_ai_server`,
+        # which when local_ai_server is __main__ resolves to a different
+        # module instance with its own zero-initialized counters — making
+        # the dashboard show "0 requests" forever. The closure here keeps
+        # us reading _seekdeep_req_stats from the running process.
+        stats_provider=_seekdeep_req_stats,
     )
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
