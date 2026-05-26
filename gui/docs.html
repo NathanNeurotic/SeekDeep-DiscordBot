@@ -579,7 +579,7 @@ const DATA = [
     ]
   },
   {
-    id: 'admin', title: 'Admin / customization', meta: '13 commands',
+    id: 'admin', title: 'Admin / customization', meta: '14 commands',
     note: 'Personas: built-in (<span class="mono">neurotic</span>, <span class="mono">unsettling</span>, <span class="mono">clinical</span>, <span class="mono">chaotic</span>) plus any custom personas you create with <span class="mono">persona create</span>. Memory presets stack on top of persona — <span class="mono">brief</span>, <span class="mono">expert</span>, <span class="mono">no-emoji</span>, <span class="mono">formal</span>, <span class="mono">casual</span>.',
     cmds: [
       { syntax: '@SeekDeep persona [channel|server] [neurotic|unsettling|clinical|chaotic|<custom>|reset|show]', desc: 'Set or display the persona. Accepts any built-in slug or one you defined via <span class="mono">persona create</span>.', type: 'mention', perm: 'Admin' },
@@ -735,6 +735,22 @@ links.forEach(l => {
 });
 
 // Sections + cards
+// Derive a "N commands" string from cmds.length, preserving any non-count
+// suffix in sec.meta (e.g. "feature-flagged" or other annotations). This
+// keeps the counts honest even when entries are added/removed without
+// updating the meta string. Pattern: replace "<digits> commands" with the
+// real count; leave the rest of the meta intact.
+function _docsCmdMeta(sec) {
+  const n = sec.cmds.length;
+  const phrase = n + ' command' + (n === 1 ? '' : 's');
+  if (typeof sec.meta !== 'string') return phrase;
+  if (/\d+\s+commands?/i.test(sec.meta)) {
+    return sec.meta.replace(/\d+\s+commands?/i, phrase);
+  }
+  // No "N commands" in the meta — prepend it.
+  return phrase + (sec.meta ? ' · ' + sec.meta : '');
+}
+
 DATA.forEach(sec => {
   const sectionEl = document.createElement('section');
   sectionEl.className = 'sec';
@@ -742,7 +758,7 @@ DATA.forEach(sec => {
   sectionEl.innerHTML = `
     <div class="sec-head">
       <h2>${sec.title}</h2>
-      <span class="meta">▸ <em>${sec.cmds.length}</em> · ${sec.meta}</span>
+      <span class="meta">▸ <em>${sec.cmds.length}</em> · ${_docsCmdMeta(sec)}</span>
     </div>
     ${sec.note ? `<div class="note">${sec.note}</div>` : ''}
     <div class="cmd-grid"></div>
