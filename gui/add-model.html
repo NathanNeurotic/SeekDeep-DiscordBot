@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Add a Model</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  /* ===== Page shell — fits the topnav-aware viewport pattern from chat.html
+     so the user can resize narrow without scrollbars on top of the wizard.
+     ============================================================ */
+  .app-wrap {
+    height: calc(100vh - var(--topnav-h, 88px));
+    padding: 22px 28px 28px;
+    display: grid;
+    place-items: stretch;
+  }
+  .win {
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    border-radius: var(--r-md);
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 18%, transparent);
+    background: linear-gradient(180deg, rgba(10,26,48,0.55) 0%, rgba(6,18,31,0.75) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      0 30px 80px rgba(0,0,0,0.55),
+      0 0 60px rgba(45,212,255,0.06);
+    position: relative;
+  }
+
+  /* ===== Stepper rail ===== */
+  .wiz-head {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 22px;
+    padding: 18px 26px 14px;
+    border-bottom: 1px solid var(--stroke);
+  }
+  .wiz-head h1 {
+    font-family: var(--font-display);
+    font-size: 21px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--hull);
+    margin: 0;
+  }
+  .wiz-head h1 em {
+    font-style: normal;
+    color: var(--cyan-1);
+    font-weight: 600;
+  }
+  .wiz-head .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--cyan-1);
+    margin-bottom: 4px;
+  }
+  .wiz-head .crumbs {
+    display: flex;
+    gap: 0;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+  }
+  .crumb {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 14px 6px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+    border: 1px solid transparent;
+    border-radius: 0;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .crumb .n {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid color-mix(in oklab, var(--hull-3) 60%, transparent);
+    color: var(--hull-3);
+    font-size: 10px;
+    background: rgba(2,6,15,0.4);
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+  .crumb.active { color: var(--cyan-1); }
+  .crumb.active .n {
+    background: var(--cyan-1);
+    color: var(--ink);
+    border-color: var(--cyan-1);
+    box-shadow: 0 0 12px color-mix(in oklab, var(--cyan-1) 35%, transparent);
+  }
+  .crumb.done .n {
+    background: transparent;
+    color: var(--good);
+    border-color: var(--good);
+  }
+  .crumb.done .n::before { content: "✓"; }
+  .crumb.done .n .label-num { display: none; }
+  .crumb.skipped { opacity: 0.45; }
+  .crumb-sep {
+    width: 18px; height: 1px;
+    background: color-mix(in oklab, var(--cyan-1) 18%, transparent);
+    flex-shrink: 0;
+  }
+
+  .wiz-head .right {
+    display: flex; gap: 10px; align-items: center;
+  }
+  .wiz-head .right a {
+    color: var(--hull-3);
+    text-decoration: none;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: var(--r-md);
+    border: 1px solid transparent;
+  }
+  .wiz-head .right a:hover { color: var(--cyan-1); border-color: color-mix(in oklab, var(--cyan-1) 25%, transparent); }
+
+  /* ===== Body ===== */
+  .wiz-body {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .wiz-pane {
+    overflow-y: auto;
+    padding: 32px 36px;
+  }
+  .step { display: none; }
+  .step.active { display: block; animation: stepIn 0.22s ease-out; }
+  @keyframes stepIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  .step-title {
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
+    color: var(--hull);
+  }
+  .step-sub {
+    font-family: var(--font-display);
+    font-size: 14px;
+    color: var(--hull-3);
+    line-height: 1.55;
+    margin: 0 0 28px;
+    max-width: 640px;
+  }
+  .step-sub code,
+  .step-sub .mono {
+    font-family: var(--font-mono);
+    color: var(--cyan-1);
+    background: rgba(45,212,255,0.08);
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 12px;
+  }
+
+  /* ===== Backend grid (Step 1) ===== */
+  .backend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .backend-card {
+    position: relative;
+    padding: 18px 18px 16px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-md);
+    background: linear-gradient(180deg, rgba(13,33,82,0.45), rgba(6,18,31,0.65));
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+    display: grid;
+    gap: 8px;
+  }
+  .backend-card:hover {
+    border-color: var(--cyan-1);
+    box-shadow: 0 0 22px color-mix(in oklab, var(--cyan-1) 18%, transparent);
+  }
+  .backend-card.sel {
+    border-color: var(--cyan-1);
+    background: linear-gradient(180deg, rgba(45,212,255,0.10), rgba(0,168,232,0.04));
+    box-shadow: 0 0 0 1px var(--cyan-1) inset, 0 0 28px color-mix(in oklab, var(--cyan-1) 28%, transparent);
+  }
+  .backend-card .row1 {
+    display: flex; gap: 10px; align-items: center;
+  }
+  .backend-card .icon {
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    border-radius: var(--r-md);
+    background: rgba(2,6,15,0.55);
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 22%, transparent);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--cyan-1);
+    letter-spacing: 0;
+  }
+  .backend-card .nm {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--hull);
+    letter-spacing: -0.01em;
+  }
+  .backend-card .nm em {
+    font-style: normal;
+    color: var(--hull-3);
+    font-weight: 400;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-left: 6px;
+  }
+  .backend-card .ds {
+    font-size: 12.5px;
+    color: var(--hull-2);
+    line-height: 1.55;
+  }
+  .backend-card .ds .mono {
+    font-family: var(--font-mono);
+    color: var(--cyan-1);
+    background: rgba(45,212,255,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 11px;
+  }
+  .backend-card .privacy {
+    margin-top: 4px;
+    padding: 6px 10px;
+    background: rgba(255,184,77,0.08);
+    border: 1px solid color-mix(in oklab, var(--warn) 30%, transparent);
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.10em;
+    color: var(--warn);
+    text-transform: uppercase;
+  }
+
+  /* ===== Form fields ===== */
+  .field {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--cyan-1);
+    margin: 18px 0 6px;
+  }
+  .field:first-child { margin-top: 0; }
+  .field .hint {
+    color: var(--hull-3);
+    letter-spacing: 0.08em;
+    text-transform: none;
+    margin-left: 8px;
+    font-size: 10.5px;
+  }
+  .step input[type="text"],
+  .step input[type="password"],
+  .step select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .step p.desc {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--hull-3);
+    margin: 6px 0 0;
+    line-height: 1.55;
+  }
+  .step p.desc .mono {
+    color: var(--cyan-1);
+    background: rgba(45,212,255,0.08);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  .step p.desc a { color: var(--cyan-1); text-decoration: none; border-bottom: 1px dotted color-mix(in oklab, var(--cyan-1) 50%, transparent); }
+  .step p.desc a:hover { color: var(--cyan-0); }
+
+  /* Suggested-model chips */
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--hull-2);
+    background: rgba(45,212,255,0.06);
+    border: 1px solid var(--stroke);
+    border-radius: 2px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s;
+  }
+  .chip:hover { color: var(--cyan-1); border-color: var(--cyan-1); }
+  .chip.placeholder { cursor: default; color: var(--hull-3); }
+  .chip.placeholder:hover { color: var(--hull-3); border-color: var(--stroke); }
+
+  /* Privacy strip (Step 3) */
+  .privacy-strip {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 12px;
+    padding: 14px 16px;
+    background: rgba(255,184,77,0.06);
+    border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent);
+    border-radius: var(--r-md);
+    margin-bottom: 22px;
+    color: var(--hull-2);
+    line-height: 1.6;
+    font-size: 13px;
+  }
+  .privacy-strip .icon {
+    color: var(--warn);
+    font-size: 18px;
+    line-height: 1;
+  }
+  .privacy-strip b { color: var(--warn); }
+  .privacy-strip .mono {
+    font-family: var(--font-mono);
+    color: var(--warn);
+    background: rgba(255,184,77,0.10);
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 11.5px;
+  }
+
+  /* Review (Step 4) */
+  .review-grid {
+    display: grid;
+    gap: 0;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: rgba(2,6,15,0.45);
+  }
+  .review-row {
+    display: grid;
+    grid-template-columns: 140px 1fr auto;
+    gap: 16px;
+    padding: 12px 16px;
+    align-items: baseline;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 8%, transparent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .review-row:last-child { border-bottom: none; }
+  .review-row .k {
+    color: var(--hull-3);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 10px;
+  }
+  .review-row .v {
+    color: var(--hull);
+    word-break: break-all;
+  }
+  .review-row .v.empty { color: var(--hull-3); }
+  .review-row .edit {
+    color: var(--cyan-1);
+    cursor: pointer;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    padding: 0;
+  }
+  .review-row .edit:hover { color: var(--cyan-0); }
+  .review-row.warn { background: rgba(255,184,77,0.05); }
+  .review-row.warn .v { color: var(--warn); }
+
+  /* Install state pane (Step 5) */
+  .install-pane {
+    display: grid;
+    gap: 18px;
+    align-items: center;
+    justify-items: center;
+    text-align: center;
+    padding: 24px 12px;
+  }
+  .install-spinner {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in oklab, var(--cyan-1) 18%, transparent);
+    border-top-color: var(--cyan-1);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .install-pane h2 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 22px;
+    color: var(--hull);
+    margin: 0;
+  }
+  .install-pane p {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--hull-3);
+    margin: 0;
+    max-width: 480px;
+    line-height: 1.6;
+  }
+  .install-pane .log {
+    width: 100%;
+    max-width: 640px;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-md);
+    padding: 14px 16px;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--hull-2);
+    line-height: 1.55;
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .install-pane .log .line-ok   { color: var(--good); }
+  .install-pane .log .line-warn { color: var(--warn); }
+  .install-pane .log .line-bad  { color: var(--bad);  }
+  .install-pane.done .install-spinner { border-color: var(--good); border-top-color: var(--good); animation: none; }
+  .install-pane.done .install-spinner::after { content: "✓"; display: block; width: 100%; height: 100%; line-height: 56px; text-align: center; color: var(--good); font-size: 28px; }
+  .install-pane.error .install-spinner { border-color: var(--bad); border-top-color: var(--bad); animation: none; }
+  .install-pane.error .install-spinner::after { content: "✕"; display: block; width: 100%; height: 100%; line-height: 56px; text-align: center; color: var(--bad); font-size: 28px; }
+  .install-pane .summary {
+    font-family: var(--font-display);
+    font-size: 14px;
+    color: var(--hull-2);
+    margin-top: -8px;
+  }
+  .install-pane .summary code {
+    font-family: var(--font-mono);
+    color: var(--cyan-1);
+    background: rgba(45,212,255,0.08);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  /* ===== Footer / nav ===== */
+  .wiz-foot {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 12px;
+    padding: 16px 26px;
+    border-top: 1px solid var(--stroke);
+    background: rgba(2,6,15,0.45);
+    align-items: center;
+  }
+  .wiz-foot .ctx {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+  }
+  .wiz-foot .ctx em { color: var(--cyan-1); font-style: normal; }
+  .wiz-foot .btn { min-width: 110px; justify-content: center; }
+  .wiz-foot .btn[disabled] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+  /* Narrow viewports — crumbs collapse to step indicator */
+  @media (max-width: 860px) {
+    .wiz-head { grid-template-columns: 1fr; gap: 12px; padding: 14px 18px 12px; }
+    .wiz-head .right { justify-self: end; }
+    .wiz-head .crumbs { justify-content: flex-start; overflow-x: auto; }
+    .crumb { padding: 6px 10px 6px 6px; }
+    .crumb-sep { width: 8px; }
+    .wiz-pane { padding: 22px 20px; }
+    .step-title { font-size: 22px; }
+    .app-wrap { padding: 14px; }
+    .wiz-foot { padding: 12px 18px; grid-template-columns: 1fr auto; }
+    .wiz-foot .ctx { grid-column: 1 / -1; order: 3; text-align: center; }
+  }
+
+  /* Topnav adoption — match chat.html so the same body padding rules apply */
+  body.has-topnav .win {
+    height: 100%;
+    border-color: color-mix(in oklab, var(--cyan-1) 14%, transparent) !important;
+  }
+</style>
+<link rel="icon" type="image/webp" href="assets/seekdeep-mark.webp" />
+<meta name="theme-color" content="#02060f" />
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill cyan" id="liveModePill" title="WebSocket bus · /events">
+      <span class="dot"></span>PROBING
+    </span>
+    <span class="pill" data-version><span class="dot"></span>v10.35 · LOCAL</span>
+  </div>
+</nav>
+
+<div class="app-wrap">
+<div class="win">
+
+  <!-- ===== HEAD / STEPPER ===== -->
+  <div class="wiz-head">
+    <div>
+      <div class="label">▸ ADD A MODEL · POST /model/install</div>
+      <h1>Bring a new model into <em>SeekDeep</em></h1>
+    </div>
+    <div class="crumbs" id="crumbs">
+      <div class="crumb active" data-step="1"><span class="n"><span class="label-num">1</span></span><span>Backend</span></div>
+      <div class="crumb-sep"></div>
+      <div class="crumb" data-step="2"><span class="n"><span class="label-num">2</span></span><span>Model ID</span></div>
+      <div class="crumb-sep"></div>
+      <div class="crumb" data-step="3"><span class="n"><span class="label-num">3</span></span><span>Credentials</span></div>
+      <div class="crumb-sep"></div>
+      <div class="crumb" data-step="4"><span class="n"><span class="label-num">4</span></span><span>Assign &amp; review</span></div>
+    </div>
+    <div class="right">
+      <a href="app.html#sec-models">▸ Models pane</a>
+    </div>
+  </div>
+
+  <!-- ===== BODY ===== -->
+  <div class="wiz-body">
+    <div class="wiz-pane">
+
+      <!-- ============================================================
+           STEP 1 · BACKEND
+           ============================================================ -->
+      <section class="step active" data-step="1">
+        <h2 class="step-title">Where does this model live?</h2>
+        <p class="step-sub">
+          The first two stay on your machine and need no API key. The bottom three call out
+          to a remote provider — prompts leave the local machine, so they carry a privacy
+          notice. You can mix any of these per role.
+        </p>
+
+        <div class="backend-grid">
+          <div class="backend-card" data-backend="hf" tabindex="0">
+            <div class="row1">
+              <div class="icon">HF</div>
+              <div class="nm">Hugging Face <em>local · no key</em></div>
+            </div>
+            <div class="ds">
+              Snapshot-download into the local cache. Anything published on
+              <span class="mono">huggingface.co</span>. The default for chat, image, and vision roles.
+            </div>
+          </div>
+
+          <div class="backend-card" data-backend="ollama" tabindex="0">
+            <div class="row1">
+              <div class="icon">OL</div>
+              <div class="nm">Ollama <em>local daemon · no key</em></div>
+            </div>
+            <div class="ds">
+              Pulls a tag via <span class="mono">POST /api/pull</span>. Needs the Ollama daemon
+              listening on <span class="mono">:11434</span>.
+            </div>
+          </div>
+
+          <div class="backend-card" data-backend="openai-compat" tabindex="0">
+            <div class="row1">
+              <div class="icon">API</div>
+              <div class="nm">OpenAI-compat <em>BYK · remote</em></div>
+            </div>
+            <div class="ds">
+              DeepSeek, OpenAI, Groq, OpenRouter, xAI Grok — anything that speaks the
+              OpenAI Chat Completions shape.
+            </div>
+            <div class="privacy">⚠ prompts leave the local machine</div>
+          </div>
+
+          <div class="backend-card" data-backend="anthropic" tabindex="0">
+            <div class="row1">
+              <div class="icon">ANT</div>
+              <div class="nm">Anthropic <em>BYK · remote</em></div>
+            </div>
+            <div class="ds">
+              Native <span class="mono">/v1/messages</span> with
+              <span class="mono">x-api-key</span> + <span class="mono">anthropic-version</span> headers.
+            </div>
+            <div class="privacy">⚠ prompts leave the local machine</div>
+          </div>
+
+          <div class="backend-card" data-backend="gemini" tabindex="0">
+            <div class="row1">
+              <div class="icon">GMI</div>
+              <div class="nm">Gemini <em>BYK · remote</em></div>
+            </div>
+            <div class="ds">
+              Native <span class="mono">:generateContent</span> with <span class="mono">x-goog-api-key</span>.
+            </div>
+            <div class="privacy">⚠ prompts leave the local machine</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           STEP 2 · MODEL ID
+           ============================================================ -->
+      <section class="step" data-step="2">
+        <h2 class="step-title" id="step2Title">Which model?</h2>
+        <p class="step-sub" id="step2Sub">Pick a backend first.</p>
+
+        <label class="field">Model ID</label>
+        <input type="text" id="modelId" class="mono" placeholder="meta-llama/Llama-3.1-8B-Instruct" />
+        <p class="desc" id="modelHint"></p>
+
+        <div id="suggestBlock" style="display:none;">
+          <label class="field">Suggested <span class="hint" id="suggestSrc"></span></label>
+          <div class="chip-row" id="suggestList"></div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           STEP 3 · CREDENTIALS (remote backends only)
+           ============================================================ -->
+      <section class="step" data-step="3">
+        <h2 class="step-title">Where does it answer from?</h2>
+        <p class="step-sub">
+          Base URL and key for the remote provider. Stored in your local
+          <span class="mono">.env</span> via <span class="mono">POST /config</span> — never logged, never leaves your machine
+          except to authenticate this provider over TLS.
+        </p>
+
+        <div class="privacy-strip">
+          <span class="icon">⚠</span>
+          <div>
+            <b>Privacy disclosure.</b> Prompts sent to this backend will leave your local machine.
+            The remote provider receives the full prompt body in cleartext over TLS. Keep the key
+            in <span class="mono">.env</span> only; never paste it into chat or commit it.
+          </div>
+        </div>
+
+        <label class="field">Base URL</label>
+        <input type="text" id="apiUrl" class="mono" placeholder="https://api.openai.com/v1" />
+        <p class="desc">
+          Defaults vary by provider. DeepSeek = <span class="mono">https://api.deepseek.com/v1</span> ·
+          Groq = <span class="mono">https://api.groq.com/openai/v1</span> ·
+          Anthropic = <span class="mono">https://api.anthropic.com/v1/messages</span> ·
+          Gemini = <span class="mono">https://generativelanguage.googleapis.com/v1beta</span>.
+        </p>
+
+        <label class="field">API key</label>
+        <input type="password" id="apiKey" class="mono" placeholder="sk-… / sk-ant-… / AIza… / gsk_…" autocomplete="off" />
+
+        <div id="anthropicVerWrap" style="display:none;">
+          <label class="field">Anthropic API version</label>
+          <input type="text" id="apiVersion" class="mono" value="2023-06-01" />
+        </div>
+      </section>
+
+      <!-- ============================================================
+           STEP 4 · ASSIGN + REVIEW
+           ============================================================ -->
+      <section class="step" data-step="4">
+        <h2 class="step-title">Assign and confirm</h2>
+        <p class="step-sub">
+          Optionally pin this model to a chat role. Skipping role assignment installs it as a
+          standalone — you can route to it later from the Models pane. Hit <em>Install</em> to
+          start the download / probe.
+        </p>
+
+        <label class="field">Assign to chat role <span class="hint">(optional · patches <span class="mono">LOCAL_CHAT_&lt;ROLE&gt;_*</span>)</span></label>
+        <select id="role" class="mono">
+          <option value="">— don't assign · just install</option>
+          <option value="default_chat">default_chat · main router target</option>
+          <option value="lightweight_chat">lightweight_chat · cheap fast lane</option>
+          <option value="quality_chat">quality_chat · long-form / nuance</option>
+          <option value="reasoning_chat">reasoning_chat · slow + careful</option>
+          <option value="fallback_chat">fallback_chat · when default fails</option>
+        </select>
+
+        <label class="field" style="margin-top: 24px;">Review</label>
+        <div class="review-grid" id="reviewGrid">
+          <div class="review-row"><span class="k">Backend</span><span class="v" id="sumBackend">—</span><button type="button" class="edit" data-jump="1">Edit</button></div>
+          <div class="review-row"><span class="k">Model ID</span><span class="v" id="sumModel">—</span><button type="button" class="edit" data-jump="2">Edit</button></div>
+          <div class="review-row" id="sumApiRow" style="display:none;"><span class="k">Base URL</span><span class="v" id="sumUrl">—</span><button type="button" class="edit" data-jump="3">Edit</button></div>
+          <div class="review-row warn" id="sumKeyRow" style="display:none;"><span class="k">API key</span><span class="v" id="sumKey">—</span><button type="button" class="edit" data-jump="3">Edit</button></div>
+          <div class="review-row"><span class="k">Role</span><span class="v empty" id="sumRole">(unassigned)</span><span></span></div>
+        </div>
+      </section>
+
+      <!-- ============================================================
+           STEP 5 · INSTALL PROGRESS  (not in the crumb bar)
+           ============================================================ -->
+      <section class="step" data-step="5">
+        <div class="install-pane" id="installPane">
+          <div class="install-spinner"></div>
+          <h2 id="installTitle">Installing…</h2>
+          <div class="summary" id="installSummary"></div>
+          <p id="installSub">Talking to <code>POST /model/install</code> · downloading, probing, and writing config keys. This window stays put — don't close.</p>
+          <pre class="log" id="installLog"></pre>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ===== FOOT ===== -->
+    <div class="wiz-foot">
+      <div class="ctx" id="ctx">
+        Pick a backend to begin · <em>5 backends · 5 chat roles</em>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btnBack" style="visibility: hidden;">‹ Back</button>
+      <button type="button" class="btn btn-primary" id="btnNext" disabled>Next ›</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<script src="notify.js" defer></script>
+
+<script>
+/* ============================================================
+   add-model.html — wizard logic
+   ============================================================
+   Drives the multi-step form, talks to:
+     - POST /model/install   (install + optional role assignment)
+     - POST /config          (only used as a fallback if /model/install
+                              doesn't write the LOCAL_CHAT_<ROLE>_* keys
+                              itself — most builds do)
+
+   Query-param prefill (from model-install.js's quick-picks):
+     ?prefill=<modelId>&backend=<hf|ollama|…>&autostart=1
+       → jumps the user past the steps it can answer for them.
+   ============================================================ */
+(function () {
+  const $  = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+    ? location.origin : 'http://127.0.0.1:7865';
+
+  const state = {
+    step: 1,
+    backend: null,
+    model_id: '',
+    api_url: '',
+    api_key: '',
+    api_version: '2023-06-01',
+    role: '',
+  };
+
+  // ============================================================
+  // Step rendering
+  // ============================================================
+  function isRemote(b) { return b && b !== 'hf' && b !== 'ollama'; }
+  function isInstallStep() { return state.step === 5; }
+
+  function setStep(n) {
+    state.step = n;
+    $$('.step').forEach(s => s.classList.toggle('active', +s.dataset.step === n));
+    const crumbSteps = [1, 2, 3, 4];
+    $$('#crumbs .crumb').forEach(c => {
+      const cn = +c.dataset.step;
+      c.classList.remove('active', 'done', 'skipped');
+      if (cn === n) c.classList.add('active');
+      else if (cn < n) c.classList.add('done');
+      // Mark step 3 skipped when backend is local
+      if (cn === 3 && !isRemote(state.backend)) {
+        c.classList.add('skipped');
+        if (cn < n) { c.classList.remove('done'); c.classList.add('skipped'); }
+      }
+    });
+
+    const back = $('#btnBack');
+    const next = $('#btnNext');
+    back.style.visibility = (n === 1 || n === 5) ? 'hidden' : 'visible';
+    next.style.display = (n === 5) ? 'none' : '';
+    next.textContent = n === 4 ? '▸ Install' : 'Next ›';
+    refreshCtx();
+    refreshNextEnabled();
+  }
+  function refreshCtx() {
+    const c = $('#ctx');
+    if (state.step === 1) c.innerHTML = 'Pick a backend to begin · <em>5 backends · 5 chat roles</em>';
+    else if (state.step === 2) c.innerHTML = `Backend · <em>${labelFor(state.backend)}</em>`;
+    else if (state.step === 3) c.innerHTML = `Backend · <em>${labelFor(state.backend)}</em> · model · <em>${state.model_id}</em>`;
+    else if (state.step === 4) c.innerHTML = `Ready to install · <em>${labelFor(state.backend)}</em> · <em>${state.model_id}</em>`;
+    else c.innerHTML = '';
+  }
+  function refreshNextEnabled() {
+    const n = $('#btnNext');
+    let ok = false;
+    if (state.step === 1) ok = !!state.backend;
+    else if (state.step === 2) ok = !!$('#modelId').value.trim();
+    else if (state.step === 3) ok = !!$('#apiUrl').value.trim() && !!$('#apiKey').value;
+    else if (state.step === 4) ok = !!state.backend && !!state.model_id;
+    n.disabled = !ok;
+  }
+
+  function labelFor(b) {
+    return ({
+      'hf': 'HuggingFace · local',
+      'ollama': 'Ollama · local daemon',
+      'openai-compat': 'OpenAI-compat · remote',
+      'anthropic': 'Anthropic · remote',
+      'gemini': 'Gemini · remote',
+    })[b] || '—';
+  }
+
+  // ============================================================
+  // Step 1 · backend picker
+  // ============================================================
+  $$('.backend-card').forEach(card => {
+    const pick = () => pickBackend(card.dataset.backend);
+    card.addEventListener('click', pick);
+    card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
+  function pickBackend(b) {
+    state.backend = b;
+    $$('.backend-card').forEach(c => c.classList.toggle('sel', c.dataset.backend === b));
+    refreshCtx();
+    refreshNextEnabled();
+  }
+
+  // ============================================================
+  // Step 2 · model id + suggestions
+  // ============================================================
+  const SUGGESTIONS = {
+    'hf': {
+      src: 'huggingface.co — popular chat picks',
+      items: [
+        'meta-llama/Llama-3.1-8B-Instruct',
+        'Qwen/Qwen2.5-7B-Instruct',
+        'microsoft/phi-4',
+        'mistralai/Mistral-Nemo-Instruct-2407',
+        'google/gemma-3n-E4B-it',
+      ],
+    },
+    'ollama': {
+      src: '/health.ollama.tags',
+      items: null,   // populated dynamically from /health
+      placeholder: '(no tags installed yet — type a tag and SeekDeep will pull it)',
+    },
+    'openai-compat': {
+      src: 'provider-specific',
+      items: ['deepseek-chat', 'gpt-4o-mini', 'grok-4', 'moonshotai/kimi-k2', 'openrouter/auto'],
+    },
+    'anthropic': {
+      src: 'Anthropic — current Claude line',
+      items: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    },
+    'gemini': {
+      src: 'Google — current Gemini line',
+      items: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+    },
+  };
+
+  function paintStep2() {
+    const b = state.backend;
+    const titles = {
+      'hf': 'Which Hugging Face model?',
+      'ollama': 'Which Ollama tag?',
+      'openai-compat': 'Which OpenAI-compat model?',
+      'anthropic': 'Which Claude model?',
+      'gemini': 'Which Gemini model?',
+    };
+    const subs = {
+      'hf': 'A repo ID like <span class="mono">meta-llama/Llama-3.1-8B-Instruct</span>. Anything on <a href="https://huggingface.co/models" target="_blank">huggingface.co</a> works.',
+      'ollama': 'Either pick from the chips below or type a new tag. Anything not installed yet gets pulled automatically (e.g. <span class="mono">llama3.1:8b-instruct-q4_K_M</span>).',
+      'openai-compat': 'Provider-specific model name. e.g. <span class="mono">deepseek-chat</span>, <span class="mono">gpt-4o-mini</span>, <span class="mono">grok-4</span>.',
+      'anthropic': 'Pick a Claude model. Any current <span class="mono">claude-*</span> ID works.',
+      'gemini': 'Pick a Gemini model. Any current <span class="mono">gemini-*</span> ID works.',
+    };
+    const placeholders = {
+      'hf': 'org/repo-name',
+      'ollama': 'name:tag',
+      'openai-compat': 'model-name',
+      'anthropic': 'claude-sonnet-4-6',
+      'gemini': 'gemini-2.5-flash',
+    };
+    $('#step2Title').textContent = titles[b] || titles.hf;
+    $('#step2Sub').innerHTML = subs[b] || '';
+    $('#modelHint').innerHTML = '';
+    $('#modelId').placeholder = placeholders[b] || '';
+    if (state.model_id) $('#modelId').value = state.model_id;
+
+    const conf = SUGGESTIONS[b];
+    const list = $('#suggestList');
+    const block = $('#suggestBlock');
+    if (!conf) { block.style.display = 'none'; return; }
+    block.style.display = '';
+    $('#suggestSrc').textContent = '· ' + conf.src;
+    list.innerHTML = '';
+
+    let items = conf.items;
+    if (b === 'ollama') {
+      // Try /health for installed tags; otherwise show placeholder hint.
+      fetch(BASE + '/health', { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+        .then(r => r.ok ? r.json() : null)
+        .then(h => {
+          const tags = h?.ollama?.tags || h?.ollama_tags || [];
+          if (tags.length) renderChips(list, tags);
+          else renderChips(list, [], conf.placeholder);
+        })
+        .catch(() => renderChips(list, [], conf.placeholder));
+      return;
+    }
+    renderChips(list, items);
+  }
+  function renderChips(list, items, placeholderText) {
+    list.innerHTML = '';
+    if (!items.length) {
+      const c = document.createElement('span');
+      c.className = 'chip placeholder';
+      c.textContent = placeholderText || '(no suggestions)';
+      list.appendChild(c);
+      return;
+    }
+    items.forEach(it => {
+      const c = document.createElement('span');
+      c.className = 'chip';
+      c.textContent = it;
+      c.addEventListener('click', () => {
+        $('#modelId').value = it;
+        state.model_id = it;
+        refreshNextEnabled();
+      });
+      list.appendChild(c);
+    });
+  }
+  $('#modelId').addEventListener('input', (e) => {
+    state.model_id = e.target.value.trim();
+    refreshNextEnabled();
+  });
+
+  // ============================================================
+  // Step 3 · credentials
+  // ============================================================
+  function paintStep3() {
+    const b = state.backend;
+    const urlDefaults = {
+      'openai-compat': 'https://api.openai.com/v1',
+      'anthropic':     'https://api.anthropic.com/v1/messages',
+      'gemini':        'https://generativelanguage.googleapis.com/v1beta',
+    };
+    if (!$('#apiUrl').value) $('#apiUrl').value = urlDefaults[b] || '';
+    $('#anthropicVerWrap').style.display = b === 'anthropic' ? 'block' : 'none';
+  }
+  ['#apiUrl', '#apiKey'].forEach(sel => {
+    $(sel).addEventListener('input', refreshNextEnabled);
+  });
+
+  // ============================================================
+  // Step 4 · review
+  // ============================================================
+  function paintStep4() {
+    $('#sumBackend').textContent = labelFor(state.backend);
+    $('#sumModel').textContent   = state.model_id || '—';
+    const remote = isRemote(state.backend);
+    $('#sumApiRow').style.display = remote ? 'grid' : 'none';
+    $('#sumKeyRow').style.display = remote ? 'grid' : 'none';
+    $('#sumUrl').textContent = state.api_url || '—';
+    $('#sumKey').textContent = state.api_key ? (state.api_key.slice(0, 4) + '••••••' + state.api_key.slice(-3)) : '—';
+    const r = $('#sumRole');
+    if (state.role) { r.textContent = state.role; r.classList.remove('empty'); }
+    else            { r.textContent = '(unassigned)'; r.classList.add('empty'); }
+  }
+  $('#role').addEventListener('change', (e) => { state.role = e.target.value; paintStep4(); });
+
+  $$('.review-row .edit').forEach(btn => {
+    btn.addEventListener('click', () => setStep(+btn.dataset.jump));
+  });
+
+  // ============================================================
+  // Step 5 · install
+  // ============================================================
+  function appendLog(line, cls) {
+    const pre = $('#installLog');
+    const span = document.createElement('span');
+    if (cls) span.className = cls;
+    span.textContent = line + '\n';
+    pre.appendChild(span);
+    pre.scrollTop = pre.scrollHeight;
+  }
+  async function runInstall() {
+    setStep(5);
+    const pane = $('#installPane');
+    pane.classList.remove('done', 'error');
+    $('#installTitle').textContent = 'Installing…';
+    $('#installSummary').innerHTML = `<code>${labelFor(state.backend)}</code> · <code>${state.model_id}</code>`;
+    $('#installSub').innerHTML = 'Talking to <code>POST /model/install</code> · downloading, probing, and writing config keys. This window stays put — don\'t close.';
+    $('#installLog').innerHTML = '';
+    appendLog(`▸ POST ${BASE}/model/install`);
+    appendLog(`  backend=${state.backend} model_id=${state.model_id}` + (state.role ? ` role=${state.role}` : ''));
+
+    const body = { backend: state.backend, model_id: state.model_id };
+    if (state.role) body.role = state.role;
+    if (state.backend === 'ollama') body.auto_pull = true;
+    if (isRemote(state.backend)) {
+      body.api_url = state.api_url;
+      body.api_key = state.api_key;
+      if (state.backend === 'anthropic') body.api_version = state.api_version;
+    }
+
+    try {
+      const res = await fetch(BASE + '/model/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(300_000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        if (data.files_downloaded) appendLog(`  · ${data.files_downloaded} files downloaded`, 'line-ok');
+        if (data.local_dir)        appendLog(`  · cached to ${data.local_dir}`);
+        if (data.note)             appendLog(`  · note: ${data.note}`, 'line-warn');
+        if (data.external)         appendLog('  ⚠ external · prompts leave the local machine', 'line-warn');
+        appendLog('✓ install complete', 'line-ok');
+        pane.classList.add('done');
+        $('#installTitle').textContent = 'Model installed';
+        $('#installSub').innerHTML = state.role
+          ? `Assigned to <code>${state.role}</code>. You can route to it from the playground now.`
+          : `Stored as a standalone. Assign it to a role from the <a href="app.html#sec-models" style="color:var(--cyan-1);">Models pane</a> when you\'re ready.`;
+        // Replace footer with "Done · open chat" + "Install another"
+        renderInstallDoneFooter();
+        if (window.SeekDeepNotify) {
+          window.SeekDeepNotify.toast({ tone: 'good', title: 'Model ready', body: `${state.model_id} installed`, ttl: 4000 });
+        }
+      } else {
+        const msg = data.error || data.detail || res.statusText || ('http ' + res.status);
+        appendLog(`✕ ${res.status} · ${msg}`, 'line-bad');
+        markError(msg);
+      }
+    } catch (e) {
+      appendLog(`✕ couldn't reach /model/install · ${e.message || e}`, 'line-bad');
+      markError(e.message || String(e));
+    }
+  }
+  function markError(msg) {
+    const pane = $('#installPane');
+    pane.classList.add('error');
+    $('#installTitle').textContent = 'Install failed';
+    $('#installSub').textContent = msg;
+    renderInstallErrorFooter();
+    if (window.SeekDeepNotify) {
+      window.SeekDeepNotify.toast({ tone: 'bad', title: 'Install failed', body: msg, ttl: 6000 });
+    }
+  }
+  function renderInstallDoneFooter() {
+    const foot = $('.wiz-foot');
+    foot.innerHTML = `
+      <div class="ctx">Install complete · <em>${state.model_id}</em></div>
+      <button type="button" class="btn btn-ghost" id="installAgain">Install another</button>
+      <a href="chat.html" class="btn btn-primary">▸ Open chat</a>
+    `;
+    $('#installAgain').addEventListener('click', () => { resetWizard(); });
+  }
+  function renderInstallErrorFooter() {
+    const foot = $('.wiz-foot');
+    foot.innerHTML = `
+      <div class="ctx">Install failed — review the log above</div>
+      <button type="button" class="btn btn-ghost" id="installBack">‹ Back to review</button>
+      <button type="button" class="btn btn-primary" id="installRetry">▸ Retry</button>
+    `;
+    $('#installBack').addEventListener('click', () => { renderDefaultFooter(); setStep(4); });
+    $('#installRetry').addEventListener('click', () => { renderDefaultFooter(); runInstall(); });
+  }
+  function renderDefaultFooter() {
+    const foot = $('.wiz-foot');
+    foot.innerHTML = `
+      <div class="ctx" id="ctx"></div>
+      <button type="button" class="btn btn-ghost" id="btnBack">‹ Back</button>
+      <button type="button" class="btn btn-primary" id="btnNext">Next ›</button>
+    `;
+    $('#btnBack').addEventListener('click', advance.regress);
+    $('#btnNext').addEventListener('click', advance.next);
+  }
+  function resetWizard() {
+    Object.assign(state, { step: 1, backend: null, model_id: '', api_url: '', api_key: '', api_version: '2023-06-01', role: '' });
+    $('#modelId').value = '';
+    $('#apiUrl').value = '';
+    $('#apiKey').value = '';
+    $('#role').value = '';
+    $$('.backend-card').forEach(c => c.classList.remove('sel'));
+    renderDefaultFooter();
+    setStep(1);
+  }
+
+  // ============================================================
+  // Footer navigation
+  // ============================================================
+  const advance = {
+    next() {
+      if (state.step === 1) {
+        if (!state.backend) return;
+        paintStep2();
+        return setStep(2);
+      }
+      if (state.step === 2) {
+        state.model_id = $('#modelId').value.trim();
+        if (!state.model_id) return;
+        if (isRemote(state.backend)) {
+          paintStep3();
+          return setStep(3);
+        }
+        paintStep4();
+        return setStep(4);
+      }
+      if (state.step === 3) {
+        state.api_url = $('#apiUrl').value.trim();
+        state.api_key = $('#apiKey').value;
+        state.api_version = $('#apiVersion')?.value?.trim() || '2023-06-01';
+        if (!state.api_url || !state.api_key) return;
+        paintStep4();
+        return setStep(4);
+      }
+      if (state.step === 4) {
+        return runInstall();
+      }
+    },
+    regress() {
+      if (state.step === 4) {
+        return setStep(isRemote(state.backend) ? 3 : 2);
+      }
+      if (state.step > 1) setStep(state.step - 1);
+    },
+  };
+  $('#btnNext').addEventListener('click', advance.next);
+  $('#btnBack').addEventListener('click', advance.regress);
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        advance.next();
+      }
+      return;
+    }
+    if (e.key === 'Enter' && !isInstallStep()) advance.next();
+    if (e.key === 'Escape' && state.step > 1 && !isInstallStep()) advance.regress();
+  });
+
+  // ============================================================
+  // Prefill from ?prefill=<id>&backend=<…>&autostart=1
+  // (used by model-install.js quick-picks)
+  // ============================================================
+  const params = new URLSearchParams(location.search);
+  const prefill = params.get('prefill');
+  const backendParam = params.get('backend');
+  const autostart = params.get('autostart') === '1';
+
+  if (backendParam) {
+    pickBackend(backendParam);
+    paintStep2();
+    if (prefill) {
+      state.model_id = prefill;
+      $('#modelId').value = prefill;
+    }
+    if (isRemote(state.backend)) {
+      // Remote backends always need credentials — jump to step 3 so the user
+      // sees what's missing before install can start.
+      setStep(3);
+      paintStep3();
+    } else if (prefill && autostart) {
+      paintStep4();
+      setStep(4);
+      // Give the user a beat to bail before kicking the install.
+      setTimeout(() => { if (state.step === 4) runInstall(); }, 600);
+    } else if (prefill) {
+      paintStep4();
+      setStep(4);
+    } else {
+      setStep(2);
+    }
+  } else {
+    setStep(1);
+  }
+
+  refreshNextEnabled();
+})();
+</script>
+
+<script src="nav.js" defer></script>
+</body>
+</html>

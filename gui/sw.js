@@ -19,7 +19,7 @@
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35.0-5';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.0-6';
 const SHELL = [
   'chat.html',
   'styles.css',
@@ -32,9 +32,15 @@ const SHELL = [
   'version.js',
   'playground.js',
   'stats.js',
+  // notify.js · shared banner / modal / toast primitive (designer zip 43);
+  // ml-deps + model-install consumers reach for it via SeekDeepNotify.
+  'notify.js',
   'ml-deps.js',
   'model-install.js',
   'seekdeep-loading.html',
+  // add-model.html · 4-step wizard (designer zip 43); model-install.js's
+  // banner deep-links into it for the "Open the full wizard" CTA.
+  'add-model.html',
   'manifest.json',
   'assets/seekdeep-mark.webp',
   // Google Fonts CSS — the font files themselves come from fonts.gstatic.com and are

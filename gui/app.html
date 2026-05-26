@@ -720,7 +720,7 @@
               <div class="pid">PID 14883 · :7865</div>
               <h4>Local AI Server</h4>
               <div class="desc">uvicorn local_ai_server.py · workers=1</div>
-              <div class="stats"><span>VRAM: <em>14.2 GB</em></span><span>Queue: <em>0</em></span></div>
+              <div class="stats"><span>VRAM: <em id="svcVram">—</em></span><span>Queue: <em id="svcQueue">—</em></span></div>
             </div>
             <div>
               <span class="pill on" style="margin-bottom: 12px;"><span class="dot"></span>HEALTHY</span>
@@ -793,8 +793,8 @@
         <div class="cards-4" style="margin-bottom: 18px;">
           <div class="card-mini">
             <div class="lbl">VRAM Used</div>
-            <div class="val cyan"><span id="gpuVramUsed">14.2</span> <span style="font-size: 16px; color: var(--hull-3);">/ <span id="gpuVramTotal">24.0</span> GB</span></div>
-            <div class="bar" style="margin-top: 10px;"><i id="gpuVramBar" style="width: 59%"></i></div>
+            <div class="val cyan"><span id="gpuVramUsed">—</span> <span style="font-size: 16px; color: var(--hull-3);">/ <span id="gpuVramTotal">—</span> GB</span></div>
+            <div class="bar" style="margin-top: 10px;"><i id="gpuVramBar" style="width: 0%"></i></div>
           </div>
           <div class="card-mini">
             <div class="lbl">GPU Util</div>
@@ -1986,7 +1986,7 @@
   <!-- STATUS BAR -->
   <footer class="statusbar">
     <span class="live"><span class="live-dot" id="stackDot"></span>STACK <em id="stackState">HEALTHY</em></span>
-    <span>VRAM <em id="sb-vram">14.2 / 24 GB</em></span>
+    <span>VRAM <em id="sb-vram">— / — GB</em></span>
     <span>QUEUE <em id="sb-queue">0</em></span>
     <span></span>
     <span>PERSONA <em id="sb-persona">CLINICAL</em></span>

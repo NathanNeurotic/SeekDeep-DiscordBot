@@ -114,6 +114,7 @@
     { id: 'tour',         title: 'Tour',                path: 'tour.html',         glyph: '⊕', meta: '16 · guided' },
     { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '17 · phone mocks' },
     { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '18 · splash' },
+    { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '19 · wizard · POST /model/install' },
   ];
 
   // Detect current page from URL filename
@@ -393,7 +394,7 @@
     <div class="sd-jump-backdrop" id="sdJumpBack"></div>
     <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
       <div class="sd-jump-head">
-        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · 17 + HUB</em></div>
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · <span data-stat-surfaces>${PAGES.length}</span> SURFACES</em></div>
         <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
       </div>
       <div class="sd-jump-list" id="sdJumpList"></div>
@@ -995,12 +996,12 @@
     inject('playground.js', null);
     // stats.js · /stats/counts → [data-stat-*] cells (designer-shipped)
     inject('stats.js', null);
-    // ml-deps.js · GET /ml_deps probe + first-use install banner for
-    // torch/transformers/diffusers. Self-gated; safe to inject everywhere
-    // because the banner only shows if /ml_deps says available=false.
+    // notify.js · shared banner + modal + toast primitive (designer-shipped).
+    // Must load BEFORE ml-deps.js + model-install.js because they consume it.
+    inject('notify.js', 'SeekDeepNotify');
+    // ml-deps.js · first-use pip-install banner (designer-shipped)
     inject('ml-deps.js', null);
-    // model-install.js · GET /models/installed probe + first-use model
-    // download banner. Stacks below the ml-deps banner if both are present.
+    // model-install.js · first-use HF/Ollama weight-download banner (designer-shipped)
     inject('model-install.js', null);
   })();
 })();

@@ -166,6 +166,26 @@
         : () => {},
     }, 'Download'));
 
+    // "Full wizard" link — for users who want to ADD a new model rather
+    // than just download what's configured. Deep-links to add-model.html
+    // (designer-shipped 4-step wizard in zip 43). Skipped on the wizard
+    // page itself to avoid a banner-on-the-wizard loop.
+    const here = (location.pathname.split('/').pop() || '').toLowerCase();
+    if (here !== 'add-model.html') {
+      banner.appendChild(el('a', {
+        href: 'add-model.html',
+        style: {
+          color: '#2dd4ff',
+          textDecoration: 'underline',
+          fontFamily: 'inherit',
+          fontSize: '11px',
+          letterSpacing: '0.06em',
+          padding: '6px 4px',
+        },
+        title: 'Full backend / model wizard with HF, Ollama, OpenAI-compat, Anthropic, Gemini',
+      }, 'Full wizard →'));
+    }
+
     banner.appendChild(el('button', {
       style: {
         background: 'transparent',
