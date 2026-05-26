@@ -91,6 +91,13 @@ pub fn app_log_dir(app: &AppHandle) -> Result<PathBuf, String> {
 ///
 /// We deliberately copy file-by-file (not recursive blat) so the user's
 /// gitignored data/ + logs/ + outputs/ subdirs aren't wiped on update.
+fn installed_version_for_diagnostic(stamp: &Path) -> Option<String> {
+    // Returns the previously-installed version string if a stamp exists.
+    // Currently unused for gating (we always re-extract) but kept around
+    // so a future cache-aware extraction can reuse it cheaply.
+    std::fs::read_to_string(stamp).ok().map(|s| s.trim().to_string())
+}
+
 pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     let runtime = app_runtime_dir(app)?;
     let resource_root = app
@@ -104,15 +111,19 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
 
     let bundled_version = env!("CARGO_PKG_VERSION");
     let stamp = runtime.join(".bundled_version");
-    let installed = fs::read_to_string(&stamp).unwrap_or_default();
-    // Stamp + canary check: only skip extraction if BOTH the version matches
-    // AND a known-required file is actually on disk. Without the canary,
-    // a previous broken extraction (e.g. before the _up_/ prefix fix) would
-    // leave behind a stamp that lies — and we'd skip re-extracting forever.
-    let canary = runtime.join("local_ai_server.py");
-    if installed.trim() == bundled_version && canary.is_file() {
-        return Ok(());
-    }
+    // Previously gated re-extraction on the stamp version. That broke
+    // every bug fix to the bundled Python: as long as CARGO_PKG_VERSION
+    // didn't bump, users running a newer .msi would skip extraction and
+    // keep running the OLD local_ai_server.py from the first install.
+    // The CORS-middleware fix shipped with the bundle but every user
+    // stuck on a pre-CORS extracted copy.
+    //
+    // New policy: always re-extract on boot. The cost is a few MB of
+    // small-file copies (server.py + gui/ tree ~ 30 MB) which is fast
+    // enough on any SSD and trivial vs the ~15s Python cold start that
+    // dominates boot time anyway. The version stamp is still written
+    // for diagnostics + future re-introduction of caching if needed.
+    let _ = installed_version_for_diagnostic(&stamp);
 
     // Files to copy from resource_dir → runtime. Mirror tauri.conf.json's
     // bundle.resources list; if you bump that, bump this too.
