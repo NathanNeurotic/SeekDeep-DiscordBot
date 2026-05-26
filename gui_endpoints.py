@@ -1952,18 +1952,32 @@ def register_gui_endpoints(
         if not req_path.is_file():
             raise HTTPException(404, f"{req_name} not found at {req_path}")
 
+        # --user is pip's per-user install dir (~/AppData/Roaming/Python/...).
+        # Inside a venv, pip REFUSES --user with: "Can not perform a '--user'
+        # install. User site-packages are not visible in this virtualenv."
+        # So drop the flag when we detect we're running under a venv —
+        # otherwise the install fails before pip even starts downloading
+        # anything. Matches sidecar.rs::pip_install's logic.
+        py_str_lower = sys.executable.lower()
+        in_venv = (
+            bool(os.environ.get("VIRTUAL_ENV"))
+            or ".venv" in py_str_lower
+            or "\\venv\\" in py_str_lower
+            or "/venv/" in py_str_lower
+        )
+
         def run_install():
             try:
                 event_bus.publish_sync({
                     "type": "deps.install.started",
-                    "data": {"requirements_file": req_name},
+                    "data": {"requirements_file": req_name, "venv": in_venv},
                 })
+                pip_args = [sys.executable, "-m", "pip", "install", "--upgrade"]
+                if not in_venv:
+                    pip_args.append("--user")
+                pip_args.extend(["-r", str(req_path)])
                 proc = subprocess.Popen(
-                    [
-                        sys.executable, "-m", "pip", "install",
-                        "--user", "--upgrade",
-                        "-r", str(req_path),
-                    ],
+                    pip_args,
                     cwd=str(root),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
