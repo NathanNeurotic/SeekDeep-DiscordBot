@@ -422,7 +422,7 @@
       panel.querySelector('[data-ms]').textContent = '—';
       out.classList.remove('has-image');
       out.innerHTML = `<span style="color:var(--bad);">▸ OFFLINE · ${(e.message||e+'').slice(0,80)}<br><br>showing canned placeholder</span>`;
-      setStatus(panel, 'OFFLINE · MOCK', 'warn');
+      setStatus(panel, 'OFFLINE', 'warn');
     }
   }
 

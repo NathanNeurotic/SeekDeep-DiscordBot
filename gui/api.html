@@ -681,7 +681,7 @@ Object.entries(groups).forEach(([group, list]) => {
     const el = document.createElement('div');
     el.className = 'ep';
     el.dataset.id = ep.id;
-    el.innerHTML = `<span class="method ${ep.method.toLowerCase()}">${ep.method}</span><span class="path">${ep.path}</span><span class="ep-offline">OFFLINE · MOCK</span>`;
+    el.innerHTML = `<span class="method ${ep.method.toLowerCase()}">${ep.method}</span><span class="path">${ep.path}</span><span class="ep-offline">OFFLINE</span>`;
     el.addEventListener('click', () => selectEndpoint(ep.id));
     railEl.appendChild(el);
   });
@@ -930,7 +930,7 @@ function setStatus(s, code) {
   const el = document.getElementById('respStatus');
   if (!el) return;
   el.className = 'resp-status ' + s;
-  el.textContent = (s === 'ok' ? '200 OK' : s === 'err' ? 'OFFLINE · MOCK' : s === 'loading' ? 'SENDING…' : 'IDLE').replace('200', code || '200');
+  el.textContent = (s === 'ok' ? '200 OK' : s === 'err' ? 'OFFLINE · unreachable' : s === 'loading' ? 'SENDING…' : 'IDLE').replace('200', code || '200');
 }
 
 function renderResponse({ ep, ok, status, dt, body, error }) {
@@ -965,9 +965,9 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
   respPane.innerHTML = `
     <div class="resp-head">
       <h2>RESPONSE</h2>
-      <span class="resp-status ${ok ? 'ok' : 'err'}" id="respStatus">${ok ? status + ' OK' : 'OFFLINE · MOCK'}</span>
+      <span class="resp-status ${ok ? 'ok' : 'err'}" id="respStatus">${ok ? status + ' OK' : 'OFFLINE · unreachable'}</span>
     </div>
-    ${error ? `<div style="color:var(--bad); font-family:var(--font-mono); font-size:12px; padding:8px 12px; background: rgba(255,107,107,0.05); border:1px solid rgba(255,107,107,0.3); border-radius: var(--r-sm); margin-bottom: 14px;">▸ FETCH ERROR · ${error} · showing canned mock response below</div>` : ''}
+    ${error ? `<div style="color:var(--bad); font-family:var(--font-mono); font-size:12px; padding:8px 12px; background: rgba(255,107,107,0.05); border:1px solid rgba(255,107,107,0.3); border-radius: var(--r-sm); margin-bottom: 14px;">▸ FETCH ERROR · ${error} · showing canned sample response below</div>` : ''}
     ${meta}
     ${inspectorHTML}
     ${bodyHTML}

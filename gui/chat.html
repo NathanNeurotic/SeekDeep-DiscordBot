@@ -634,54 +634,71 @@
   })();
 
   // ===== LIVE PROBE — /health every 5s =====
-  // Pill ships as PROBING; flips to LIVE on first successful probe,
-  // or MOCK if the first probe fails or two consecutive probes fail.
+  // Three-state machine: PROBING (initial / transient failures) → LIVE
+  // (any successful probe) → OFFLINE (3+ consecutive failures). There is
+  // NO mock mode — the page either shows real data or admits it can't
+  // reach the server. "MOCK" was a legacy label from a demo-mode chat
+  // path that no longer exists; saying it now misled users into thinking
+  // their real /chat errors were synthetic.
+  //
+  // Timeout is 6s, not 2s, because /health calls ollama_available()
+  // (up to OLLAMA_PROBE_TIMEOUT_SECS, default 2s) + iterates every chat
+  // role to resolve backends. 2s was an aggressive ceiling that flipped
+  // the page to "MOCK" on every cold start.
   const cLIVE = {
     timer: null,
     failures: 0,
     isLive: false,
-    everProbed: false,
+    everSucceeded: false,
     async probe() {
       const t0 = performance.now();
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+        const r = await fetch(SEEKDEEP_BASE + '/health', { signal: AbortSignal.timeout(6000), cache: 'no-store' });
         if (!r.ok) throw new Error('http ' + r.status);
         const h = await r.json();
         const ms = Math.round(performance.now() - t0);
         this.failures = 0;
+        this.everSucceeded = true;
         if (!this.isLive) this.setMode('live');
         this.apply(h, ms);
       } catch {
         this.failures++;
-        if (!this.everProbed) this.setMode('mock');
-        else if (this.isLive && this.failures >= 2) this.setMode('mock');
-      } finally {
-        this.everProbed = true;
+        // Stay in PROBING for the first 2 failures; only flip to OFFLINE
+        // after 3+ consecutive misses or if we've never seen success and
+        // 5+ tries failed (~25s of trying).
+        if (this.isLive && this.failures >= 3) this.setMode('offline');
+        else if (!this.everSucceeded && this.failures >= 5) this.setMode('offline');
       }
     },
     setMode(mode) {
       this.isLive = (mode === 'live');
       const st = document.getElementById('cBotStatus');
-      if (st) st.textContent = (mode === 'live') ? '● healthy · live' : '● mock · standalone';
       const pp = document.getElementById('playgroundPill');
-      if (pp) {
-        const label = mode === 'live' ? 'LIVE' : 'MOCK';
-        pp.innerHTML = '<span class="dot"></span>PLAYGROUND · ' + label;
-        pp.classList.toggle('cyan', mode === 'live');
-      }
       const hr = document.getElementById('helperRoute');
-      if (hr && mode !== 'live') hr.textContent = 'OFFLINE · mock · /chat unreachable';
+      if (mode === 'live') {
+        if (st) st.textContent = '● healthy · live';
+        if (pp) { pp.innerHTML = '<span class="dot"></span>PLAYGROUND · LIVE'; pp.classList.add('cyan'); }
+      } else if (mode === 'offline') {
+        if (st) st.textContent = '● offline · server unreachable';
+        if (pp) { pp.innerHTML = '<span class="dot"></span>PLAYGROUND · OFFLINE'; pp.classList.remove('cyan'); }
+        if (hr) hr.textContent = 'OFFLINE · /health unreachable';
+      }
     },
     apply(h, ms) {
       const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
       set('cBotLatency', ms + 'ms');
-      if (h.model) set('cBotModel', String(h.model).split('/').pop());
+      // /health returns models: { chat, vision, image }; prefer the loaded
+      // chat role label, fall back to the configured chat model id, then
+      // legacy h.model field for older servers.
+      const modelLabel = h.loaded_chat_model_id || (h.models && h.models.chat) || h.model;
+      if (modelLabel) set('cBotModel', String(modelLabel).split('/').pop());
       const g = h.gpu || {};
       if (g.used_mb != null && g.total_mb != null) {
         set('cBotVram', `${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
-      } else {
-        // CPU-only or empty /health.gpu — say so instead of leaving a stale placeholder.
+      } else if (g.available === false) {
         set('cBotVram', 'cpu · no gpu');
+      } else {
+        set('cBotVram', '—');
       }
       if (h.queue_depth != null) set('cBotQueue', String(h.queue_depth));
       else if (h.queue != null) set('cBotQueue', String(h.queue));

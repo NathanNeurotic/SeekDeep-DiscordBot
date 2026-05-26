@@ -2340,23 +2340,26 @@ const SEEKDEEP_BASE = (function() {
     async probe() {
       try {
         const ctl = new AbortController();
-        const tm = setTimeout(() => ctl.abort(), 2000);
+        const tm = setTimeout(() => ctl.abort(), 6000);
         const r = await fetch(SEEKDEEP_BASE + '/health', { signal: ctl.signal, cache: 'no-store' });
         clearTimeout(tm);
         if (!r.ok) throw new Error('http ' + r.status);
         const h = await r.json();
         this.failures = 0;
+        this.everSucceeded = true;
         if (!this.isLive) this.setMode('live');
         this.applyHealth(h);
         // Also pull /gpu for the richer GPU pane numbers
         try {
-          const gr = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+          const gr = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
           if (gr.ok) this.applyGpu(await gr.json());
         } catch {}
       } catch (e) {
         this.failures++;
-        // Only flip back to MOCK after 2 consecutive failures (avoid flicker)
-        if (this.isLive && this.failures >= 2) this.setMode('mock');
+        // Stay in PROBING for transient hiccups. Flip to OFFLINE after 3
+        // consecutive misses (so a brief stall doesn't change the UI).
+        if (this.isLive && this.failures >= 3) this.setMode('offline');
+        else if (!this.everSucceeded && this.failures >= 5) this.setMode('offline');
       }
     },
     setMode(mode) {
@@ -2371,9 +2374,9 @@ const SEEKDEEP_BASE = (function() {
         if (stackState) stackState.textContent = 'HEALTHY';
       } else {
         pill.classList.remove('on'); pill.classList.add('warn');
-        pill.innerHTML = '<span class="dot"></span>MOCK · STANDALONE';
+        pill.innerHTML = '<span class="dot"></span>OFFLINE · :7865';
         if (stackDot) { stackDot.style.background = 'var(--warn)'; stackDot.style.boxShadow = '0 0 10px var(--warn)'; }
-        if (stackState) stackState.textContent = 'MOCK';
+        if (stackState) stackState.textContent = 'OFFLINE';
       }
     },
     applyHealth(h) {
@@ -2784,7 +2787,7 @@ const SEEKDEEP_BASE = (function() {
         if (refs.history.children.length > 6) refs.history.lastChild.remove();
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
-        setStatus(`OFFLINE · MOCK · ${(ms/1000).toFixed(1)}s`, 'bad');
+        setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · /image unreachable`, 'bad');
         refs.placeholder.style.display = 'grid';
         refs.placeholder.textContent = `[OFFLINE — ${SEEKDEEP_BASE}/image unreachable · start the AI server]`;
       } finally {
@@ -2978,7 +2981,7 @@ const SEEKDEEP_BASE = (function() {
         pending.innerHTML = `<span class="meta">${role.toUpperCase()} · WEB ${web.toUpperCase()} · ${ms}MS · LIVE</span>${escapeHtml(reply).replace(/\n/g, '<br/>')}`;
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
-        pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS · MOCK</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. Start the stack via <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.`;
+        pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. ${e && e.message ? '<br/>Error: ' + escapeHtml(e.message) : 'Start the stack via the SeekDeep tray icon or <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.'}`;
       } finally {
         sending = false;
       }

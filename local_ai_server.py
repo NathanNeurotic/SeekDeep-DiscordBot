@@ -3096,7 +3096,17 @@ def chat(req: ChatRequest):
                     print(f"[SeekDeep Local AI] fallback chat also failed reason={fb_reason}: {fb_exc!r}", flush=True)
                     traceback.print_exc()
 
-        clean_msg = f"Chat model failed ({reason}). Check the local AI server log for details."
+        # Tailor the message for the cases the user can actually fix without
+        # reading the log. VRAMPressureError means "your GPU is full" — the
+        # user can free it via POST /unload or by closing other CUDA apps.
+        if reason == "chat-load-error:VRAMPressureError":
+            clean_msg = ("Out of VRAM — the model couldn't fit. Free GPU memory: "
+                         "click 'Flush model cache' in the Control Center (or POST /unload), "
+                         "close other CUDA apps, or pick a smaller quantization in Config.")
+        elif reason.startswith("chat-load-error:"):
+            clean_msg = f"Chat model failed to load ({reason.split(':',1)[1]}). See server.log via the Control Center → View logs."
+        else:
+            clean_msg = f"Chat model failed ({reason}). See server.log via the Control Center → View logs."
         return JSONResponse(status_code=503, content={"error": clean_msg, "reason": reason})
 
 
