@@ -464,6 +464,30 @@ Auto-loaded by `nav.js`'s `autoLoadSiblings` alongside `events / version / playg
 
 Self-gated via `window.__seekdeepModelInstallLoaded`.
 
+### Cross-tab event stream
+
+`POST /model/install` now publishes WS events to `/events` so the modal can track installs across tabs (e.g. user kicks off SDXL on one tab, opens chat.html in another while it's downloading):
+
+| Topic | Data |
+|---|---|
+| `model.install.started` | `{ model_id, backend, role? }` |
+| `model.install.complete` | `{ model_id, backend, role?, result: { ok, env_patched, external } }` |
+| `model.install.failed` | `{ model_id, backend, role?, error }` |
+
+The HTTP response shape is unchanged — synchronous callers still get the full `install_result` body when the call returns. Events are additive observability for the GUI.
+
+### In-UI backend swap (chat roles only)
+
+The backend chip in each modal row is clickable when the row's role matches `chat.*` and the current backend is `hf` or `ollama`. Click opens a small inline popover with:
+- Backend dropdown (HF ↔ Ollama)
+- `model_id` text input (pre-filled with current value)
+- HF / Ollama format hint
+- Save button → POSTs `/model/install` with `{ backend, model_id, role: <stripped chat. prefix>, auto_pull: true }`
+
+The endpoint patches `.env` (via `_env_key_for_role`) so the role's backend + model_id flip on disk, then runs the pull/download. Restart the AI server (tray "Restart AI server" or `restart_sidecar` Tauri command) for the new role assignment to take effect.
+
+**Remote backends** (openai-compat / anthropic / gemini) are NOT swappable from this mini-editor — they need API URL + key + version inputs. That's the full "Add a Model" wizard (designer queue item 1 in `PLANNED.md`). Until that ships, remote backend assignment stays `.env`-driven.
+
 ## 3.11 · Tauri sidecar v2.1 — auto-restart + system tray
 
 Building on [§ 3.7-3.10](#37--persona-override-over-http-persona) (the loading overlay + sidecar spawn + ml-deps installer), the Tauri shell now exposes:

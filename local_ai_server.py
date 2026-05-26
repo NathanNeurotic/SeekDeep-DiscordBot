@@ -2015,14 +2015,40 @@ def _env_key_for_role(role: str, kind: Literal["model_id", "backend"]) -> str | 
     return None
 
 
+def _publish_model_event(event_type: str, data: dict) -> None:
+    """Best-effort WS event publish — used by /model/install to surface
+    download progress to subscribed GUI tabs. Failures swallowed so a
+    missing event_bus (e.g. in unit-test import) doesn't break the
+    install path."""
+    try:
+        from gui_endpoints import event_bus
+        event_bus.publish_sync({"type": event_type, "data": data})
+    except Exception:
+        pass
+
+
 @app.post("/model/install", dependencies=[Depends(require_gui_token)])
 def model_install(req: ModelInstallRequest):
     """Install a model (HF download or Ollama pull) and optionally assign
     it to a chat role by patching .env. Idempotent: re-running with the
-    same params is a no-op when the model is already present."""
+    same params is a no-op when the model is already present.
+
+    Emits WS events on the /events bus so the GUI's install modal (and any
+    other subscribed tab) sees progress even if the user navigates away:
+      - model.install.started   {model_id, backend, role}
+      - model.install.complete  {model_id, backend, role, result}
+      - model.install.failed    {model_id, backend, role, error}
+
+    Synchronous return shape preserved for callers that prefer to wait."""
     model_id = (req.model_id or "").strip()
     if not model_id:
         raise HTTPException(400, "model_id is required")
+
+    _publish_model_event("model.install.started", {
+        "model_id": model_id,
+        "backend": req.backend,
+        "role": (req.role or "").strip() or None,
+    })
 
     if req.backend == "ollama":
         # Ollama tag pull (or just verify presence)
@@ -2069,6 +2095,12 @@ def model_install(req: ModelInstallRequest):
         install_result["backend"] = "hf"
 
     if not install_result.get("ok"):
+        _publish_model_event("model.install.failed", {
+            "model_id": model_id,
+            "backend": req.backend,
+            "role": (req.role or "").strip() or None,
+            "error": install_result.get("note") or install_result.get("error") or "install failed",
+        })
         return JSONResponse(status_code=500, content=install_result)
 
     # Optional .env patch: assign this model to a chat role
@@ -2122,6 +2154,16 @@ def model_install(req: ModelInstallRequest):
             install_result["env_error"] = str(e)
         install_result["role"] = role
 
+    _publish_model_event("model.install.complete", {
+        "model_id": model_id,
+        "backend": req.backend,
+        "role": role or None,
+        "result": {
+            "ok": install_result.get("ok"),
+            "env_patched": install_result.get("env_patched", False),
+            "external": install_result.get("external", False),
+        },
+    })
     return install_result
 
 

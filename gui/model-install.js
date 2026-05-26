@@ -194,6 +194,224 @@
     }
   }
 
+  // --- Backend swap mini-editor -------------------------------------------
+  // Opens an inline popover next to a clicked backend chip. Lets the user
+  // flip a chat role between HF and Ollama (the two local backends) without
+  // editing .env by hand. Remote backends (openai-compat / anthropic /
+  // gemini) need API URL + key + persona vocab handling — that's the full
+  // 'Add a Model' wizard which lives on designer's plate.
+
+  let swapPopover = null;
+
+  function closeSwapPopover() {
+    if (swapPopover) { swapPopover.remove(); swapPopover = null; }
+    document.removeEventListener('click', onDocClickToClose, true);
+  }
+
+  function onDocClickToClose(ev) {
+    if (swapPopover && !swapPopover.contains(ev.target)) {
+      // Don't close on chip-clicks; openSwapEditor handles those
+      const isChip = ev.target.closest && ev.target.closest('[data-sd-backend-chip]');
+      if (!isChip) closeSwapPopover();
+    }
+  }
+
+  function openSwapEditor(anchor, modelRow, roleNoPrefix) {
+    closeSwapPopover();
+    const rect = anchor.getBoundingClientRect();
+    swapPopover = el('div', {
+      style: {
+        position: 'fixed',
+        top: (rect.bottom + 6) + 'px',
+        left: rect.left + 'px',
+        zIndex: '10000',
+        width: '320px',
+        background: '#050b1a',
+        border: '1px solid rgba(45, 212, 255, 0.4)',
+        borderRadius: '8px',
+        padding: '16px',
+        boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
+        fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+        fontSize: '11px',
+        color: '#e1eaf5',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+      },
+    });
+    swapPopover.appendChild(el('div', {
+      style: { fontSize: '10px', letterSpacing: '0.16em', textTransform: 'uppercase', color: '#7a8aa0' },
+    }, 'Change backend · ' + modelRow.role));
+
+    const backendSel = el('select', {
+      style: {
+        background: 'rgba(2,6,15,0.6)',
+        color: '#e1eaf5',
+        border: '1px solid rgba(45,212,255,0.25)',
+        borderRadius: '4px',
+        padding: '6px 8px',
+        fontFamily: 'inherit',
+        fontSize: '11px',
+      },
+    },
+      el('option', { value: 'hf', ...(modelRow.backend === 'hf' ? { selected: 'selected' } : {}) }, 'HuggingFace (hf)'),
+      el('option', { value: 'ollama', ...(modelRow.backend === 'ollama' ? { selected: 'selected' } : {}) }, 'Ollama (local daemon)'),
+    );
+
+    const modelInput = el('input', {
+      type: 'text',
+      value: modelRow.model_id || '',
+      placeholder: 'e.g. Qwen/Qwen2.5-7B-Instruct or llama3.1:8b',
+      style: {
+        background: 'rgba(2,6,15,0.6)',
+        color: '#e1eaf5',
+        border: '1px solid rgba(45,212,255,0.25)',
+        borderRadius: '4px',
+        padding: '6px 8px',
+        fontFamily: 'inherit',
+        fontSize: '11px',
+      },
+    });
+
+    // Helper text reminds users that HF uses repo IDs, Ollama uses tags
+    const hint = el('div', { style: { color: '#7a8aa0', lineHeight: '1.55' } },
+      'HF: ',
+      el('code', { style: { color: '#2dd4ff' } }, 'owner/repo-name'),
+      ' (huggingface.co)',
+      el('br', null),
+      'Ollama: ',
+      el('code', { style: { color: '#59dc84' } }, 'name:tag'),
+      ' (registry.ollama.ai)',
+    );
+
+    const saveStatus = el('div', { style: { fontSize: '10px', minHeight: '1.3em' } });
+
+    const buttons = el('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+      el('button', {
+        style: {
+          background: 'transparent',
+          color: '#7a8aa0',
+          border: '1px solid rgba(45,212,255,0.18)',
+          padding: '6px 10px',
+          borderRadius: '4px',
+          fontFamily: 'inherit',
+          fontSize: '10px',
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          cursor: 'pointer',
+        },
+        onclick: closeSwapPopover,
+      }, 'Cancel'),
+      el('button', {
+        style: {
+          background: '#2dd4ff',
+          color: '#02060f',
+          border: 'none',
+          padding: '6px 12px',
+          borderRadius: '4px',
+          fontFamily: 'inherit',
+          fontSize: '10px',
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          fontWeight: '600',
+          cursor: 'pointer',
+        },
+        onclick: async () => {
+          const newBackend = backendSel.value;
+          const newModelId = (modelInput.value || '').trim();
+          if (!newModelId) {
+            saveStatus.textContent = '⚠ model_id required';
+            saveStatus.style.color = '#ff6b6b';
+            return;
+          }
+          saveStatus.textContent = 'Saving + downloading…';
+          saveStatus.style.color = '#ffb84d';
+          try {
+            // POST /model/install with role= triggers .env patch AND pull.
+            // For ollama with daemon-down, the call will error fast and we
+            // surface that. For hf, this downloads ~5-15 minutes worth of
+            // weights — the existing modal row status will reflect that
+            // via the WS event subscription wired below.
+            const r = await fetch(BASE + '/model/install', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                backend: newBackend,
+                model_id: newModelId,
+                role: roleNoPrefix,
+                auto_pull: true,
+              }),
+            });
+            let data = null;
+            try { data = await r.json(); } catch {}
+            if (!r.ok || !data || !data.ok) {
+              const note = (data && (data.note || data.error || data.detail)) || ('HTTP ' + r.status);
+              saveStatus.textContent = '⚠ ' + String(note).slice(0, 80);
+              saveStatus.style.color = '#ff6b6b';
+              return;
+            }
+            saveStatus.textContent = '✓ Backend + model_id saved. Restart server to load.';
+            saveStatus.style.color = '#6df0ff';
+            // Re-probe to refresh the parent banner/modal state
+            setTimeout(() => { closeSwapPopover(); probe(); }, 1500);
+          } catch (err) {
+            saveStatus.textContent = '⚠ ' + String(err);
+            saveStatus.style.color = '#ff6b6b';
+          }
+        },
+      }, 'Save'),
+    );
+
+    swapPopover.append(backendSel, modelInput, hint, saveStatus, buttons);
+    document.body.appendChild(swapPopover);
+    // Defer the doc-click listener attachment so the current click event
+    // (which opened the popover) doesn't immediately close it.
+    setTimeout(() => document.addEventListener('click', onDocClickToClose, true), 0);
+  }
+
+  // --- Cross-tab event subscription ---------------------------------------
+  // /model/install emits model.install.{started,complete,failed} on the
+  // /events WebSocket. Subscribing makes the modal track installs kicked
+  // off by OTHER browser tabs (e.g. user opens chat.html in a second tab
+  // mid-download). The bus is set up by events.js (auto-loaded by nav.js).
+
+  function subscribeToInstallEvents() {
+    const bus = window.SeekDeepEvents;
+    if (!bus || subscribeToInstallEvents._wired) return;
+    subscribeToInstallEvents._wired = true;
+
+    function matchRow(data) {
+      // Match by model_id + backend — the role might be absent on cross-tab
+      // installs that didn't pass role=. We iterate rowEls and find the
+      // first matching row.
+      for (const role of Object.keys(rowEls)) {
+        const r = rowEls[role];
+        if (!r || !r.row) continue;
+        // The model row's `m` reference isn't stored — but the role string
+        // matches `chat.<X>` or `image` / `vision` and rowEls is keyed by
+        // it. We re-look up via the banner's last state if needed.
+        if (data.role && (data.role === role || data.role === role.replace(/^chat\./, ''))) return role;
+      }
+      return null;
+    }
+
+    bus.on('model.install.started', (data) => {
+      const role = matchRow(data);
+      if (role) setRowStatus(role, 'DOWNLOADING…', '#ffb84d');
+    });
+    bus.on('model.install.complete', (data) => {
+      const role = matchRow(data);
+      if (role) setRowStatus(role, 'DONE', '#6df0ff');
+    });
+    bus.on('model.install.failed', (data) => {
+      const role = matchRow(data);
+      if (role) {
+        const msg = (data && data.error) ? String(data.error).slice(0, 60) : 'FAILED';
+        setRowStatus(role, 'FAILED · ' + msg, '#ff6b6b');
+      }
+    });
+  }
+
   // --- Install modal -------------------------------------------------------
 
   let modal = null;
@@ -270,7 +488,13 @@
         gemini:           { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
       };
       const bc = backendColors[m.backend] || { bg: 'rgba(122, 138, 160, 0.15)', fg: '#7a8aa0' };
+      // Chat roles can have their backend swapped via the mini-editor popover
+      // (.env patch through POST /model/install with role=). Image + vision
+      // are always hf with a fixed model_id — no swap UI for those rows.
+      const chatRoleMatch = m.role.match(/^chat\.(.+)$/);
+      const canSwap = !!chatRoleMatch && (m.backend === 'hf' || m.backend === 'ollama');
       const backendChip = el('span', {
+        'data-sd-backend-chip': canSwap ? 'swappable' : 'fixed',
         style: {
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           fontSize: '9.5px',
@@ -283,8 +507,12 @@
           fontWeight: '600',
           marginLeft: '8px',
           verticalAlign: 'middle',
+          cursor: canSwap ? 'pointer' : 'default',
+          userSelect: 'none',
         },
-      }, m.backend === 'hf' ? 'HuggingFace' : m.backend);
+        title: canSwap ? 'Click to change backend (HF ↔ Ollama)' : 'This role\'s backend is fixed',
+        onclick: canSwap ? (ev) => openSwapEditor(ev.target, m, chatRoleMatch[1]) : null,
+      }, (m.backend === 'hf' ? 'HuggingFace' : m.backend) + (canSwap ? ' ▾' : ''));
 
       const row = el('div', {
         style: {
@@ -337,6 +565,12 @@
     overlay.appendChild(card);
     document.body.appendChild(overlay);
     modal = overlay;
+
+    // Subscribe to cross-tab events so the modal reflects installs kicked
+    // off elsewhere. Retried after a short delay because events.js / the
+    // WS connection may not be ready at modal-open time on a fresh page.
+    subscribeToInstallEvents();
+    setTimeout(subscribeToInstallEvents, 1000);
 
     runSequentialDownloads(downloadable);
   }
