@@ -537,11 +537,16 @@ class _SeekDeepNoCacheStaticFiles(StaticFiles):
         resp = await super().get_response(path, scope)
         if hasattr(resp, "headers"):
             ext = (path or "").lower().rsplit(".", 1)[-1]
-            # HTML/JS/JSON are the surfaces that mutate during dev + ship
-            # cycles. Images, fonts, etc. are stable so we let the browser
-            # cache them normally.
-            if ext in ("html", "htm", "js", "mjs", "json"):
-                resp.headers["Cache-Control"] = "no-store, max-age=0"
+            # HTML/JS/CSS/JSON are everything that mutates between SeekDeep
+            # releases. SeekDeep ships as a Tauri desktop app serving over
+            # loopback — there is no bandwidth case for caching the GUI.
+            # The only thing caching buys us is stale UIs after an update,
+            # which is what we just spent hours debugging. So: hard no-store.
+            # Images / fonts / webp / svg / wasm stay cacheable since they
+            # rarely change and don't carry the "is this the new build?"
+            # question marks.
+            if ext in ("html", "htm", "js", "mjs", "css", "json"):
+                resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
                 resp.headers["Pragma"] = "no-cache"
                 resp.headers["Expires"] = "0"
         return resp
