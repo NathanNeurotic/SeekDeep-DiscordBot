@@ -1972,9 +1972,78 @@ class ModelInstallRequest(BaseModel):
     api_version: str = ""    # anthropic only: per-call anthropic-version
 
 
+class _HfDownloadProgressTqdm:
+    """tqdm-compatible wrapper that emits `model.install.line` WS events
+    instead of writing progress bars to stderr. huggingface_hub
+    instantiates this once per file being downloaded:
+        tqdm_class(total=N, desc=filename, unit='B', unit_scale=True, ...)
+    then calls .update(chunk_size) on each chunk. We throttle events to
+    at most every 250 ms per file AND only on integer percent changes so
+    the bus doesn't get hammered.
+
+    Each emitted event payload:
+        { filename, bytes, total, percent, unit, done? }
+    The GUI (gui/model-install.js) subscribes via SeekDeepEvents.on and
+    paints a real progress bar instead of just a spinner."""
+    def __init__(self, *args, **kwargs):
+        self.desc = kwargs.get('desc') or ''
+        self.total = kwargs.get('total') or 0
+        self.n = kwargs.get('initial') or 0
+        self.unit = kwargs.get('unit', 'it')
+        self._last_ts = 0.0
+        self._last_pct = -1
+
+    def update(self, n=1):
+        self.n += int(n or 0)
+        now = time.time()
+        pct = int((self.n * 100) / self.total) if self.total else None
+        # Skip emit if neither 250 ms nor a new int-percent has happened
+        if (now - self._last_ts) < 0.25 and pct == self._last_pct:
+            return
+        self._last_ts = now
+        self._last_pct = pct
+        _publish_model_event("model.install.line", {
+            "filename": self.desc or "?",
+            "bytes": self.n,
+            "total": self.total,
+            "percent": pct,
+            "unit": self.unit,
+        })
+
+    def close(self):
+        _publish_model_event("model.install.line", {
+            "filename": self.desc or "?",
+            "bytes": self.n,
+            "total": self.total or self.n,
+            "percent": 100,
+            "done": True,
+        })
+
+    def set_description(self, desc=None, *_, **__):
+        if desc:
+            self.desc = desc
+
+    # tqdm has a wide surface area. These are the methods huggingface_hub
+    # actually touches; the rest are no-ops to be safe.
+    def set_postfix(self, *_, **__): pass
+    def set_postfix_str(self, *_, **__): pass
+    def write(self, *_, **__): pass
+    def refresh(self, *_, **__): pass
+    def reset(self, total=None):
+        if total is not None: self.total = total
+        self.n = 0
+        self._last_pct = -1
+
+    def __enter__(self): return self
+    def __exit__(self, *_): self.close()
+    def __iter__(self): return iter([])
+
+
 def _hf_install(model_id: str, revision: str = "") -> dict:
     """Download an HF repo to LOCAL_MODEL_CACHE_DIR (or HF_HOME). Uses
     huggingface_hub.snapshot_download so partial downloads resume cleanly.
+    Streams per-file byte progress to the GUI via model.install.line
+    events (see _HfDownloadProgressTqdm above).
     Returns {ok, model_id, local_dir, files_downloaded}."""
     try:
         from huggingface_hub import snapshot_download
@@ -1982,7 +2051,12 @@ def _hf_install(model_id: str, revision: str = "") -> dict:
         return {"ok": False, "error": "huggingface_hub not installed"}
     try:
         cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-        kw = {"repo_id": model_id, "cache_dir": cache_dir} if cache_dir else {"repo_id": model_id}
+        kw = {
+            "repo_id": model_id,
+            "tqdm_class": _HfDownloadProgressTqdm,
+        }
+        if cache_dir:
+            kw["cache_dir"] = cache_dir
         if revision:
             kw["revision"] = revision
         if os.getenv("HF_TOKEN"):
@@ -1995,6 +2069,17 @@ def _hf_install(model_id: str, revision: str = "") -> dict:
             files = -1
         return {"ok": True, "model_id": model_id, "local_dir": str(local_dir),
                 "files_downloaded": files}
+    except TypeError as e:
+        # Older huggingface_hub didn't accept tqdm_class. Retry without it.
+        if "tqdm_class" not in str(e):
+            return {"ok": False, "error": f"hf download failed: {e}"}
+        kw.pop("tqdm_class", None)
+        try:
+            local_dir = snapshot_download(**kw)
+            return {"ok": True, "model_id": model_id, "local_dir": str(local_dir),
+                    "files_downloaded": -1, "note": "progress events disabled (legacy huggingface_hub)"}
+        except Exception as e2:
+            return {"ok": False, "error": f"hf download failed: {e2}"}
     except Exception as e:
         return {"ok": False, "error": f"hf download failed: {e}"}
 

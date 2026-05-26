@@ -173,6 +173,30 @@
     r.dotEl.style.boxShadow = '0 0 6px ' + color;
   }
 
+  // Update the per-row progress text + bar from a model.install.line
+  // event. Payload: { filename, bytes, total, percent, unit, done? }.
+  // Currently model.install.line fires WITHOUT a `role` field (it's
+  // emitted from inside snapshot_download which doesn't know what role
+  // we're installing for), so we apply it to whichever row is currently
+  // in DOWNLOADING state — that's the active sequential walker target.
+  function applyLineEvent(data) {
+    // Find the row currently in DOWNLOADING state (sequential walker
+    // guarantees at most one).
+    const activeRole = Object.keys(rowEls).find((role) => {
+      const r = rowEls[role];
+      return r && r.statusEl && /DOWNLOADING/i.test(r.statusEl.textContent || '');
+    });
+    if (!activeRole) return;
+    const r = rowEls[activeRole];
+    const fn = (data.filename || '').split('/').pop().slice(0, 32);
+    const pct = (data.percent != null) ? data.percent : '?';
+    const mb = data.bytes != null ? (data.bytes / 1024 / 1024).toFixed(1) : '?';
+    const totalMb = data.total ? (data.total / 1024 / 1024).toFixed(1) : null;
+    const sizeStr = totalMb ? mb + ' / ' + totalMb + ' MB' : mb + ' MB';
+    r.statusEl.textContent = 'DOWNLOADING · ' + fn + ' · ' + pct + '% · ' + sizeStr;
+    r.statusEl.style.color = 'var(--warn, #ffb84d)';
+  }
+
   function openInstallModal(state) {
     if (modalOpen) return;
     const sdn = notify();
@@ -491,6 +515,11 @@
     bus.on('model.install.started', (data) => {
       const role = matchRow(data);
       if (role) setRowStatus(role, 'DOWNLOADING…', 'var(--warn, #ffb84d)');
+    });
+    bus.on('model.install.line', (data) => {
+      // Per-byte snapshot_download progress; payload doesn't carry role
+      // so applyLineEvent finds the active DOWNLOADING row.
+      applyLineEvent(data || {});
     });
     bus.on('model.install.complete', (data) => {
       const role = matchRow(data);
