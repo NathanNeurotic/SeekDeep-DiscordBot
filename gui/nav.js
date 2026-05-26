@@ -107,7 +107,7 @@
     // backend (AUD-003 — sensitive reads policy). Without auto-attaching the
     // header here every GUI page that fetches /memory/users / per-guild
     // archive config would hit 401. AUD-003.
-    const SENSITIVE_READ_RE = /\/(memory|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config)\.json)(\/|$)/;
+    const SENSITIVE_READ_RE = /\/(memory|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot)\.json)(\/|$)/;
     window.fetch = async function patchedFetch(input, init) {
       init = init || {};
       const method = (init.method || (input && input.method) || 'GET').toUpperCase();
