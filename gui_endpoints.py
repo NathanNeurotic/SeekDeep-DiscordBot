@@ -1439,6 +1439,11 @@ def register_gui_endpoints(
         persona_agg:     dict[str, int] = {}
         image_style_agg: dict[str, int] = {}
         chat_model_agg:  dict[str, int] = {}
+        # Aggregate per-user activity across guilds so we can surface a
+        # top-contributors leaderboard (the Stats pane was looking for
+        # data.top in server-stats.json but the file is keyed guild→user;
+        # nothing was rendering even when there was real activity).
+        user_agg: dict[str, dict[str, int]] = {}
         if bot_stats_path.is_file():
             try:
                 raw = json.loads(bot_stats_path.read_text(encoding="utf-8"))
@@ -1450,8 +1455,13 @@ def register_gui_endpoints(
                     bot["total_chats"]  += int(g.get("totalChats") or 0)
                     bot["total_images"] += int(g.get("totalImages") or 0)
                     bot["total_vision"] += int(g.get("totalVision") or 0)
-                    for uid in (g.get("users") or {}).keys():
+                    for uid, u in (g.get("users") or {}).items():
                         user_ids.add(uid)
+                        if not isinstance(u, dict): continue
+                        agg = user_agg.setdefault(uid, {"chats": 0, "images": 0, "vision": 0})
+                        agg["chats"]  += int(u.get("chats")  or 0)
+                        agg["images"] += int(u.get("images") or 0)
+                        agg["vision"] += int(u.get("vision") or 0)
                     for date, bucket in (g.get("dayBuckets") or {}).items():
                         if not isinstance(bucket, dict): continue
                         d = day_agg.setdefault(date, {"chats": 0, "images": 0, "vision": 0})
@@ -1468,8 +1478,27 @@ def register_gui_endpoints(
                 bot["by_persona"]     = persona_agg
                 bot["by_image_style"] = image_style_agg
                 bot["by_chat_model"]  = chat_model_agg
+                # Top contributors: sorted by total activity (chats + images +
+                # vision). Top 10. Bot has no display names — the GUI shows
+                # the snowflake's last 6 digits as a stand-in.
+                ranked = []
+                for uid, u in user_agg.items():
+                    total = u["chats"] + u["images"] + u["vision"]
+                    if total <= 0: continue
+                    ranked.append({
+                        "id":     uid,
+                        "tag":    "@" + uid[-6:],   # stand-in until display names ship
+                        "count":  total,
+                        "chats":  u["chats"],
+                        "images": u["images"],
+                        "vision": u["vision"],
+                    })
+                ranked.sort(key=lambda x: x["count"], reverse=True)
+                bot["top_contributors"] = ranked[:10]
             except Exception as e:
                 bot["error"] = str(e)
+        else:
+            bot["top_contributors"] = []
         # Merge web-playground chat counters into the bot's by_persona /
         # by_chat_model so the dashboard breakdowns reflect total chat
         # activity (Discord bot + web playground). Reuses the same

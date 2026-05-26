@@ -1698,9 +1698,9 @@
               <div style="position: absolute; bottom: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center;">
                 <span class="pill" id="ipStatus" style="padding: 3px 10px;"><span class="dot"></span>IDLE</span>
                 <div style="display: flex; gap: 6px;">
-                  <button class="btn-mini" id="ipDownload">⤓ Download</button>
-                  <button class="btn-mini">📂 Archive</button>
-                  <button class="btn-mini" id="ipReRefine">⟳ Re-refine</button>
+                  <button class="btn-mini" id="ipDownload" title="Save the last generated image to disk">⤓ Download</button>
+                  <button class="btn-mini" id="ipCopySeed" title="Copy the seed of the last generation so you can reproduce it">⎘ Seed</button>
+                  <button class="btn-mini" id="ipSendToSource" title="Use the last generated image as the source for img2img/pix2pix/inpaint/upscale">↻ Use as source</button>
                 </div>
               </div>
             </div>
@@ -1862,7 +1862,7 @@
           </div>
 
           <div class="chart-wrap"><h3>Top contributors</h3><div id="statsLeaderboard">
-            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— no contributor data yet · run /seekdeep stats in a guild to seed</div>
+            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— no contributor data yet · send any chat/image/vision through the bot to seed (counters live in <span class="mono">data/server-stats.json</span> per user, aggregated by <span class="mono">/stats/snapshot</span>)</div>
             </div>
           </div>
         </div>
@@ -1870,17 +1870,17 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 18px;">
           <div class="chart-wrap">
             <h3>Persona usage</h3>
-            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="personaBreakdown">— per-persona counters not tracked yet (bot writes totalChats only, not by-persona)</div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="personaBreakdown">— no persona usage yet · run <span class="mono" style="color:var(--cyan-1)">@SeekDeep persona &lt;name&gt;</span> in Discord or pick one in the chat playground to seed</div>
           </div>
 
           <div class="chart-wrap">
             <h3>Image styles</h3>
-            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="styleBreakdown">— per-style counters not tracked yet (image prompts aren't classified by style)</div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="styleBreakdown">— no image-style usage yet · generate an image with a style preset (cinematic / anime / pixel …) to seed</div>
           </div>
 
           <div class="chart-wrap">
             <h3>Model usage</h3>
-            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="modelBreakdown">— per-model counters not tracked yet (ai-server logs role but doesn't aggregate)</div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="modelBreakdown">— no chat-model usage yet · send a chat in Discord or the playground to seed</div>
           </div>
         </div>
       </section>
@@ -3582,6 +3582,56 @@ const SEEKDEEP_BASE = (function() {
       a.href = lastImageUrl;
       a.download = `seekdeep-${activeMode()}-${lastSeed || 'x'}.png`;
       a.click();
+    });
+
+    // ⎘ Seed — copy the last seed to the clipboard so the user can paste it
+    // back into the seed input for a reproducible run. Was an unwired
+    // "📂 Archive" button that did nothing in the playground context.
+    document.getElementById('ipCopySeed')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const orig = btn.textContent;
+      if (lastSeed == null) {
+        btn.textContent = '— no seed yet';
+        setTimeout(() => { btn.textContent = orig; }, 1400);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(String(lastSeed));
+        btn.textContent = '✓ ' + lastSeed;
+      } catch {
+        btn.textContent = String(lastSeed);  // at least surface it
+      }
+      setTimeout(() => { btn.textContent = orig; }, 1800);
+    });
+
+    // ↻ Use as source — pipe the last generated image into the source-image
+    // slot. Lets the user txt2img → img2img → inpaint chain without
+    // manually saving + uploading. Mode auto-switches to img2img unless the
+    // user is already on a non-txt2img mode.
+    document.getElementById('ipSendToSource')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const orig = btn.textContent;
+      if (!lastImageUrl) {
+        btn.textContent = '— generate one first';
+        setTimeout(() => { btn.textContent = orig; }, 1600);
+        return;
+      }
+      try {
+        // Fetch the blob from the data URL or object URL we already have
+        const r = await fetch(lastImageUrl);
+        const blob = await r.blob();
+        const file = new File([blob], `seekdeep-source-${lastSeed || 'x'}.png`, { type: blob.type || 'image/png' });
+        await acceptFile(file);
+        if (activeMode() === 'txt2img') {
+          // Auto-switch to img2img since that's the most common downstream
+          const chip = document.querySelector('.mode-tabs .chip[data-mode="img2img"]');
+          if (chip) chip.click();
+        }
+        btn.textContent = '✓ loaded';
+      } catch (err) {
+        btn.textContent = '✕ failed';
+      }
+      setTimeout(() => { btn.textContent = orig; }, 1800);
     });
   })();
 

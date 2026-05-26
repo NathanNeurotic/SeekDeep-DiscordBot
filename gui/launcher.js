@@ -290,11 +290,38 @@
     // ---- Stats pane: Persona / Image-style / Chat-model breakdowns --------
     // Live render IF the bot has bumped at least one entry. While empty
     // (fresh install, or @SeekDeep hasn't been pinged yet), the panel keeps
-    // its "— per-X counters not tracked yet" placeholder so the page
-    // doesn't fake data.
+    // its empty-state placeholder so the page doesn't fake data.
     renderBreakdown('personaBreakdown', bot.by_persona,     'persona');
     renderBreakdown('styleBreakdown',   bot.by_image_style, 'image style');
     renderBreakdown('modelBreakdown',   bot.by_chat_model,  'chat model');
+
+    // ---- Stats pane: Top contributors leaderboard -------------------------
+    // /stats/snapshot now aggregates per-user activity across guilds and
+    // returns top 10. The old wireStats() in app.html was looking for
+    // data.top in server-stats.json which never existed (the file is
+    // keyed guild→user), so the leaderboard never rendered. Drive it
+    // from snapshot.bot.top_contributors instead.
+    const lb = document.getElementById('statsLeaderboard');
+    const ranked = Array.isArray(bot.top_contributors) ? bot.top_contributors : [];
+    if (lb && ranked.length) {
+      lb.innerHTML = '';
+      const total = ranked.reduce((s, u) => s + (u.count || 0), 0) || 1;
+      ranked.forEach((u, i) => {
+        const pct = Math.round(((u.count || 0) / total) * 100);
+        const row = document.createElement('div');
+        row.className = 'lb-row';
+        // XSS-safe: u.tag / u.id come from server but go via textContent.
+        const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; el.textContent = text; return el; };
+        const tag = String(u.tag || ('@' + (u.id || '').slice(-6) || '?'));
+        row.appendChild(mk('span', 'rk', String(i + 1).padStart(2, '0')));
+        row.appendChild(mk('span', 'av', tag.charAt(1) || tag.charAt(0) || '?'));
+        row.appendChild(mk('span', '',   tag));
+        row.appendChild(mk('span', 'count', String(u.count || 0)));
+        row.appendChild(mk('span', 'pct', pct + '%'));
+        row.title = `chats ${u.chats || 0} · images ${u.images || 0} · vision ${u.vision || 0}`;
+        lb.appendChild(row);
+      });
+    }
 
     // ---- Sidebar Models badge --------------------------------------------
     const sbModels = document.getElementById('sbModelsBadge');
