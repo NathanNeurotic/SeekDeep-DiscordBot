@@ -313,6 +313,7 @@
   }
   .check-row.checking .status-dot { background: var(--warn); animation: livePulse 1s ease-in-out infinite; }
   .check-row.ok       .status-dot { background: var(--good); box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 12px var(--good); }
+  .check-row.warn     .status-dot { background: var(--warn); box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 12px var(--warn); }
   .check-row.bad      .status-dot { background: var(--bad);  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 12px var(--bad); }
   .check-row .name { color: var(--hull); }
   .check-row .name .hint { display: block; font-size: 11px; color: var(--hull-3); margin-top: 3px; }
@@ -328,6 +329,7 @@
     line-height: 1.45;
   }
   .check-row.ok .read { color: var(--good); }
+  .check-row.warn .read { color: var(--warn); }
   .check-row.bad .read { color: var(--bad); }
   @keyframes livePulse {
     0%, 100% { opacity: 1; transform: scale(1); }
@@ -1406,7 +1408,9 @@ const SEEKDEEP_BASE = (function() {
   function setCheckState(name, status, read) {
     const row = document.querySelector(`[data-check="${name}"]`);
     if (!row) return;
-    row.classList.remove('checking', 'ok', 'bad');
+    // 'warn' is amber (Docker-up-but-container-not-running, etc.) — the
+    // setup isn't broken, a feature is just disabled until you fix it.
+    row.classList.remove('checking', 'ok', 'bad', 'warn');
     if (status) row.classList.add(status);
     if (read != null) row.querySelector('[data-read]').textContent = read;
   }
@@ -1521,9 +1525,11 @@ const SEEKDEEP_BASE = (function() {
           setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but torch.cuda.is_available() is False — PyTorch wheel isn't CUDA-enabled or the CUDA version doesn't match your GPU architecture. ${hint}`);
         }
       } else if (gpu && gpu.available === false) {
-        // No GPU at all (nvidia-smi didn't find one). Honest yellow.
+        // No GPU at all (nvidia-smi didn't find one). Use warn (amber):
+        // CPU mode is a valid choice for remote-backend users, not a
+        // "your install is broken" failure.
         const err = gpu.nvidia_smi && gpu.nvidia_smi.error;
-        setCheckState('gpu', 'bad', 'no GPU · CPU mode' + (err ? ' (' + err + ')' : '') + ' — ok for remote backends; local HF chat/image/vision will be slow or unavailable.');
+        setCheckState('gpu', 'warn', 'no GPU · CPU mode' + (err ? ' (' + err + ')' : '') + ' — ok for remote backends; local HF chat/image/vision will be slow or unavailable.');
       } else {
         setCheckState('gpu', 'ok', 'detected (no detail)');
       }
@@ -1538,11 +1544,36 @@ const SEEKDEEP_BASE = (function() {
       } else {
         setCheckState('node', 'bad', 'node not on PATH · install from nodejs.org (LTS 20+)');
       }
-      // Python
+      // Python — surface the actual interpreter the AI server is using
+      // and warn LOUDLY on 3.13+ where PyTorch wheels don't exist yet.
+      // The common failure mode the user kept hitting: Tauri sidecar
+      // spawns system Python 3.14 because the .venv lives in the cloned
+      // repo dir (not the Tauri runtime dir), torch can't be imported
+      // there, GPU check fails — but the user's .bat launcher works
+      // fine because IT uses .venv. Surfacing the executable lets the
+      // user see which Python they're actually running.
       if (rt.python?.installed) {
-        const venv = rt.python.venv_active ? ' · venv active' : '';
-        if (rt.python.meets_min) setCheckState('python', 'ok',  `${rt.python.version} (≥ ${rt.python.min_required} required)${venv}`);
-        else                     setCheckState('python', 'bad', `${rt.python.version} · need ≥ ${rt.python.min_required}${venv}`);
+        const py = rt.python;
+        const venvTag = py.venv_active ? ' · venv' : '';
+        const exec    = py.executable ? py.executable.split(/[\\/]/).slice(-3).join('/') : '';
+        const baseLine = `${py.version}${venvTag} (${exec})`;
+        // Three failure tiers, in priority order:
+        //   1. Python too OLD (< 3.11) — meets_min false
+        //   2. Python too NEW for torch (>= 3.13) — torch_supported_by_version false
+        //   3. Python is fine but torch is missing/broken
+        //   4. All good
+        if (!py.meets_min) {
+          setCheckState('python', 'bad', `${baseLine} — need ≥ ${py.min_required}. The AI server is running on a too-old Python; install 3.11 or 3.12 and point SEEKDEEP_PYTHON at it in .env.`);
+        } else if (py.torch_supported_by_version === false) {
+          setCheckState('python', 'bad', `${baseLine} — PyTorch has no wheels for Python ${py.version} yet (max supported: ${py.max_torch_supported}). The Tauri sidecar picked this Python but it can't load torch. Fix: install Python 3.11 or 3.12, then in .env set SEEKDEEP_PYTHON=C:\\\\path\\\\to\\\\python3.11\\\\python.exe and Reload .env. Your .bat launcher uses .venv which is probably already 3.11 and works.`);
+        } else if (py.torch_present === false) {
+          setCheckState('python', 'bad', `${baseLine} — Python version is fine but torch isn't installed in it. Click "Install ML libraries" in the Control Center, or point SEEKDEEP_PYTHON in .env at a venv that has torch.`);
+        } else if (!py.torch_cuda_runtime) {
+          const cudaTag = py.torch_cuda_built ? ` (wheel built for ${py.torch_cuda_built})` : '';
+          setCheckState('python', 'bad', `${baseLine} — torch ${py.torch_version || ''}${cudaTag} loaded but torch.cuda.is_available()=False. Either the wheel doesn't match your GPU (Blackwell needs cu124+, Ampere/Ada fine on cu121) or the driver is too old.`);
+        } else {
+          setCheckState('python', 'ok',  `${baseLine} · torch ${py.torch_version || ''} (${py.torch_cuda_built || 'cpu'}) CUDA available`);
+        }
       } else {
         setCheckState('python', 'bad', 'FastAPI is alive so Python must be installed; version probe failed');
       }
@@ -1571,7 +1602,13 @@ const SEEKDEEP_BASE = (function() {
         if (sx) {
           setCheckState('docker', 'ok', `Docker daemon up${ver} · searxng container up`);
         } else {
-          setCheckState('docker', 'bad', `Docker daemon up${ver} — but searxng container isn't running. Web search will be unavailable until you start the searxng container (e.g. \`docker compose up -d searxng\`).`);
+          // Daemon is healthy — this is a soft warning, NOT a failure.
+          // Was 'bad' (red): the user's screenshot 2026-05-26 showed
+          // "Docker daemon up v29.4.0" with a red dot which is misleading
+          // because Docker itself is fine. Using 'warn' (amber) communicates
+          // "feature limited, fix when you need web search" instead of
+          // "your install is broken".
+          setCheckState('docker', 'warn', `Docker daemon up${ver} · searxng container NOT running — web search disabled until you start it. Run "docker compose up -d searxng" from the repo root, or skip if you don't need web-routed chat.`);
         }
       } else if (docker && docker.state === 'installed_not_running') {
         setCheckState('docker', 'bad', `Docker is installed but the daemon isn't running. Click "Try start" to launch Docker Desktop, or open it manually. ${docker.detail ? '(' + docker.detail + ')' : ''}`);

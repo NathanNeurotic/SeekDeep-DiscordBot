@@ -1127,17 +1127,51 @@ def register_gui_endpoints(
             out["node"] = {"installed": False, "error": "node not on PATH"}
         except Exception as exc:
             out["node"] = {"installed": False, "error": str(exc)[:160]}
-        # Python — sys.version_info (this server IS Python so this always works)
+        # Python — sys.version_info (this server IS Python so this always works).
+        # ALSO probe for torch importability + version + CUDA build flag so
+        # the user can see whether the running Python has the ML stack
+        # their .bat launcher uses. The common failure mode: Tauri sidecar
+        # finds system Python 3.14 (which has no torch wheels yet), so the
+        # GUI complains about "CUDA not available" while the .bat-launched
+        # .venv Python 3.11 has working torch. Surfacing both pieces here
+        # lets the user diagnose without thinking about venvs.
         try:
+            ver_t = (sys.version_info.major, sys.version_info.minor)
+            # PyTorch supports up to Python 3.12 as of 2026-Q2. 3.13+ has no
+            # official wheels; warn so the user knows why torch.cuda is False.
+            torch_compat = ver_t <= (3, 12)
+            try:
+                import torch as _torch  # noqa
+                torch_present = True
+                torch_version = getattr(_torch, "__version__", "unknown")
+                torch_cuda_built = getattr(getattr(_torch, "version", None), "cuda", None) or None
+                try:
+                    torch_cuda_runtime = bool(_torch.cuda.is_available())
+                except Exception:
+                    torch_cuda_runtime = False
+            except Exception:
+                torch_present = False
+                torch_version = None
+                torch_cuda_built = None
+                torch_cuda_runtime = False
             out["python"] = {
                 "installed": True,
                 "version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                 "major": sys.version_info.major,
                 "minor": sys.version_info.minor,
-                "meets_min": (sys.version_info.major, sys.version_info.minor) >= (3, 11),
+                "meets_min": ver_t >= (3, 11),
                 "min_required": "3.11",
+                "max_torch_supported": "3.12",
+                "torch_supported_by_version": torch_compat,
                 "executable": sys.executable,
                 "venv_active": bool(os.environ.get("VIRTUAL_ENV")) or "venv" in sys.executable.lower() or ".venv" in sys.executable.lower(),
+                "venv_path":  os.environ.get("VIRTUAL_ENV") or "",
+                # torch surface — lets the installer page distinguish
+                # "wrong Python" from "right Python, wrong wheel"
+                "torch_present":      torch_present,
+                "torch_version":      torch_version,
+                "torch_cuda_built":   torch_cuda_built,   # cu121 / cu124 / None
+                "torch_cuda_runtime": torch_cuda_runtime, # torch.cuda.is_available()
             }
         except Exception as exc:
             out["python"] = {"installed": True, "error": str(exc)[:160]}

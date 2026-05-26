@@ -339,15 +339,31 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// Find a Python interpreter we can spawn. Order:
-///   1. <runtime>/.venv/Scripts/python.exe   (Windows venv)
-///   2. <runtime>/.venv/bin/python           (Unix venv)
-///   3. py.exe -3 (Windows Python launcher; preferred on Windows because
+///   1. SEEKDEEP_PYTHON env var (absolute path override — for users with
+///      a working venv outside the runtime dir, e.g. the dev `.venv` in
+///      the cloned repo. Set in `.env` to point at the same Python the
+///      .bat launcher uses, so the GUI sidecar doesn't fall back to a
+///      system Python that lacks torch).
+///   2. <runtime>/.venv/Scripts/python.exe   (Windows venv extracted by Tauri)
+///   3. <runtime>/.venv/bin/python           (Unix venv)
+///   4. py.exe -3 (Windows Python launcher; preferred on Windows because
 ///      the Microsoft Store python.exe stub launches the Store installer
-///      instead of starting Python)
-///   4. python3 / python on PATH
+///      instead of starting Python). Walks `py -0p` output to skip
+///      versions known to lack PyTorch wheels (3.13+ as of now).
+///   5. python3 / python on PATH
 ///
 /// Returns None if we can't find anything usable.
 pub fn find_python(runtime: &Path) -> Option<PathBuf> {
+    // Honor SEEKDEEP_PYTHON override first. Users hitting the "Python
+    // 3.14 detected but no torch" trap (because their .venv lives in
+    // the cloned-repo dir, not the Tauri runtime dir) can point this at
+    // their working interpreter without us having to guess.
+    if let Ok(env_py) = std::env::var("SEEKDEEP_PYTHON") {
+        let p = PathBuf::from(env_py.trim());
+        if p.is_file() {
+            return Some(p);
+        }
+    }
     let venv_candidates = [
         runtime.join(".venv").join("Scripts").join("python.exe"),
         runtime.join(".venv").join("bin").join("python"),
