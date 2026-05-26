@@ -288,11 +288,11 @@
             <span class="ch">#prompts · today at 14:32</span>
           </div>
           <div class="embed-title" id="eTitle">Template: cli-reviewer</div>
-          <div class="embed-desc" id="eDesc">Posted by <b>@nautilus</b> · 2 variables</div>
+          <div class="embed-desc" id="eDesc">Posted by <b>@offline-demo</b> · 2 variables</div>
           <div class="embed-fields">
             <div><div class="f-name">Variables</div><div class="f-value" id="eVars">{{language}}, {{code}}</div></div>
             <div><div class="f-name">Length</div><div class="f-value" id="eLen">428 chars</div></div>
-            <div><div class="f-name">Author</div><div class="f-value" id="eAuth">@nautilus</div></div>
+            <div><div class="f-name">Author</div><div class="f-value" id="eAuth">@offline-demo</div></div>
           </div>
           <div class="embed-body" id="eBody">…</div>
           <div class="embed-actions">
@@ -336,8 +336,8 @@
   <div class="field">
     <label>SERVER</label>
     <select id="shServer">
-      <option>Abyss Guild (current)</option>
-      <option>Bathyscaphe Co</option>
+      <option>(demo guild) (current)</option>
+      <option>(demo guild)</option>
       <option disabled>— other servers: cross-server sharing disabled —</option>
     </select>
   </div>
@@ -433,8 +433,8 @@
   const TEMPLATES = [
     {
       id: 'cli-reviewer', name: 'cli-reviewer', source: 'own', vars: ['language', 'code'],
-      uses: 18, lastUsed: '4h ago', author: '@nautilus',
-      shared: { guild: 'Abyss Guild', age_days: 3, msg_id: 'm-31a8…' },
+      uses: 18, lastUsed: '4h ago', author: '@offline-demo',
+      shared: { guild: '(demo guild)', age_days: 3, msg_id: 'm-31a8…' },
       body: `You are a code reviewer specializing in {{language}}.
 
 Review the following code with a focus on:
@@ -452,7 +452,7 @@ Output numbered points, terse. Cite line numbers. No filler.`,
     },
     {
       id: 'meeting-distiller', name: 'meeting-distiller', source: 'imported', vars: ['transcript'],
-      uses: 7, lastUsed: '1d ago', author: '@deepdiver',
+      uses: 7, lastUsed: '1d ago', author: '@offline-demo',
       body: `Read this meeting transcript and produce:
 1. The 3 decisions made (verbatim where possible)
 2. The 3 open questions raised but not answered
@@ -465,8 +465,8 @@ Transcript:
     },
     {
       id: 'tweet-shrink', name: 'tweet-shrink', source: 'own', vars: ['idea', 'voice'],
-      uses: 33, lastUsed: '3h ago', author: '@nautilus',
-      shared: { guild: 'Bathyscaphe Co', age_days: 24, msg_id: 'm-08c1…' },
+      uses: 33, lastUsed: '3h ago', author: '@offline-demo',
+      shared: { guild: '(demo guild)', age_days: 24, msg_id: 'm-08c1…' },
       body: `Convert this idea into 3 tweet-sized variants ({{voice}} voice):
 - < 240 chars each
 - no hashtags
@@ -477,7 +477,7 @@ idea: {{idea}}`,
     },
     {
       id: 'changelog-from-diff', name: 'changelog-from-diff', source: 'imported', vars: ['diff'],
-      uses: 12, lastUsed: '5d ago', author: '@k-ray',
+      uses: 12, lastUsed: '5d ago', author: '@offline-demo',
       body: `Convert this git diff into a user-facing changelog entry. Group by:
 - feat
 - fix
@@ -491,7 +491,7 @@ Mention the file path in parens. Skip pure refactors.
     },
     {
       id: 'rubber-duck', name: 'rubber-duck', source: 'own', vars: ['problem'],
-      uses: 41, lastUsed: '2h ago', author: '@nautilus',
+      uses: 41, lastUsed: '2h ago', author: '@offline-demo',
       shared: null,
       body: `You are a rubber duck. Read my problem and ask me one clarifying question per turn — never more — until I tell you I've figured it out.
 
@@ -501,7 +501,7 @@ Problem: {{problem}}`,
     },
     {
       id: 'one-shot-fastapi', name: 'one-shot-fastapi', source: 'imported', vars: ['feature'],
-      uses: 3, lastUsed: '2 weeks ago', author: '@abyssalbot',
+      uses: 3, lastUsed: '2 weeks ago', author: '@offline-demo',
       body: `Scaffold a FastAPI route for: {{feature}}
 
 Requirements:
@@ -514,7 +514,7 @@ Output: one file. No prose.`,
     },
     {
       id: 'persona-clinical', name: 'persona-clinical', source: 'own', vars: [],
-      uses: 9, lastUsed: '6d ago', author: '@nautilus',
+      uses: 9, lastUsed: '6d ago', author: '@offline-demo',
       body: `Reply in clinical persona:
 - numbered points
 - footnoted citations where relevant
@@ -796,7 +796,7 @@ The user wants information density, not company.`,
       }
     } else {
       // first-time share
-      active.shared = { guild: 'Abyss Guild', age_days: 0, msg_id: 'm-' + Math.random().toString(16).slice(2,6) + '…' };
+      active.shared = { guild: '(demo guild)', age_days: 0, msg_id: 'm-' + Math.random().toString(16).slice(2,6) + '…' };
       flashChannelState('✓ POSTED · #prompts embed shipped');
     }
     closeEdit();

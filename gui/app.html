@@ -3270,6 +3270,35 @@ const SEEKDEEP_BASE = (function() {
     }, 5000);  // longer so the user has time to read "click Reload .env"
   });
 
+  // Section-count refresher. Both the quick-jump sidebar (.qj .ct) and the
+  // collapsible section headers (.sec-count) had HARDCODED counts ("9",
+  // "8", "7"...) that never changed. So:
+  //   - Filtering for "TOKEN" hid 60 rows but the sidebar still showed
+  //     "Discord & routing 9"
+  //   - Adding/removing rows in HTML without bumping the literals shows
+  //     a stale total
+  // recountConfigSections() rederives counts from the live DOM. Run once
+  // on Config-pane mount and again on every cfg-filter input event so
+  // the user always sees how many rows actually match.
+  function recountConfigSections() {
+    document.querySelectorAll('.cfg-section').forEach(sec => {
+      const visible = [...sec.querySelectorAll('.config-row, .card-mini')]
+        .filter(r => r.style.display !== 'none').length;
+      const total = sec.querySelectorAll('.config-row, .card-mini').length;
+      const txt = visible === total ? String(total) : `${visible}/${total}`;
+      const badge = sec.querySelector('summary .sec-count');
+      if (badge) badge.textContent = txt;
+      // Match the section to its quick-jump entry via the section's id
+      // (e.g. id="sec-discord" -> a.qj[href="#sec-discord"]).
+      const id = sec.id || sec.getAttribute('id');
+      if (id) {
+        const qj = document.querySelector(`a.qj[href="#${id}"] .ct`);
+        if (qj) qj.textContent = txt;
+      }
+    });
+  }
+  recountConfigSections();
+
   // Config filter
   document.getElementById('cfg-filter')?.addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
@@ -3285,6 +3314,7 @@ const SEEKDEEP_BASE = (function() {
         sec.open = anyVisible;
       });
     }
+    recountConfigSections();
   });
 
   // ===== Persona cards (sync with Tweaks panel) =====
