@@ -511,23 +511,26 @@ The user wants information density, not company.`,
 
   let active = TEMPLATES[0];
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
   function renderList(q) {
     const host = $('#tplList');
     const filtered = TEMPLATES.filter(t => !q || t.name.toLowerCase().includes(q.toLowerCase()));
+    // XSS-safe: t.name + t.id come from data/prompt-templates.json (user
+    // input via @SeekDeep template create / Discord #prompts imports), so
+    // every interpolation runs through escapeHtml. Numeric fields stay raw.
     host.innerHTML = filtered.map(t => `
-      <div class="tpl ${t.id === active.id ? 'active' : ''}" data-id="${t.id}">
-        <div class="nm">${t.name}</div>
+      <div class="tpl ${t.id === active.id ? 'active' : ''}" data-id="${escapeHtml(t.id)}">
+        <div class="nm">${escapeHtml(t.name)}</div>
         <div class="meta">
           <span><em>${t.vars.length}</em> var${t.vars.length === 1 ? '' : 's'} · <em>${t.uses}</em> uses</span>
-          <span class="src-tag ${t.source}">${t.source === 'own' ? 'OWN' : 'IMPORTED'}</span>
+          <span class="src-tag ${t.source === 'own' ? 'own' : 'imported'}">${t.source === 'own' ? 'OWN' : 'IMPORTED'}</span>
         </div>
       </div>
     `).join('');
     host.querySelectorAll('.tpl').forEach(el => el.addEventListener('click', () => select(el.dataset.id)));
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
   function highlightVars(body, vars) {
     let s = escapeHtml(body);
@@ -550,20 +553,22 @@ The user wants information density, not company.`,
       editBtn.style.pointerEvents = active.source === 'own' ? '' : 'none';
       editBtn.title = active.source === 'own' ? 'Edit body / re-share' : 'Imported templates are read-only here — duplicate to fork.';
     }
+    // XSS-safe: every user-controlled field (vars list, guild name, author)
+    // flows through escapeHtml before interpolation.
     $('#vMeta').innerHTML = `
-      <span><em>source</em> ${active.source}</span>
-      <span><em>variables</em> ${active.vars.join(', ') || '(none)'}</span>
+      <span><em>source</em> ${escapeHtml(active.source)}</span>
+      <span><em>variables</em> ${active.vars.map(escapeHtml).join(', ') || '(none)'}</span>
       <span><em>chars</em> ${active.body.length}</span>
       <span><em>uses</em> ${active.uses}</span>
-      <span><em>last used</em> ${active.lastUsed}</span>
+      <span><em>last used</em> ${escapeHtml(active.lastUsed)}</span>
       <span><em>shared</em> ${active.shared
-        ? active.shared.guild + ' · ' + (active.shared.age_days < 1 ? 'today' : active.shared.age_days + 'd ago')
+        ? escapeHtml(active.shared.guild) + ' · ' + (active.shared.age_days < 1 ? 'today' : active.shared.age_days + 'd ago')
         : '<span style="color:var(--hull-3)">never</span>'}</span>
     `;
     $('#vBody').innerHTML = highlightVars(active.body, active.vars);
     // Embed preview
     $('#eTitle').textContent = `Template: ${active.name}`;
-    $('#eDesc').innerHTML    = `Posted by <b>${active.author}</b> · ${active.vars.length} variable${active.vars.length === 1 ? '' : 's'}`;
+    $('#eDesc').innerHTML    = `Posted by <b>${escapeHtml(active.author)}</b> · ${active.vars.length} variable${active.vars.length === 1 ? '' : 's'}`;
     $('#eVars').textContent  = active.vars.length ? active.vars.map(v => `{{${v}}}`).join(', ') : '(none)';
     $('#eLen').textContent   = `${active.body.length} chars`;
     $('#eAuth').textContent  = active.author;
