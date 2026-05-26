@@ -92,6 +92,26 @@
       sbLauncher.classList.toggle('warn', up > 0 && up < total);
       sbLauncher.classList.toggle('bad',  up === 0);
     }
+
+    // Bottom-bar STACK status — reflect aggregate launcher state instead of
+    // the cLIVE pump's binary "is /health up" view. cLIVE used to stamp
+    // HEALTHY whenever /health responded, which lied about the stack when
+    // bot or searxng were down. Now: HEALTHY only if every service is up,
+    // DEGRADED if some are up + some are down, DOWN if nothing is running.
+    const stackState = document.getElementById('stackState');
+    const stackDot   = document.getElementById('stackDot');
+    if (stackState) {
+      if (up === total && total > 0)      stackState.textContent = 'HEALTHY';
+      else if (up > 0)                    stackState.textContent = 'DEGRADED';
+      else                                stackState.textContent = 'DOWN';
+    }
+    if (stackDot) {
+      // Match the badge color to the new state. Single source of truth so
+      // the dot doesn't show green next to "DEGRADED" text.
+      if (up === total && total > 0)      { stackDot.style.background = 'var(--good)';  stackDot.style.boxShadow = '0 0 10px var(--good)'; }
+      else if (up > 0)                    { stackDot.style.background = 'var(--warn)';  stackDot.style.boxShadow = '0 0 10px var(--warn)'; }
+      else                                { stackDot.style.background = 'var(--bad)';   stackDot.style.boxShadow = '0 0 10px var(--bad)';  }
+    }
     for (const svc of Object.keys(data.services)) {
       const s = data.services[svc];
       const card = document.querySelector('.launcher-card[data-svc="' + svc + '"]');

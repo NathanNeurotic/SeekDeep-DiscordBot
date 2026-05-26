@@ -1876,7 +1876,7 @@
 
   <!-- STATUS BAR -->
   <footer class="statusbar">
-    <span class="live"><span class="live-dot" id="stackDot"></span>STACK <em id="stackState">HEALTHY</em></span>
+    <span class="live"><span class="live-dot" id="stackDot"></span>STACK <em id="stackState">PROBING</em></span>
     <span>VRAM <em id="sb-vram">— / — GB</em></span>
     <span>QUEUE <em id="sb-queue">0</em></span>
     <span></span>
@@ -2347,18 +2347,17 @@ const SEEKDEEP_BASE = (function() {
     setMode(mode) {
       this.isLive = (mode === 'live');
       const pill = document.getElementById('liveModePill');
-      const stackDot = document.getElementById('stackDot');
-      const stackState = document.getElementById('stackState');
+      // stackDot + stackState are owned by launcher.js's pumpStatus now —
+      // it knows whether bot/searxng are also running, not just whether
+      // /health responded. cLIVE only owns its own .pill here. (Previously
+      // cLIVE stamped STACK HEALTHY whenever /health 200'd, lying about
+      // the stack when bot or searxng were exited.)
       if (mode === 'live') {
         pill.classList.add('on'); pill.classList.remove('warn');
         pill.innerHTML = '<span class="dot"></span>LIVE · :7865';
-        if (stackDot) { stackDot.style.background = 'var(--good)'; stackDot.style.boxShadow = '0 0 10px var(--good)'; }
-        if (stackState) stackState.textContent = 'HEALTHY';
       } else {
         pill.classList.remove('on'); pill.classList.add('warn');
         pill.innerHTML = '<span class="dot"></span>OFFLINE · :7865';
-        if (stackDot) { stackDot.style.background = 'var(--warn)'; stackDot.style.boxShadow = '0 0 10px var(--warn)'; }
-        if (stackState) stackState.textContent = 'OFFLINE';
       }
     },
     applyHealth(h) {
@@ -2373,6 +2372,10 @@ const SEEKDEEP_BASE = (function() {
         this.setText('gpuVramTotal', totalGB.toFixed(1));
         const bar = document.getElementById('gpuVramBar');
         if (bar) bar.style.width = Math.round((usedGB / totalGB) * 100) + '%';
+      } else if (g.available === false) {
+        // No CUDA / torch missing. Don't leave "— / —" hanging; tell the
+        // user the truth ("CPU mode") so they don't stare at empty fields.
+        this.setText('sb-vram', 'CPU');
       }
       // Models pane — mark loaded + pinned roles
       const loaded = h.loaded;
