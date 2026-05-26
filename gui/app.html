@@ -796,24 +796,19 @@
           </div>
           <div class="card-mini">
             <div class="lbl">GPU Util</div>
-            <div class="val"><span id="gpuUtil">72</span><span style="font-size: 16px; color: var(--hull-3);">%</span></div>
-            <div class="delta" id="gpuUtilNote">↑ image gen in progress</div>
+            <div class="val"><span id="gpuUtil">—</span><span style="font-size: 16px; color: var(--hull-3);">%</span></div>
+            <div class="delta" id="gpuUtilNote">—</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Temperature</div>
-            <div class="val"><span id="gpuTemp">68</span><span style="font-size: 16px; color: var(--hull-3);">°C</span></div>
-            <div class="delta" id="gpuTempNote">fan 42%</div>
+            <div class="val"><span id="gpuTemp">—</span><span style="font-size: 16px; color: var(--hull-3);">°C</span></div>
+            <div class="delta" id="gpuTempNote">— nvidia-smi pending</div>
           </div>
           <div class="card-mini">
             <div class="lbl">Power Draw</div>
-            <div class="val">182 <span style="font-size: 16px; color: var(--hull-3);">W</span></div>
-            <div class="delta">limit 200W</div>
+            <div class="val"><span id="gpuPower">—</span> <span style="font-size: 16px; color: var(--hull-3);">W</span></div>
+            <div class="delta" id="gpuPowerNote">— nvidia-smi pending</div>
           </div>
-        </div>
-
-        <div class="alert ok" style="margin-bottom: 18px;">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12l4 4 10-10"/></svg>
-          <div><strong>HEALTHY · no thrashing detected.</strong> Last eviction 4m ago (vision · cold). Singleflight lock idle. Task-LRU stable.</div>
         </div>
 
         <div class="panel-flat" style="padding: 22px; margin-bottom: 18px;">
