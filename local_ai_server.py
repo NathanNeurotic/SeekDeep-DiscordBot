@@ -523,11 +523,33 @@ def _seekdeep_req_stats() -> dict:
     }
 
 # ===== SeekDeep GUI · static mount =====
+# Custom StaticFiles subclass that adds Cache-Control: no-store on HTML +
+# JS responses. Without this, WebView2 caches index.html / app.html /
+# chat.html etc. so aggressively that pushing a new gui/*.html file +
+# running the new .msi still shows the OLD page until the user manually
+# clears the WebView cache. no-store forces every request to re-fetch.
+# We're on loopback — there's no bandwidth cost.
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response as _SDResponse
+
+class _SeekDeepNoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if hasattr(resp, "headers"):
+            ext = (path or "").lower().rsplit(".", 1)[-1]
+            # HTML/JS/JSON are the surfaces that mutate during dev + ship
+            # cycles. Images, fonts, etc. are stable so we let the browser
+            # cache them normally.
+            if ext in ("html", "htm", "js", "mjs", "json"):
+                resp.headers["Cache-Control"] = "no-store, max-age=0"
+                resp.headers["Pragma"] = "no-cache"
+                resp.headers["Expires"] = "0"
+        return resp
+
 _GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
 if os.path.isdir(_GUI_DIR):
-    app.mount("/gui", StaticFiles(directory=_GUI_DIR, html=True), name="gui")
-    print(f"[SeekDeep] GUI mounted at /gui  ->  {_GUI_DIR}")
+    app.mount("/gui", _SeekDeepNoCacheStaticFiles(directory=_GUI_DIR, html=True), name="gui")
+    print(f"[SeekDeep] GUI mounted at /gui  ->  {_GUI_DIR}  (no-store headers on html/js)")
 
 # ===== SeekDeep GUI · backend endpoints (config / logs / launcher / data / model.warm) =====
 # `require_gui_token` is set up by register_gui_endpoints. We import it once

@@ -19,7 +19,7 @@
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35.0-8';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.1-1';
 const SHELL = [
   'chat.html',
   'styles.css',
