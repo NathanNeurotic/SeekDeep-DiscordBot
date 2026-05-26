@@ -20348,6 +20348,38 @@ async function seekdeepHandleForceReactComponent(interaction) {
 
 // SEEKDEEP_CONTEXT_MENU_HANDLERS_END
 
+// ============================================================================
+// interactionCreate listener registry (AUD-012 documentation)
+// ----------------------------------------------------------------------------
+// discord.js fires interactionCreate once per interaction; every registered
+// listener receives the same event in registration order. The bot ships FIVE
+// listeners. Each emergency listener was added as a hot-fix when a button-
+// driven feature shipped without an obvious slot in the main router; they
+// all narrowly self-gate on a customId prefix and return early on mismatch,
+// so there's no double-handling, but the spread complicates ordering reviews.
+//
+// Listeners (in registration order, top of file → bottom):
+//   1. MAIN ROUTER (this listener, line ~20351)
+//      Handles every commandName + autocomplete + modal + context-menu +
+//      the seekdeep:fr:* Force-React picker components + any button NOT
+//      claimed by an emergency listener below. The shared archive button
+//      (seekdeepHandleSharedArchiveButtonInteractionV4) is checked first.
+//   2. EMERGENCY: prompt-choice buttons    prefix `seekdeep:prompt:`
+//   3. EMERGENCY: prompts marketplace      prefix `sd-prompts-import:` and
+//                                          `sd-prompts-copy:`
+//   4. EMERGENCY: generated-image buttons  regex-matched via
+//                                          seekdeepEmergencyIsGeneratedImageActionCustomId
+//                                          — covers `seekdeep:regen:*:*`,
+//                                          `seekdeep:(regenerate|download|archive|save):*`,
+//                                          and `seekdeep:image:(regen|archive|save):*`.
+//                                          Shared-archive customIds are
+//                                          explicitly excluded so listener 1
+//                                          owns them.
+//   5. EMERGENCY: archive delete buttons   prefix `seekdeep:archivedelete:`
+//
+// If you add a 6th button family, prefer extending the main router's button
+// dispatch over a new listener — the audit flagged this fan-out as fragile.
+// ============================================================================
 client.on('interactionCreate', async (interaction) => {
   if (typeof seekdeepHandleSharedArchiveButtonInteractionV4 === 'function' && await seekdeepHandleSharedArchiveButtonInteractionV4(interaction)) return;
 
