@@ -2057,114 +2057,12 @@
   })();
 
   
-  // ===== Archive browser · live wiring (GET /data/archive-snapshots.json) =====
-  (function wireArchive() {
-    const tabs = document.getElementById('archTabs');
-    const grid = document.getElementById('archGrid');
-    if (!tabs || !grid) return;
-    let snapshot = null, activeThreadId = '*';
-
-    function tile(entry) {
-      const el = document.createElement('div');
-      el.className = 'arch-item';
-      if (entry.thumb || entry.url) {
-        el.style.backgroundImage = 'url(' + (entry.thumb || entry.url) + ')';
-        el.style.backgroundSize = 'cover';
-        el.style.backgroundPosition = 'center';
-      }
-      el.title = entry.prompt || '';
-      const ts = entry.timestamp ? new Date(entry.timestamp) : null;
-      const ago = ts ? humanAgo(ts) : '—';
-      const sub = (entry.width && entry.height) ? (entry.width + '×' + entry.height) : (entry.author_name || '');
-      el.innerHTML = '<div class="arch-meta"><div class="p">' + escapeHtml((entry.prompt||'').slice(0,40)) + '</div><div class="s">' + escapeHtml(sub) + ' · ' + escapeHtml(ago) + '</div></div>';
-      return el;
-    }
-    function humanAgo(d) {
-      const s = Math.floor((Date.now() - d.getTime()) / 1000);
-      if (s < 60) return s + 's';
-      if (s < 3600) return Math.floor(s/60) + 'm';
-      if (s < 86400) return Math.floor(s/3600) + 'h';
-      return Math.floor(s/86400) + 'd';
-    }
-    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-    function render() {
-      if (!snapshot) return;
-      // Build tabs from all threads across all guilds
-      const allThreads = [];
-      (snapshot.guilds || []).forEach(g => {
-        (g.threads || []).forEach(t => allThreads.push({...t, guild_name: g.guild_name}));
-      });
-
-      tabs.innerHTML = '';
-      const shared = document.createElement('span');
-      shared.className = 'chip active';
-      shared.dataset.thread = '*';
-      const totalEntries = allThreads.reduce((s, t) => s + (t.entries?.length || 0), 0);
-      shared.textContent = 'SHARED · ' + totalEntries;
-      tabs.appendChild(shared);
-      allThreads.forEach(t => {
-        const c = document.createElement('span');
-        c.className = 'chip';
-        c.dataset.thread = t.thread_id;
-        c.textContent = (t.name || t.thread_id.slice(0,8)) + ' · ' + (t.count ?? t.entries?.length ?? 0);
-        tabs.appendChild(c);
-      });
-      tabs.querySelectorAll('.chip').forEach(c => {
-        c.addEventListener('click', () => {
-          tabs.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
-          c.classList.add('active');
-          activeThreadId = c.dataset.thread || '*';
-          renderGrid(allThreads);
-        });
-      });
-      renderGrid(allThreads);
-    }
-    function renderGrid(allThreads) {
-      grid.innerHTML = '';
-      const entries = [];
-      if (activeThreadId === '*') {
-        allThreads.forEach(t => (t.entries || []).forEach(e => entries.push(e)));
-      } else {
-        const t = allThreads.find(t => t.thread_id === activeThreadId);
-        if (t) entries.push(...(t.entries || []));
-      }
-      // newest first
-      entries.sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
-      if (!entries.length) {
-        grid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px;">▸ no entries in this thread yet</div>';
-        return;
-      }
-      entries.slice(0, 30).forEach(e => grid.appendChild(tile(e)));
-    }
-
-    let loaded = false;
-    async function load() {
-      if (loaded) return;
-      loaded = true;
-      try {
-        const r = await fetch(SEEKDEEP_BASE + '/data/archive-snapshots.json', { signal: AbortSignal.timeout(3000) });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const wrap = await r.json();
-        snapshot = wrap.data || wrap;
-        render();
-      } catch (e) {
-        loaded = false;
-        // /data/archive-snapshots.json doesn't exist on a fresh install (no
-        // local snapshot writer ships today — archives live in Discord). The
-        // empty-state markup in #archGrid stays visible until the file is
-        // populated by a future bot-side writer.
-      }
-    }
-    function onActive() {
-      const pane = document.querySelector('[data-pane="archive"]');
-      if (pane && pane.classList.contains('active')) load();
-    }
-    document.querySelectorAll('.sidebar a[data-mod="archive"]').forEach(a =>
-      a.addEventListener('click', () => setTimeout(onActive, 50))
-    );
-    onActive();
-  })();
+  // ===== (removed: dead wireArchive that hit non-existent archive-snapshots.json) =====
+  // The real wiring lives below in wireArchiveBrowser, which reads the
+  // correct singular /data/archive-snapshot.json that the bot's
+  // seekdeepBuildArchiveSnapshot writes every 6h. The old wireArchive
+  // raced for the same #archTabs + #archGrid DOM nodes but always
+  // 404'd because the filename was wrong + the schema didn't match.
 
   // ===== Universal Archive · author-notify settings (v2 follow-up) =====
   // Persists to data/archive-config.json via POST /archive/config. Read on mount.
