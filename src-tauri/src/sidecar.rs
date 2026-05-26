@@ -24,7 +24,6 @@
 // On window close: child process is killed via the AppState held in tauri::State.
 
 use std::fs;
-use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
