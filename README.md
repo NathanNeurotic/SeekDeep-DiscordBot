@@ -160,13 +160,20 @@ A native desktop wrapper is auto-built on every push to `main` via GitHub Action
 
 | Platform | File |
 |---|---|
-| Windows | `SeekDeep_0.1.0_x64-setup.exe` (NSIS) or `.msi` |
-| macOS   | `SeekDeep_0.1.0_universal.dmg` |
-| Linux   | `SeekDeep_0.1.0_amd64.AppImage` or `.deb` |
+| Windows | `SeekDeep_10.35.0_x64_en-US.msi` or `_x64-setup.exe` (NSIS) |
+| macOS   | `SeekDeep_10.35.0_universal.dmg` |
+| Linux   | `SeekDeep_10.35.0_amd64.AppImage`, `_amd64.deb`, or `_1.x86_64.rpm` |
 
-Double-click to install. First launch opens a native window pointing at the local AI server's GUI. **Python 3.11+ and Node.js 20+ still need to be installed on your system** — the Tauri app contains SeekDeep's code, not the runtimes (~5 MB bundle instead of ~150 MB).
+Double-click to install. On first launch the app spawns SeekDeep's Python AI server itself — no `.bat` file, no terminal, no setup script. The only system dependency is **Python 3.11+** (the app will surface a "Get Python 3.11+" button in the loading overlay if it's missing). The Tauri bundle carries our code + the boot dependencies list, not a Python runtime, so the installer stays ~45 MB.
 
-**Today (v0.1):** the desktop app assumes the AI server is already running (start it with `seekdeep_standalone_launcher.bat` first, then open SeekDeep). **Next iteration:** auto-spawn the server as a sidecar process on app launch, so it's truly one-click.
+**What happens on first launch:**
+1. Loading overlay appears, polls `127.0.0.1:7865/health`.
+2. Rust shell finds your system Python, copies bundled `local_ai_server.py` + `gui/` to `%APPDATA%/SeekDeep/app/` (or platform equivalent), and probes whether the boot dependencies (fastapi/uvicorn/pydantic/etc) are importable.
+3. If they aren't: click **Install Python deps** in the overlay. The app runs `pip install --user -r requirements-local.txt` for you (~30 MB, ~30 seconds), in-app, no terminal.
+4. Server boots, page redirects to the playground.
+5. When you first open `/image`, `/vision`, or use local-model `/chat`, a banner offers to install the heavy ML libraries (torch + transformers + diffusers, ~2 GB). Pip output streams live in a progress modal.
+
+Remote-only setups (OpenAI-compatible / Anthropic / Gemini) skip the 2 GB ML download entirely — those backends are HTTP-only.
 
 Build it yourself:
 
