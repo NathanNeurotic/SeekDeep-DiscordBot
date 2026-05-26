@@ -820,11 +820,44 @@
         const d = await r.json();
         if (Array.isArray(d.valid_personas) && d.valid_personas.length) {
           this.valid = d.valid_personas.slice();
+          // Append rows for any custom personas /persona returned that
+          // aren't already in the static popover markup. Server returns
+          // both built-ins (which already have rows) AND user-defined
+          // slugs from data/custom-personas.json. Without this, custom
+          // personas show up in `valid_personas` but the user can't
+          // click them in the popover.
+          const pop = document.getElementById('personaPop');
+          if (pop) {
+            const existing = new Set([...pop.querySelectorAll('.opt[data-persona]')].map(el => el.dataset.persona));
+            const sep = pop.querySelector('.sep');
+            for (const slug of this.valid) {
+              if (existing.has(slug)) continue;
+              const row = document.createElement('div');
+              row.className = 'opt';
+              row.setAttribute('data-persona', slug);
+              row.setAttribute('role', 'menuitem');
+              const label = document.createElement('span');
+              label.textContent = slug.charAt(0).toUpperCase() + slug.slice(1);
+              const meta = document.createElement('span');
+              meta.className = 'meta';
+              meta.textContent = 'custom';
+              row.appendChild(label); row.appendChild(meta);
+              row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.choose(slug);
+                pop.classList.remove('open');
+              });
+              // Insert before the .sep so "Clear override" stays at bottom
+              if (sep && sep.parentNode === pop) pop.insertBefore(row, sep);
+              else pop.appendChild(row);
+            }
+          }
         }
         if (d.env_default) this.fallback = String(d.env_default);
         this.setUI(d.effective_global || d.global || this.fallback);
       } catch {
-        // /persona unreachable (mock mode). Keep a sane placeholder.
+        // /persona unreachable (server offline / restarting). Keep a sane
+        // placeholder so the pill doesn't render empty.
         this.setUI('clinical');
       }
     },

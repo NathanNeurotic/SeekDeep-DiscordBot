@@ -1127,9 +1127,29 @@ def register_gui_endpoints(
     # scope='global'. Channel/server scopes are accepted for symmetry but
     # require channel_id / guild_id in the body.
     _persona_overrides_path = _data_dir / "persona-overrides.json"
-    _VALID_PERSONAS = {"neurotic", "unsettling", "clinical", "chaotic"}
+    _custom_personas_path   = _data_dir / "custom-personas.json"
+    _BUILTIN_PERSONAS = frozenset({"neurotic", "unsettling", "clinical", "chaotic"})
     _VALID_SCOPES = {"channel", "server", "guild", "global"}
     _WEB_OWNER_ID = "web-owner"  # sentinel for setBy when the call comes from the playground
+
+    def _read_custom_persona_slugs() -> list[str]:
+        """Slugs of every persona in data/custom-personas.json (lowercase).
+        Empty list if the file's missing or malformed. Used to make /persona's
+        valid_personas list include user-defined personas so the chat-playground
+        popover and the persona admin command stay in sync."""
+        try:
+            if not _custom_personas_path.is_file():
+                return []
+            raw = json.loads(_custom_personas_path.read_text(encoding="utf-8"))
+            personas = (raw or {}).get("personas") or {}
+            return [str(k).lower() for k in personas.keys() if str(k).strip()]
+        except Exception:
+            return []
+
+    def _valid_personas() -> set[str]:
+        """Built-in + custom slugs. Recomputed on each call so newly-created
+        custom personas are visible without an AI-server restart."""
+        return set(_BUILTIN_PERSONAS) | set(_read_custom_persona_slugs())
 
     def _read_persona_overrides() -> dict:
         try:
@@ -1148,7 +1168,7 @@ def register_gui_endpoints(
     def _env_default_persona() -> str:
         env = _read_env_kv(_env_path)
         v = str(env.get("SEEKDEEP_PERSONA", "") or "").strip().lower()
-        return v if v in _VALID_PERSONAS else "neurotic"
+        return v if v in _valid_personas() else "neurotic"
 
     @app.get("/persona")
     def get_persona():
@@ -1156,10 +1176,10 @@ def register_gui_endpoints(
         glob = data.get("global") or {}
         global_persona = str(glob.get("persona") or "").lower() if isinstance(glob, dict) else ""
         env_default = _env_default_persona()
-        effective_global = global_persona if global_persona in _VALID_PERSONAS else env_default
+        effective_global = global_persona if global_persona in _valid_personas() else env_default
         return {
             "ok": True,
-            "valid_personas": sorted(_VALID_PERSONAS),
+            "valid_personas": sorted(_valid_personas()),
             "env_default": env_default,
             "global": global_persona or None,
             "effective_global": effective_global,
@@ -1197,8 +1217,8 @@ def register_gui_endpoints(
 
         if not persona:
             raise HTTPException(400, "body must include either persona='...' or action='reset'")
-        if persona not in _VALID_PERSONAS:
-            raise HTTPException(400, f"persona must be one of: {sorted(_VALID_PERSONAS)} (got {persona!r})")
+        if persona not in _valid_personas():
+            raise HTTPException(400, f"persona must be one of: {sorted(_valid_personas())} (got {persona!r})")
 
         entry = {"persona": persona, "setBy": _WEB_OWNER_ID, "setAt": _now_iso()}
         data = _read_persona_overrides()
