@@ -44,11 +44,15 @@ self.addEventListener('activate', (event) => {
     } catch (_) { /* best-effort */ }
     // Force open clients to reload so they pick up the now-uncached pages
     // immediately rather than running stale JS that was intercepted on
-    // first paint.
+    // first paint. POST a "pls-reload" message instead of calling
+    // c.navigate(c.url) — the latter wipes any unsaved form state in
+    // memory.html / chat.html / app.html's Config pane. The receiving
+    // page can listen for this message and decide WHEN to reload
+    // (e.g. only if no dirty state, or after a beforeunload prompt).
     try {
       const all = await self.clients.matchAll({ type: 'window' });
       for (const c of all) {
-        try { c.navigate(c.url); } catch (_) { /* best-effort */ }
+        try { c.postMessage({ type: 'seekdeep:sw-cleaned', reload: true }); } catch (_) { /* best-effort */ }
       }
     } catch (_) { /* best-effort */ }
   })());

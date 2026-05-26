@@ -269,7 +269,7 @@
         <div class="info-l">
           <span style="font-size: 16px;">📌</span>
           <div>
-            <div><b>#prompts channel</b> · <span id="chState">DETECTED · #prompts in this guild</span></div>
+            <div><b>#prompts channel</b> · <span id="chState">— (status not yet checked)</span></div>
             <div style="color: #949ba4; margin-top: 2px;">configured by an admin via <span class="mono" style="color:#dbdee1">@SeekDeep prompts channel here</span></div>
           </div>
         </div>
@@ -580,16 +580,25 @@ The user wants information density, not company.`,
       const list = Array.isArray(d.templates) ? d.templates : [];
       // Replace TEMPLATES contents in place so the existing references stay valid.
       TEMPLATES.length = 0;
+      // The bot's prompt-templates.json file mixes templates created
+      // by guild members (kind=guild / source=imported) with the
+      // current viewer's own templates. We can't know who the viewer
+      // is from inside the browser, so we fall back to: anything with
+      // a `imported_from_msg` or a non-matching `guild` field is
+      // tagged 'imported'. Templates with no guild or owned-flag are
+      // 'own'. This restores the IMPORTED chip + the Edit-button gate
+      // that was always-OWN before.
       for (const t of list) {
+        const isImported = !!(t.imported_from_msg || t.imported || (t.source === 'imported'));
         TEMPLATES.push({
           id:        String(t.id || ''),
           name:      String(t.name || '(unnamed)'),
-          source:    'own',  // GUI is read-only; ownership shown via guild/user IDs
+          source:    isImported ? 'imported' : 'own',
           vars:      Array.isArray(t.vars) ? t.vars : [],
           uses:      Number(t.used_count || 0),
           lastUsed:  _fmtAgo(t.updated_at),
           author:    '@' + String(t.owner_user_id || '').slice(-6),
-          shared:    null,
+          shared:    isImported && t.imported_from_msg ? { guild: String(t.guild || ''), age_days: 0, msg_id: String(t.imported_from_msg || '') } : null,
           body:      String(t.prompt || ''),
           // Extra fields surfaced to the GUI viewer:
           char_count:  Number(t.char_count || 0),
@@ -685,14 +694,36 @@ The user wants information density, not company.`,
   function closeShare() { sh.classList.remove('open'); shBack.classList.remove('open'); }
   $('#shCancel').addEventListener('click', closeShare);
   shBack.addEventListener('click', closeShare);
+  // Honest helper: prompt-templates writes only happen via the bot's
+  // Discord slash command (no GUI write endpoint exists). Show the
+  // command + Copy button instead of pretending to write locally.
+  function showPromptDiscordHint(title, cmd, body) {
+    const m = document.createElement('div');
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
+    m.innerHTML = `
+      <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:640px;color:var(--hull-2);font-family:var(--font-grotesk);">
+        <h3 style="margin:0 0 8px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">${title}</h3>
+        <p style="color:var(--hull-3);font-size:13px;line-height:1.55;margin-bottom:12px;">${body}</p>
+        <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${cmd.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</pre>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+          <button id="phCopy" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy</button>
+          <button id="phClose" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+    m.querySelector('#phCopy').onclick = async () => { try { await navigator.clipboard.writeText(cmd); } catch {} };
+    m.querySelector('#phClose').onclick = () => m.remove();
+    m.onclick = (e) => { if (e.target === m) m.remove(); };
+  }
+
   $('#shGo').addEventListener('click', () => {
     closeShare();
-    // Quick visual confirmation — flash the discord-mock author chip
-    const ch = $('#chState');
-    const orig = ch.textContent;
-    ch.textContent = '✓ POSTED · 3s ago';
-    ch.style.color = '#57f287';
-    setTimeout(() => { ch.textContent = orig; ch.style.color = ''; }, 3500);
+    const body = (active.body || '').replace(/\n/g, ' ').slice(0, 200);
+    showPromptDiscordHint(
+      '▸ Post to #prompts',
+      `@SeekDeep template share ${active.name}`,
+      "GUI doesn't have a write endpoint for #prompts yet. Run this in any guild channel where SeekDeep can post to #prompts:",
+    );
   });
 
   // Import button in the discord-mock — mock toggle
@@ -703,7 +734,11 @@ The user wants information density, not company.`,
   });
 
   $('#vDup').addEventListener('click', () => {
-    alert('Mock: would duplicate "' + active.name + '" as "' + active.name + '-copy" in local prompt-templates.json');
+    showPromptDiscordHint(
+      'Duplicate template',
+      `@SeekDeep template save ${active.name}-copy: ${(active.body || '').slice(0, 240)}`,
+      'GUI duplication is read-only. Run this in Discord — SeekDeep will save the duplicate as a new template under your user.',
+    );
   });
   $('#vExport').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(active, null, 2)], { type: 'application/json' });
@@ -713,9 +748,17 @@ The user wants information density, not company.`,
   });
 
   $('#jumpChBtn').addEventListener('click', () => {
-    alert('Mock: would deep-link to #prompts in the connected Discord client.');
+    showPromptDiscordHint(
+      'Jump to #prompts',
+      `Open Discord → your server → #prompts`,
+      'No deep-link integration with the Discord desktop client yet. Switch to Discord and find the #prompts channel manually.',
+    );
   });
-  $('#newBtn').addEventListener('click', () => alert('Mock: would open a "new template" editor (out of scope for this drop).'));
+  $('#newBtn').addEventListener('click', () => showPromptDiscordHint(
+    'New template',
+    '@SeekDeep template save <name>: <body with {{variables}}>',
+    'GUI editor for new templates isn\'t wired yet. Use the Discord slash command — SeekDeep parses {{variables}} automatically.',
+  ));
 
   // ===== Edit-in-place flow (v2 follow-up — prompts marketplace) =====
   // Mirrors the bot side: when a previously-shared template is edited, the

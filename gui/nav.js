@@ -249,6 +249,26 @@
     window.SeekDeepDebug = { warn: (label, detail) => surface(label, detail) };
   })();
 
+  // ===== Service-worker tombstone reload listener ============================
+  // sw.js posts a "seekdeep:sw-cleaned" message to every client when it
+  // self-unregisters. Previously the SW called client.navigate() directly,
+  // which wiped any unsaved form data (memory.html composer, app.html
+  // Config pane dirty rows, prompts.html in-progress edits). Now we ask
+  // the user first if anything's dirty, otherwise reload silently.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const m = e && e.data;
+      if (!m || m.type !== 'seekdeep:sw-cleaned' || !m.reload) return;
+      const hasDirty = document.querySelectorAll('.cfg-section .save').length
+        ? [...document.querySelectorAll('.cfg-section .save')].some(s => /DIRTY/i.test(s.textContent || ''))
+        : false;
+      if (hasDirty) {
+        if (!confirm('SeekDeep service worker was cleaned up — reload now? Unsaved config changes will be lost.')) return;
+      }
+      try { location.reload(); } catch (_) {}
+    });
+  }
+
   // ===== Multi-window detection (BroadcastChannel) ============================
   // Two SeekDeep windows open simultaneously can fight over destructive ops:
   // each clicks "Reload .env" → both restart the sidecar → race; both POST

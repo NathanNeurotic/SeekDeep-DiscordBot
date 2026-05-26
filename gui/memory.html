@@ -416,11 +416,25 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     if (r && r.ok && Array.isArray(r.presets)) return r.presets;
     return (MOCK_USERS[uid]?.presets || []).slice();
   }
-  async function writeFact(uid, text)         { await safeFetch(base() + '/memory/user/' + uid + '/fact', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
-  async function editFact(uid, n, text)       { await safeFetch(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
-  async function deleteFact(uid, n)           { await safeFetch(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'DELETE' }); }
-  async function clearUser(uid)               { await safeFetch(base() + '/memory/user/' + uid, { method: 'DELETE' }); }
-  async function savePresets(uid, list)       { await safeFetch(base() + '/memory/presets/' + uid, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({presets: list}) }); }
+  // Write helpers — return TRUE on server-confirmed success, FALSE on
+  // any failure (network, 4xx, 5xx). Callers must check and roll back
+  // optimistic UI changes when false. Previously these used safeFetch
+  // which swallowed everything and returned null silently, so a
+  // 404/401/500 from the server looked identical to success and the
+  // UI happily showed phantom state.
+  async function writeOk(url, opts) {
+    try {
+      const r = await fetch(url, Object.assign({ signal: AbortSignal.timeout(5000) }, opts || {}));
+      if (!r.ok) return false;
+      const j = await r.json().catch(() => ({ ok: true }));
+      return j && j.ok !== false;
+    } catch { return false; }
+  }
+  async function writeFact(uid, text)         { return writeOk(base() + '/memory/user/' + uid + '/fact', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
+  async function editFact(uid, n, text)       { return writeOk(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); }
+  async function deleteFact(uid, n)           { return writeOk(base() + '/memory/user/' + uid + '/fact/' + n, { method: 'DELETE' }); }
+  async function clearUser(uid)               { return writeOk(base() + '/memory/user/' + uid, { method: 'DELETE' }); }
+  async function savePresets(uid, list)       { return writeOk(base() + '/memory/presets/' + uid, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({presets: list}) }); }
 
   // --- render -------------------------------------------------------
   function renderUsersRail(users, query) {
@@ -500,7 +514,19 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
       if (newText.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars (${newText.length})`); return; }
       state.facts[idx].text = newText;
       state.facts[idx].at   = Date.now();
-      await editFact(state.activeId, idx, newText);
+      // CRITICAL: server expects 1-based fact index (PATCH/DELETE
+      // /memory/user/{id}/fact/{n} routes use `n - 1` internally).
+      // Passing the 0-based array idx made n=0 -> 404 "no fact at
+      // index 0", and n=1 -> overwrote/deleted the fact at array
+      // index 0 instead of the one the user clicked. Ghost-edits +
+      // ghost-deletes of neighbors. Now we pass idx+1 explicitly.
+      const ok = await editFact(state.activeId, idx + 1, newText);
+      if (ok === false) {
+        // Roll back the optimistic UI change since the write failed.
+        state.facts[idx].text = originalText;
+        alert(`✕ Could not save fact #${idx + 1}. The server may be down or the token may have rotated. Try Reload.`);
+        return;
+      }
       textEl.removeAttribute('contenteditable');
       editBtn.style.display = ''; saveBtn.style.display = 'none'; cancelBtn.style.display = 'none';
       originalText = newText;
@@ -509,8 +535,15 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     });
     forgetBtn.addEventListener('click', async () => {
       confirmModal(`Forget fact #${idx + 1}?`, state.facts[idx].text, async () => {
+        // Hit the server FIRST so a write-failure doesn't ghost-delete
+        // from the UI. Pass idx+1 because routes use n-1 (1-based on
+        // the wire). Roll back on failure.
+        const ok = await deleteFact(state.activeId, idx + 1);
+        if (ok === false) {
+          alert(`✕ Could not forget fact #${idx + 1}. The server may be down or the token may have rotated.`);
+          return;
+        }
         state.facts.splice(idx, 1);
-        await deleteFact(state.activeId, idx);
         if (state.isMock) MOCK_USERS[state.activeId].facts = state.facts.slice();
         renderFacts(); renderMeters(); renderInjection(); refreshUserRow();
       });
@@ -552,9 +585,18 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
         if (!state.activeId) return;
         const k = el.dataset.k;
         const i = state.presets.indexOf(k);
+        // Optimistic toggle, with rollback on server failure. Was:
+        // silent fire-and-forget that lied when the POST failed.
+        const before = state.presets.slice();
         if (i >= 0) state.presets.splice(i, 1); else state.presets.push(k);
         el.classList.toggle('on');
-        await savePresets(state.activeId, state.presets);
+        const ok = await savePresets(state.activeId, state.presets);
+        if (ok === false) {
+          state.presets = before;
+          el.classList.toggle('on');
+          alert('✕ Could not save preset selection. Server may be down.');
+          return;
+        }
         if (state.isMock && MOCK_USERS[state.activeId]) MOCK_USERS[state.activeId].presets = state.presets.slice();
         renderInjection();
         $('#psCount').textContent = state.presets.length + ' active';
@@ -638,9 +680,16 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     if (text.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars`); return; }
     if (state.facts.length >= MAX_FACTS) { alert(`Already at the ${MAX_FACTS}-fact cap. Forget one first.`); return; }
     if (!state.activeId) { alert('Pick a user first.'); return; }
+    // Server write first; UI commit only on success. Previously the
+    // optimistic unshift stayed visible even when the POST failed,
+    // so users thought a fact was saved when it wasn't.
+    const ok = await writeFact(state.activeId, text);
+    if (ok === false) {
+      alert('✕ Could not save fact. Server may be down or token rotated.');
+      return;
+    }
     state.facts.unshift({ text, at: Date.now() });
     state.updatedAt = Date.now();
-    await writeFact(state.activeId, text);
     if (state.isMock) MOCK_USERS[state.activeId].facts = state.facts.slice();
     newFactInput.value = '';
     $('#newFactLen').textContent = '0 / ' + MAX_FACT_CHARS;
@@ -652,8 +701,12 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     if (!state.activeId) return;
     if (!state.facts.length) { alert('Already empty.'); return; }
     confirmModal('Wipe all facts?', `This will DELETE all ${state.facts.length} fact${state.facts.length===1?'':'s'} for ${$('#hUserName').textContent}. Atomic write · no soft-delete · cannot be undone.`, async () => {
+      const ok = await clearUser(state.activeId);
+      if (ok === false) {
+        alert('✕ Could not clear facts. Server may be down or token rotated. Nothing was deleted.');
+        return;
+      }
       state.facts = []; state.updatedAt = Date.now();
-      await clearUser(state.activeId);
       if (state.isMock) MOCK_USERS[state.activeId].facts = [];
       renderFacts(); renderMeters(); renderInjection(); refreshUserRow();
     });
