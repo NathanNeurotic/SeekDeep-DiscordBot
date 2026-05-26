@@ -671,6 +671,7 @@
       }
     },
     setMode(mode) {
+      const wasLive = this.isLive;
       this.isLive = (mode === 'live');
       const st = document.getElementById('cBotStatus');
       const pp = document.getElementById('playgroundPill');
@@ -678,6 +679,11 @@
       if (mode === 'live') {
         if (st) st.textContent = '● healthy · live';
         if (pp) { pp.innerHTML = '<span class="dot"></span>PLAYGROUND · LIVE'; pp.classList.add('cyan'); }
+        // Kick refreshRoute now so the helper-row badge doesn't sit at
+        // "PROBING …" for up to 8s while the periodic interval ticks over.
+        if (!wasLive && typeof refreshRoute === 'function') {
+          setTimeout(refreshRoute, 0);
+        }
       } else if (mode === 'offline') {
         if (st) st.textContent = '● offline · server unreachable';
         if (pp) { pp.innerHTML = '<span class="dot"></span>PLAYGROUND · OFFLINE'; pp.classList.remove('cyan'); }

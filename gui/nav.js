@@ -886,12 +886,14 @@
     const iv = setInterval(() => {
       if (wireLivePill() || ++tries > 20) clearInterval(iv);
     }, 250);
-    // Fallback: probe /health for liveness if bus never arrives
+    // Fallback: probe /health for liveness if bus never arrives. 6s
+    // timeout because /health does an Ollama probe (~2s) + role-backend
+    // resolution; 2s was too aggressive on cold starts.
     setTimeout(async () => {
       if (window.SeekDeepEvents) return;
       try {
         const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
-        const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+        const r = await fetch(base + '/health', { signal: AbortSignal.timeout(6000), cache: 'no-store' });
         setLiveState(r.ok ? 'live' : 'offline');
       } catch { setLiveState('offline'); }
     }, 6000);
