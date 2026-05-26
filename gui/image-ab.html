@@ -421,7 +421,11 @@
     } catch (e) {
       panel.querySelector('[data-ms]').textContent = '—';
       out.classList.remove('has-image');
-      out.innerHTML = `<span style="color:var(--bad);">▸ OFFLINE · ${(e.message||e+'').slice(0,80)}<br><br>showing canned placeholder</span>`;
+      // Escape the error message — a hostile server response could embed
+      // HTML; we don't want it rendering as live markup.
+      const errEscaped = String(e?.message || e || '').slice(0, 80)
+        .replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      out.innerHTML = `<span style="color:var(--bad);">▸ OFFLINE · ${errEscaped}<br><br>showing canned placeholder</span>`;
       setStatus(panel, 'OFFLINE', 'warn');
     }
   }

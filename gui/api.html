@@ -891,9 +891,10 @@ function setLiveMode(mode) {
   if (mode === 'live') {
     pill.classList.add('on'); pill.classList.remove('warn');
     pill.innerHTML = '<span class="dot"></span>LIVE · :7865';
-  } else if (mode === 'mock') {
+  } else if (mode === 'mock' || mode === 'offline') {
+    // Legacy 'mock' callers map to OFFLINE — there's no mock chat path.
     pill.classList.remove('on'); pill.classList.add('warn');
-    pill.innerHTML = '<span class="dot"></span>MOCK · OFFLINE';
+    pill.innerHTML = '<span class="dot"></span>OFFLINE · :7865';
   } else {
     pill.classList.remove('on'); pill.classList.remove('warn');
     pill.innerHTML = '<span class="dot"></span>STANDBY';
