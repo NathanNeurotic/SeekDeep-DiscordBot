@@ -164,7 +164,7 @@ A native desktop wrapper is auto-built on every push to `main` via GitHub Action
 | macOS   | `SeekDeep_10.35.0_universal.dmg` |
 | Linux   | `SeekDeep_10.35.0_amd64.AppImage`, `_amd64.deb`, or `_1.x86_64.rpm` |
 
-Double-click to install. On first launch the app spawns SeekDeep's Python AI server itself — no `.bat` file, no terminal, no setup script. The only system dependency is **Python 3.11+** (the app will surface a "Get Python 3.11+" button in the loading overlay if it's missing). The Tauri bundle carries our code + the boot dependencies list, not a Python runtime, so the installer stays ~45 MB.
+Double-click to install. On first launch the app spawns SeekDeep's Python AI server itself — no `.bat` file, no terminal, no setup script. The only required system dependency is **Python 3.11+** (the app will surface a "Get Python 3.11+" button in the loading overlay if it's missing). If you've configured any chat role to use the Ollama backend, the app will also offer a **"Get Ollama ↗"** button when the daemon isn't reachable. The Tauri bundle carries our code + the boot dependencies list, not a Python runtime, so the installer stays ~45 MB.
 
 **What happens on first launch:**
 1. Loading overlay appears, polls `127.0.0.1:7865/health`.

@@ -51,10 +51,9 @@
 
   // --- Banner --------------------------------------------------------------
 
-  function showBanner(missing) {
+  function showBanner(state) {
+    // state = { missing[], ollama_required, ollama_available, ollama_install_url }
     if (document.getElementById('sd-model-banner')) return;
-    // If ml-deps banner is already showing, offset ours below it so they
-    // don't overlap.
     const offsetTop = document.getElementById('sd-ml-deps-banner') ? '50px' : '0';
     const banner = el('div', {
       id: 'sd-model-banner',
@@ -78,19 +77,62 @@
       },
     });
 
+    const missing = state.missing || [];
+    const ollamaDown = state.ollama_required && !state.ollama_available;
+
+    // Split missing by backend so the user gets accurate copy. HF pulls from
+    // huggingface.co; Ollama pulls from the user's local daemon (which must
+    // be running). If daemon is down AND any role needs ollama, surface that
+    // distinctly — clicking Download with no daemon would just fail.
+    const hfMissing = missing.filter((m) => m.backend === 'hf');
+    const ollamaMissing = missing.filter((m) => m.backend === 'ollama');
+
     const names = missing.map((m) => m.model_id.split('/').pop()).slice(0, 3).join(', ');
     const more = missing.length > 3 ? ` +${missing.length - 3} more` : '';
 
-    const text = el('div', { style: { flex: '1', lineHeight: '1.5' } },
-      el('strong', { style: { color: '#2dd4ff', marginRight: '8px' } }, '◐ Models not downloaded'),
-      missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights: ',
-      el('code', { style: { color: '#2dd4ff', background: 'rgba(45,212,255,0.12)', padding: '1px 5px', borderRadius: '3px' } }, names + more),
-    );
+    const text = el('div', { style: { flex: '1', lineHeight: '1.5' } });
+    if (ollamaDown) {
+      text.append(
+        el('strong', { style: { color: '#ffb84d', marginRight: '8px' } }, '⚠ Ollama daemon not running'),
+        ollamaMissing.length + ' role' + (ollamaMissing.length === 1 ? '' : 's') + ' need the Ollama daemon. Install + start Ollama, then return here.',
+      );
+    } else {
+      text.append(
+        el('strong', { style: { color: '#2dd4ff', marginRight: '8px' } }, '◐ Models not downloaded'),
+        missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights: ',
+        el('code', { style: { color: '#2dd4ff', background: 'rgba(45,212,255,0.12)', padding: '1px 5px', borderRadius: '3px' } }, names + more),
+      );
+    }
 
-    const dl = el('button', {
+    banner.appendChild(text);
+
+    // "Get Ollama ↗" button if daemon down + any role needs it
+    if (ollamaDown) {
+      banner.appendChild(el('button', {
+        style: {
+          background: '#ffb84d',
+          color: '#02060f',
+          border: 'none',
+          padding: '6px 14px',
+          borderRadius: '4px',
+          fontFamily: 'inherit',
+          fontSize: '11px',
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          fontWeight: '600',
+          cursor: 'pointer',
+        },
+        onclick: () => openExternal(state.ollama_install_url || 'https://ollama.com/download'),
+      }, 'Get Ollama ↗'));
+    }
+
+    // Download button — disabled (visually) if Ollama is required + missing
+    // AND there are no HF-backed missing models to download right now.
+    const canDownloadNow = hfMissing.length > 0 || (ollamaMissing.length > 0 && state.ollama_available);
+    banner.appendChild(el('button', {
       style: {
-        background: '#2dd4ff',
-        color: '#02060f',
+        background: canDownloadNow ? '#2dd4ff' : 'rgba(45,212,255,0.25)',
+        color: canDownloadNow ? '#02060f' : '#7a8aa0',
         border: 'none',
         padding: '6px 14px',
         borderRadius: '4px',
@@ -99,12 +141,14 @@
         letterSpacing: '0.12em',
         textTransform: 'uppercase',
         fontWeight: '600',
-        cursor: 'pointer',
+        cursor: canDownloadNow ? 'pointer' : 'not-allowed',
       },
-      onclick: () => openInstallModal(missing),
-    }, 'Download');
+      onclick: canDownloadNow
+        ? () => openInstallModal(state)
+        : () => {},
+    }, 'Download'));
 
-    const dismiss = el('button', {
+    banner.appendChild(el('button', {
       style: {
         background: 'transparent',
         color: '#2dd4ff',
@@ -118,10 +162,18 @@
         cursor: 'pointer',
       },
       onclick: () => banner.remove(),
-    }, 'Dismiss');
+    }, 'Dismiss'));
 
-    banner.append(text, dl, dismiss);
     document.body.appendChild(banner);
+  }
+
+  function openExternal(url) {
+    const tauri = window.__TAURI__;
+    if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+      tauri.core.invoke('open_external', { url }).catch(() => window.open(url, '_blank'));
+    } else {
+      window.open(url, '_blank');
+    }
   }
 
   // --- Install modal -------------------------------------------------------
@@ -129,8 +181,15 @@
   let modal = null;
   let rowEls = {};   // role -> { row, status, dot }
 
-  function openInstallModal(missing) {
+  function openInstallModal(state) {
     if (modal) return;
+    const missing = state.missing || [];
+    // If Ollama is needed but daemon is down, skip ollama-backed rows in the
+    // modal — they'd fail-fast with "daemon not reachable" anyway. The banner
+    // already tells the user to install Ollama.
+    const downloadable = (state.ollama_required && !state.ollama_available)
+      ? missing.filter((m) => m.backend !== 'ollama')
+      : missing;
     const overlay = el('div', {
       id: 'sd-model-modal',
       style: {
@@ -172,7 +231,7 @@
     });
 
     rowEls = {};
-    for (const m of missing) {
+    for (const m of downloadable) {
       const dot = el('span', {
         style: {
           display: 'inline-block', width: '10px', height: '10px',
@@ -231,7 +290,7 @@
     document.body.appendChild(overlay);
     modal = overlay;
 
-    runSequentialDownloads(missing);
+    runSequentialDownloads(downloadable);
   }
 
   function closeInstallModal() {
@@ -263,14 +322,21 @@
         // .env to reassign, which we don't want here.
         body: JSON.stringify({ model_id: m.model_id, backend: m.backend, auto_pull: true }),
       });
-      if (!r.ok) {
-        const text = await r.text().catch(() => String(r.status));
-        setRowStatus(m.role, 'FAILED · ' + r.status, '#ff6b6b');
-        return false;
-      }
-      const data = await r.json();
-      if (!data.ok) {
-        setRowStatus(m.role, 'FAILED', '#ff6b6b');
+      // /model/install returns JSON even on 500 (when install_result.ok is
+      // false the server JSONResponse wraps it). We try to parse first; if
+      // that fails fall back to status code text.
+      let data = null;
+      try { data = await r.json(); } catch {}
+      if (!r.ok || !data || !data.ok) {
+        // Surface the server's diagnostic note when present — e.g.
+        // 'Ollama daemon not reachable at http://127.0.0.1:11434' or
+        // 'hf download failed: ...'. Falls back to raw status for the
+        // edge case where the server died entirely.
+        const note = (data && (data.note || data.error)) ? (data.note || data.error) : ('HTTP ' + r.status);
+        setRowStatus(m.role, 'FAILED · ' + note.slice(0, 60), '#ff6b6b');
+        const tooltip = (data && (data.note || data.error)) || ('HTTP ' + r.status);
+        const row = rowEls[m.role];
+        if (row && row.status) row.status.title = tooltip;
         return false;
       }
       setRowStatus(m.role, 'DONE', '#6df0ff');
@@ -300,14 +366,28 @@
       if (!r.ok) return;
       const data = await r.json();
       if (data.ml_deps_missing) return; // ml-deps.js owns this case
-      if (data.all_local_present) {
-        // Clean up any lingering banner from a previous state
+
+      const ollamaDown = data.ollama_required && !data.ollama_available;
+
+      // If everything's installed AND Ollama is fine (or not needed), clear
+      // any lingering banner and bail.
+      if (data.all_local_present && !ollamaDown) {
         const old = document.getElementById('sd-model-banner');
         if (old) old.remove();
         return;
       }
-      if (Array.isArray(data.missing) && data.missing.length > 0) {
-        showBanner(data.missing);
+
+      // Show banner when EITHER any local model is missing OR Ollama is
+      // needed but the daemon is down (so the user gets the "Get Ollama"
+      // call-to-action even if no model rows are pending).
+      const hasWork = (Array.isArray(data.missing) && data.missing.length > 0) || ollamaDown;
+      if (hasWork) {
+        showBanner({
+          missing: data.missing || [],
+          ollama_required: !!data.ollama_required,
+          ollama_available: !!data.ollama_available,
+          ollama_install_url: data.ollama_install_url || 'https://ollama.com/download',
+        });
       }
     } catch {
       // /models/installed unreachable — server probably not up. Stay silent;

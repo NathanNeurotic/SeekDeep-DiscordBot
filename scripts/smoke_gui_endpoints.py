@@ -678,11 +678,16 @@ def main() -> int:
     r = cl.get("/models/installed")
     check("GET /models/installed -> 200", r.status_code == 200, f"got {r.status_code}")
     j = r.json() if r.status_code == 200 else {}
-    check("  ...response shape {ok, ml_deps_missing, all_local_present, roles, ...}",
+    check("  ...response shape {ok, ml_deps_missing, all_local_present, roles, ollama_*, ...}",
           j.get("ok") is True
           and isinstance(j.get("ml_deps_missing"), bool)
           and isinstance(j.get("all_local_present"), bool)
-          and isinstance(j.get("roles"), dict),
+          and isinstance(j.get("roles"), dict)
+          and isinstance(j.get("ollama_required"), bool)
+          and isinstance(j.get("ollama_available"), bool)
+          and isinstance(j.get("ollama_base_url"), str)
+          and isinstance(j.get("ollama_install_url"), str)
+          and j.get("ollama_install_url", "").startswith("https://ollama.com"),
           f"body keys={sorted((j or {}).keys())}")
     if j.get("ml_deps_missing") is False:
         check("  ...roles dict has at least image + vision + chat.default_chat",

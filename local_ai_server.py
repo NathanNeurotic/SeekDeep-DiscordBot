@@ -1795,12 +1795,27 @@ def models_installed_endpoint():
         for k, v in roles.items()
         if v["local"] and not v["present"]
     ]
+    # Ollama is the second local backend. If the user has any role wired to
+    # ollama, the GUI needs to know whether the daemon is reachable so it
+    # can surface "Get Ollama" before the user clicks Download (which would
+    # otherwise fail with "daemon not reachable"). For HF-only setups, this
+    # is just informational.
+    ollama_required = any(v["backend"] == "ollama" for v in roles.values())
+    ollama_up = False
+    try:
+        ollama_up = ollama_available()
+    except Exception:
+        pass
     return {
         "ok": True,
         "ml_deps_missing": False,
         "all_local_present": all_local_present,
         "missing": missing,
         "roles": roles,
+        "ollama_required": ollama_required,
+        "ollama_available": ollama_up,
+        "ollama_base_url": OLLAMA_BASE_URL,
+        "ollama_install_url": "https://ollama.com/download",
         "install_endpoint": "POST /model/install (token required) — body: {model_id, backend, auto_pull?}",
     }
 

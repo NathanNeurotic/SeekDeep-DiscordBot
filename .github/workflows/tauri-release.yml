@@ -153,8 +153,9 @@ jobs:
             - **macOS:** download `.dmg`, drag SeekDeep to Applications. First launch: right-click the app → "Open" → confirm. Required because the build is unsigned.
             - **Linux:** download `.AppImage`, `chmod +x` it, run.
 
-            **One system dependency** (the app will surface this in the loading overlay if missing):
-            - **Python 3.11+** — install from [python.org](https://www.python.org/downloads/) before first launch.
+            **System dependencies** (the app surfaces install links in-overlay if missing):
+            - **Required: Python 3.11+** — install from [python.org](https://www.python.org/downloads/) before first launch.
+            - **Optional: [Ollama](https://ollama.com/download)** — only if you want to route `/chat` through the Ollama daemon instead of HuggingFace. The "Models not downloaded" banner has a "Get Ollama ↗" button when relevant.
 
             **What happens on first run:**
 
