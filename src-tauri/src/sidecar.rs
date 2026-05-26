@@ -105,13 +105,23 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     let bundled_version = env!("CARGO_PKG_VERSION");
     let stamp = runtime.join(".bundled_version");
     let installed = fs::read_to_string(&stamp).unwrap_or_default();
-    if installed.trim() == bundled_version {
-        // Already extracted at this version — nothing to do.
+    // Stamp + canary check: only skip extraction if BOTH the version matches
+    // AND a known-required file is actually on disk. Without the canary,
+    // a previous broken extraction (e.g. before the _up_/ prefix fix) would
+    // leave behind a stamp that lies — and we'd skip re-extracting forever.
+    let canary = runtime.join("local_ai_server.py");
+    if installed.trim() == bundled_version && canary.is_file() {
         return Ok(());
     }
 
     // Files to copy from resource_dir → runtime. Mirror tauri.conf.json's
     // bundle.resources list; if you bump that, bump this too.
+    //
+    // Tauri 2 places resources declared with `../` in tauri.conf.json under
+    // a `_up_/` prefix inside resource_dir to keep them sandboxed. So
+    // `../local_ai_server.py` lands at `<resource_dir>/_up_/local_ai_server.py`,
+    // NOT at `<resource_dir>/local_ai_server.py`. We probe both locations
+    // because Tauri 1 (and some configurations of v2) used the flat layout.
     let files = [
         "local_ai_server.py",
         "gui_endpoints.py",
@@ -121,19 +131,48 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         "requirements-ml.txt",
         ".env.default",
     ];
+    let mut copied: u32 = 0;
     for f in files {
-        let src = resource_root.join(f);
+        // Try the Tauri-2-with-../-prefix layout first; fall back to flat.
+        let candidates = [
+            resource_root.join("_up_").join(f),
+            resource_root.join(f),
+        ];
         let dst = runtime.join(f);
-        if src.is_file() {
-            fs::copy(&src, &dst).map_err(|e| format!("cp {src:?} -> {dst:?}: {e}"))?;
+        for src in &candidates {
+            if src.is_file() {
+                fs::copy(src, &dst).map_err(|e| format!("cp {src:?} -> {dst:?}: {e}"))?;
+                copied += 1;
+                break;
+            }
         }
     }
 
-    // gui/ directory — recursive copy.
-    let gui_src = resource_root.join("gui");
+    // gui/ directory — recursive copy. Same `_up_` fallback.
+    let gui_candidates = [
+        resource_root.join("_up_").join("gui"),
+        resource_root.join("gui"),
+    ];
     let gui_dst = runtime.join("gui");
-    if gui_src.is_dir() {
-        copy_dir(&gui_src, &gui_dst)?;
+    for gui_src in &gui_candidates {
+        if gui_src.is_dir() {
+            copy_dir(gui_src, &gui_dst)?;
+            copied += 1;
+            break;
+        }
+    }
+
+    // If we found nothing, the bundle is malformed (or we're looking in the
+    // wrong place). Surface the failure rather than silently writing the
+    // stamp — otherwise next boot would skip extraction entirely and pip
+    // would fail again with "no such file or directory".
+    if copied == 0 {
+        return Err(format!(
+            "no bundled resources found under {} (or {}/_up_/) — \
+             possible Tauri-resources layout change",
+            resource_root.display(),
+            resource_root.display(),
+        ));
     }
 
     // Seed .env from .env.default if no .env exists yet. The Tweaks panel
