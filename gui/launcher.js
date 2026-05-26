@@ -227,14 +227,13 @@
     const ai = snap.ai_server || {};
     const bot = snap.bot || {};
     const fam = (ai.by_family_24h || ai.by_family_lifetime || {});
-    // searxng card: "Reqs:" cell — count any path family this could plausibly
-    // serve via the local-AI proxy. We don't proxy searxng through here, so
-    // this is just the count attributable to the family; if we ever wire a
-    // /search/ family it will show up automatically.
-    setStatCell('searxng', /^reqs/i, fmtCountAbbrev((fam.search || fam.web || 0)));
-    // ai-server card: existing svcQueue id is for live queue depth (not in
-    // snapshot). Leave alone; backed by events.js if/when wired. But we DO
-    // populate VRAM via stats.js elsewhere — no-op here.
+    // searxng card: "Reqs:" cell — we don't have a count for it. SearXNG
+    // runs in Docker, not through this AI server, so the AI server's
+    // request-counter middleware doesn't see those hits. Leave the cell
+    // as "—" (honest) rather than writing "0" which lies.
+    // ai-server card has no Reqs cell in its markup, so the setStatCell
+    // call below is dead — but kept for forward compat if a Reqs cell
+    // gets added later.
     setStatCell('ai-server', /^reqs/i, fmtCountAbbrev(ai.total_requests));
     // bot card: Latency (p50 from ai-server, which is what the user feels
     // when they /chat) + Guilds (lifetime distinct guild count)

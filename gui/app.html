@@ -1828,7 +1828,7 @@
           </div>
 
           <div id="reactRulesList">
-            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— reaction-rule storage + editor backend pending. The bot's built-in stacks below ARE wired.</div>
+            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— loading custom rules from <span style="color:var(--cyan-1);">/data/auto-reactions.json</span>… (rules persist; GUI editor is read-only — use <span style="color:var(--cyan-1);">@SeekDeep reactrule</span> to add/edit/remove)</div>
           </div>
         </div>
 
@@ -2064,6 +2064,55 @@
           const btnEdit    = mk('button', 'btn-mini', 'EDIT');
           const btnInspect = mk('button', 'btn-mini', '⌕'); btnInspect.setAttribute('data-act','inspect');
           const btnRemove  = mk('button', 'btn-mini bad', '✕ REMOVE'); btnRemove.setAttribute('data-act','remove');
+          // Per-row buttons. Inspect renders a local modal with the full
+          // rule JSON (no backend needed). Edit/Remove + the toggle don't
+          // have a GUI write endpoint yet — the bot owns the data file
+          // and only the @SeekDeep reactrule slash commands persist
+          // changes. Surface that honestly instead of silently no-opping.
+          function showDiscordHint(action, rule) {
+            const cmd = action === 'edit'
+              ? `@SeekDeep reactrule edit ${rule.id || '<rule-id>'} <emoji> when <new-pattern>`
+              : action === 'remove'
+                ? `@SeekDeep reactrule remove ${rule.id || '<rule-id>'}`
+                : `@SeekDeep reactrule toggle ${rule.id || '<rule-id>'}`;
+            const m = document.createElement('div');
+            m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
+            m.innerHTML = `
+              <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:540px;color:var(--hull-2);font-family:var(--font-grotesk);">
+                <h3 style="margin:0 0 8px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">${action.toUpperCase()} rule · ${rule.emoji || '?'}</h3>
+                <p style="color:var(--hull-3);font-size:13px;line-height:1.55;margin-bottom:12px;">
+                  GUI write endpoint isn't wired yet — the bot owns the rules file and only the slash command persists changes. Run this in any guild channel where SeekDeep is present:
+                </p>
+                <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${cmd}</pre>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+                  <button id="rrCopy" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy</button>
+                  <button id="rrClose" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
+                </div>
+              </div>`;
+            document.body.appendChild(m);
+            m.querySelector('#rrCopy').onclick = async () => { try { await navigator.clipboard.writeText(cmd); } catch {} };
+            m.querySelector('#rrClose').onclick = () => m.remove();
+            m.onclick = (e) => { if (e.target === m) m.remove(); };
+          }
+          btnInspect.addEventListener('click', () => {
+            const m = document.createElement('div');
+            m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
+            const json = JSON.stringify(rule, null, 2);
+            m.innerHTML = `
+              <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:640px;color:var(--hull-2);font-family:var(--font-grotesk);">
+                <h3 style="margin:0 0 12px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">⌕ INSPECT · ${rule.emoji || '?'} · ${rule.pattern || ''}</h3>
+                <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:11px;max-height:420px;overflow:auto;">${json.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</pre>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+                  <button id="riClose" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
+                </div>
+              </div>`;
+            document.body.appendChild(m);
+            m.querySelector('#riClose').onclick = () => m.remove();
+            m.onclick = (e) => { if (e.target === m) m.remove(); };
+          });
+          btnEdit.addEventListener('click', () => showDiscordHint('edit', rule));
+          btnRemove.addEventListener('click', () => showDiscordHint('remove', rule));
+          toggle.addEventListener('click', () => showDiscordHint('toggle', rule));
           actions.appendChild(btnEdit); actions.append(' '); actions.appendChild(btnInspect); actions.appendChild(btnRemove);
           row.appendChild(actions);
           list.appendChild(row);
@@ -4896,6 +4945,95 @@ root.render(<App />);
       } catch (e) {
         alert(`✕ couldn't reach /model/uninstall · ${e.message || e}`);
       }
+    });
+  });
+  // Wire the per-row WARM buttons. /model/warm dispatches by role:
+  //   image   -> calls the image warmup handler
+  //   vision  -> calls the vision warmup handler
+  //   <chat>  -> loads the chat model for that role
+  // GUI feedback: row state pill flips to "WARMING", and on response we
+  // flip to "RESIDENT" (success) / "ERROR" (failure). The Model.loaded
+  // event from /events will also reach setRowState below, so the pill
+  // stabilizes even if /model/warm's response races.
+  document.querySelectorAll('.model-row [data-act="warm"]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const row = b.closest('.model-row');
+      const role = row.dataset.role || '';
+      const model = row.dataset.model || row.querySelector('.name')?.firstChild?.textContent?.trim() || '';
+      if (!role) {
+        alert(`⚠ this row has no assigned role (${model}); /model/warm needs a role`);
+        return;
+      }
+      const stateEl = row.querySelector('[data-role-state]');
+      const setPill = (cls, text) => {
+        if (!stateEl) return;
+        stateEl.innerHTML = `<span class="pill ${cls}" style="padding: 2px 6px;"><span class="dot"></span>${text}</span>`;
+      };
+      setPill('warn', 'WARMING…');
+      try {
+        const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
+        const r = await fetch(base + '/model/warm', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+          signal: AbortSignal.timeout(180_000),  // up to 3 min for cold load
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok !== false) {
+          setPill('on', 'RESIDENT');
+          const sdn = window.SeekDeepNotify;
+          if (sdn?.toast) sdn.toast({ tone: 'good', title: 'Model warm', body: `${role} loaded`, ttl: 4000 });
+        } else {
+          setPill('bad', 'ERROR');
+          alert(`✕ warm failed · ${data.error || r.statusText || 'HTTP ' + r.status}`);
+        }
+      } catch (e) {
+        setPill('bad', 'ERROR');
+        alert(`✕ couldn't reach /model/warm · ${e.message || e}`);
+      }
+    });
+  });
+  // Wire the per-row Inspect (⌕) buttons. Pops a small modal with the
+  // model id, role, backend, current state, and a copyable JSON dump
+  // of whatever /health.models / /models/installed knows about it.
+  document.querySelectorAll('.model-row [data-act="inspect"]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const row = b.closest('.model-row');
+      const model = row.dataset.model || '';
+      const role = row.dataset.role || '(unassigned)';
+      const backend = row.dataset.backend || 'hf';
+      const sizeEl = row.querySelector('.actions')?.previousElementSibling;
+      const size = sizeEl ? sizeEl.previousElementSibling?.textContent : '';
+      let installedInfo = null;
+      try {
+        const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : 'http://127.0.0.1:7865';
+        const r = await fetch(base + '/models/installed', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        if (r.ok) {
+          const all = await r.json();
+          const list = Array.isArray(all?.models) ? all.models : (Array.isArray(all) ? all : []);
+          installedInfo = list.find(m => (m.id || m.model_id || m) === model) || null;
+        }
+      } catch {}
+      const cell = (k, v) => `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--stroke);"><div style="color:var(--hull-3);font-family:var(--font-mono);font-size:11px;">${k}</div><div style="font-family:var(--font-mono);font-size:12px;color:var(--hull-1);">${v}</div></div>`;
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
+      modal.innerHTML = `
+        <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:560px;min-width:480px;color:var(--hull-2);font-family:var(--font-grotesk);">
+          <h3 style="margin:0 0 16px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">⌕ INSPECT MODEL</h3>
+          ${cell('Model ID', model)}
+          ${cell('Role', role)}
+          ${cell('Backend', backend.toUpperCase())}
+          ${cell('Size', size || '—')}
+          ${cell('Installed?', installedInfo ? 'YES' : 'unknown (try /models/installed)')}
+          ${installedInfo ? cell('Cached bytes', installedInfo.size_bytes ? (installedInfo.size_bytes/1024/1024/1024).toFixed(2) + ' GB' : '—') : ''}
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button id="inspCopyBtn" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy ID</button>
+            <button id="inspCloseBtn" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      modal.querySelector('#inspCopyBtn').onclick = async () => { try { await navigator.clipboard.writeText(model); } catch {} };
+      modal.querySelector('#inspCloseBtn').onclick = () => modal.remove();
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
     });
   });
 })();

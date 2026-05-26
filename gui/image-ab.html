@@ -442,6 +442,76 @@
     $('#srcUrl').value = img.src;
     refreshSrcPreview();
   }));
+
+  // "SAVE" — download the generated image. Used to be dead (no listener);
+  // user clicks SAVE on a generated image and nothing happens. Now triggers
+  // a browser download via a synthetic <a download> click. Works for both
+  // blob: URLs (image/* response) and data: URLs (b64 in JSON response).
+  // Filename: <pipe>-<seed>.png so multiple pipes don't overwrite each other.
+  $$('[data-act="save"]').forEach(b => b.addEventListener('click', e => {
+    const panel = e.target.closest('.pipe-panel');
+    const img = panel?.querySelector('[data-out] img');
+    if (!img || !img.src) {
+      alert('Nothing to save yet — click GENERATE first.');
+      return;
+    }
+    const pipe = panel.dataset.pipe || 'image';
+    const seed = panel.querySelector('[data-seed]')?.textContent || 'unknown';
+    const a = document.createElement('a');
+    a.href = img.src;
+    a.download = `seekdeep-${pipe}-seed${seed}.png`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }));
+
+  // "PREVIEW MASK" — only on the inpaint panel. Hits /inpaint_mask_preview
+  // with the current source URL + mask target phrase, then renders the
+  // returned mask PNG into the panel's output cell so the user can see
+  // what CLIPSeg actually matched BEFORE running the full inpaint.
+  $$('[data-act="mask"]').forEach(b => b.addEventListener('click', async e => {
+    const panel = e.target.closest('.pipe-panel');
+    const src = $('#srcUrl').value.trim();
+    const maskPrompt = $('#mask').value.trim();
+    if (!src || !maskPrompt) {
+      alert('Need both a source image URL and a mask target phrase.');
+      return;
+    }
+    const out = panel.querySelector('[data-out]');
+    const setStatus = (txt, tone) => {
+      const pill = panel.querySelector('[data-status]');
+      if (pill) { pill.className = 'pill' + (tone ? ' ' + tone : ''); pill.innerHTML = `<span class="dot"></span>${txt}`; }
+    };
+    setStatus('MASKING', 'cyan');
+    out.innerHTML = '<span style="color:var(--cyan-1);">▸ POST /inpaint_mask_preview</span>';
+    try {
+      const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : 'http://127.0.0.1:7865';
+      const r = await fetch(base + '/inpaint_mask_preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src, mask_prompt: maskPrompt }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      const ct = r.headers.get('Content-Type') || '';
+      if (ct.startsWith('image/')) {
+        const blob = await r.blob();
+        out.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="mask preview" style="max-width:100%;" />`;
+        setStatus('MASK OK', 'on');
+      } else {
+        const data = await r.json().catch(() => null);
+        if (data?.image_b64) {
+          out.innerHTML = `<img src="data:image/png;base64,${data.image_b64}" alt="mask preview" style="max-width:100%;" />`;
+          setStatus('MASK OK', 'on');
+        } else {
+          out.innerHTML = `<span style="color:var(--bad);">▸ ${r.status} · no mask returned</span>`;
+          setStatus('FAIL', 'bad');
+        }
+      }
+    } catch (err) {
+      out.innerHTML = `<span style="color:var(--bad);">▸ ${String(err && err.message || err).slice(0, 120)}</span>`;
+      setStatus('OFFLINE', 'warn');
+    }
+  }));
 })();
 </script>
 <script src="nav.js" defer></script>

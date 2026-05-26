@@ -1009,7 +1009,7 @@
           <div class="vram-budget" style="margin-top: 14px;">
             <div class="vb-head">
               <span class="lbl">VRAM BUDGET · TASK-LRU SWAP</span>
-              <span class="total"><span id="vramTotal">14.3</span> <span style="font-size:12px; color:var(--hull-3); letter-spacing:0.14em;">/ 24 GB</span></span>
+              <span class="total"><span id="vramTotal">14.3</span> <span style="font-size:12px; color:var(--hull-3); letter-spacing:0.14em;">/ <span id="vramCapacity">24</span> GB</span></span>
             </div>
             <div class="vb-stack" id="vbStack"></div>
             <div class="vb-legend">
@@ -1846,6 +1846,29 @@ const SEEKDEEP_BASE = (function() {
     });
   });
 
+  // Detected GPU capacity from /gpu — populated by refreshVramCapacity().
+  // 24 GB was the previous hardcoded default that pretended every user had
+  // an RTX 4090. Users on 12 GB / 16 GB / 8 GB cards saw their stack
+  // claim "way under budget" when they were actually OVER. Now we probe
+  // nvidia_smi.total_mb and use it for both the "/N GB" label and the
+  // overflow threshold.
+  let vramCapacityGb = 24;  // safe default until /gpu resolves
+  async function refreshVramCapacity() {
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const g = await r.json();
+      const totalMb = g?.nvidia_smi?.total_mb || g?.total_mb;
+      if (totalMb && totalMb > 0) {
+        vramCapacityGb = Math.round(totalMb / 1024);
+        const cap = document.getElementById('vramCapacity');
+        if (cap) cap.textContent = String(vramCapacityGb);
+        refreshVramBudget();  // re-render bar with new capacity
+      }
+    } catch {}
+  }
+  refreshVramCapacity();
+
   function refreshVramBudget() {
     const chat   = state.sizes.chat   || 0;
     const image  = state.sizes.image  || 0;
@@ -1856,14 +1879,14 @@ const SEEKDEEP_BASE = (function() {
     document.getElementById('vbChat').textContent = chat.toFixed(1);
     document.getElementById('vbImage').textContent = image.toFixed(1);
     document.getElementById('vbVision').textContent = vision.toFixed(1);
-    // total color flips red if >24
+    // total color flips red if it exceeds the user's actual capacity
     const totalEl = document.getElementById('vramTotal');
-    totalEl.style.color = total > 24 ? 'var(--bad)' : 'var(--cyan-1)';
+    totalEl.style.color = total > vramCapacityGb ? 'var(--bad)' : 'var(--cyan-1)';
 
-    // Build the 20 cell bar
+    // Build the 20 cell bar — proportional to user's actual GPU capacity
     const stack = document.getElementById('vbStack');
     stack.innerHTML = '';
-    const cellsPerGb = 20 / 24;
+    const cellsPerGb = 20 / vramCapacityGb;
     function cells(n, cls) {
       const c = Math.round(n * cellsPerGb);
       for (let i = 0; i < c; i++) {
@@ -1882,7 +1905,7 @@ const SEEKDEEP_BASE = (function() {
       stack.appendChild(cell);
     }
     // overflow indicator
-    if (total > 24) {
+    if (total > vramCapacityGb) {
       stack.querySelectorAll('i').forEach(c => c.classList.add('over'));
     }
 
