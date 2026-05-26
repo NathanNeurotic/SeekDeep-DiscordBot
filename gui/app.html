@@ -3172,6 +3172,31 @@ const SEEKDEEP_BASE = (function() {
       });
     });
 
+    // Custom personas from /persona — same idea as chat.html's popover.
+    // Hydrates the cpPersona <select> with anything in data/custom-
+    // personas.json so the user can route the playground through their
+    // own personas, not just the 4 built-ins.
+    (async function loadCustomPersonas() {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+        if (!r.ok) return;
+        const d = await r.json();
+        const sel = document.getElementById('cpPersona');
+        if (!sel || !Array.isArray(d.valid_personas)) return;
+        const existing = new Set([...sel.options].map(o => o.value.replace(/ · default$/, '').toLowerCase()));
+        const resetIdx = [...sel.options].findIndex(o => /reset/i.test(o.value));
+        for (const slug of d.valid_personas) {
+          const s = String(slug).toLowerCase();
+          if (existing.has(s)) continue;
+          const opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = s.charAt(0).toUpperCase() + s.slice(1) + ' · custom';
+          if (resetIdx >= 0) sel.insertBefore(opt, sel.options[resetIdx]);
+          else sel.appendChild(opt);
+        }
+      } catch {}
+    })();
+
     let sending = false;
     async function doSend() {
       const text = (input.value || '').trim();
@@ -3205,9 +3230,43 @@ const SEEKDEEP_BASE = (function() {
         const ms = Math.round(performance.now() - t0);
         const reply = data.response || data.text || data.content || JSON.stringify(data);
         pending.innerHTML = `<span class="meta">${role.toUpperCase()} · WEB ${web.toUpperCase()} · ${ms}MS · LIVE</span>${escapeHtml(reply).replace(/\n/g, '<br/>')}`;
+
+        // Diagnostics panel — was a row of "—" forever even after dozens of
+        // successful sends. Fill in from /chat response now. tok/s derives
+        // from completion_tokens / elapsed seconds when both are present.
+        const setDiag = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = (v == null || v === '') ? '—' : String(v); };
+        const elapsedSec = (data.elapsed_ms || ms) / 1000;
+        const compTok = data.completion_tokens;
+        setDiag('cpLastLatency', ms + ' ms');
+        setDiag('cpTokRate', (compTok && elapsedSec > 0) ? (compTok / elapsedSec).toFixed(1) : '—');
+        setDiag('cpPromptTokens', data.prompt_tokens);
+        setDiag('cpCompletionTokens', compTok);
+        setDiag('cpWebTrace', data.web_search_used ? (data.web_search_engine || 'used') : 'off');
+        setDiag('cpMemTrace', data.memory_used ? 'hit' : 'miss');
+        setDiag('cpVramResident', data.loaded_chat_role || data.role || role);
+
+        // Routing trace — show model_id + backend + (if web-routed) sources
+        const trace = document.getElementById('cpRouteTrace');
+        if (trace) {
+          const bits = [];
+          if (data.model_id || data.model) bits.push(`<div><span class="muted">model</span> · <span style="color:var(--cyan-1);">${escapeHtml(String(data.model_id || data.model))}</span></div>`);
+          if (data.backend) bits.push(`<div><span class="muted">backend</span> · ${escapeHtml(String(data.backend))}</div>`);
+          if (Array.isArray(data.web_sources) && data.web_sources.length) {
+            bits.push('<div><span class="muted">sources</span></div>');
+            data.web_sources.slice(0, 5).forEach(s => {
+              const url = typeof s === 'string' ? s : (s.url || s.link || '');
+              if (url) bits.push(`<div style="margin-left:10px; color:var(--cyan-1); word-break:break-all;">${escapeHtml(url)}</div>`);
+            });
+          }
+          trace.innerHTML = bits.length ? bits.join('') : '<div class="tiny muted">— response had no routing metadata</div>';
+        }
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
         pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. ${e && e.message ? '<br/>Error: ' + escapeHtml(e.message) : 'Start the stack via the SeekDeep tray icon or <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.'}`;
+        // Diagnostics — show the error in the latency slot so the panel
+        // doesn't stay frozen on a stale successful send.
+        const el = document.getElementById('cpLastLatency');
+        if (el) { el.textContent = 'offline · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
       } finally {
         sending = false;
       }
