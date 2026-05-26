@@ -35,9 +35,15 @@ use tauri::{AppHandle, Emitter, Manager};
 // Held in tauri's app-state so the spawn handle survives across commands and
 // can be killed cleanly on window-close. Mutex because tauri command handlers
 // can be invoked concurrently.
+//
+// `quit_requested` disambiguates the WindowEvent::CloseRequested handler:
+// when false (default), close-X means "hide to tray, keep the server running";
+// when true (tray Quit menu item set it), close-X means "actually exit + kill
+// the child". The tray menu's Quit handler is the only thing that flips it.
 #[derive(Default)]
 pub struct SidecarState {
     pub child: Mutex<Option<Child>>,
+    pub quit_requested: Mutex<bool>,
 }
 
 /// Probe 127.0.0.1:7865 with a short connect timeout. True = the AI server

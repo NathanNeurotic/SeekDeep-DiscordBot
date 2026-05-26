@@ -1703,6 +1703,108 @@ def ml_deps_endpoint():
     }
 
 
+@app.get("/models/installed")
+def models_installed_endpoint():
+    """Report which configured model_ids are actually downloaded so the GUI
+    can prompt the user to install missing weights BEFORE they trigger a
+    /chat / /image / /vision call that would otherwise silently block on
+    snapshot_download for 5-15 minutes.
+
+    For each role we report:
+      - model_id   : what the .env / role-map says we'd use
+      - backend    : hf | ollama | openai-compat | anthropic | gemini
+      - local      : true if the backend stores weights on this machine
+      - present    : true if the weights are reachable right now
+                     (hf: in HF cache; ollama: tag installed; remote: always)
+
+    `all_local_present` is the convenience boolean the UI uses to decide
+    whether to show the 'Download missing models' banner at all.
+
+    Cheap to call — no network, no model load. The HF cache scan is a
+    single directory walk; the Ollama probe is the existing tag list."""
+    # ML deps are a prerequisite for the HF cache probe. Report early so
+    # the UI knows to prompt the user to install torch/etc first.
+    try:
+        from huggingface_hub import scan_cache_dir
+        try:
+            from huggingface_hub.errors import CacheNotFound
+        except ImportError:
+            CacheNotFound = Exception
+    except ImportError:
+        return {
+            "ok": True,
+            "ml_deps_missing": True,
+            "all_local_present": False,
+            "roles": {},
+            "note": "huggingface_hub not installed — hit /ml_deps and POST /deps/install first.",
+        }
+
+    cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+    try:
+        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        cached_repos = {r.repo_id for r in info.repos}
+    except CacheNotFound:
+        cached_repos = set()
+    except Exception:
+        cached_repos = set()
+
+    ollama_tags: set = set()
+    try:
+        if ollama_available():
+            ollama_tags = set(ollama_list_tags())
+    except Exception:
+        pass
+
+    def _present(model_id: str, backend: str) -> bool:
+        if not model_id:
+            return False
+        if backend == "hf":
+            return model_id in cached_repos
+        if backend == "ollama":
+            return model_id in ollama_tags
+        if backend in {"openai-compat", "anthropic", "gemini"}:
+            return True
+        return False
+
+    roles: dict = {}
+    for role, model_id in chat_role_map().items():
+        backend = _resolve_chat_backend(role)
+        roles[f"chat.{role}"] = {
+            "model_id": model_id,
+            "backend": backend,
+            "local": backend in {"hf", "ollama"},
+            "present": _present(model_id, backend),
+        }
+    # Image + vision live on hf only.
+    roles["image"] = {
+        "model_id": IMAGE_MODEL_ID,
+        "backend": "hf",
+        "local": True,
+        "present": _present(IMAGE_MODEL_ID, "hf"),
+    }
+    roles["vision"] = {
+        "model_id": VISION_MODEL_ID,
+        "backend": "hf",
+        "local": True,
+        "present": _present(VISION_MODEL_ID, "hf"),
+    }
+
+    all_local_present = all(v["present"] for v in roles.values() if v["local"])
+    missing = [
+        {"role": k, "model_id": v["model_id"], "backend": v["backend"]}
+        for k, v in roles.items()
+        if v["local"] and not v["present"]
+    ]
+    return {
+        "ok": True,
+        "ml_deps_missing": False,
+        "all_local_present": all_local_present,
+        "missing": missing,
+        "roles": roles,
+        "install_endpoint": "POST /model/install (token required) — body: {model_id, backend, auto_pull?}",
+    }
+
+
 @app.get("/vram")
 def vram_budget_endpoint():
     """Detailed VRAM budget breakdown for diagnostics."""

@@ -248,11 +248,30 @@
     unsubscribers.push(bus.on('deps.install.line', (data) => {
       appendLogLine(data.line || '');
     }));
-    unsubscribers.push(bus.on('deps.install.complete', (data) => {
-      if (modalStatus) modalStatus.textContent = '✓ INSTALL COMPLETE · restart the AI server to load the new libraries';
+    unsubscribers.push(bus.on('deps.install.complete', async (data) => {
+      if (modalStatus) modalStatus.textContent = '✓ INSTALL COMPLETE · restarting the AI server';
       if (modalStatus) modalStatus.style.color = '#6df0ff';
       appendLogLine('');
-      appendLogLine('--- Install finished. Restart the SeekDeep AI server to load torch/transformers/diffusers ---');
+      appendLogLine('--- Install finished. Restarting AI server to load torch/transformers/diffusers ---');
+
+      // If we're inside the Tauri shell, ask Rust to kill + respawn the
+      // Python sidecar so the new libraries take effect. The loading
+      // overlay (or the chat page's cLIVE probe) will pick up the new
+      // /health response once it's back. Without Tauri (pure browser),
+      // the user has to restart manually — we leave the hint in place.
+      const tauri = window.__TAURI__;
+      if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+        try {
+          await tauri.core.invoke('restart_sidecar');
+          appendLogLine('--- Server restart requested. Reloading the page in ~5 seconds. ---');
+          setTimeout(() => { location.reload(); }, 5000);
+        } catch (err) {
+          appendLogLine('--- Restart request failed: ' + err + ' ---');
+          appendLogLine('--- Close + reopen SeekDeep manually to finish loading the libraries. ---');
+        }
+      } else {
+        appendLogLine('--- (No Tauri shell detected — restart the AI server manually.) ---');
+      }
     }));
     unsubscribers.push(bus.on('deps.install.failed', (data) => {
       if (modalStatus) modalStatus.textContent = '⚠ INSTALL FAILED · exit code ' + (data.exit_code != null ? data.exit_code : '?');

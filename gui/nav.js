@@ -999,5 +999,8 @@
     // torch/transformers/diffusers. Self-gated; safe to inject everywhere
     // because the banner only shows if /ml_deps says available=false.
     inject('ml-deps.js', null);
+    // model-install.js · GET /models/installed probe + first-use model
+    // download banner. Stacks below the ml-deps banner if both are present.
+    inject('model-install.js', null);
   })();
 })();

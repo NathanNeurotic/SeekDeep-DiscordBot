@@ -429,6 +429,63 @@ Auto-loaded by `nav.js`'s `autoLoadSiblings` alongside `events.js / version.js /
 
 Self-gated via `window.__seekdeepMlDepsLoaded` so multiple injections no-op. Pages that want to suppress the banner can set that flag before `nav.js` runs.
 
+**Tauri auto-restart hook:** when the install completes, `ml-deps.js` checks for `window.__TAURI__` and calls the `restart_sidecar` command. The Rust shell kills the Python child, waits ~500 ms for port 7865 to release, then re-runs `boot_sequence`. The page auto-reloads ~5 s later to pick up `/ml_deps available:true`. Plain-browser users (no Tauri) get the manual restart hint instead.
+
+## 3.10 · First-use HF model download UI (`/models/installed` + `/model/install`)
+
+The user has Python deps installed, the server boots, the playground opens — but `/image` will silently hang for 10 minutes the first time because the SDXL weights aren't on disk yet. `GET /models/installed` lets the GUI surface "this needs downloading" upfront with a Download button.
+
+### `GET /models/installed` (open)
+
+Lives on `local_ai_server.py`. No network probe, no model load — just an `huggingface_hub.scan_cache_dir()` walk and an Ollama tag query.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ok` | `true` | Always set when the endpoint responds. |
+| `ml_deps_missing` | `bool` | True if `huggingface_hub` itself isn't importable. The GUI short-circuits to `ml-deps.js` in that case. |
+| `all_local_present` | `bool` | True iff every role with `local: true` has `present: true`. |
+| `missing` | `[{ role, model_id, backend }]` | Roles that need a download. |
+| `roles` | `{ <key>: { model_id, backend, local, present } }` | One entry per chat role + `image` + `vision`. |
+
+`local` is true for `hf` + `ollama` backends; false for `openai-compat` / `anthropic` / `gemini` (hosted upstream — never "missing").
+
+### `POST /model/install` (token-required, pre-existing)
+
+Already documented in [INTEGRATION.md § 3.4](#34--chat-backends-huggingface-transformers-or-ollama-per-role). For the first-use UI we POST without `role` so the call is a pure download (no `.env` patch). Returns synchronously once `snapshot_download` finishes — for SDXL / 7B-class that's 5-15 minutes on a decent connection.
+
+### Consumer wired in `gui/model-install.js`
+
+Auto-loaded by `nav.js`'s `autoLoadSiblings` alongside `events / version / playground / stats / ml-deps`. On load:
+
+1. Probes `GET /models/installed`. If `ml_deps_missing`, stays silent (ml-deps owns the banner).
+2. If `all_local_present: false`, injects a cyan topnav banner naming up to 3 missing models + "Download" + "Dismiss". Stacks below the ml-deps banner when both are present.
+3. Click "Download" → opens a modal with one row per missing model. Walks them sequentially via `POST /model/install`; per-row status flips PENDING → DOWNLOADING → DONE / FAILED.
+4. On modal close, re-probes `/models/installed`; banner clears if everything's now present.
+
+Self-gated via `window.__seekdeepModelInstallLoaded`.
+
+## 3.11 · Tauri sidecar v2.1 — auto-restart + system tray
+
+Building on [§ 3.7-3.10](#37--persona-override-over-http-persona) (the loading overlay + sidecar spawn + ml-deps installer), the Tauri shell now exposes:
+
+| Tauri command | Caller | What it does |
+|---|---|---|
+| `install_python_deps` | ml-deps loading overlay | `python -m pip install --user -r requirements-local.txt` |
+| `retry_spawn` | loading overlay "Retry" button | Re-runs `boot_sequence` after the user fixed deps/python |
+| `open_external` | "Get Python 3.11+ ↗" button | Opens python.org via `tauri-plugin-opener` |
+| `restart_sidecar` | `ml-deps.js` post-install hook + tray "Restart AI server" menu item | Kills the child, waits 500 ms, re-spawns. Required after pip-installing torch (native extensions can't be hot-imported). |
+
+**System tray** ([Tauri 2 `tray-icon` feature](https://v2.tauri.app/learn/system-tray/)) — right-click for menu, left-click toggles window visibility.
+
+| Menu item | Action |
+|---|---|
+| Show SeekDeep | `window.show() + unminimize + set_focus` |
+| Hide window | `window.hide()` |
+| Restart AI server | Same as the `restart_sidecar` command |
+| Quit SeekDeep | Sets `quit_requested` flag → kills child → `app.exit(0)` |
+
+**Close-to-tray:** `WindowEvent::CloseRequested` calls `api.prevent_close()` and hides the window UNLESS `quit_requested` is set. Tray "Quit" is the only path to truly exit; the X button just hides. Side effect: the AI server keeps running while the window is hidden, which is exactly what you want when the Discord bot needs to stay online.
+
 ## 4 · Archive browser bot bridge
 
 The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.

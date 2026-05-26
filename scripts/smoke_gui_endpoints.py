@@ -674,6 +674,41 @@ def main() -> int:
     check("  ...endpoint is a dict", isinstance(j.get("endpoint"), dict))
     check("  ...fallback_chain is a list", isinstance(j.get("fallback_chain"), list))
 
+    # ---- GET /models/installed (no auth required; first-use model downloader) ----
+    r = cl.get("/models/installed")
+    check("GET /models/installed -> 200", r.status_code == 200, f"got {r.status_code}")
+    j = r.json() if r.status_code == 200 else {}
+    check("  ...response shape {ok, ml_deps_missing, all_local_present, roles, ...}",
+          j.get("ok") is True
+          and isinstance(j.get("ml_deps_missing"), bool)
+          and isinstance(j.get("all_local_present"), bool)
+          and isinstance(j.get("roles"), dict),
+          f"body keys={sorted((j or {}).keys())}")
+    if j.get("ml_deps_missing") is False:
+        check("  ...roles dict has at least image + vision + chat.default_chat",
+              "image" in j["roles"] and "vision" in j["roles"] and "chat.default_chat" in j["roles"],
+              f"roles={sorted(j['roles'].keys())}")
+        # Each role entry should have model_id + backend + local + present
+        for role_key, role_info in j["roles"].items():
+            check(f"  ...role {role_key!r} has full schema",
+                  isinstance(role_info, dict)
+                  and "model_id" in role_info and "backend" in role_info
+                  and "local" in role_info and "present" in role_info,
+                  f"role_info={role_info}")
+            break  # Just check the first role; the schema is symmetric
+        # Invariant: all_local_present iff every local role is present
+        if "roles" in j:
+            local_roles = [v for v in j["roles"].values() if v.get("local")]
+            expected = all(v.get("present") for v in local_roles) if local_roles else True
+            check("  ...all_local_present <-> (every local role.present)",
+                  j["all_local_present"] == expected,
+                  f"all_local_present={j['all_local_present']} expected={expected}")
+    else:
+        # When ml deps missing, roles dict is allowed to be empty
+        check("  ...ml_deps_missing=true short-circuits role enumeration",
+              j.get("all_local_present") is False,
+              f"all_local_present={j.get('all_local_present')}")
+
     # ---- GET /ml_deps (no auth required; first-use ML installer probe) ----
     r = cl.get("/ml_deps")
     check("GET /ml_deps -> 200", r.status_code == 200, f"got {r.status_code}")
