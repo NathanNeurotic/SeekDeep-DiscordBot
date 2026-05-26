@@ -1532,9 +1532,9 @@
               <option>reset · default</option>
             </select>
 
-            <div class="eyebrow" style="margin: 20px 0 12px;">Temperature</div>
+            <div class="eyebrow" style="margin: 20px 0 12px; display: flex; justify-content: space-between; align-items: baseline;"><span>Temperature</span><span class="mono" id="cpTempReadout" style="color:var(--cyan-1); font-size: 12px;">0.7</span></div>
             <input id="cpTemp" type="range" min="0" max="10" value="7" style="width: 100%; accent-color: var(--cyan-1);" />
-            <div class="row" style="justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);"><span>0.0</span><span>0.7</span><span>1.0</span></div>
+            <div class="row" style="justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);"><span>0.0 · greedy</span><span>0.7 · default</span><span>1.0 · creative</span></div>
           </div>
 
           <div class="cp-panel" style="padding: 0; display: flex; flex-direction: column;">
@@ -3893,6 +3893,16 @@ const SEEKDEEP_BASE = (function() {
     function getTemp() {
       const v = parseFloat(document.getElementById('cpTemp')?.value || '7');
       return Math.max(0, Math.min(1, v / 10));
+    }
+
+    // Live temperature readout — slider has no inherent text feedback so
+    // users couldn't tell what 0.7 vs 0.3 felt like.
+    const tempInput = document.getElementById('cpTemp');
+    const tempReadout = document.getElementById('cpTempReadout');
+    if (tempInput && tempReadout) {
+      const paintTemp = () => { tempReadout.textContent = (parseFloat(tempInput.value || '7') / 10).toFixed(2); };
+      tempInput.addEventListener('input', paintTemp);
+      paintTemp();
     }
 
     // Active styling for role radios
