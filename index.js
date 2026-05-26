@@ -18773,7 +18773,14 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       } catch {}
       seekdeepLogRoute('image', imagePrompt);
       seekdeepConsumeLoadingGif(message);
-      try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'image' }); } catch {}
+      try { seekdeepTrackStatEvent({
+        guildId: message.guild?.id, userId: message.author?.id, kind: 'image',
+        // Style picked from the message options (set by /image style:... or
+        // the natural-language router when it detected one in the prompt).
+        // Empty → bumps 'unknown', which is fine — at least we see the
+        // distribution of "what style is the user actually picking".
+        imageStyle: seekdeepMessageImageModeOptions?.style || '',
+      }); } catch {}
       remember(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
         remember(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
