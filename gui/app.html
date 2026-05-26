@@ -2495,13 +2495,32 @@
     document.getElementById('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }, 1000);
 
-  // Smart BASE — when served from local_ai_server.py via /gui mount, use same origin.
-// When opened directly (file://) or from another origin, fall back to :7865.
+  // Smart BASE — picks the right host for our fetches.
+//   1. nav.js's shared resolver (Tauri-aware: detects __TAURI__ /
+//      tauri.localhost and forces 127.0.0.1:7865 instead of the
+//      bundled-WebView host).
+//   2. Same-origin when served from local_ai_server.py via /gui mount.
+//   3. file:// or other origins fall back to :7865.
+//
+// The previous version returned window.location.origin unconditionally
+// in any http:// context — which in Tauri 2 on Windows resolves to
+// http://tauri.localhost. Every fetch using SEEKDEEP_BASE then hit the
+// WebView's bundled-resources host instead of the AI server, producing
+// the now-classic "Unexpected token '<', '<!DOCTYPE ...' is not valid
+// JSON" error (the WebView served its 404 HTML page as the response).
+// The image playground, chat composer, persona pill, config save, GPU
+// stats, archive snapshot, server stats, persona load — all silently
+// broken under Tauri until this fix.
 const SEEKDEEP_BASE = (function() {
   if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+  if (typeof window.SeekDeepResolveBase === 'function') {
+    try { return window.SeekDeepResolveBase(); } catch (_) {}
+  }
+  if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') {
+    return 'http://127.0.0.1:7865';
+  }
   const sameOrigin = window.location.protocol === 'http:' || window.location.protocol === 'https:';
   if (sameOrigin && window.location.host) {
-    // Drop the /gui prefix if present
     return window.location.origin;
   }
   return 'http://127.0.0.1:7865';
