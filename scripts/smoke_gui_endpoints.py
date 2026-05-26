@@ -184,6 +184,23 @@ def main() -> int:
           and body.get("state") in ("running", "installed_not_running", "not_installed", "error"),
           f"body={body}")
 
+    # ---- GET /system/runtime (open; installer page Node/Python/Git/Disk probe) ----
+    r = c.get("/system/runtime")
+    check("GET /system/runtime -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    rt = body.get("runtime") or {}
+    check("  ...returns {ok, runtime:{node, python, git, disk}}",
+          body.get("ok") is True
+          and isinstance(rt, dict)
+          and all(k in rt for k in ("node", "python", "git", "disk")),
+          f"runtime keys={sorted(rt.keys())}")
+    # Python always installed (we're running this test inside it). Sanity-check.
+    check("  ...python entry has installed=True + version + meets_min booleans",
+          rt.get("python", {}).get("installed") is True
+          and isinstance(rt.get("python", {}).get("version"), str)
+          and isinstance(rt.get("python", {}).get("meets_min"), bool),
+          f"python={rt.get('python')}")
+
     if token:
         r = c.post("/launcher/bot/status", headers={_TOKEN_HEADER: token})
         check("POST /launcher/bot/status with correct token -> 200",

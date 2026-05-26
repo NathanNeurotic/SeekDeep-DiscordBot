@@ -1441,6 +1441,17 @@ const SEEKDEEP_BASE = (function() {
       return await r.json();
     } catch { return null; }
   }
+  async function probeRuntime() {
+    // /system/runtime spawns node --version + git --version + reads
+    // sys.version + shutil.disk_usage so we can give real per-row answers
+    // for Node / Python / Git / Disk instead of the previous "server up
+    // implies node ok" placeholder text.
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/system/runtime', { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
 
   async function runAllChecks() {
     const all = ['node','python','git','docker','gpu','disk','aiserver','searxng'];
@@ -1451,7 +1462,7 @@ const SEEKDEEP_BASE = (function() {
 
     if (ai.up) {
       setCheckState('aiserver', 'ok', 'live on :7865');
-      const [gpu, docker] = await Promise.all([probeAiGpu(), probeDocker()]);
+      const [gpu, docker, runtime] = await Promise.all([probeAiGpu(), probeDocker(), probeRuntime()]);
 
       // ---- GPU row ----------------------------------------------------
       // /gpu now returns { available, total_mb, used_mb, ..., nvidia_smi:
@@ -1489,13 +1500,38 @@ const SEEKDEEP_BASE = (function() {
         setCheckState('gpu', 'ok', 'detected (no detail)');
       }
 
-      // node / python / git / disk inferred from server presence (the only
-      // way this page can talk to the server is if Node spawned the bot
-      // OR Python is running uvicorn — same thing means git+disk are fine).
-      setCheckState('node', 'ok', 'server up implies node ok');
-      setCheckState('python', 'ok', 'FastAPI alive');
-      setCheckState('git', 'ok', 'assumed (repo cloned)');
-      setCheckState('disk', 'ok', 'enough to run (~80 GB recommended)');
+      // node / python / git / disk: real probes via /system/runtime
+      // instead of "server up implies node ok" placeholders.
+      const rt = (runtime && runtime.runtime) || {};
+      // Node
+      if (rt.node?.installed) {
+        if (rt.node.meets_min) setCheckState('node', 'ok',  `v${rt.node.version} (≥ ${rt.node.min_required} required)`);
+        else                   setCheckState('node', 'bad', `v${rt.node.version} · need ≥ ${rt.node.min_required} · upgrade Node from nodejs.org`);
+      } else {
+        setCheckState('node', 'bad', 'node not on PATH · install from nodejs.org (LTS 20+)');
+      }
+      // Python
+      if (rt.python?.installed) {
+        const venv = rt.python.venv_active ? ' · venv active' : '';
+        if (rt.python.meets_min) setCheckState('python', 'ok',  `${rt.python.version} (≥ ${rt.python.min_required} required)${venv}`);
+        else                     setCheckState('python', 'bad', `${rt.python.version} · need ≥ ${rt.python.min_required}${venv}`);
+      } else {
+        setCheckState('python', 'bad', 'FastAPI is alive so Python must be installed; version probe failed');
+      }
+      // Git
+      if (rt.git?.installed) {
+        setCheckState('git', 'ok', rt.git.version || 'installed');
+      } else {
+        setCheckState('git', 'bad', 'git not on PATH · install for clone/pull (npm install also needs it for some deps)');
+      }
+      // Disk
+      if (rt.disk?.free_gb != null) {
+        const txt = `${rt.disk.free_gb} GB free of ${rt.disk.total_gb} GB · ${rt.disk.used_pct}% used`;
+        if (rt.disk.meets_min) setCheckState('disk', 'ok',  txt);
+        else                   setCheckState('disk', 'bad', `${txt} · ${rt.disk.min_recommended_gb} GB recommended for full ML cache`);
+      } else {
+        setCheckState('disk', 'bad', 'disk probe failed — check repo path permissions');
+      }
 
       // ---- Docker row -------------------------------------------------
       // /system/docker tells us the real state — running / installed_not_

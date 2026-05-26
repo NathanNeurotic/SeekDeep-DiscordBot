@@ -27,12 +27,14 @@ without an authenticating reverse proxy in front.
 from __future__ import annotations
 import os
 import re
+import sys
 import json
 import time
 import secrets
 import asyncio
 import socket
 import subprocess
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -977,6 +979,74 @@ def register_gui_endpoints(
             "services": services_out,
             "generated_at": _now_iso(),
         }
+
+    # ----- GET /system/runtime -----
+    # Probe-only check for Node + Python + Git versions on PATH. Replaces
+    # the installer page's "server up implies node ok" placeholder — that
+    # told you the AI server was running but nothing about whether the
+    # supplied Node/Python actually meet the minimum versions. This runs
+    # locally only (loopback server already implies trust on this box).
+    @app.get("/system/runtime")
+    def get_system_runtime():
+        out: dict[str, dict] = {}
+        # Node — "node --version" → v20.11.0
+        try:
+            r = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=2)
+            if r.returncode == 0:
+                v = (r.stdout or "").strip().lstrip("v")
+                major = int(v.split(".")[0]) if v else 0
+                out["node"] = {
+                    "installed": True,
+                    "version": v,
+                    "major": major,
+                    "meets_min": major >= 20,  # discord.js v14 needs Node 20+
+                    "min_required": "20.x",
+                }
+            else:
+                out["node"] = {"installed": False, "error": (r.stderr or "").strip()[:160]}
+        except FileNotFoundError:
+            out["node"] = {"installed": False, "error": "node not on PATH"}
+        except Exception as exc:
+            out["node"] = {"installed": False, "error": str(exc)[:160]}
+        # Python — sys.version_info (this server IS Python so this always works)
+        try:
+            out["python"] = {
+                "installed": True,
+                "version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                "major": sys.version_info.major,
+                "minor": sys.version_info.minor,
+                "meets_min": (sys.version_info.major, sys.version_info.minor) >= (3, 11),
+                "min_required": "3.11",
+                "executable": sys.executable,
+                "venv_active": bool(os.environ.get("VIRTUAL_ENV")) or "venv" in sys.executable.lower() or ".venv" in sys.executable.lower(),
+            }
+        except Exception as exc:
+            out["python"] = {"installed": True, "error": str(exc)[:160]}
+        # Git — "git --version" → git version 2.43.0
+        try:
+            r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=2)
+            if r.returncode == 0:
+                out["git"] = {"installed": True, "version": (r.stdout or "").strip().replace("git version ", "")[:40]}
+            else:
+                out["git"] = {"installed": False, "error": (r.stderr or "").strip()[:160]}
+        except FileNotFoundError:
+            out["git"] = {"installed": False, "error": "git not on PATH"}
+        except Exception as exc:
+            out["git"] = {"installed": False, "error": str(exc)[:160]}
+        # Disk free — best-effort, shutil.disk_usage on the repo root
+        try:
+            usage = shutil.disk_usage(str(root))
+            out["disk"] = {
+                "free_gb":  round(usage.free  / (1024**3), 1),
+                "total_gb": round(usage.total / (1024**3), 1),
+                "used_pct": round(100.0 * usage.used / usage.total, 1) if usage.total else None,
+                "meets_min": usage.free >= 80 * (1024**3),  # 80 GB rec for full ML cache
+                "min_recommended_gb": 80,
+                "path": str(root),
+            }
+        except Exception as exc:
+            out["disk"] = {"error": str(exc)[:160]}
+        return {"ok": True, "runtime": out, "generated_at": _now_iso()}
 
     # ----- GET /system/docker -----
     # Probe-only Docker check. Spawns `docker info` then `docker --version`
