@@ -184,6 +184,23 @@ def main() -> int:
           and body.get("state") in ("running", "installed_not_running", "not_installed", "error"),
           f"body={body}")
 
+    # ---- GET /system/firstrun (open; first-run checklist) -----------------
+    r = c.get("/system/firstrun")
+    check("GET /system/firstrun -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, ready, checks:[...], summary:{...}}",
+          body.get("ok") is True
+          and isinstance(body.get("ready"), bool)
+          and isinstance(body.get("checks"), list)
+          and isinstance(body.get("summary"), dict),
+          f"keys={sorted(body.keys())}")
+    if isinstance(body.get("checks"), list):
+        sample = (body["checks"] or [None])[0]
+        check("  ...check entry has {id, label, ok, fix, blocking}",
+              isinstance(sample, dict)
+              and all(k in sample for k in ("id", "label", "ok", "fix", "blocking")),
+              f"sample={sample}")
+
     # ---- GET /system/runtime (open; installer page Node/Python/Git/Disk probe) ----
     r = c.get("/system/runtime")
     check("GET /system/runtime -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

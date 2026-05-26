@@ -684,6 +684,21 @@
     <!-- MAIN PANES -->
     <main class="main" id="main">
 
+      <!-- First-run setup checklist banner — populated by wireFirstRunBanner
+           from GET /system/firstrun. Auto-hides once every blocking check
+           passes. Sits above all panes so the user sees it regardless of
+           which sidebar tab they land on. -->
+      <div id="firstRunBanner" style="display: none; margin-bottom: 18px; border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent); border-radius: var(--r-md); background: rgba(255,184,77,0.06); padding: 14px 18px;">
+        <div style="display:flex; justify-content: space-between; align-items: flex-start; gap: 14px;">
+          <div>
+            <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; color: var(--warn); text-transform: uppercase; margin-bottom: 4px;">▸ FIRST-RUN SETUP</div>
+            <div id="firstRunSummary" style="font-size: 13px; color: var(--hull-2); line-height: 1.5;">probing…</div>
+          </div>
+          <button id="firstRunDismiss" class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px;" title="Hide until next reload">Dismiss</button>
+        </div>
+        <ul id="firstRunChecks" style="margin: 10px 0 0; padding-left: 0; list-style: none; font-family: var(--font-mono); font-size: 12px;"></ul>
+      </div>
+
       <!-- ====== LAUNCHER ====== -->
       <section class="pane active" data-pane="launcher" data-screen-label="Launcher">
         <div class="head-row">
@@ -2920,8 +2935,68 @@ const SEEKDEEP_BASE = (function() {
   // marked the row DIRTY, never showed up in the per-section dirty
   // count, and didn't get POSTed by Save. Cover every cfg-section row.
   document.querySelectorAll('.cfg-section .config-row input, .cfg-section .config-row select').forEach(el => {
-    el.addEventListener('change', () => markDirty(el));
-    el.addEventListener('input',  () => markDirty(el));
+    el.addEventListener('change', () => { markDirty(el); validateField(el); });
+    el.addEventListener('input',  () => { markDirty(el); validateField(el); });
+  });
+
+  // ===== Client-side validation =====================================
+  // Rules table keyed by ENV var name. Validators return null on pass,
+  // a short error string on fail. Inline error message gets attached
+  // to the row; Save button gates on no validation errors anywhere.
+  const CFG_VALIDATORS = {
+    DISCORD_TOKEN:           v => !v || v.length >= 50 ? null : 'Token too short (Discord bot tokens are 70+ chars)',
+    DISCORD_CLIENT_ID:       v => !v || /^\d{15,25}$/.test(v) ? null : 'Should be a numeric snowflake (15-25 digits)',
+    SEEKDEEP_ALLOWED_CHANNELS: v => !v || /^[\d,\s]+$/.test(v) ? null : 'Comma-separated numeric channel IDs',
+    SEEKDEEP_BLOCKED_CHANNELS: v => !v || /^[\d,\s]+$/.test(v) ? null : 'Comma-separated numeric channel IDs',
+    SEEKDEEP_ADMIN_IDS:      v => !v || /^[\d,\s]+$/.test(v) ? null : 'Comma-separated numeric user IDs',
+    MAX_DISCORD_CHARS:       v => !v || (/^\d+$/.test(v) && +v >= 500 && +v <= 2000) ? null : 'Integer 500-2000 (Discord hard cap is 2000)',
+    HF_TOKEN:                v => !v || /^hf_[A-Za-z0-9]+$/.test(v) ? null : 'HF tokens start with "hf_"',
+  };
+  function validateField(el) {
+    const row = el.closest('.config-row');
+    if (!row) return;
+    const keyEl = row.querySelector('.key');
+    if (!keyEl) return;
+    const key = keyEl.textContent.trim();
+    const rule = CFG_VALIDATORS[key];
+    if (!rule) return;
+    const msg = rule(String(el.value || '').trim());
+    // Attach / replace an inline error span (".cfg-err") just inside the row
+    let errEl = row.querySelector('.cfg-err');
+    if (msg) {
+      if (!errEl) {
+        errEl = document.createElement('div');
+        errEl.className = 'cfg-err';
+        errEl.style.cssText = 'grid-column: 1/-1; padding: 4px 0 0 0; font-family: var(--font-mono); font-size: 10px; color: var(--bad); letter-spacing: 0.06em;';
+        row.appendChild(errEl);
+      }
+      errEl.textContent = '✕ ' + msg;
+      el.style.borderColor = 'var(--bad)';
+    } else {
+      if (errEl) errEl.remove();
+      el.style.borderColor = '';
+    }
+  }
+  // Run an initial pass so Reload-from-disk-populated values get a fresh badge
+  function validateAll() {
+    document.querySelectorAll('.cfg-section .config-row input, .cfg-section .config-row select').forEach(validateField);
+  }
+
+  // ===== beforeunload warning on dirty config ========================
+  // Browser shows "Leave site? Changes you made may not be saved." when
+  // the user navigates away with unsaved edits. Was: silent loss every
+  // time you switched panes via the sidebar (which navigates within the
+  // SPA but not via a real beforeunload — so this guards the page-reload
+  // / window-close / external-link case). Sidebar nav doesn't fire
+  // beforeunload, so dirty state survives across panes already.
+  window.addEventListener('beforeunload', (e) => {
+    const dirty = document.querySelectorAll('.config-row .save').length
+      ? [...document.querySelectorAll('.config-row .save')].some(s => s.textContent.includes('DIRTY'))
+      : false;
+    if (!dirty) return undefined;
+    e.preventDefault();
+    e.returnValue = 'You have unsaved config changes. Save them before reloading.';
+    return e.returnValue;
   });
 
   // "Reload from disk" button — GET /config and populate every .config-row
@@ -2962,6 +3037,7 @@ const SEEKDEEP_BASE = (function() {
           if (save) { save.textContent = 'SAVED'; save.style.color = ''; }
         });
         if (typeof recountDirty === 'function') recountDirty();
+        if (typeof validateAll === 'function') validateAll();
         btn.textContent = `Loaded ${populated} · ${redacted} redacted`;
         setTimeout(() => { btn.textContent = orig; }, 2400);
       } catch (err) {
@@ -2977,6 +3053,21 @@ const SEEKDEEP_BASE = (function() {
   // Save button — POST /config with dirty values, fall back to local-only "saved" on offline
   document.getElementById('cfg-save')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    // Validation gate — refuse to save if any field has a CFG_VALIDATORS
+    // error active. Was: silently sent garbage and let the server 422.
+    validateAll();
+    const errs = document.querySelectorAll('.config-row .cfg-err');
+    if (errs.length) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<span id="cfg-dirty-count">' + errs.length + '</span> validation error' + (errs.length === 1 ? '' : 's') + ' · fix before save';
+      btn.style.color = 'var(--bad)';
+      // Scroll to first error so the user can see what's wrong
+      errs[0].closest('.config-row')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Also expand the section containing it so it's actually visible
+      errs[0].closest('details.cfg-section')?.setAttribute('open', '');
+      setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 4000);
+      return;
+    }
     const dirtyRows = [...document.querySelectorAll('.config-row .save')]
       .filter(s => s.textContent.includes('DIRTY'))
       .map(s => s.closest('.config-row'));
@@ -3414,9 +3505,43 @@ const SEEKDEEP_BASE = (function() {
     });
 
     let lastSeed = null, lastImageUrl = null;
+    let inflightCtl = null;   // AbortController for the in-flight /image POST
+    let inflightMode = null;  // mode of the in-flight request (for status text)
+
+    function setGenButtonMode(state, mode) {
+      // state: 'idle' | 'busy' | 'cancelling'
+      // Replaces the lazy `genBtn.disabled = true` pattern. The button now
+      // doubles as a Cancel button while a request is in flight: same
+      // visual position, label flips, click signals AbortController.abort().
+      const u = MODE_UI[mode || activeMode()] || MODE_UI.txt2img;
+      if (state === 'busy') {
+        genBtn.textContent = '✕ Cancel ' + (mode || activeMode());
+        genBtn.classList.remove('btn-primary');
+        genBtn.classList.add('btn-ghost');
+        genBtn.style.color = 'var(--warn)';
+        regenBtn.disabled = true;
+      } else if (state === 'cancelling') {
+        genBtn.textContent = '⋯ cancelling…';
+        genBtn.style.color = 'var(--bad)';
+      } else {
+        genBtn.textContent = u.btn;
+        genBtn.classList.remove('btn-ghost');
+        genBtn.classList.add('btn-primary');
+        genBtn.style.color = '';
+        regenBtn.disabled = false;
+      }
+    }
 
     async function generate(useLastSeed) {
-      if (genBtn.disabled) return;
+      // If a request is already in flight, treat this click as a Cancel:
+      // abort the AbortController and let the existing generate() unwind
+      // through its catch block. Was: silently ignored — user clicked
+      // Generate, nothing happened, clicked again, still nothing.
+      if (inflightCtl) {
+        setGenButtonMode('cancelling', inflightMode);
+        try { inflightCtl.abort(); } catch {}
+        return;
+      }
       const mode = activeMode();
       const u = MODE_UI[mode] || MODE_UI.txt2img;
 
@@ -3541,10 +3666,16 @@ const SEEKDEEP_BASE = (function() {
         return;
       }
 
-      genBtn.disabled = true;
-      regenBtn.disabled = true;
+      // Set up cancellable in-flight state. Button flips to "✕ Cancel
+      // <mode>" — second click on the same button triggers abort().
+      inflightCtl = new AbortController();
+      inflightMode = mode;
+      setGenButtonMode('busy', mode);
+      // 3 min hard cap on top of user-cancellable abort. SDXL on a 4090
+      // takes 5-30s normally, 60-90s on first cold load with steps=40+.
+      const cancelOnTimeout = setTimeout(() => { try { inflightCtl?.abort(); } catch {} }, 180000);
       const label = u.btn.replace('▸ ', '').toUpperCase();
-      setStatus(`${label}ING · SEED ${seed}`, 'warn');
+      setStatus(`${label}ING · SEED ${seed} · click button to cancel`, 'warn');
       refs.placeholder.style.display = 'grid';
       const dim = (body.width && body.height) ? `${body.width}×${body.height} · ` : '';
       refs.placeholder.textContent = `[${label}ING · ${dim}${body.steps ? body.steps + ' steps · ' : ''}seed ${seed}]`;
@@ -3556,7 +3687,7 @@ const SEEKDEEP_BASE = (function() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(180000),
+          signal: inflightCtl.signal,
         });
         if (!r.ok) {
           const txt = await r.text().catch(() => '');
@@ -3612,16 +3743,28 @@ const SEEKDEEP_BASE = (function() {
         }
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
+        const aborted = (e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || e))));
         const msg = String(e && e.message || e);
-        setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · ${endpoint} · ${msg.slice(0, 60)}`, 'bad');
-        refs.placeholder.style.display = 'grid';
-        refs.placeholder.textContent = `[ERROR — ${SEEKDEEP_BASE}${endpoint}\n${msg}]`;
-        refs.placeholder.style.whiteSpace = 'pre-line';
-        refs.placeholder.style.textAlign = 'center';
-        refs.placeholder.style.fontSize = '11px';
+        if (aborted) {
+          setStatus(`CANCELLED · ${(ms/1000).toFixed(1)}s · ${endpoint}`, 'warn');
+          refs.placeholder.style.display = 'grid';
+          refs.placeholder.textContent = `[CANCELLED — ${endpoint}]`;
+          refs.placeholder.style.whiteSpace = '';
+          refs.placeholder.style.textAlign = '';
+          refs.placeholder.style.fontSize = '';
+        } else {
+          setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · ${endpoint} · ${msg.slice(0, 60)}`, 'bad');
+          refs.placeholder.style.display = 'grid';
+          refs.placeholder.textContent = `[ERROR — ${SEEKDEEP_BASE}${endpoint}\n${msg}]`;
+          refs.placeholder.style.whiteSpace = 'pre-line';
+          refs.placeholder.style.textAlign = 'center';
+          refs.placeholder.style.fontSize = '11px';
+        }
       } finally {
-        genBtn.disabled = false;
-        regenBtn.disabled = false;
+        clearTimeout(cancelOnTimeout);
+        inflightCtl = null;
+        inflightMode = null;
+        setGenButtonMode('idle');
       }
     }
 
@@ -3855,6 +3998,80 @@ const SEEKDEEP_BASE = (function() {
     if (clearBtn) {
       clearBtn.addEventListener('click', () => clear());
     }
+  })();
+
+  // ===== First-run setup checklist · GET /system/firstrun =================
+  // Probes for the common "fresh install" gotchas (missing DISCORD_TOKEN,
+  // ML deps not installed, SearXNG not running, no chat model in cache,
+  // etc.) and renders a top-of-page banner listing what still needs to
+  // happen. Auto-hides when every blocking check passes. Was: empty panes
+  // with no hint why nothing worked.
+  (function wireFirstRunBanner() {
+    const banner = document.getElementById('firstRunBanner');
+    if (!banner) return;
+    // Per-session dismiss — sessionStorage so it comes back next time
+    // the user opens the app (don't permanently hide setup issues).
+    if (sessionStorage.getItem('seekdeep:firstrun:dismissed') === '1') return;
+    document.getElementById('firstRunDismiss')?.addEventListener('click', () => {
+      banner.style.display = 'none';
+      sessionStorage.setItem('seekdeep:firstrun:dismissed', '1');
+    });
+
+    async function load() {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/system/firstrun', { signal: AbortSignal.timeout(4000), cache: 'no-store' });
+        if (!r.ok) return;
+        const data = await r.json();
+        const checks = Array.isArray(data.checks) ? data.checks : [];
+        const failed = checks.filter(c => !c.ok);
+        if (!failed.length) {
+          // Everything passes — keep banner hidden (or fade it out if it
+          // was previously shown).
+          banner.style.display = 'none';
+          return;
+        }
+        // Render. Banner stays the same color regardless — let per-row
+        // markers (✕ blocking, ⚠ warning, ✓ ok) tell the severity story.
+        banner.style.display = 'block';
+        const blocking = failed.filter(c => c.blocking);
+        const summary = document.getElementById('firstRunSummary');
+        if (summary) {
+          if (blocking.length) {
+            summary.innerHTML = `<strong>${blocking.length} blocking issue${blocking.length === 1 ? '' : 's'}</strong> · the bot can't start until these are fixed. ${failed.length - blocking.length > 0 ? failed.length - blocking.length + ' optional warning' + (failed.length - blocking.length === 1 ? '' : 's') + ' below.' : ''}`;
+          } else {
+            summary.innerHTML = `Bot can run, but <strong>${failed.length} optional feature${failed.length === 1 ? '' : 's'}</strong> won't work until fixed. Each is independent — fix whatever you need.`;
+          }
+        }
+        const list = document.getElementById('firstRunChecks');
+        if (list) {
+          list.innerHTML = '';
+          for (const c of checks) {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding: 6px 0; display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start;';
+            const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; };
+            const marker = mk('span', '', '');
+            if (c.ok) { marker.textContent = '✓'; marker.style.color = 'var(--good)'; }
+            else if (c.blocking) { marker.textContent = '✕'; marker.style.color = 'var(--bad)'; }
+            else { marker.textContent = '⚠'; marker.style.color = 'var(--warn)'; }
+            li.appendChild(marker);
+            const right = document.createElement('div');
+            const lbl = mk('div', '', String(c.label || c.id || ''));
+            lbl.style.color = c.ok ? 'var(--hull-3)' : 'var(--hull)';
+            right.appendChild(lbl);
+            if (!c.ok && c.fix) {
+              const fix = mk('div', '', String(c.fix));
+              fix.style.cssText = 'font-size: 10.5px; color: var(--hull-3); margin-top: 2px; line-height: 1.45;';
+              right.appendChild(fix);
+            }
+            li.appendChild(right);
+            list.appendChild(li);
+          }
+        }
+      } catch { /* server unreachable — keep banner hidden */ }
+    }
+    load();
+    // Re-check every 60s so resolved issues drop off without a manual reload.
+    setInterval(load, 60000);
   })();
 
   // ===== Boot sequence panel (launcher pane) · last startup-related lines ====

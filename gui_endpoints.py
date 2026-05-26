@@ -980,6 +980,125 @@ def register_gui_endpoints(
             "generated_at": _now_iso(),
         }
 
+    # ----- GET /system/firstrun -----
+    # Discovers what's missing for a fresh install and returns a checklist
+    # the GUI can render as a "do these N things first" banner. Replaces
+    # the previous experience where a user with no .env / no models / no
+    # Discord token saw a bunch of empty panes with no clear next step.
+    @app.get("/system/firstrun")
+    def get_system_firstrun():
+        checks: list[dict[str, Any]] = []
+        env = _read_env_kv(_env_path) if _env_path.is_file() else {}
+        # 1. .env exists at all
+        checks.append({
+            "id": "env_file",
+            "label": "`.env` file exists",
+            "ok": _env_path.is_file(),
+            "fix": f"Copy `.env.default` -> `.env` in the repo root (or run setup_local.ps1).",
+            "blocking": True,
+        })
+        # 2. DISCORD_TOKEN looks plausible
+        tok = (env.get("DISCORD_TOKEN") or "").strip()
+        checks.append({
+            "id": "discord_token",
+            "label": "DISCORD_TOKEN set",
+            "ok": bool(tok) and len(tok) >= 50,
+            "fix": "Paste your bot token in the Installer Discord row, or edit .env directly.",
+            "blocking": True,
+        })
+        # 3. DISCORD_CLIENT_ID set (for slash command registration)
+        cid = (env.get("DISCORD_CLIENT_ID") or "").strip()
+        checks.append({
+            "id": "discord_client_id",
+            "label": "DISCORD_CLIENT_ID set (for slash commands)",
+            "ok": bool(cid) and cid.isdigit() and len(cid) >= 15,
+            "fix": "Copy the Application ID from the Discord developer portal -> General Information.",
+            "blocking": False,
+        })
+        # 4. SEEKDEEP_ADMIN_IDS set (admin features will all 403 without this)
+        admin = (env.get("SEEKDEEP_ADMIN_IDS") or env.get("ADMIN_USER_IDS") or "").strip()
+        checks.append({
+            "id": "admin_ids",
+            "label": "SEEKDEEP_ADMIN_IDS set (admin features need it)",
+            "ok": bool(admin),
+            "fix": "Add your Discord user ID(s) to SEEKDEEP_ADMIN_IDS in .env (comma-separated).",
+            "blocking": False,
+        })
+        # 5. ML deps installed (best-effort; full check is /ml_deps which lives on local_ai_server)
+        ml_ok = False
+        for mod in ("torch", "transformers", "diffusers"):
+            try:
+                __import__(mod)
+                ml_ok = True
+            except Exception:
+                ml_ok = False
+                break
+        checks.append({
+            "id": "ml_deps",
+            "label": "ML dependencies installed (torch / transformers / diffusers)",
+            "ok": ml_ok,
+            "fix": "Click \"Install ML libraries\" in the Control Center, or run `pip install -r requirements-ml.txt`.",
+            "blocking": False,
+        })
+        # 6. nvidia-smi reachable (GPU detected)
+        try:
+            r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=2)
+            gpu_present = r.returncode == 0 and bool((r.stdout or "").strip())
+        except Exception:
+            gpu_present = False
+        checks.append({
+            "id": "gpu",
+            "label": "NVIDIA GPU detected by driver",
+            "ok": gpu_present,
+            "fix": "GPU is optional but strongly recommended for local chat/image. CPU mode is slow.",
+            "blocking": False,
+        })
+        # 7. searxng container reachable (web search)
+        try:
+            with socket.create_connection(("127.0.0.1", 8080), timeout=1):
+                searxng_up = True
+        except Exception:
+            searxng_up = False
+        checks.append({
+            "id": "searxng",
+            "label": "SearXNG container running (web search)",
+            "ok": searxng_up,
+            "fix": "`docker compose up -d searxng` from the repo, or skip if you don't need web-routed chat.",
+            "blocking": False,
+        })
+        # 8. At least one chat model can be loaded — HF cache or Ollama tag.
+        # Best-effort: check HF cache dir + ollama daemon. Skipping the full
+        # cache scan here to keep this endpoint snappy (<200ms typical).
+        hf_cache = Path(env.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface"))
+        has_hf_cache = hf_cache.is_dir() and any(hf_cache.iterdir()) if hf_cache.exists() else False
+        try:
+            with socket.create_connection(("127.0.0.1", 11434), timeout=1):
+                ollama_up = True
+        except Exception:
+            ollama_up = False
+        checks.append({
+            "id": "chat_model",
+            "label": "A chat model is reachable (HF cache or Ollama)",
+            "ok": has_hf_cache or ollama_up,
+            "fix": "Open the Models pane and click Warm on a chat role, or install ollama + pull a model.",
+            "blocking": False,
+        })
+
+        blocking_failed = [c for c in checks if c["blocking"] and not c["ok"]]
+        warning_failed  = [c for c in checks if not c["blocking"] and not c["ok"]]
+        return {
+            "ok": True,
+            "ready": not blocking_failed,
+            "checks": checks,
+            "summary": {
+                "total":            len(checks),
+                "passed":           sum(1 for c in checks if c["ok"]),
+                "blocking_failed":  len(blocking_failed),
+                "warning_failed":   len(warning_failed),
+            },
+            "generated_at": _now_iso(),
+        }
+
     # ----- GET /system/runtime -----
     # Probe-only check for Node + Python + Git versions on PATH. Replaces
     # the installer page's "server up implies node ok" placeholder — that

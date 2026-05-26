@@ -122,7 +122,30 @@
           init.headers = ensureHeader(init.headers, TOKEN_HEADER, tok);
         }
       }
-      return origFetch(input, init);
+      let response;
+      try {
+        response = await origFetch(input, init);
+      } catch (err) {
+        throw err;
+      }
+      // Auto-retry on 401 for token-required calls: the user may have
+      // rotated SEEKDEEP_GUI_TOKEN in .env mid-session, or the sidecar
+      // restarted with a different token. Force-refresh the cache and
+      // retry once. Idempotent on GETs; for writes the server is
+      // responsible for not double-applying a re-played POST (every
+      // write endpoint reads then writes atomically — no duplicates).
+      if (needsToken && response.status === 401 && !init.__seekdeepRetried) {
+        if (typeof window.SeekDeepAuth?.reset === 'function') {
+          window.SeekDeepAuth.reset();
+        }
+        const fresh = await fetchToken();
+        if (fresh) {
+          init.headers = ensureHeader(init.headers || {}, TOKEN_HEADER, fresh);
+          init.__seekdeepRetried = true;
+          try { response = await origFetch(input, init); } catch (err) { throw err; }
+        }
+      }
+      return response;
     };
   })();
 
