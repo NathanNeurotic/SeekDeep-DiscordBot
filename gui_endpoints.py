@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 def _now_iso() -> str:
@@ -65,7 +65,7 @@ class EventPayload(BaseModel):
     """Body of POST /events/emit. `type` is the event topic (e.g. 'model.loaded',
     'vram.sample'); `data` is an arbitrary JSON object the consumer interprets."""
     type: str
-    data: dict[str, Any] = {}
+    data: dict[str, Any] = Field(default_factory=dict)  # AUD-019 — Field over mutable {}
 
 
 class FactBody(BaseModel):

@@ -16306,7 +16306,12 @@ function seekdeepArchiveBumpSent24h() {
     let data = { sent_24h: 0, window_start: Date.now() };
     if (fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
       const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_CONFIG_PATH, 'utf8'));
-      if (parsed && typeof parsed === 'object') data = { ...parsed, ...data, ...parsed };
+      // Merge defaults with what's on disk: defaults first, parsed overrides.
+      // Previous `{ ...parsed, ...data, ...parsed }` had ...data overwritten
+      // by the trailing ...parsed anyway, making the middle spread dead
+      // weight — and the defaults were unconditionally clobbered, so a
+      // half-written file would still get the on-disk window_start. AUD-024.
+      if (parsed && typeof parsed === 'object') data = { ...data, ...parsed };
     }
     const now = Date.now();
     const winStart = Number(data.window_start || 0) || now;
