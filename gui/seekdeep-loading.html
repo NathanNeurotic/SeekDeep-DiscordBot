@@ -426,19 +426,36 @@
       return ready;
     }
 
+    // Patience tuning: Python 3.14 + cold uvicorn + fastapi imports can take
+    // 15-30s on first launch. 20 attempts × ~4s/attempt ≈ 80s before we
+    // show OFFLINE state — AND we keep polling indefinitely after that so
+    // a slow Python eventually rescues itself.
+    const FAILURE_THRESHOLD = 20;
+    const POLL_INTERVAL_MS  = 1500;
+    let offlineShown = false;
+
     async function run() {
       const h = await pollServer();
       if (!h) {
         failures++;
-        if (failures >= 3) {
+        if (failures >= FAILURE_THRESHOLD && !offlineShown) {
           $status.classList.add('is-error');
           $label.textContent = 'OFFLINE';
-          setStage('local server unreachable · ' + BASE);
-          return;
+          setStage('still waiting for ' + BASE + '/health … (will keep trying)');
+          offlineShown = true;
+          // DON'T return — keep retrying forever. The visual error state is
+          // for the user; the auto-recovery is the real safety net.
         }
-        setTimeout(run, 800);
+        setTimeout(run, POLL_INTERVAL_MS);
         return;
       }
+      // /health came back — clear error state if we'd shown it.
+      if (offlineShown) {
+        $status.classList.remove('is-error');
+        $label.textContent = 'BOOTING';
+        offlineShown = false;
+      }
+
       // Mirror the live version into the tagline as soon as we have it.
       if (h && h.version) {
         document.querySelectorAll('[data-version]').forEach(el => {
@@ -446,9 +463,11 @@
         });
       }
 
-      await pollDeps();
-      await pollModels();
-      await pollBus();
+      // Tick the remaining phase ladder cells — these are informational only;
+      // /health succeeding is the only gate that matters for redirect.
+      try { await pollDeps(); } catch {}
+      try { await pollModels(); } catch {}
+      try { await pollBus(); } catch {}
 
       $status.classList.add('is-ready');
       $label.textContent = 'READY';
