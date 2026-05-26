@@ -1790,39 +1790,14 @@
         <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 18px;">
           <div class="chart-wrap">
             <h3>Activity · last 30 days</h3>
+            <!-- Was 30 hardcoded bars at 18%-100% heights — fake activity
+                 that lied on every fresh install. launcher.js's
+                 pumpStatsSnapshot rewrites this from /stats/snapshot.bot.
+                 day_buckets when the bot has accumulated real data. -->
             <div class="bars-chart" id="statsBars">
-              <div class="col" style="height: 18%"></div>
-              <div class="col" style="height: 26%"></div>
-              <div class="col" style="height: 32%"></div>
-              <div class="col" style="height: 24%"></div>
-              <div class="col" style="height: 41%"></div>
-              <div class="col" style="height: 55%"></div>
-              <div class="col" style="height: 48%"></div>
-              <div class="col" style="height: 38%"></div>
-              <div class="col" style="height: 52%"></div>
-              <div class="col" style="height: 60%"></div>
-              <div class="col" style="height: 72%"></div>
-              <div class="col" style="height: 58%"></div>
-              <div class="col" style="height: 64%"></div>
-              <div class="col" style="height: 70%"></div>
-              <div class="col" style="height: 80%"></div>
-              <div class="col" style="height: 76%"></div>
-              <div class="col" style="height: 62%"></div>
-              <div class="col" style="height: 84%"></div>
-              <div class="col" style="height: 92%"></div>
-              <div class="col" style="height: 78%"></div>
-              <div class="col" style="height: 88%"></div>
-              <div class="col" style="height: 95%"></div>
-              <div class="col" style="height: 81%"></div>
-              <div class="col" style="height: 74%"></div>
-              <div class="col" style="height: 82%"></div>
-              <div class="col" style="height: 90%"></div>
-              <div class="col" style="height: 86%"></div>
-              <div class="col" style="height: 79%"></div>
-              <div class="col" style="height: 91%"></div>
-              <div class="col" style="height: 100%"></div>
+              <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono); margin: auto;">— /stats/snapshot pending · run a /chat or /image to seed day-buckets, or wait for the 30s pump</div>
             </div>
-            <div class="bars-labels"><span>04-23</span><span>05-01</span><span>05-08</span><span>05-15</span><span>05-23</span></div>
+            <div class="bars-labels"><span></span><span></span><span></span><span></span><span></span></div>
           </div>
 
           <div class="chart-wrap"><h3>Top contributors</h3><div id="statsLeaderboard">
