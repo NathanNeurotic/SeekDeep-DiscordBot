@@ -1831,11 +1831,11 @@
   <footer class="statusbar">
     <span class="live"><span class="live-dot" id="stackDot"></span>STACK <em id="stackState">PROBING</em></span>
     <span>VRAM <em id="sb-vram">— / — GB</em></span>
-    <span>QUEUE <em id="sb-queue">0</em></span>
+    <span>QUEUE <em id="sb-queue">—</em></span>
     <span></span>
-    <span>PERSONA <em id="sb-persona">CLINICAL</em></span>
-    <span>WEB <em id="sb-web">SEARXNG · :8080</em></span>
-    <span id="clock">14:23:48</span>
+    <span>PERSONA <em id="sb-persona">—</em></span>
+    <span>WEB <em id="sb-web">—</em></span>
+    <span id="clock">—</span>
   </footer>
 </div>
 </div>
@@ -2488,6 +2488,54 @@ const SEEKDEEP_BASE = (function() {
     }
   };
   LIVE.start();
+
+  // ===== Footer status bar pumps (persona / web / queue) =====
+  // sb-persona was hardcoded "CLINICAL" forever; sb-web was hardcoded
+  // "SEARXNG · :8080" even when searxng was unreachable. Now they reflect
+  // real /persona + searxng-probe state.
+  (function pumpFooter() {
+    const personaEl = document.getElementById('sb-persona');
+    const webEl     = document.getElementById('sb-web');
+    if (!personaEl && !webEl) return;
+    async function pull() {
+      // Persona — /persona returns effective_global / global / env_default
+      if (personaEl) {
+        try {
+          const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+          if (r.ok) {
+            const d = await r.json();
+            const slug = String(d.effective_global || d.global || d.env_default || '').trim();
+            if (slug) personaEl.textContent = slug.toUpperCase();
+            else personaEl.textContent = '—';
+          }
+        } catch { /* leave the dash */ }
+      }
+      // Web search backend — /launchers/status reports searxng state.
+      if (webEl) {
+        try {
+          const r = await fetch(SEEKDEEP_BASE + '/launchers/status', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+          if (r.ok) {
+            const d = await r.json();
+            const sx = (d && d.services && d.services.searxng) || {};
+            if (sx.state === 'running') webEl.textContent = 'SEARXNG · :8080';
+            else if (sx.state === 'exited' || sx.state === 'not-running') webEl.textContent = 'SEARXNG · OFF';
+            else webEl.textContent = '—';
+          }
+        } catch { /* leave the dash */ }
+      }
+    }
+    pull();
+    setInterval(pull, 15000);
+  })();
+
+  // ===== Clock — kick-start before the existing setInterval ticks =====
+  (function tickClockNow() {
+    const clk = document.getElementById('clock');
+    if (!clk) return;
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    clk.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  })();
 
   // ===== Config: collapse / expand all =====
   document.getElementById('cfg-collapse-all')?.addEventListener('click', () => {
@@ -3856,6 +3904,17 @@ root.render(<App />);
     window.SeekDeepEvents.on('model.evicted', (d) => {
       if (d.role) setRowState(d.role, 'CACHED', '');
     });
+    // Footer sb-queue: tracks queue.depth events from the AI server's
+    // in-flight middleware. Was hardcoded "0" forever even when the
+    // server was processing requests. Sum chat+image+vision.
+    const sbQueue = document.getElementById('sb-queue');
+    if (sbQueue) {
+      window.SeekDeepEvents.on('queue.depth', (d) => {
+        if (!d) return;
+        const n = (d.chat || 0) + (d.image || 0) + (d.vision || 0);
+        sbQueue.textContent = String(n);
+      });
+    }
     return true;
   }
   if (!attachModelBus()) {
