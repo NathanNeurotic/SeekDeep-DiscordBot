@@ -212,11 +212,11 @@
     <aside class="col">
       <div>
         <h2>Templates</h2>
-        <div class="sub" style="margin-top: 4px;">▸ data/prompt-templates.json · design preview</div>
+        <div class="sub" style="margin-top: 4px;">▸ <span id="tplSource">data/prompt-templates.json</span> · <span id="tplBackendTag" style="color: var(--hull-3);">probing…</span></div>
       </div>
 
-      <div class="info-banner" style="background: rgba(255,184,77,0.08); border-color: color-mix(in oklab, var(--warn) 35%, transparent);">
-        <strong>⚠ DESIGN PREVIEW.</strong> The template list, view, and edit panes below are rendered from a static in-page list — there's no live <span class="mono">GET /data/prompt-templates.json</span> fetch yet. The Discord-side flow (<span class="mono" style="color:var(--cyan-1)">@SeekDeep template share/import/edit</span>) is fully wired on the bot; this GUI panel is the target shape for when someone wires the read endpoint.
+      <div class="info-banner" id="tplBanner" style="background: rgba(45,212,255,0.04); border-color: color-mix(in oklab, var(--cyan-1) 22%, transparent);">
+        <strong>▸ LIVE.</strong> Templates load from <span class="mono">GET /data/prompt-templates.json</span> (the bot writes this on every <span class="mono" style="color:var(--cyan-1)">@SeekDeep template save</span>). Use Discord to author/edit/share; this pane is read-only by design — Discord remains the source of truth.
       </div>
 
       <div class="info-banner">
@@ -418,6 +418,18 @@
 (function () {
   const $ = (s, r=document) => r.querySelector(s);
 
+  // Smart base — same Tauri/loopback/origin pattern every other page uses.
+  const SEEKDEEP_BASE = (function() {
+    if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+    return 'http://127.0.0.1:7865';
+  })();
+
+  // Demo seed used ONLY when /data/prompt-templates.json is unreachable
+  // (server offline or token missing). Replaced by the real list on first
+  // successful fetch — see hydrateFromBackend() below.
   const TEMPLATES = [
     {
       id: 'cli-reviewer', name: 'cli-reviewer', source: 'own', vars: ['language', 'code'],
@@ -517,6 +529,92 @@ The user wants information density, not company.`,
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  function _fmtAgo(iso) {
+    if (!iso) return '—';
+    const t = Date.parse(iso);
+    if (isNaN(t)) return '—';
+    const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60)    return s + 's ago';
+    if (s < 3600)  return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+
+  function paintBackendTag(state) {
+    const tag = document.getElementById('tplBackendTag');
+    const banner = document.getElementById('tplBanner');
+    if (!tag) return;
+    if (state === 'live') {
+      tag.textContent = 'LIVE · ' + TEMPLATES.length + ' template' + (TEMPLATES.length === 1 ? '' : 's');
+      tag.style.color = 'var(--cyan-1)';
+      if (banner) banner.style.display = 'block';
+    } else if (state === 'empty') {
+      tag.textContent = 'LIVE · no templates yet · run @SeekDeep template save in Discord';
+      tag.style.color = 'var(--hull-3)';
+      if (banner) banner.style.display = 'block';
+    } else if (state === 'offline') {
+      tag.textContent = 'OFFLINE · showing demo seed · server unreachable';
+      tag.style.color = 'var(--warn)';
+      if (banner) {
+        banner.style.background = 'rgba(255,184,77,0.08)';
+        banner.style.borderColor = 'color-mix(in oklab, var(--warn) 35%, transparent)';
+        banner.innerHTML = '<strong>⚠ OFFLINE.</strong> Couldn\'t reach <span class="mono">GET /data/prompt-templates.json</span> — showing in-page demo seed instead. Start the local AI server (or wait for it to come back) and reload this page.';
+      }
+    }
+  }
+
+  // Hydrate from /data/prompt-templates.json on load. Token-gated; nav.js's
+  // patchedFetch auto-injects X-SeekDeep-Token on this path. Falls back to
+  // the in-page demo seed if the server is unreachable.
+  async function hydrateFromBackend() {
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/data/prompt-templates.json', {
+        signal: AbortSignal.timeout(4000),
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const wrap = await r.json();
+      const d = wrap.data || wrap;
+      const list = Array.isArray(d.templates) ? d.templates : [];
+      // Replace TEMPLATES contents in place so the existing references stay valid.
+      TEMPLATES.length = 0;
+      for (const t of list) {
+        TEMPLATES.push({
+          id:        String(t.id || ''),
+          name:      String(t.name || '(unnamed)'),
+          source:    'own',  // GUI is read-only; ownership shown via guild/user IDs
+          vars:      Array.isArray(t.vars) ? t.vars : [],
+          uses:      Number(t.used_count || 0),
+          lastUsed:  _fmtAgo(t.updated_at),
+          author:    '@' + String(t.owner_user_id || '').slice(-6),
+          shared:    null,
+          body:      String(t.prompt || ''),
+          // Extra fields surfaced to the GUI viewer:
+          char_count:  Number(t.char_count || 0),
+          created_at:  String(t.created_at || ''),
+          updated_at:  String(t.updated_at || ''),
+          owner_id:    String(t.owner_user_id || ''),
+          guild_id:    String(t.guild || ''),
+        });
+      }
+      if (!TEMPLATES.length) {
+        paintBackendTag('empty');
+        // Render a single placeholder card so the viewer doesn't look broken
+        active = { id: '_empty', name: '(no templates yet)', source: 'own', vars: [], uses: 0, lastUsed: '—', author: '—', shared: null, body: '▸ No templates saved yet.\n\nIn Discord, run:\n  @SeekDeep template save <name>: <prompt body with {{variables}}>\n\nExample:\n  @SeekDeep template save tldr: Summarize {{text}} in 3 bullets, no filler.' };
+        renderList('');
+        select('_empty');
+        return;
+      }
+      active = TEMPLATES[0];
+      renderList('');
+      select(active.id);
+      paintBackendTag('live');
+    } catch (err) {
+      paintBackendTag('offline');
+      // Demo seed already loaded — leave it. renderList runs below on init.
+    }
   }
 
   function renderList(q) {
@@ -716,6 +814,11 @@ The user wants information density, not company.`,
 
   renderList();
   select(TEMPLATES[0].id);
+  // Replace the demo seed with live data from the bot on load. nav.js's
+  // patchedFetch attaches X-SeekDeep-Token; gui_endpoints._normalize_prompt_
+  // templates flattens the guild→user→name nesting into a flat list with
+  // extracted {{vars}} per body.
+  hydrateFromBackend();
 })();
 </script>
 <script src="nav.js" defer></script>

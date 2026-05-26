@@ -734,6 +734,54 @@ def _normalize_auto_reactions(raw: Any) -> dict:
     return {"rules": rules_out, "builtins": builtins_out}
 
 
+def _normalize_prompt_templates(raw: Any) -> dict:
+    """
+    Bot schema  : {guilds:{<gid>:{<uid>:{<name>:{prompt,createdAt,updatedAt,
+                                                usedCount}}}}}
+    GUI expects : {templates:[{id,name,owner_user_id,guild,prompt,vars,
+                               char_count,used_count,created_at,updated_at}]}
+
+    Flattens the nested guild→user→name structure into a flat list and
+    extracts {{vars}} from each prompt body for the GUI's "Variables"
+    column. Token-gated since prompts often include personal context.
+    """
+    if not isinstance(raw, dict):
+        return {"templates": [], "count": 0}
+    import re as _re
+    var_re = _re.compile(r"\{\{\s*([a-z0-9_-]{1,40})\s*\}\}", _re.IGNORECASE)
+    out: list[dict[str, Any]] = []
+    for gid, g in (raw.get("guilds") or {}).items():
+        if not isinstance(g, dict):
+            continue
+        for uid, u in g.items():
+            if not isinstance(u, dict):
+                continue
+            for name, t in u.items():
+                if not isinstance(t, dict):
+                    continue
+                prompt = str(t.get("prompt") or "")
+                vars_seen: list[str] = []
+                for m in var_re.finditer(prompt):
+                    v = m.group(1).lower()
+                    if v not in vars_seen:
+                        vars_seen.append(v)
+                out.append({
+                    "id":             f"{gid}:{uid}:{name}",
+                    "name":           str(name),
+                    "owner_user_id":  str(uid),
+                    "guild":          str(gid),
+                    "prompt":         prompt,
+                    "vars":           vars_seen,
+                    "char_count":     len(prompt),
+                    "used_count":     int(t.get("usedCount") or 0),
+                    "created_at":     str(t.get("createdAt") or ""),
+                    "updated_at":     str(t.get("updatedAt") or ""),
+                })
+    # Sort newest-updated first; the GUI can re-sort client-side.
+    out.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    return {"templates": out, "count": len(out)}
+
+
 def _normalize_archive_snapshot(raw: Any) -> dict:
     """Empty-state shape for data/archive-snapshot.json so the GUI Archive
     pane can render its "no snapshot yet" message without a JSON parse
@@ -759,6 +807,7 @@ _DATA_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
     "server-stats.json":     _normalize_server_stats,
     "auto-reactions.json":   _normalize_auto_reactions,
     "archive-snapshot.json": _normalize_archive_snapshot,
+    "prompt-templates.json": _normalize_prompt_templates,
 }
 
 
@@ -987,6 +1036,7 @@ def register_gui_endpoints(
         "archive-optout.json",     # per-user opt-out list
         "archive-guild-config.json",  # guild/channel routing IDs
         "archive-snapshot.json",   # per-thread entry metadata + prompts + thumbnails
+        "prompt-templates.json",   # discord user IDs + saved prompt bodies
     }
 
     # ----- GET /data/{file} -----

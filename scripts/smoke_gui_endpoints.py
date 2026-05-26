@@ -262,6 +262,21 @@ def main() -> int:
         check("GET /data/archive-snapshot.json (no token) -> 401",
               r.status_code == 401, f"got {r.status_code}")
 
+    # prompt-templates.json: token-gated + normalized. GUI prompts.html
+    # consumes the flat templates list.
+    if token:
+        r = c.get("/data/prompt-templates.json", headers={"X-SeekDeep-Token": token})
+        check("GET /data/prompt-templates.json (with token) -> 200 (empty-fallback)",
+              r.status_code == 200, f"got {r.status_code}")
+        if r.status_code == 200:
+            body = r.json()
+            d = body.get("data") or body
+            check("  ...returns {templates:[], count:0} shape when file missing",
+                  isinstance(d.get("templates"), list) and "count" in d)
+        r = c.get("/data/prompt-templates.json")
+        check("GET /data/prompt-templates.json (no token) -> 401",
+              r.status_code == 401, f"got {r.status_code}")
+
     # Path traversal in /data should be blocked.
     r = c.get("/data/..%2F.env")
     check("GET /data/..%2F.env -> 400 or 404 (path traversal blocked)",
