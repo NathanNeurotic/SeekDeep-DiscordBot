@@ -2663,9 +2663,15 @@ const SEEKDEEP_BASE = (function() {
       }
     },
     applyGpu(g) {
-      // /gpu (per local_ai_server.py): { allocated_mb, reserved_mb, free_mb, total_mb, used_mb, used_pct, reserved_pct, loaded, keep_resident, device_name }
-      if (g.used_pct != null) {
-        // No direct util % from PyTorch — use reserved_pct as proxy for "busy"
+      // /gpu (per local_ai_server.py): { allocated_mb, reserved_mb, free_mb,
+      // total_mb, used_mb, used_pct, reserved_pct, loaded, keep_resident,
+      // device_name, nvidia_smi:{util_pct, temp_c, power_w, fan_pct, ...} }
+      const smi = g.nvidia_smi || {};
+      // Prefer nvidia-smi util (real GPU utilization) over the
+      // reserved_pct proxy. Falls back when smi isn't reporting.
+      if (smi.util_pct != null) {
+        this.setText('gpuUtil', Math.round(smi.util_pct));
+      } else if (g.used_pct != null) {
         this.setText('gpuUtil', Math.round(g.used_pct));
       }
       const usedGB  = g.used_mb  ? (g.used_mb / 1024)  : null;
@@ -2679,6 +2685,45 @@ const SEEKDEEP_BASE = (function() {
       }
       if (g.device_name) {
         this.setText('gpuUtilNote', g.device_name);
+      }
+      // ---- Temperature / Power / Fan from nvidia-smi --------------------
+      // Were dead "— nvidia-smi pending" placeholders. /gpu now bundles
+      // smi readings as g.nvidia_smi.{temp_c, power_w, power_limit_w, fan_pct}
+      // so we can render them honestly. If smi isn't available (CPU box
+      // or driver hung), leave the dash and surface the smi error in the
+      // note row.
+      if (smi.temp_c != null) {
+        this.setText('gpuTemp', Math.round(smi.temp_c));
+        const note = document.getElementById('gpuTempNote');
+        if (note) {
+          // Heat tiers cribbed from RTX laptop GPU spec sheets — 75 C is
+          // hot but fine, 85 C is throttling-imminent.
+          const t = smi.temp_c;
+          const tier = t < 60 ? 'cool' : t < 75 ? 'normal' : t < 85 ? 'hot' : 'throttling-soon';
+          note.textContent = tier;
+          note.style.color = t < 75 ? '' : (t < 85 ? 'var(--warn)' : 'var(--bad)');
+        }
+      } else {
+        const note = document.getElementById('gpuTempNote');
+        if (note) note.textContent = smi.error ? ('— ' + smi.error.slice(0, 80)) : '— nvidia-smi unavailable';
+      }
+      if (smi.power_w != null) {
+        this.setText('gpuPower', Math.round(smi.power_w));
+        const note = document.getElementById('gpuPowerNote');
+        if (note) {
+          const limit = smi.power_limit_w;
+          if (limit) note.textContent = `${Math.round(smi.power_w)}W of ${Math.round(limit)}W limit`;
+          else note.textContent = `live draw`;
+        }
+      } else {
+        const note = document.getElementById('gpuPowerNote');
+        if (note) note.textContent = smi.error ? ('— ' + smi.error.slice(0, 80)) : '— nvidia-smi unavailable';
+      }
+      // Fan slot doesn't exist as a mini-card but surface in the temp note
+      // when temp is also available — useful diagnostic for "why isn't it cooling".
+      if (smi.fan_pct != null && smi.temp_c != null) {
+        const note = document.getElementById('gpuTempNote');
+        if (note) note.textContent = note.textContent + ' · fan ' + Math.round(smi.fan_pct) + '%';
       }
     },
     setText(id, value) {

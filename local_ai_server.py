@@ -771,10 +771,15 @@ def first_model_device(model: Any):
 def _seekdeep_nvidia_smi_probe() -> dict:
     """Probe the NVIDIA driver for GPU presence *without* needing PyTorch.
 
-    Returns {detected: bool, name?, total_mb?, driver?, error?}. The point
-    is to distinguish "no GPU at all" from "GPU is here, PyTorch just isn't
-    installed yet" — the installer page lied as 'no GPU · CPU mode' for
-    fresh installs with the hardware fine but ML deps not pulled.
+    Returns {detected: bool, name?, total_mb?, driver?, util_pct?, temp_c?,
+    power_w?, power_limit_w?, fan_pct?, error?}. The point is to distinguish
+    "no GPU at all" from "GPU is here, PyTorch just isn't installed yet"
+    — the installer page lied as 'no GPU · CPU mode' for fresh installs
+    with the hardware fine but ML deps not pulled.
+
+    Also reports live util/temp/power/fan so the GPU pane can show real
+    "Temperature: 67°C / Power Draw: 165W / Fan: 42%" instead of "—
+    nvidia-smi pending" placeholders forever.
 
     nvidia-smi ships with the NVIDIA driver on every supported OS, so this
     works before requirements-ml.txt is ever installed. Cheap subprocess
@@ -785,7 +790,9 @@ def _seekdeep_nvidia_smi_probe() -> dict:
     out: dict = {"detected": False}
     try:
         r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
+            ["nvidia-smi",
+             "--query-gpu=name,memory.total,driver_version,utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed",
+             "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=2,
         )
     except FileNotFoundError:
@@ -806,15 +813,24 @@ def _seekdeep_nvidia_smi_probe() -> dict:
     if not line:
         return out
     parts = [p.strip() for p in line[0].split(",")]
+    def _f(s):
+        try:
+            v = s.strip()
+            if not v or v.lower() in ("[n/a]", "n/a", "not supported"):
+                return None
+            return float(v)
+        except Exception:
+            return None
     if len(parts) >= 2:
         out["detected"] = True
         out["name"] = parts[0]
-        try:
-            out["total_mb"] = int(round(float(parts[1])))
-        except Exception:
-            pass
-        if len(parts) >= 3:
-            out["driver"] = parts[2]
+        out["total_mb"] = int(_f(parts[1])) if _f(parts[1]) is not None else None
+        if len(parts) >= 3: out["driver"]        = parts[2] or None
+        if len(parts) >= 4: out["util_pct"]      = _f(parts[3])
+        if len(parts) >= 5: out["temp_c"]        = _f(parts[4])
+        if len(parts) >= 6: out["power_w"]       = _f(parts[5])
+        if len(parts) >= 7: out["power_limit_w"] = _f(parts[6])
+        if len(parts) >= 8: out["fan_pct"]       = _f(parts[7])
     return out
 
 
