@@ -2127,7 +2127,7 @@
           const j = await r.json();
           if (j && j.ok) state = Object.assign(state, j.config || {});
         }
-      } catch {}
+      } catch (err) { window.SeekDeepDebug?.warn('archive/config load', err); }
       render();
     }
     async function save(patch) {
@@ -2454,6 +2454,21 @@
   document.querySelectorAll('.sidebar a[data-mod]').forEach(a => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
+      // Dirty-guard: if the user is leaving the Bot config pane with
+      // unsaved DIRTY rows, prompt before letting them switch. Was:
+      // silent loss every time the user clicked a different sidebar
+      // entry. The DOM state survives across panes (rows aren't
+      // re-rendered), so cancelling the nav recovers fully.
+      const currentPane = document.querySelector('.pane.active');
+      if (currentPane && currentPane.dataset.pane === 'config') {
+        const dirtyCount = [...document.querySelectorAll('.config-row .save')]
+          .filter(s => s.textContent.includes('DIRTY')).length;
+        if (dirtyCount > 0) {
+          if (!confirm(`You have ${dirtyCount} unsaved config change${dirtyCount === 1 ? '' : 's'}. Switch panes anyway?\n\n(Values stay in the form until you reload the page — Save them first, or hit Cancel here to stay on Bot config.)`)) {
+            return;
+          }
+        }
+      }
       activate(a.dataset.mod);
     });
   });
@@ -2515,7 +2530,7 @@ const SEEKDEEP_BASE = (function() {
         try {
           const gr = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
           if (gr.ok) this.applyGpu(await gr.json());
-        } catch {}
+        } catch (err) { window.SeekDeepDebug?.warn('/gpu probe', err); }
       } catch (e) {
         this.failures++;
         // Stay in PROBING for transient hiccups. Flip to OFFLINE after 3
@@ -3053,6 +3068,9 @@ const SEEKDEEP_BASE = (function() {
   // Save button — POST /config with dirty values, fall back to local-only "saved" on offline
   document.getElementById('cfg-save')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    // Multi-window guard: another window saving simultaneously means
+    // last-writer-wins and earlier user thinks their save took effect.
+    if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple('Save config to .env')) return;
     // Validation gate — refuse to save if any field has a CFG_VALIDATORS
     // error active. Was: silently sent garbage and let the server 422.
     validateAll();
@@ -3252,7 +3270,7 @@ const SEEKDEEP_BASE = (function() {
             if (stopBtn) { stopBtn.textContent = 'Start'; stopBtn.style.color = 'var(--good)'; }
           }
         }
-      } catch {} // offline → leave the visual default
+      } catch (err) { window.SeekDeepDebug?.warn('launcher-card status', err); }  // offline → leave the visual default
     }
   })();
 
@@ -3910,10 +3928,11 @@ const SEEKDEEP_BASE = (function() {
       try {
         sse = new EventSource(SEEKDEEP_BASE + '/logs/stream');
         sse.onmessage = (e) => {
-          try { const line = JSON.parse(e.data); if (typeof line === 'string') append(line); } catch {}
+          try { const line = JSON.parse(e.data); if (typeof line === 'string') append(line); }
+          catch (err) { window.SeekDeepDebug?.warn('SSE log.line parse', err); }
         };
         sse.onerror = () => { sse?.close(); sse = null; };
-      } catch {}
+      } catch (err) { window.SeekDeepDebug?.warn('EventSource /logs/stream', err); }
     }
 
     function onLogsActive() {
@@ -4220,7 +4239,7 @@ const SEEKDEEP_BASE = (function() {
           if (resetIdx >= 0) sel.insertBefore(opt, sel.options[resetIdx]);
           else sel.appendChild(opt);
         }
-      } catch {}
+      } catch (err) { window.SeekDeepDebug?.warn('cpPersona /persona hydrate', err); }
     })();
 
     let sendCtl = null;  // AbortController for in-flight /chat
@@ -5072,7 +5091,7 @@ root.render(<App />);
       for (const ln of lines.slice(-5)) {
         appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
       }
-    } catch {}
+    } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); }
   }
   if (!attachLogBus()) {
     let n = 0; const iv = setInterval(() => { if (attachLogBus() || ++n > 30) clearInterval(iv); }, 250);

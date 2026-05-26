@@ -149,6 +149,184 @@
     };
   })();
 
+  // ===== Cross-browser polyfills ===============================================
+  // The GUI uses AbortSignal.timeout(ms) heavily — easier than the explicit
+  // AbortController + setTimeout dance. It's Chrome 103+ / Firefox 100+ /
+  // Safari 15.4+. Tauri WebView 2 ships Chromium 100+ so this is mostly to
+  // cover the case where a user opens the static HTML in an older browser
+  // (Firefox 95 ESR, etc.) — the page no longer hard-crashes with
+  // "TypeError: AbortSignal.timeout is not a function".
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'function') {
+    AbortSignal.timeout = function (ms) {
+      const ctl = new AbortController();
+      setTimeout(() => {
+        try { ctl.abort(new DOMException('TimeoutError', 'TimeoutError')); }
+        catch { ctl.abort(); }
+      }, Math.max(0, Number(ms) || 0));
+      return ctl.signal;
+    };
+  }
+  // structuredClone landed Chrome 98 / Firefox 94 / Safari 15.4. Nothing
+  // currently depends on it, but defensive — falls back to JSON round-trip
+  // which covers ~95% of cases (no functions, no DOM nodes, no BigInt).
+  if (typeof window.structuredClone !== 'function') {
+    window.structuredClone = (v) => {
+      try { return JSON.parse(JSON.stringify(v)); }
+      catch { return v; }
+    };
+  }
+
+  // ===== Global error logger ===================================================
+  // Surface silent failures so empty `catch {}` patterns elsewhere don't hide
+  // real bugs. Two hooks:
+  //   1. window.error                — uncaught exceptions, syntax errors,
+  //                                    failing image/script loads.
+  //   2. window.unhandledrejection   — Promises that reject without a .catch.
+  // Output:
+  //   - console.warn with a [SeekDeep] prefix (always)
+  //   - Toast via window.SeekDeepNotify.toast() when it's loaded, throttled
+  //     to one toast per 10s per error message so a flapping endpoint
+  //     can't spam the user with stacks.
+  (function installErrorSurfacing() {
+    const recent = new Map();  // msg -> lastShownTs
+    const TOAST_THROTTLE_MS = 10000;
+    function surface(label, detail) {
+      try {
+        const msg = String(detail || '').slice(0, 600);
+        if (!msg) return;
+        const key = label + '::' + msg.slice(0, 120);
+        const now = Date.now();
+        if (recent.get(key) && (now - recent.get(key)) < TOAST_THROTTLE_MS) {
+          console.warn('[SeekDeep ' + label + '] (throttled) ' + msg);
+          return;
+        }
+        recent.set(key, now);
+        console.warn('[SeekDeep ' + label + '] ' + msg);
+        const sdn = window.SeekDeepNotify;
+        if (sdn && typeof sdn.toast === 'function') {
+          sdn.toast({ tone: 'bad', title: 'SeekDeep ' + label, body: msg.slice(0, 200), ttl: 5500 });
+        }
+      } catch { /* logging itself failed — don't loop */ }
+    }
+    window.addEventListener('error', (e) => {
+      // Filter out cross-origin script load errors (no actionable detail)
+      if (!e || !e.message) return;
+      // Skip noise from third-party CDN scripts that block (React/Babel UMD on chat.html / app.html)
+      if (e.filename && /unpkg\.com|cdn\./i.test(e.filename)) return;
+      surface('JS error', `${e.message} @ ${e.filename || '(unknown)'}:${e.lineno || '?'}`);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const r = e && e.reason;
+      if (!r) return;
+      // AbortError is a normal user-cancel signal; skip toast.
+      if (r.name === 'AbortError' || /aborted/i.test(String(r.message || r))) return;
+      // TimeoutError from AbortSignal.timeout(...) is benign on offline-fallback paths
+      if (r.name === 'TimeoutError' || /timed out/i.test(String(r.message || r))) return;
+      surface('unhandled promise', String(r.message || r));
+    });
+    // Expose so other modules can opt in to the same logger
+    window.SeekDeepDebug = { warn: (label, detail) => surface(label, detail) };
+  })();
+
+  // ===== Multi-window detection (BroadcastChannel) ============================
+  // Two SeekDeep windows open simultaneously can fight over destructive ops:
+  // each clicks "Reload .env" → both restart the sidecar → race; both POST
+  // dirty config updates → last writer wins, earlier user thinks they saved.
+  // This module:
+  //   1. Establishes a BroadcastChannel("seekdeep-app") on every nav.js-using page
+  //   2. Each window announces itself on load and replies to "who's there" pings
+  //   3. Builds a Set of peer window IDs (heartbeat every 5s, expire at 12s)
+  //   4. Exposes window.SeekDeepWindows = { count(), peers(), confirmIfMultiple(msg) }
+  //   5. Renders a small "N other SeekDeep windows open" pill in the topnav when count > 1
+  // Dangerous-action wrappers (Reload .env / Force kill / Lock cache) can call
+  // confirmIfMultiple() to gate behind a confirm() dialog.
+  (function installMultiWindowGuard() {
+    if (typeof BroadcastChannel !== 'function') {
+      // Older browsers (Safari < 15.4 etc) skip the guard. Single-window
+      // behavior remains correct; we just lose the "other windows" warning.
+      window.SeekDeepWindows = { count: () => 1, peers: () => [], confirmIfMultiple: () => true };
+      return;
+    }
+    const SELF_ID = 'sd-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+    const HEARTBEAT_MS = 5000;
+    const EXPIRE_MS    = 12000;
+    const peers = new Map();  // id -> {lastSeen, page}
+    const channel = new BroadcastChannel('seekdeep-app');
+    function activePage() {
+      try { return (location.pathname.split('/').pop() || 'index.html').toLowerCase(); }
+      catch { return 'unknown'; }
+    }
+    function broadcast(type, extra) {
+      try { channel.postMessage({ type, from: SELF_ID, page: activePage(), ts: Date.now(), ...(extra || {}) }); }
+      catch {}
+    }
+    function expireStale() {
+      const cutoff = Date.now() - EXPIRE_MS;
+      for (const [id, info] of peers) {
+        if (info.lastSeen < cutoff) peers.delete(id);
+      }
+      renderPill();
+    }
+    function renderPill() {
+      // Render in topnav.row if it exists; harmless to inject everywhere.
+      let pill = document.getElementById('sd-multi-window-pill');
+      const n = peers.size;
+      if (n === 0) {
+        if (pill) pill.remove();
+        return;
+      }
+      if (!pill) {
+        const host = document.querySelector('.topnav .row') || document.querySelector('.topnav') || document.body;
+        if (!host) return;
+        pill = document.createElement('span');
+        pill.id = 'sd-multi-window-pill';
+        pill.className = 'pill warn';
+        pill.style.cssText = 'padding: 3px 9px; font-size: 10px; letter-spacing: 0.14em; cursor: default;';
+        pill.title = '';
+        host.appendChild(pill);
+      }
+      pill.innerHTML = '<span class="dot"></span>' + n + ' OTHER WINDOW' + (n === 1 ? '' : 'S');
+      pill.title = [...peers.values()].map(p => p.page).join(', ') + '\n\nDestructive actions (Reload .env, Force kill, Lock cache, Save config) will prompt for confirmation while other windows are open, to avoid races.';
+    }
+    channel.addEventListener('message', (e) => {
+      const m = e.data || {};
+      if (!m.from || m.from === SELF_ID) return;
+      // hello/heartbeat/pong → record peer; bye → drop
+      if (m.type === 'bye') {
+        peers.delete(m.from);
+        renderPill();
+        return;
+      }
+      peers.set(m.from, { lastSeen: m.ts || Date.now(), page: m.page || 'unknown' });
+      renderPill();
+      // Reply to a hello with our own pong so the new window learns about us
+      if (m.type === 'hello' || m.type === 'whoIsThere') {
+        broadcast('pong');
+      }
+    });
+    // Announce + ask who's there. Heartbeat thereafter.
+    broadcast('hello');
+    broadcast('whoIsThere');
+    setInterval(() => { broadcast('heartbeat'); expireStale(); }, HEARTBEAT_MS);
+    // Notify peers we're going away (browser may not deliver this, but try)
+    window.addEventListener('beforeunload', () => broadcast('bye'));
+
+    window.SeekDeepWindows = {
+      id: SELF_ID,
+      count: () => peers.size + 1,
+      peers: () => [...peers.values()],
+      confirmIfMultiple: (action) => {
+        if (peers.size === 0) return true;
+        const list = [...peers.values()].map(p => '  · ' + p.page).join('\n');
+        return confirm(
+          'You have ' + peers.size + ' other SeekDeep window' + (peers.size === 1 ? '' : 's') + ' open:\n' +
+          list + '\n\nProceed with "' + action + '" anyway?\n\n' +
+          'This action affects the shared local stack and may race with the other window(s).'
+        );
+      },
+    };
+  })();
+
   const PAGES = [
     { id: 'index',        title: 'Hub',                 path: 'index.html',        glyph: '⌂', meta: '01 · home' },
     { id: 'app',          title: 'Control Center',      path: 'app.html',          glyph: '⌘', meta: '02 · wired · events bus' },
