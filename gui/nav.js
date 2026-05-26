@@ -1016,5 +1016,9 @@
     inject('ml-deps.js', null);
     // model-install.js · first-use HF/Ollama weight-download banner (designer-shipped)
     inject('model-install.js', null);
+    // updater.js · Tauri-only update checker (pings GitHub releases API,
+    // surfaces a notify.banner if a newer stable tag exists). Self-gates
+    // to chat.html + Tauri context; harmless to inject everywhere.
+    inject('updater.js', null);
   })();
 })();

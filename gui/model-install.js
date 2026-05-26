@@ -75,12 +75,28 @@
 
   const BANNER_ID = 'sd-model-install-banner';
 
+  // Persistent dismiss survives reload. Keyed by missing-set hash so a new
+  // missing model still surfaces a fresh banner.
+  const DISMISS_KEY = 'sd-model-install-dismiss';
+  function missingHash(state) {
+    return ((state.missing || []).map((m) => m.role + ':' + m.model_id).sort().join('|'))
+      + '#ollamaDown=' + (!!(state.ollama_required && !state.ollama_available));
+  }
+  function isDismissed(state) {
+    try { return localStorage.getItem(DISMISS_KEY) === missingHash(state); }
+    catch { return false; }
+  }
+  function markDismissed(state) {
+    try { localStorage.setItem(DISMISS_KEY, missingHash(state)); } catch {}
+  }
+
   function clearBanner() {
     const sdn = notify();
     if (sdn) sdn.dismiss(BANNER_ID);
   }
 
   function showBanner(state) {
+    if (isDismissed(state)) return; // user said "stop nagging me about this set"
     const sdn = notify();
     if (!sdn) {
       console.warn('[SeekDeep model-install] notify.js not loaded; state:', state);
@@ -136,7 +152,7 @@
       title,
       body,
       primary,
-      secondary: { label: 'Dismiss', onClick: ({ close }) => close() },
+      secondary: { label: 'Dismiss', onClick: ({ close }) => { markDismissed(state); close(); } },
       dismissible: false,
       sticky: true,
     });

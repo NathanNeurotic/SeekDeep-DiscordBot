@@ -19,7 +19,7 @@
  * the next 'activate' phase.
  */
 
-const CACHE_VERSION = 'seekdeep-shell-v10.35.0-6';
+const CACHE_VERSION = 'seekdeep-shell-v10.35.0-7';
 const SHELL = [
   'chat.html',
   'styles.css',
@@ -37,6 +37,7 @@ const SHELL = [
   'notify.js',
   'ml-deps.js',
   'model-install.js',
+  'updater.js',
   'seekdeep-loading.html',
   // add-model.html · 4-step wizard (designer zip 43); model-install.js's
   // banner deep-links into it for the "Open the full wizard" CTA.

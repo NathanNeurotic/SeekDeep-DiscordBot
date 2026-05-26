@@ -40,10 +40,20 @@ use tauri::{AppHandle, Emitter, Manager};
 // when false (default), close-X means "hide to tray, keep the server running";
 // when true (tray Quit menu item set it), close-X means "actually exit + kill
 // the child". The tray menu's Quit handler is the only thing that flips it.
+//
+// `intentional_kill` tells the crash-recovery watchdog NOT to respawn the
+// child when it dies — because the user clicked Restart, Quit, or invoked
+// install_python_deps which we wrap in a restart. Auto-consumed by the
+// watchdog: it reads + clears in one shot.
+//
+// `respawn_attempts` is the consecutive-crash counter. Resets every time
+// the server stays alive long enough to be considered healthy.
 #[derive(Default)]
 pub struct SidecarState {
     pub child: Mutex<Option<Child>>,
     pub quit_requested: Mutex<bool>,
+    pub intentional_kill: Mutex<bool>,
+    pub respawn_attempts: Mutex<u32>,
 }
 
 /// Probe 127.0.0.1:7865 with a short connect timeout. True = the AI server
@@ -201,6 +211,12 @@ pub fn deps_present(python: &Path) -> bool {
 /// Spawn `python local_ai_server.py` with cwd = runtime dir and stdout/stderr
 /// redirected to <log_dir>/server.log. Returns the child handle so the caller
 /// can store it for shutdown.
+///
+/// Sets SEEKDEEP_EMIT_LOG_LINES=on in the child env so the bus pumps
+/// `log.line` events; that means app.html's logs viewer lights up LIVE
+/// instead of falling back to 3s /logs/tail polling. Cheap to enable
+/// for the Tauri single-user case (event rate is bounded and the Tauri
+/// shell is the only consumer).
 pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Child, String> {
     fs::create_dir_all(log_dir).map_err(|e| format!("mkdir {log_dir:?}: {e}"))?;
     let log_path = log_dir.join("server.log");
@@ -210,6 +226,8 @@ pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Chi
     let child = Command::new(python)
         .arg("local_ai_server.py")
         .current_dir(runtime)
+        .env("SEEKDEEP_EMIT_LOG_LINES", "on")
+        .env("SEEKDEEP_TAURI_SHELL", "1")
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .spawn()
@@ -254,15 +272,122 @@ pub fn emit_status(app: &AppHandle, code: &str) {
     let _ = app.emit("sidecar:status", serde_json::json!({ "code": code }));
 }
 
-/// Best-effort kill of the held child. Called on window-close / app-exit.
-/// We don't propagate errors because shutdown is best-effort anyway.
+/// Best-effort kill of the held child. Called on window-close / app-exit /
+/// tray Restart / install_python_deps wrap-up. Sets `intentional_kill` so
+/// the crash-recovery watchdog knows not to respawn — only unexpected
+/// exits trigger auto-respawn.
 pub fn kill_child(state: &SidecarState) {
+    if let Ok(mut g) = state.intentional_kill.lock() {
+        *g = true;
+    }
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
     }
+}
+
+/// Crash-recovery watchdog: polls the held child every 3 s. When it sees the
+/// child has exited AND the exit wasn't `intentional_kill`d, it triggers a
+/// fresh boot_sequence with exponential backoff (1 s → 2 s → 4 s → 8 s …
+/// capped at 30 s) up to MAX_RESPAWN_ATTEMPTS consecutive crashes. After
+/// MAX_RESPAWN_ATTEMPTS, gives up and emits `CRASH_GAVE_UP` so the loading
+/// overlay surfaces the dead state.
+///
+/// The attempt counter is held in `respawn_attempts` and decremented to 0
+/// every HEALTHY_RESET_SEC seconds the server stays alive — so a one-off
+/// crash doesn't poison the budget for the rest of the session.
+///
+/// Started by `boot_sequence` after every successful spawn. Self-terminates
+/// once it triggers a respawn (the new boot_sequence starts a fresh
+/// watchdog). Also self-terminates when quit_requested flips.
+const MAX_RESPAWN_ATTEMPTS: u32 = 5;
+const POLL_INTERVAL_SEC: u64 = 3;
+const HEALTHY_RESET_SEC: u64 = 120;
+
+pub fn start_crash_watchdog(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut alive_secs: u64 = 0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(POLL_INTERVAL_SEC));
+
+            let state = app.state::<SidecarState>();
+            // App-shutdown gate
+            let quit = state.quit_requested.lock().map(|g| *g).unwrap_or(false);
+            if quit { return; }
+
+            // Check child status. Three relevant cases:
+            //   1. handle is None → kill_child took it (or never spawned)
+            //   2. try_wait Ok(None) → still running
+            //   3. try_wait Ok(Some(_)) or Err → exited / unreachable
+            let exited = {
+                let mut guard = match state.child.lock() {
+                    Ok(g) => g,
+                    Err(_) => return, // poisoned mutex; bail
+                };
+                match guard.as_mut() {
+                    None => true,
+                    Some(c) => matches!(c.try_wait(), Ok(Some(_)) | Err(_)),
+                }
+            };
+
+            if !exited {
+                // Still alive. Bump the alive counter and reset attempts if
+                // we've been healthy for HEALTHY_RESET_SEC.
+                alive_secs += POLL_INTERVAL_SEC;
+                if alive_secs >= HEALTHY_RESET_SEC {
+                    if let Ok(mut g) = state.respawn_attempts.lock() { *g = 0; }
+                    alive_secs = 0;
+                }
+                continue;
+            }
+
+            // Child exited. Was it intentional?
+            let intentional = {
+                let mut g = match state.intentional_kill.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                let prev = *g;
+                *g = false; // consume the flag
+                prev
+            };
+            if intentional {
+                // User-initiated kill. boot_sequence will start a new
+                // watchdog if/when a fresh spawn happens. We're done.
+                return;
+            }
+
+            // Unexpected exit. Bump the attempt counter; bail if over budget.
+            let attempts = {
+                let mut g = match state.respawn_attempts.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                *g += 1;
+                *g
+            };
+            if attempts > MAX_RESPAWN_ATTEMPTS {
+                emit_status(&app, "CRASH_GAVE_UP");
+                return;
+            }
+
+            // Clear the dead child handle so boot_sequence's spawn populates
+            // a fresh one.
+            if let Ok(mut g) = state.child.lock() { *g = None; }
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s.
+            let backoff_ms = (1u64 << (attempts - 1).min(5)).saturating_mul(1000).min(30_000);
+            emit_status(&app, "CHILD_CRASH_RESPAWNING");
+            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+
+            // Re-enter boot_sequence; it will start its own watchdog on
+            // success. We exit here so we don't double-watch.
+            boot_sequence(app.clone());
+            return;
+        }
+    });
 }
 
 /// The top-level boot sequence — called from setup() in lib.rs.
@@ -317,6 +442,8 @@ pub fn boot_sequence(app: AppHandle) {
                 *guard = Some(child);
             }
             emit_status(&app, "SPAWNING");
+            // Watch for unexpected exits and respawn with backoff.
+            start_crash_watchdog(app.clone());
         }
         Err(_e) => {
             emit_status(&app, "SPAWN_FAILED");

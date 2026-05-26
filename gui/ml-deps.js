@@ -47,12 +47,25 @@
 
   const BANNER_ID = 'sd-ml-deps-banner';
 
+  // Persistent dismiss — survives reload. Keyed by the missing-set hash so
+  // dismissing "torch, diffusers" doesn't suppress a future "transformers"
+  // banner. localStorage lives as long as the WebView's profile dir.
+  const DISMISS_KEY = 'sd-ml-deps-dismiss';
+  function missingHash(missing) {
+    return [...missing].sort().join('|');
+  }
+  function isDismissed(missing) {
+    try { return localStorage.getItem(DISMISS_KEY) === missingHash(missing); }
+    catch { return false; }
+  }
+  function markDismissed(missing) {
+    try { localStorage.setItem(DISMISS_KEY, missingHash(missing)); } catch {}
+  }
+
   function showBanner(missing) {
+    if (isDismissed(missing)) return; // user said "stop nagging me about these"
     const sdn = notify();
     if (!sdn) {
-      // Notify primitive not loaded — fall back to a minimal console hint
-      // rather than crashing. The Tauri shell + chat page still work; the
-      // user just doesn't see the install banner.
       console.warn('[SeekDeep ml-deps] notify.js not loaded; missing:', missing);
       return;
     }
@@ -62,7 +75,7 @@
       title: 'ML libraries not installed',
       body: 'Local /chat, /image, and /vision will return errors until installed. Missing: <code>' + missing.join(', ') + '</code>',
       primary: { label: 'Install (~2 GB)', onClick: ({ close }) => { openInstallModal(); /* leave banner up until install completes */ } },
-      secondary: { label: 'Dismiss', onClick: ({ close }) => close() },
+      secondary: { label: 'Dismiss', onClick: ({ close }) => { markDismissed(missing); close(); } },
       dismissible: false,
       sticky: true,
     });

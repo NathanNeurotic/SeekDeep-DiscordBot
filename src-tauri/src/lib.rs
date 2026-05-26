@@ -71,6 +71,61 @@ fn restart_sidecar(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Compare this build's version (from CARGO_PKG_VERSION, sourced from
+/// package.json) against the latest GitHub release tag. Returns:
+///   { current, latest, update_available, release_url }
+///
+/// Synchronous std::process call to `curl` to avoid pulling in reqwest +
+/// a TLS stack just for a single GET. Curl ships with Windows since
+/// 1809 (April 2018) and is part of the base macOS + Linux installs we
+/// support, so it's a safe assumption.
+///
+/// Called by the frontend on chat.html load. Surfaces a toast / banner
+/// (via notify.js) if a newer tag exists upstream.
+#[tauri::command]
+fn check_for_update() -> Result<serde_json::Value, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let url = "https://api.github.com/repos/NathanNeurotic/SeekDeep-DiscordBot/releases/latest";
+    let out = std::process::Command::new("curl")
+        .args([
+            "-s", "-L",
+            "-H", "Accept: application/vnd.github+json",
+            "-H", "User-Agent: SeekDeep-Tauri",
+            "--max-time", "8",
+            url,
+        ])
+        .output()
+        .map_err(|e| format!("curl invocation failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("curl exited {}", out.status));
+    }
+    let body = String::from_utf8_lossy(&out.stdout).to_string();
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("parse GitHub response: {e}"))?;
+    let latest_tag = parsed.get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+    let release_url = parsed.get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases")
+        .to_string();
+    // Naive semver compare — current/latest are both "X.Y.Z" so str cmp
+    // works in 99% of cases. The "nightly" tag (no version, no .) is
+    // skipped explicitly.
+    let update_available = !latest_tag.is_empty()
+        && latest_tag != "nightly"
+        && latest_tag != current
+        && latest_tag > current.as_str();
+    Ok(serde_json::json!({
+        "current": current,
+        "latest": latest_tag,
+        "update_available": update_available,
+        "release_url": release_url,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -81,6 +136,7 @@ pub fn run() {
             retry_spawn,
             open_external,
             restart_sidecar,
+            check_for_update,
         ])
         .setup(|app| {
             // --- System tray ---------------------------------------------
