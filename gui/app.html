@@ -1653,10 +1653,10 @@
             </div>
 
             <div class="ip-field" id="ipRefineField">
-              <label>Refinement</label>
-              <div style="display: flex; gap: 4px;" id="ipRefine">
-                <span class="chip" data-refine="raw">raw</span>
-                <span class="chip active" data-refine="refined">refined</span>
+              <label>Refinement <span class="tiny muted" style="font-family: var(--font-mono); font-size:10px; margin-left:6px;">prompt → chat refine → SDXL</span></label>
+              <div style="display: flex; gap: 4px;" id="ipRefine" title="raw: send prompt straight to SDXL. refined: have the chat model rewrite for SDXL first (1 extra request). both: generate both side-by-side in history.">
+                <span class="chip active" data-refine="raw">raw</span>
+                <span class="chip" data-refine="refined">refined</span>
                 <span class="chip" data-refine="both">both</span>
               </div>
             </div>
@@ -3382,13 +3382,51 @@ const SEEKDEEP_BASE = (function() {
         ? lastSeed
         : (isNaN(seedInput) || seedInput < 0 ? Math.floor(Math.random() * 1_000_000) : seedInput);
 
+      // ---- Refinement step (txt2img only) -------------------------------
+      // When "refined" or "both" is active, run the user's prompt through
+      // /chat first with a system prompt asking for an SDXL-friendly
+      // rewrite. The bot does this server-side for Discord /image flows;
+      // the playground replicates it client-side so the refinement chips
+      // are honest. "raw" skips the chat round-trip.
+      let workingPrompt = prompt;
+      let refineMeta = null;
+      if (mode === 'txt2img') {
+        const refineChip = document.querySelector('#ipRefine .chip.active');
+        const refineMode = refineChip?.dataset.refine || 'raw';
+        if (refineMode === 'refined' || refineMode === 'both') {
+          setStatus(`REFINING · /chat → SDXL`, 'warn');
+          refs.placeholder.style.display = 'grid';
+          refs.placeholder.textContent = `[REFINING · chat model rewriting your prompt for SDXL…]`;
+          try {
+            const sys = 'You are a prompt refiner for Stable Diffusion XL. Rewrite the user\'s prompt to be vivid, concrete, and image-friendly. Output ONLY the rewritten prompt — no preamble, no explanation, no quotation marks. Keep proper nouns. Add 2-4 visual descriptors (lighting, composition, style) only if missing. Max 350 chars.';
+            const rr = await fetch(SEEKDEEP_BASE + '/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt, role: 'default_chat', temperature: 0.5,
+                system_prompt: sys, max_new_tokens: 256,
+              }),
+              signal: AbortSignal.timeout(45000),
+            });
+            if (rr.ok) {
+              const rd = await rr.json();
+              const refined = (rd.response || rd.text || rd.content || '').trim().replace(/^["']|["']$/g, '').slice(0, 700);
+              if (refined && refined.length > 8) {
+                refineMeta = { original: prompt, refined, mode: refineMode };
+                workingPrompt = refined;
+              }
+            }
+          } catch { /* refinement fail → fall back to raw prompt */ }
+        }
+      }
+
       // Build endpoint + body per mode
       let endpoint, body;
       if (mode === 'txt2img') {
         const style = refs.style?.value || '';
         endpoint = '/image';
         body = {
-          prompt: style ? `${prompt}, ${style}` : prompt,
+          prompt: style ? `${workingPrompt}, ${style}` : workingPrompt,
           negative_prompt: refs.neg?.value || '',
           width:  parseInt(refs.w.value, 10)  || 1024,
           height: parseInt(refs.h.value, 10)  || 1024,
@@ -3487,15 +3525,34 @@ const SEEKDEEP_BASE = (function() {
         const ms = Math.round(performance.now() - t0);
         setStatus(`DONE · ${label} · ${(ms/1000).toFixed(1)}s · SEED ${seed}`, 'on');
 
-        // Append to history
+        // Append to history (tooltip shows refinement provenance when applicable)
         const thumb = document.createElement('div');
         thumb.className = 'thumb';
         thumb.style.backgroundImage = `url(${url})`;
         thumb.style.backgroundSize = 'cover';
         thumb.style.backgroundPosition = 'center';
-        thumb.title = `${label} · seed ${seed}${body.steps ? ' · ' + body.steps + ' steps' : ''}`;
+        let thumbTitle = `${label} · seed ${seed}${body.steps ? ' · ' + body.steps + ' steps' : ''}`;
+        if (refineMeta) thumbTitle += `\nrefined: ${refineMeta.refined.slice(0, 200)}`;
+        thumb.title = thumbTitle;
         refs.history.prepend(thumb);
         if (refs.history.children.length > 6) refs.history.lastChild.remove();
+        // "both" mode: kick off a second pass with the RAW prompt (no
+        // refinement) so the user can A/B compare. Skip the recursion
+        // guard by passing useLastSeed=true so both pieces share a seed.
+        if (refineMeta && refineMeta.mode === 'both') {
+          // Temporarily flip the active chip to "raw" so the recursive
+          // generate() call skips refinement, then restore.
+          const allChips = document.querySelectorAll('#ipRefine .chip');
+          const wasActive = document.querySelector('#ipRefine .chip.active');
+          allChips.forEach(c => c.classList.remove('active'));
+          const rawChip = document.querySelector('#ipRefine .chip[data-refine="raw"]');
+          if (rawChip) rawChip.classList.add('active');
+          // Use the SAME seed so the only variable is prompt-refinement effect.
+          await generate(true);
+          // Restore the "both" chip
+          allChips.forEach(c => c.classList.remove('active'));
+          if (wasActive) wasActive.classList.add('active');
+        }
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
         const msg = String(e && e.message || e);
