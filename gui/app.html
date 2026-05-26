@@ -931,7 +931,7 @@
               <div class="sec-body">
                 <div class="config-row">
                   <div><div class="key">DISCORD_TOKEN</div><div class="desc">Bot token from the Discord developer portal · required.</div></div>
-                  <input type="password" value="••••••••••••••••••••••••••••••••••" class="mono" />
+                  <input type="password" value="" class="mono" placeholder="(set in .env · redacted by /config)" />
                   <span class="save">SAVED</span>
                 </div>
                 <div class="config-row">
@@ -946,8 +946,8 @@
                 </div>
                 <div class="config-row">
                   <div><div class="key">SEEKDEEP_ADMIN_IDS</div><div class="desc">User IDs that get queue priority + persona/digest perms.</div></div>
-                  <input value="182394483920," class="mono" />
-                  <span class="save" style="color: var(--warn);">DIRTY</span>
+                  <input value="" class="mono" placeholder="(empty · comma-separated)" />
+                  <span class="save">SAVED</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">MAX_DISCORD_CHARS</div><div class="desc">Hard cap before SeekDeep splits an answer across messages.</div></div>
@@ -2567,6 +2567,56 @@ const SEEKDEEP_BASE = (function() {
     el.addEventListener('change', () => markDirty(el));
     el.addEventListener('input',  () => markDirty(el));
   });
+
+  // "Reload from disk" button — GET /config and populate every .config-row
+  // whose .key textContent matches a returned env key. Secrets come back
+  // redacted as "*****" so we just clear the input (browser shows placeholder
+  // "set in .env · redacted by /config" instead of fake dots).
+  (function wireConfigReload() {
+    const btn = [...document.querySelectorAll('.head-row .actions button')].find(b =>
+      (b.textContent || '').toLowerCase().trim() === 'reload from disk');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Loading…';
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/config', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const env = (data && data.env) || {};
+        let populated = 0, redacted = 0;
+        document.querySelectorAll('.config-row').forEach(row => {
+          const keyEl = row.querySelector('.key');
+          if (!keyEl) return;
+          const key = keyEl.textContent.trim();
+          if (!(key in env)) return;
+          const input = row.querySelector('input, select');
+          if (!input) return;
+          const v = env[key];
+          if (v === '*****') {
+            // Secret — leave the input empty so the placeholder shows
+            input.value = '';
+            redacted++;
+          } else {
+            input.value = String(v || '');
+            populated++;
+          }
+          const save = row.querySelector('.save');
+          if (save) { save.textContent = 'SAVED'; save.style.color = ''; }
+        });
+        if (typeof recountDirty === 'function') recountDirty();
+        btn.textContent = `Loaded ${populated} · ${redacted} redacted`;
+        setTimeout(() => { btn.textContent = orig; }, 2400);
+      } catch (err) {
+        btn.textContent = 'Offline · /config unreachable';
+        btn.style.color = 'var(--warn)';
+        setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  })();
 
   // Save button — POST /config with dirty values, fall back to local-only "saved" on offline
   document.getElementById('cfg-save')?.addEventListener('click', async (e) => {
