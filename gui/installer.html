@@ -730,15 +730,20 @@
           <div class="step-of">STEP <span id="stepOfNum">01</span> / 09</div>
         </div>
 
+        <!-- Persistent "skip this wizard" banner for Tauri users. Lives OUTSIDE
+             the step-panes so it shows on EVERY step, not just Welcome.
+             Hidden on non-Tauri loads (source-from-git installs still need
+             this wizard). Wired in the maybeShowTauriSkipBanner() IIFE
+             near the bottom of this file. -->
+        <div id="tauriSkipBanner" style="display:none; margin-bottom: 20px; padding: 14px 18px; background: rgba(45,212,255,0.06); border: 1px solid color-mix(in oklab, var(--cyan-1) 35%, transparent); border-radius: var(--r-md);">
+          <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--cyan-1); text-transform: uppercase; margin-bottom: 6px;">▸ YOU CAN SKIP THIS WIZARD</div>
+          <div style="font-size: 13px; line-height: 1.6; color: var(--hull);">
+            You're running SeekDeep through the desktop shell — the .msi already did steps 1-8 for you. The local AI server is up, Python deps are installed, and the tray icon manages everything. Every "Install" button below is misleading for your install (you already have Node, Python, etc — that's how this page is even loading). Free to keep scrolling out of curiosity; nothing here is required.
+          </div>
+        </div>
+
         <!-- ============ STEP 1 — WELCOME ============ -->
         <section class="step-pane active" data-step="welcome">
-          <div id="tauriSkipBanner" style="display:none; margin-bottom: 20px; padding: 14px 18px; background: rgba(45,212,255,0.06); border: 1px solid color-mix(in oklab, var(--cyan-1) 35%, transparent); border-radius: var(--r-md);">
-            <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--cyan-1); text-transform: uppercase; margin-bottom: 6px;">▸ YOU CAN SKIP THIS WIZARD</div>
-            <div style="font-size: 13px; line-height: 1.6; color: var(--hull);">
-              You're running SeekDeep through the desktop shell, which already did steps 1-8 for you. The local AI server is up, Python deps are installed, and the launcher manages everything from the system tray.
-              This wizard is preserved for source-from-git installs — feel free to keep scrolling if you want to understand what was set up, but you don't need to run any commands.
-            </div>
-          </div>
           <p class="lede">SeekDeep runs entirely on your own machine. This wizard will check your system, install the bot, configure Discord, download models, and bring up the full local stack. <strong style="color:var(--hull);">Nothing leaves the box.</strong></p>
 
           <div class="welcome-grid">
@@ -1391,7 +1396,11 @@ const SEEKDEEP_BASE = (function() {
     if (status) row.classList.add(status);
     if (read != null) row.querySelector('[data-read]').textContent = read;
   }
-  async function probeAiHealth(timeoutMs = 1200) {
+  async function probeAiHealth(timeoutMs = 6000) {
+    // 6s default — /health calls ollama_available() (up to 2s) + iterates
+    // every chat role to resolve backends. The previous 1.2s was way too
+    // tight; healthy installs were showing "timeout" because the server
+    // was just slow-but-fine. Same root cause as the chat.html cLIVE fix.
     try {
       const ctl = new AbortController();
       const tm = setTimeout(() => ctl.abort(), timeoutMs);
@@ -1406,7 +1415,9 @@ const SEEKDEEP_BASE = (function() {
   }
   async function probeAiGpu() {
     try {
-      const r = await fetch(SEEKDEEP_BASE + '/gpu', { signal: AbortSignal.timeout(1200) });
+      // 4s — /gpu can stall briefly on torch.cuda.mem_get_info() when VRAM
+      // is fragmented or torch isn't installed. 1.2s was too tight.
+      const r = await fetch(SEEKDEEP_BASE + '/gpu', { signal: AbortSignal.timeout(4000) });
       if (!r.ok) return null;
       return await r.json();
     } catch { return null; }
@@ -1630,11 +1641,25 @@ const SEEKDEEP_BASE = (function() {
   // Show the "you can skip this wizard" banner if we detect the Tauri shell.
   // The .msi-installed desktop app already performs steps 1-8; users landing
   // here are reading curiosity-mode, not running-the-commands-mode.
+  //
+  // Also auto-run the System Check probes on page load so red dots that
+  // would falsely accuse the user of missing Node/Python flip green
+  // immediately. Without this the page sits at "install + come back" for
+  // every prereq until the user clicks "Run all checks" — actively
+  // misleading for users who definitely have everything (they're running
+  // SeekDeep right now).
   (function maybeShowTauriSkipBanner() {
     const isTauri = !!(window.__TAURI__) || (window.location.hostname || '') === 'tauri.localhost';
     if (!isTauri) return;
     const banner = document.getElementById('tauriSkipBanner');
     if (banner) banner.style.display = 'block';
+    // Defer until the syscheck pane is in the DOM (it always is, but the
+    // run handler may not be wired yet on a freshly-loaded page).
+    setTimeout(() => {
+      try {
+        if (typeof runAllChecks === 'function') runAllChecks();
+      } catch (_) { /* best-effort */ }
+    }, 250);
   })();
 </script>
 
