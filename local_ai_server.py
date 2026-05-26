@@ -523,7 +523,20 @@ try:
     )
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
-    async def require_gui_token(request=None): return None  # no-op fallback
+    # FAIL CLOSED: if gui_endpoints couldn't register, the destructive routes
+    # below (/unload, /model/install, /model/uninstall, /warmup/*) MUST reject
+    # requests. Previously this fallback was `return None` which silently
+    # disabled auth — anyone reaching the loopback port could pip-install
+    # arbitrary HF repos or unload models. Now they get 503.
+    #
+    # If you genuinely want the routes available without auth in test/dev,
+    # set SEEKDEEP_GUI_AUTH_ALLOW_OPEN=1 in the environment. Never in prod.
+    if os.getenv("SEEKDEEP_GUI_AUTH_ALLOW_OPEN") == "1":
+        async def require_gui_token(request=None): return None
+    else:
+        from fastapi import HTTPException as _HE
+        async def require_gui_token(request=None):
+            raise _HE(status_code=503, detail="GUI auth unavailable (gui_endpoints failed to register)")
     event_bus = None  # no-op fallback so producer hooks below don't crash
 
 

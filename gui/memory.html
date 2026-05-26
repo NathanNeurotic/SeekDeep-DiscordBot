@@ -311,9 +311,10 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
 
    All writes are X-SeekDeep-Token guarded · the nav.js interceptor adds it.
 
-   While the endpoints aren't shipped yet, the UI falls back to a local mock
-   so the design renders end-to-end. Mocked data is marked in the rail with
-   a small "MOCK" tag — flips off as soon as a real GET /memory/users 200s.
+   All endpoints above are shipped on the local AI server. If the server is
+   unreachable the UI falls back to a small in-page sample so the design still
+   renders — marked with an OFFLINE tag in the rail, flips back to BACKEND
+   LIVE on the first 200 response.
 */
 (function () {
   const $  = (s, r=document) => r.querySelector(s);
@@ -451,19 +452,24 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     const q = (query || '').toLowerCase();
     const filtered = users.filter(u => !q || (u.display + ' ' + u.user_id).toLowerCase().includes(q));
     if (!filtered.length) { host.innerHTML = '<div class="empty" style="padding:16px 8px;">no users match</div>'; return; }
-    host.innerHTML = filtered.map(u => `
-      <div class="user-item ${u.user_id === state.activeId ? 'active' : ''}" data-id="${u.user_id}">
-        <div class="av">${avInit(u.display)}</div>
-        <div>
-          <div class="name">${u.display || u.user_id}</div>
-          <div class="id">${u.user_id}</div>
-        </div>
-        <div class="count">${u.fact_count}</div>
-      </div>
-    `).join('');
-    host.querySelectorAll('.user-item').forEach(el =>
-      el.addEventListener('click', () => selectUser(el.dataset.id))
-    );
+    // XSS-safe: build with createElement + textContent so a malicious display
+    // name ("<img onerror=…>") can't escape the row markup. user_id IDs go
+    // via setAttribute (escaped) instead of attribute interpolation.
+    host.innerHTML = '';
+    const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; };
+    filtered.forEach(u => {
+      const item = document.createElement('div');
+      item.className = 'user-item' + (u.user_id === state.activeId ? ' active' : '');
+      item.setAttribute('data-id', String(u.user_id || ''));
+      item.appendChild(mk('div', 'av', avInit(u.display)));
+      const mid = document.createElement('div');
+      mid.appendChild(mk('div', 'name', String(u.display || u.user_id || '')));
+      mid.appendChild(mk('div', 'id',   String(u.user_id || '')));
+      item.appendChild(mid);
+      item.appendChild(mk('div', 'count', String(u.fact_count != null ? u.fact_count : '')));
+      item.addEventListener('click', () => selectUser(item.dataset.id));
+      host.appendChild(item);
+    });
     $('#rUserCount').textContent = filtered.length + (filtered.length !== users.length ? ' / ' + users.length : '');
   }
 
@@ -619,8 +625,8 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     if (state.isMock) {
       tag.style.color = 'var(--warn)';
       tag.style.borderColor = 'color-mix(in oklab, var(--warn) 45%, transparent)';
-      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>MOCK';
-      tag.title = 'GET /memory/users not implemented yet. UI reads from in-page mock until the endpoints ship — see HANDOFF_CLAUDE_CODE.md';
+      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow: 0 0 6px var(--warn);"></span>OFFLINE';
+      tag.title = 'GET /memory/users is shipped but the local AI server is unreachable. Showing in-page sample data as a placeholder.';
     } else {
       tag.style.color = '';
       tag.style.borderColor = '';

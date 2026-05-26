@@ -1448,6 +1448,15 @@ if (!TOKEN && process.env.SEEKDEEP_TEST_MODE !== '1') {
 }
 
 const client = new Client({
+  // Bot-wide default: never parse mentions in outbound message content.
+  // discord.js's default behavior parses @everyone / role pings / user
+  // mentions in any string we hand it, so model output containing those
+  // tokens would trigger real Discord notifications. The narrower
+  // `{ repliedUser: false }` we used per-reply only suppressed pinging
+  // the replied-to user — it didn't disable @everyone/@here/role parsing.
+  // Routes that legitimately need to ping (e.g. /say) opt in explicitly
+  // via per-message allowedMentions.
+  allowedMentions: { parse: [], repliedUser: false },
   rest: {
     timeout: Math.max(15000, Number(process.env.DISCORD_REST_TIMEOUT_MS || 120000)),
     retries: Math.max(0, Number(process.env.DISCORD_REST_RETRIES || 3)),

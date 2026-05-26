@@ -1739,46 +1739,10 @@
         </div>
 
         <div class="arch-grid" id="archGrid">
-          <div class="arch-item" style="background: linear-gradient(165deg, #14306b, #2dd4ff30);">
-            <div class="arch-meta"><div class="p">colossal squid · 10000m</div><div class="s">SEED 8842 · 1024² · 5h</div></div>
+          <div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px; line-height: 1.7;">
+            ▸ no local archive index yet<br/>
+            <span style="opacity:0.7;">SeekDeep stores archives in your Discord archive channel, not on disk. A local snapshot writer is planned but not shipped — see <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/INTEGRATION.md" style="color:var(--cyan-1);">INTEGRATION.md</a>.</span>
           </div>
-          <div class="arch-item" style="background: linear-gradient(135deg, #050b1c, #00a8e840);">
-            <div class="arch-meta"><div class="p">anglerfish lure macro</div><div class="s">SEED 1138 · CINEMATIC · 8h</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(165deg, #02060f, #6df0ff20);">
-            <div class="arch-meta"><div class="p">bioluminescent jellyfish bloom</div><div class="s">SEED 4444 · PHOTOREAL · 12h</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(135deg, #0d2152, #14306b);">
-            <div class="arch-meta"><div class="p">abandoned bathyscaphe wreck</div><div class="s">SEED 9919 · 3d-render · 1d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(165deg, #14306b, #00a8e860);">
-            <div class="arch-meta"><div class="p">hydrothermal vent ecosystem</div><div class="s">SEED 0271 · oil · 1d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(135deg, #02060f, #2dd4ff40);">
-            <div class="arch-meta"><div class="p">deep sea isopod portrait</div><div class="s">SEED 6633 · MACRO · 2d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(165deg, #050b1c, #007ab8);">
-            <div class="arch-meta"><div class="p">submersible cabin · interior</div><div class="s">SEED 1010 · 3d · 2d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(135deg, #14306b, #6df0ff40);">
-            <div class="arch-meta"><div class="p">leviathan silhouette</div><div class="s">SEED 7777 · CINE · 3d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(165deg, #0d2152, #2dd4ff30);">
-            <div class="arch-meta"><div class="p">midnight zone plankton</div><div class="s">SEED 2222 · MACRO · 3d</div></div>
-          </div>
-          <div class="arch-item" style="background: linear-gradient(135deg, #02060f, #00a8e830);">
-            <div class="arch-meta"><div class="p">vampire squid courtship</div><div class="s">SEED 0444 · OIL · 4d</div></div>
-          </div>
-        </div>
-
-        <div style="margin-top: 18px; display: flex; justify-content: center; gap: 6px;">
-          <button class="btn-mini">‹ PREV</button>
-          <span class="btn-mini" style="background: var(--cyan-1); color: var(--ink); border-color: var(--cyan-1);">1</span>
-          <button class="btn-mini">2</button>
-          <button class="btn-mini">3</button>
-          <button class="btn-mini">…</button>
-          <button class="btn-mini">42</button>
-          <button class="btn-mini">NEXT ›</button>
         </div>
       </section>
 
@@ -1964,17 +1928,21 @@
         if (Array.isArray(top) && top.length) {
           lb.innerHTML = '';
           const total = top.reduce((s, u) => s + (u.count || 0), 0) || 1;
+          // XSS-safe build: every runtime user field goes through textContent,
+          // not innerHTML interpolation. A guild member with display name
+          // "<img src=x onerror=alert(1)>" can't break out of the row markup.
           top.slice(0, 10).forEach((u, i) => {
             const row = document.createElement('div');
             row.className = 'lb-row';
-            const initial = (u.name || u.username || '?').charAt(0).toUpperCase();
+            const name = String(u.name || u.username || u.id || '');
+            const initial = (name || '?').charAt(0).toUpperCase();
             const pct = Math.round(((u.count || 0) / total) * 100);
-            row.innerHTML =
-              '<span class="rk">' + String(i+1).padStart(2,'0') + '</span>' +
-              '<span class="av">' + initial + '</span>' +
-              '<span>' + (u.name || u.username || u.id) + '</span>' +
-              '<span class="count">' + (u.count || 0).toLocaleString() + '</span>' +
-              '<span class="pct">' + pct + '%</span>';
+            const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; el.textContent = text; return el; };
+            row.appendChild(mk('span', 'rk', String(i+1).padStart(2,'0')));
+            row.appendChild(mk('span', 'av', initial));
+            row.appendChild(mk('span', '',   name));
+            row.appendChild(mk('span', 'count', (u.count || 0).toLocaleString()));
+            row.appendChild(mk('span', 'pct', pct + '%'));
             lb.appendChild(row);
           });
         }
@@ -2012,25 +1980,38 @@
           return;
         }
         list.innerHTML = '';
+        // XSS-safe: every rule field flows via textContent / setAttribute, not
+        // raw innerHTML interpolation. A rule with emoji '<img onerror=…>' or
+        // an id that breaks attribute quoting can't escape the row.
         rules.forEach(rule => {
           const row = document.createElement('div');
           row.className = 'rule-row';
           const scope = rule.channel ? '#' + rule.channel : (rule.user ? 'user: ' + rule.user : 'any channel');
           const enabled = rule.enabled !== false;
-          row.innerHTML =
-            '<span class="emo">' + (rule.emoji || '?') + '</span>' +
-            '<span class="pattern">' + escapeHtml(rule.pattern || '') + '</span>' +
-            '<span class="scope">' + escapeHtml(scope) + '</span>' +
-            '<span>' + ((rule.hits || 0).toLocaleString()) + '</span>' +
-            '<span><div class="toggle' + (enabled ? ' on' : '') + '" data-rule-id="' + escapeHtml(rule.id || '') + '"></div></span>' +
-            '<div><button class="btn-mini">EDIT</button> <button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div>';
+          const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text != null) el.textContent = text; return el; };
+          row.appendChild(mk('span', 'emo',     String(rule.emoji || '?')));
+          row.appendChild(mk('span', 'pattern', String(rule.pattern || '')));
+          row.appendChild(mk('span', 'scope',   scope));
+          row.appendChild(mk('span', null,      (rule.hits || 0).toLocaleString()));
+          const toggleHost = document.createElement('span');
+          const toggle = document.createElement('div');
+          toggle.className = 'toggle' + (enabled ? ' on' : '');
+          toggle.setAttribute('data-rule-id', String(rule.id || ''));
+          toggleHost.appendChild(toggle);
+          row.appendChild(toggleHost);
+          const actions = document.createElement('div');
+          const btnEdit    = mk('button', 'btn-mini', 'EDIT');
+          const btnInspect = mk('button', 'btn-mini', '⌕'); btnInspect.setAttribute('data-act','inspect');
+          const btnRemove  = mk('button', 'btn-mini bad', '✕ REMOVE'); btnRemove.setAttribute('data-act','remove');
+          actions.appendChild(btnEdit); actions.append(' '); actions.appendChild(btnInspect); actions.appendChild(btnRemove);
+          row.appendChild(actions);
           list.appendChild(row);
         });
       } catch (e) {
         loaded = false;
       }
     }
-    function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function onActive() {
       const pane = document.querySelector('[data-pane="reacts"]');
       if (pane && pane.classList.contains('active')) load();
@@ -2071,7 +2052,7 @@
       if (s < 86400) return Math.floor(s/3600) + 'h';
       return Math.floor(s/86400) + 'd';
     }
-    function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
     function render() {
       if (!snapshot) return;
@@ -2135,7 +2116,10 @@
         render();
       } catch (e) {
         loaded = false;
-        // Leave mock visuals in place — page still looks alive
+        // /data/archive-snapshots.json doesn't exist on a fresh install (no
+        // local snapshot writer ships today — archives live in Discord). The
+        // empty-state markup in #archGrid stays visible until the file is
+        // populated by a future bot-side writer.
       }
     }
     function onActive() {

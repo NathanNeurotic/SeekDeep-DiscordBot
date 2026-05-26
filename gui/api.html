@@ -843,11 +843,22 @@ function refreshCurl() {
   const ep = currentEp();
   const body = buildBody();
   const qs = buildQueryString(ep);
-  let curl = `<span class="pmt">$</span> curl -X ${ep.method} ${BASE}${ep.path}${qs}`;
+  // XSS-safe: prettyJSON returns the raw user-entered body, which can contain
+  // "<script>" tokens. Build the curl preview with textContent everywhere
+  // except the prompt-sign chip. Previously innerHTML interpolation here was
+  // a self-XSS surface, and a same-origin XSS in the GUI can call GET /token
+  // to bypass auth on every write endpoint.
+  const host = document.getElementById('curlBody');
+  if (!host) return;
+  host.innerHTML = '';
+  const prompt = document.createElement('span');
+  prompt.className = 'pmt';
+  prompt.textContent = '$';
+  host.appendChild(prompt);
+  host.appendChild(document.createTextNode(' curl -X ' + ep.method + ' ' + BASE + ep.path + qs));
   if (body) {
-    curl += ` \\\n      -H "Content-Type: application/json" \\\n      -d '${prettyJSON(body, true)}'`;
+    host.appendChild(document.createTextNode(' \\\n      -H "Content-Type: application/json" \\\n      -d \'' + prettyJSON(body, true) + '\''));
   }
-  document.getElementById('curlBody').innerHTML = curl;
 }
 
 function escape(s) {
