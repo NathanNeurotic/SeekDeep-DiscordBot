@@ -1,20 +1,22 @@
 /* SeekDeep · launcher.js
    =====================
-   Wires the Control Center launcher panel + GPU pane.
+   Wires the Control Center launcher panel + Stats KPIs + cache cells.
 
    - Auto-loaded by nav.js's autoLoadSiblings on every page; self-gates
      to app.html (the only page with the launcher markup).
    - Polls GET /launchers/status every 5s; rewrites PID + state + uptime
      into the .launcher-card[data-svc] tiles.
+   - Polls GET /stats/snapshot every 30s; rewrites the Reqs/Latency/Guilds
+     launcher tile cells, the 4 Stats-pane KPIs + their 30d deltas, the
+     activity bars chart (gap-filled from bot.day_buckets), the bar-axis
+     labels, and the Models-pane cache-size cells + Prune button label.
    - Wires the per-card Restart / Stop buttons to POST /launcher/{svc}/{action}.
    - Wires the header Launch all / Stop all buttons.
    - Wires the GPU pane's "/unload all" button to POST /unload.
    - Wires the Quick Actions (Reload .env → restart_sidecar via Tauri,
      Flush model cache → POST /unload, Force kill all → loop stop, Smoke
      test → opens a notify.toast linking to the preflight script).
-   - Drops a notify.banner ("Some launcher controls are unwired mocks")
-     on the page once the page proves its panel is rendered, so users
-     know which bits are decorative vs functional.
+   - Wires the Models-pane "Prune cache" button to POST /cache/prune.
 
    Self-gates via window.__seekdeepLauncherLoaded + path check.
 */
@@ -45,6 +47,27 @@
       return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
     }
     return Math.round(s / 86400) + 'd';
+  }
+
+  function fmtBytes(n) {
+    if (n == null) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  }
+
+  function fmtPct(p) {
+    if (p == null) return null;
+    const arrow = p > 0 ? '↑' : (p < 0 ? '↓' : '·');
+    return arrow + ' ' + Math.abs(p).toFixed(1) + '% vs prior 30d';
+  }
+
+  function fmtCountAbbrev(n) {
+    if (n == null) return '—';
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
+    return (n / 1_000_000).toFixed(1) + 'M';
   }
 
   // --- Card status pump ---------------------------------------------------
@@ -98,6 +121,160 @@
       }
 
       card.classList.toggle('up', s.state === 'running');
+    }
+  }
+
+  // --- Stats snapshot pump ------------------------------------------------
+  // Single GET /stats/snapshot every 30s rewrites everything previously
+  // hardcoded: per-service Reqs/Latency/Guilds cells on the launcher tiles,
+  // the 4 Stats-pane KPI cards + their deltas, the 30-day activity bars
+  // chart, the bar labels, and the Models-pane cache size cells.
+  //
+  // Soft-fail: if /stats/snapshot is unreachable (server down during boot,
+  // CORS misconfig, etc.) we leave the existing DOM alone so the page still
+  // renders something. The 5s status pump above handles the up/down state;
+  // this pump only handles content updates.
+
+  async function pumpStatsSnapshot() {
+    let snap;
+    try {
+      const r = await fetch(BASE + '/stats/snapshot', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+      if (!r.ok) return;
+      snap = await r.json();
+    } catch { return; }
+    if (!snap || !snap.ok) return;
+
+    // ---- launcher tile cells (Reqs, Latency, Guilds) --------------------
+    const ai = snap.ai_server || {};
+    const bot = snap.bot || {};
+    const fam = (ai.by_family_24h || ai.by_family_lifetime || {});
+    // searxng card: "Reqs:" cell — count any path family this could plausibly
+    // serve via the local-AI proxy. We don't proxy searxng through here, so
+    // this is just the count attributable to the family; if we ever wire a
+    // /search/ family it will show up automatically.
+    setStatCell('searxng', /^reqs/i, fmtCountAbbrev((fam.search || fam.web || 0)));
+    // ai-server card: existing svcQueue id is for live queue depth (not in
+    // snapshot). Leave alone; backed by events.js if/when wired. But we DO
+    // populate VRAM via stats.js elsewhere — no-op here.
+    setStatCell('ai-server', /^reqs/i, fmtCountAbbrev(ai.total_requests));
+    // bot card: Latency (p50 from ai-server, which is what the user feels
+    // when they /chat) + Guilds (lifetime distinct guild count)
+    setStatCell('bot', /^latency/i, (ai.latency_p50_ms != null) ? Math.round(ai.latency_p50_ms) + 'ms' : '—');
+    setStatCell('bot', /^guilds/i, bot.guild_count != null ? String(bot.guild_count) : '—');
+
+    // ---- Stats pane: 4 KPI cards ---------------------------------------
+    setText('statTotalMessages', bot.total_chats);
+    setText('statTotalImages',   bot.total_images);
+    setText('statTotalVision',   bot.total_vision);
+    // Active members: we know lifetime distinct users; "active" needs a
+    // window. Use 24h-distinct-users from the bot if/when it ships; for now
+    // show lifetime users, no fake "/ 42" denominator.
+    setText('statTotalActive',   bot.user_count);
+
+    // KPI deltas (Total messages / Images / Vision)
+    const deltas = snap.deltas || {};
+    setDeltaForCard('statTotalMessages', deltas.messages_30d_pct);
+    setDeltaForCard('statTotalImages',   deltas.images_30d_pct);
+    setDeltaForCard('statTotalVision',   deltas.vision_30d_pct);
+    // Active members delta — no backend value; mark explicit pending so the
+    // mock "↓ 3" doesn't keep lying.
+    setDeltaForCard('statTotalActive', null, '— no window data yet');
+
+    // ---- Stats pane: 30-day activity bars ------------------------------
+    const buckets = Array.isArray(bot.day_buckets) ? bot.day_buckets : [];
+    if (buckets.length) {
+      const bars = document.getElementById('statsBars');
+      if (bars) {
+        const max = Math.max(1, ...buckets.map(b => (b.chats||0) + (b.images||0) + (b.vision||0)));
+        bars.innerHTML = '';
+        for (const b of buckets) {
+          const v = (b.chats||0) + (b.images||0) + (b.vision||0);
+          const col = document.createElement('div');
+          col.className = 'col';
+          col.style.height = Math.max(2, Math.round((v / max) * 100)) + '%';
+          col.title = b.date + ' · ' + v + ' (chats ' + (b.chats||0) + ', images ' + (b.images||0) + ', vision ' + (b.vision||0) + ')';
+          bars.appendChild(col);
+        }
+        // Bar labels: first, +7, +14, +22, last
+        const labelsEl = bars.parentElement && bars.parentElement.querySelector('.bars-labels');
+        if (labelsEl) {
+          const pick = (i) => buckets[i] ? buckets[i].date.slice(5) : '';
+          labelsEl.innerHTML = '<span>' + pick(0) + '</span>'
+                             + '<span>' + pick(7) + '</span>'
+                             + '<span>' + pick(14) + '</span>'
+                             + '<span>' + pick(22) + '</span>'
+                             + '<span>' + pick(buckets.length - 1) + '</span>';
+        }
+      }
+    }
+
+    // ---- Models pane: cache size cells ---------------------------------
+    const cache = snap.cache || {};
+    if (cache.hf_size_bytes != null) {
+      // "Prune cache (4.2 GB)" button label
+      document.querySelectorAll('button').forEach((btn) => {
+        if (/^prune cache/i.test(btn.textContent || '')) {
+          btn.textContent = 'Prune cache (' + fmtBytes(cache.hf_size_bytes) + ')';
+        }
+      });
+      // "Cache total" mini-card — find the card whose .lbl is "Cache total"
+      document.querySelectorAll('.card-mini').forEach((card) => {
+        const lbl = card.querySelector('.lbl');
+        if (!lbl || !/cache total/i.test(lbl.textContent || '')) return;
+        const val = card.querySelector('.val');
+        if (val) {
+          const gb = (cache.hf_size_bytes / (1024 * 1024 * 1024));
+          val.innerHTML = gb.toFixed(1) + ' <span style="font-size:16px; color:var(--hull-3);">GB</span>';
+        }
+        const delta = card.querySelector('.delta');
+        if (delta && cache.hf_repo_count != null) {
+          delta.textContent = cache.hf_repo_count + ' model' + (cache.hf_repo_count === 1 ? '' : 's') + ' pulled';
+        }
+      });
+    }
+  }
+
+  // --- DOM helpers used by pumpStatsSnapshot ------------------------------
+
+  function setText(id, val) {
+    const el = document.getElementById(id);
+    if (!el || val == null) return;
+    el.textContent = (typeof val === 'number') ? val.toLocaleString() : String(val);
+  }
+
+  // Update one of the launcher-card .stats <span>'s <em> based on a label
+  // regex (e.g. /^reqs/i matches "Reqs:" or "Reqs"). No-ops if the cell
+  // isn't on this card — three cards each have different cell mixes.
+  function setStatCell(svc, labelRe, value) {
+    const card = document.querySelector('.launcher-card[data-svc="' + svc + '"]');
+    if (!card) return;
+    card.querySelectorAll('.stats span').forEach((span) => {
+      const em = span.querySelector('em');
+      if (!em) return;
+      const lbl = (span.textContent || '').replace(em.textContent || '', '').trim();
+      if (labelRe.test(lbl)) em.textContent = value;
+    });
+  }
+
+  // Find the .delta sibling of #<id>'s parent .card-mini and rewrite it.
+  // pct=null with no fallback → hide the delta entirely.
+  function setDeltaForCard(valueId, pct, fallback) {
+    const valEl = document.getElementById(valueId);
+    if (!valEl) return;
+    const card = valEl.closest('.card-mini');
+    if (!card) return;
+    const delta = card.querySelector('.delta');
+    if (!delta) return;
+    const txt = fmtPct(pct);
+    if (txt != null) {
+      delta.textContent = txt;
+      delta.classList.toggle('bad', pct < 0);
+    } else if (fallback != null) {
+      delta.textContent = fallback;
+      delta.classList.remove('bad');
+    } else {
+      delta.textContent = '';
+      delta.classList.remove('bad');
     }
   }
 
@@ -171,6 +348,29 @@
       }
     });
 
+    // Prune cache button (Models pane)
+    document.querySelectorAll('button').forEach((btn) => {
+      const label = (btn.textContent || '').toLowerCase().trim();
+      if (label.startsWith('prune cache')) {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete all unreferenced HF cache revisions? This frees disk but redownloads are needed if you switch back to a deleted model rev.')) return;
+          try {
+            const r = await fetch(BASE + '/cache/prune', { method: 'POST' });
+            const sdn = notify();
+            const body = await r.json().catch(() => ({}));
+            if (sdn) {
+              if (r.ok) sdn.toast({ tone: 'good', title: 'Cache pruned · ' + fmtBytes(body.freed_bytes || 0) + ' freed', body: body.note || '', ttl: 5000 });
+              else sdn.toast({ tone: 'bad', title: '/cache/prune failed', body: 'HTTP ' + r.status + ' · ' + (body.detail || ''), ttl: 6000 });
+            }
+            setTimeout(pumpStatsSnapshot, 600);
+          } catch (err) {
+            const sdn = notify();
+            if (sdn) sdn.toast({ tone: 'bad', title: 'Network error', body: String(err), ttl: 5000 });
+          }
+        });
+      }
+    });
+
     // Quick Actions: Reload .env / Flush cache / Smoke test / Force kill all
     document.querySelectorAll('button').forEach((btn) => {
       const label = (btn.textContent || '').toLowerCase().trim();
@@ -205,37 +405,16 @@
     });
   }
 
-  // --- One-shot "some controls are decorative" disclosure -----------------
-  // The Control Center has historical mock buttons (paginated transcripts,
-  // "↑ 18% vs last 30d" deltas, "History (184)" counters). Wiring them all
-  // would mean shipping new endpoints we don't have. Flag the situation
-  // honestly via a one-time notify.banner so the user knows which controls
-  // do something vs which are placeholders.
-
-  const DISCLOSURE_KEY = 'sd-launcher-mocks-acknowledged';
-
-  function maybeShowDisclosure() {
-    const sdn = notify();
-    if (!sdn) return;
-    try { if (localStorage.getItem(DISCLOSURE_KEY) === '1') return; } catch {}
-    sdn.banner({
-      id: 'sd-launcher-mocks',
-      tone: 'neutral',
-      title: 'Some Control Center widgets are still mocks',
-      body: 'Launch / Stop / Restart / /unload / Reload .env / Flush cache / Force kill are wired. Pagination, transcript history, "↑ 18% vs last 30d" deltas, and "Reqs: 184" counters are placeholders pending backend telemetry.',
-      primary: { label: 'Got it', onClick: ({ close }) => { try { localStorage.setItem(DISCLOSURE_KEY, '1'); } catch {} close(); } },
-      dismissible: true,
-    });
-  }
-
   // --- Boot --------------------------------------------------------------
 
   function init() {
     wireButtons();
     pumpStatus();
     setInterval(pumpStatus, 5000);
-    // Give the page a beat to settle before surfacing the disclosure banner.
-    setTimeout(maybeShowDisclosure, 1500);
+    // Stats snapshot pump: less frequent (30s) because it does more work
+    // backend-side (HF cache scan, bot-stats file read, day-bucket sums).
+    pumpStatsSnapshot();
+    setInterval(pumpStatsSnapshot, 30000);
   }
 
   if (document.readyState === 'loading') {
