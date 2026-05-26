@@ -2489,6 +2489,73 @@ const SEEKDEEP_BASE = (function() {
   };
   LIVE.start();
 
+  // ===== Persona-grid click → POST /persona (global scope) =====
+  // Cards had .active styling toggled by the Tweaks UI but no click handler,
+  // so clicking them did nothing. Wire a delegated handler that posts the
+  // selected slug to /persona scope=global and updates active styling.
+  (function wirePersonaGridClicks() {
+    const grid = document.getElementById('persona-grid');
+    if (!grid) return;
+    grid.addEventListener('click', async (e) => {
+      const card = e.target.closest('.persona-card[data-persona]');
+      if (!card) return;
+      const slug = card.dataset.persona;
+      if (!slug) return;
+      // Optimistic active toggle so the click feels immediate
+      grid.querySelectorAll('.persona-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/persona', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'global', persona: slug }),
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // Update footer pill to match
+        const sb = document.getElementById('sb-persona');
+        if (sb) sb.textContent = slug.toUpperCase();
+      } catch (err) {
+        // Revert active state and toast the failure
+        card.classList.remove('active');
+        if (window.SeekDeepNotify?.toast) {
+          window.SeekDeepNotify.toast({ tone: 'bad', title: 'Persona update failed', body: String(err && err.message || err), ttl: 4000 });
+        }
+      }
+    });
+  })();
+
+  // ===== Persona-grid hydration — append custom personas from /persona =====
+  // The four built-in cards (clinical/neurotic/unsettling/chaotic) are
+  // baked into the markup with their tone descriptions. Custom personas
+  // defined via @SeekDeep persona create get a generic "(custom)" card
+  // here so the user can click-to-select them in the Tweaks panel.
+  (async function hydratePersonaGrid() {
+    const grid = document.getElementById('persona-grid');
+    if (!grid) return;
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!Array.isArray(d.valid_personas)) return;
+      const builtIn = new Set(['clinical','neurotic','unsettling','chaotic']);
+      const existing = new Set([...grid.querySelectorAll('.persona-card')].map(c => c.dataset.persona));
+      for (const slug of d.valid_personas) {
+        const s = String(slug).toLowerCase();
+        if (builtIn.has(s) || existing.has(s)) continue;
+        const card = document.createElement('div');
+        card.className = 'persona-card';
+        card.setAttribute('data-persona', s);
+        const h4 = document.createElement('h4');
+        h4.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+        const p = document.createElement('p');
+        p.textContent = 'custom persona · defined via @SeekDeep persona create. Click to set globally.';
+        card.appendChild(h4); card.appendChild(p);
+        grid.appendChild(card);
+      }
+    } catch { /* leave the 4 built-in cards as-is */ }
+  })();
+
   // ===== Footer status bar pumps (persona / web / queue) =====
   // sb-persona was hardcoded "CLINICAL" forever; sb-web was hardcoded
   // "SEARXNG · :8080" even when searxng was unreachable. Now they reflect
