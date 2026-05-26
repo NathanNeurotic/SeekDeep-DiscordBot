@@ -1894,34 +1894,17 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-top: 18px;">
           <div class="chart-wrap">
             <h3>Persona usage</h3>
-            <div style="font-family: var(--font-mono); font-size: 12px; color: var(--hull-2); padding-top: 6px;">
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>clinical</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 58%"></i></div><span style="color:var(--cyan-1);">58%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>neurotic</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 22%"></i></div><span style="color:var(--cyan-1);">22%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>chaotic</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 14%"></i></div><span style="color:var(--cyan-1);">14%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>unsettling</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 6%"></i></div><span style="color:var(--cyan-1);">6%</span></div>
-            </div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="personaBreakdown">— per-persona counters not tracked yet (bot writes totalChats only, not by-persona)</div>
           </div>
 
           <div class="chart-wrap">
             <h3>Image styles</h3>
-            <div style="font-family: var(--font-mono); font-size: 12px; color: var(--hull-2); padding-top: 6px;">
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>cinematic</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 38%"></i></div><span style="color:var(--cyan-1);">38%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>photoreal</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 24%"></i></div><span style="color:var(--cyan-1);">24%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>3d-render</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 14%"></i></div><span style="color:var(--cyan-1);">14%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>anime</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 12%"></i></div><span style="color:var(--cyan-1);">12%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>oil-painting</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 8%"></i></div><span style="color:var(--cyan-1);">8%</span></div>
-            </div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="styleBreakdown">— per-style counters not tracked yet (image prompts aren't classified by style)</div>
           </div>
 
           <div class="chart-wrap">
             <h3>Model usage</h3>
-            <div style="font-family: var(--font-mono); font-size: 12px; color: var(--hull-2); padding-top: 6px;">
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>default_chat</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 71%"></i></div><span style="color:var(--cyan-1);">71%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>quality_text</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 14%"></i></div><span style="color:var(--cyan-1);">14%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>reasoning</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 8%"></i></div><span style="color:var(--cyan-1);">8%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>fallback</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 5%"></i></div><span style="color:var(--cyan-1);">5%</span></div>
-              <div class="row" style="justify-content: space-between; padding: 6px 0;"><span>lightweight</span><div class="bar" style="flex: 1; margin: 0 12px;"><i style="width: 2%"></i></div><span style="color:var(--cyan-1);">2%</span></div>
-            </div>
+            <div class="tiny muted" style="padding: 18px 4px; font-family: var(--font-mono);" id="modelBreakdown">— per-model counters not tracked yet (ai-server logs role but doesn't aggregate)</div>
           </div>
         </div>
       </section>
