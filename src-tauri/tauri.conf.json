@@ -22,7 +22,7 @@
         "fullscreen": false,
         "decorations": true,
         "transparent": false,
-        "url": "http://127.0.0.1:7865/gui/chat.html"
+        "url": "seekdeep-loading.html"
       }
     ],
     "security": {
@@ -44,7 +44,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": [
+      "../local_ai_server.py",
+      "../gui_endpoints.py",
+      "../warmup_local_cache.py",
+      "../package.json",
+      "../requirements-local.txt",
+      "../.env.default",
+      "../gui/**/*"
+    ],
     "externalBin": [],
     "windows": {
       "certificateThumbprint": null,
