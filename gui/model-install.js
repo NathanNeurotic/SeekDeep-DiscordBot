@@ -1,25 +1,27 @@
 /* SeekDeep · model-install.js
    ===========================
-   First-use HF model downloader. Auto-loaded by nav.js's autoLoadSiblings.
+   First-use HF / Ollama model downloader. Auto-loaded by nav.js's
+   autoLoadSiblings AFTER notify.js (whose SeekDeepNotify banner/modal
+   primitive this file consumes for the visible UX).
 
    Flow:
-     1. On load, probe GET /models/installed (which itself depends on the
-        ML libraries being present — if they aren't, ml-deps.js handles the
-        banner and we stay silent).
-     2. If `all_local_present: false`, show a topnav banner naming the
-        missing roles + a "Download all" button.
-     3. On click, open a modal that walks each missing model and POSTs
-        /model/install sequentially. Per-model status flips from PENDING →
-        DOWNLOADING (spinner) → DONE / FAILED.
-     4. On all-done, the modal closes; the banner disappears once the next
-        /models/installed probe returns all_local_present:true.
+     1. On load, probe GET /models/installed (which itself depends on
+        the ML libraries being present — if they aren't, ml-deps.js
+        owns the banner and we stay silent).
+     2. If all_local_present:false, show a banner naming the missing
+        model_ids. Backend chips per row tell users where each weight
+        is coming from (HuggingFace / Ollama / remote provider).
+     3. When ollama_required && !ollama_available, banner copy flips
+        warn-tone with a "Get Ollama ↗" button instead of Download.
+     4. Click Download opens a modal that walks each missing model
+        sequentially via POST /model/install. Per-row PENDING →
+        DOWNLOADING → DONE / FAILED.
+     5. Chat-role rows have a clickable backend chip → mini popover
+        that lets user swap backend (HF ↔ Ollama) with model_id.
+     6. WS subscription to model.install.* surfaces installs kicked
+        off in other tabs.
 
-   POST /model/install is synchronous and blocks until snapshot_download
-   completes (5-15 minutes per model for SDXL / 7B-class). We don't have
-   per-byte progress events from huggingface_hub here, so we show "this
-   takes minutes; safe to leave it running" copy and trust the user.
-
-   Self-gates via window.__seekdeepModelInstallLoaded.
+   Self-gated via window.__seekdeepModelInstallLoaded.
 */
 (function () {
   'use strict';
@@ -31,7 +33,9 @@
     return 'http://127.0.0.1:7865';
   })();
 
-  // --- DOM helpers (mirrored from ml-deps.js style) ------------------------
+  function notify() { return window.SeekDeepNotify || null; }
+
+  // --- DOM helpers ---------------------------------------------------------
 
   function el(tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -39,7 +43,7 @@
       for (const [k, v] of Object.entries(attrs)) {
         if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
         else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
-        else node.setAttribute(k, v);
+        else if (v != null) node.setAttribute(k, v);
       }
     }
     for (const c of children) {
@@ -47,162 +51,6 @@
       node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     }
     return node;
-  }
-
-  // --- Banner --------------------------------------------------------------
-
-  function showBanner(state) {
-    // state = { missing[], ollama_required, ollama_available, ollama_install_url }
-    if (document.getElementById('sd-model-banner')) return;
-    const offsetTop = document.getElementById('sd-ml-deps-banner') ? '50px' : '0';
-    const banner = el('div', {
-      id: 'sd-model-banner',
-      style: {
-        position: 'fixed',
-        top: offsetTop,
-        left: '0',
-        right: '0',
-        zIndex: '9989',
-        padding: '10px 18px',
-        background: 'rgba(45, 212, 255, 0.05)',
-        borderBottom: '1px dashed rgba(45, 212, 255, 0.35)',
-        color: '#2dd4ff',
-        fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-        fontSize: '12px',
-        letterSpacing: '0.04em',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        backdropFilter: 'blur(6px)',
-      },
-    });
-
-    const missing = state.missing || [];
-    const ollamaDown = state.ollama_required && !state.ollama_available;
-
-    // Split missing by backend so the user gets accurate copy. HF pulls from
-    // huggingface.co; Ollama pulls from the user's local daemon (which must
-    // be running). If daemon is down AND any role needs ollama, surface that
-    // distinctly — clicking Download with no daemon would just fail.
-    const hfMissing = missing.filter((m) => m.backend === 'hf');
-    const ollamaMissing = missing.filter((m) => m.backend === 'ollama');
-
-    // Show "<model_id> [backend]" so the user can see at a glance whether
-    // each row comes from HF, Ollama, or a remote provider. With a mixed
-    // setup the source becomes important — Ollama tags pull from the
-    // user's daemon, HF repos pull from huggingface.co, remotes don't
-    // download anything.
-    const fmt = (m) => m.model_id.split('/').pop() + ' [' + m.backend + ']';
-    const names = missing.map(fmt).slice(0, 3).join(', ');
-    const more = missing.length > 3 ? ` +${missing.length - 3} more` : '';
-
-    // Are the missing models a mix of backends? Banner copy adapts.
-    const backendSet = new Set(missing.map((m) => m.backend));
-    const mixed = backendSet.size > 1;
-    const sources = (() => {
-      if (backendSet.has('hf') && backendSet.has('ollama')) return 'huggingface.co + Ollama daemon';
-      if (backendSet.has('hf')) return 'huggingface.co';
-      if (backendSet.has('ollama')) return 'Ollama daemon';
-      return 'multiple sources';
-    })();
-
-    const text = el('div', { style: { flex: '1', lineHeight: '1.5' } });
-    if (ollamaDown) {
-      text.append(
-        el('strong', { style: { color: '#ffb84d', marginRight: '8px' } }, '⚠ Ollama daemon not running'),
-        ollamaMissing.length + ' role' + (ollamaMissing.length === 1 ? '' : 's') + ' need the Ollama daemon. Install + start Ollama, then return here.',
-      );
-    } else {
-      text.append(
-        el('strong', { style: { color: '#2dd4ff', marginRight: '8px' } }, '◐ Models not downloaded'),
-        missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights from ',
-        el('em', { style: { color: '#e1eaf5', fontStyle: 'normal' } }, sources),
-        ': ',
-        el('code', { style: { color: '#2dd4ff', background: 'rgba(45,212,255,0.12)', padding: '1px 5px', borderRadius: '3px' } }, names + more),
-      );
-    }
-
-    banner.appendChild(text);
-
-    // "Get Ollama ↗" button if daemon down + any role needs it
-    if (ollamaDown) {
-      banner.appendChild(el('button', {
-        style: {
-          background: '#ffb84d',
-          color: '#02060f',
-          border: 'none',
-          padding: '6px 14px',
-          borderRadius: '4px',
-          fontFamily: 'inherit',
-          fontSize: '11px',
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-          fontWeight: '600',
-          cursor: 'pointer',
-        },
-        onclick: () => openExternal(state.ollama_install_url || 'https://ollama.com/download'),
-      }, 'Get Ollama ↗'));
-    }
-
-    // Download button — disabled (visually) if Ollama is required + missing
-    // AND there are no HF-backed missing models to download right now.
-    const canDownloadNow = hfMissing.length > 0 || (ollamaMissing.length > 0 && state.ollama_available);
-    banner.appendChild(el('button', {
-      style: {
-        background: canDownloadNow ? '#2dd4ff' : 'rgba(45,212,255,0.25)',
-        color: canDownloadNow ? '#02060f' : '#7a8aa0',
-        border: 'none',
-        padding: '6px 14px',
-        borderRadius: '4px',
-        fontFamily: 'inherit',
-        fontSize: '11px',
-        letterSpacing: '0.12em',
-        textTransform: 'uppercase',
-        fontWeight: '600',
-        cursor: canDownloadNow ? 'pointer' : 'not-allowed',
-      },
-      onclick: canDownloadNow
-        ? () => openInstallModal(state)
-        : () => {},
-    }, 'Download'));
-
-    // "Full wizard" link — for users who want to ADD a new model rather
-    // than just download what's configured. Deep-links to add-model.html
-    // (designer-shipped 4-step wizard in zip 43). Skipped on the wizard
-    // page itself to avoid a banner-on-the-wizard loop.
-    const here = (location.pathname.split('/').pop() || '').toLowerCase();
-    if (here !== 'add-model.html') {
-      banner.appendChild(el('a', {
-        href: 'add-model.html',
-        style: {
-          color: '#2dd4ff',
-          textDecoration: 'underline',
-          fontFamily: 'inherit',
-          fontSize: '11px',
-          letterSpacing: '0.06em',
-          padding: '6px 4px',
-        },
-        title: 'Full backend / model wizard with HF, Ollama, OpenAI-compat, Anthropic, Gemini',
-      }, 'Full wizard →'));
-    }
-
-    banner.appendChild(el('button', {
-      style: {
-        background: 'transparent',
-        color: '#2dd4ff',
-        border: '1px solid rgba(45,212,255,0.35)',
-        padding: '6px 10px',
-        borderRadius: '4px',
-        fontFamily: 'inherit',
-        fontSize: '11px',
-        letterSpacing: '0.12em',
-        textTransform: 'uppercase',
-        cursor: 'pointer',
-      },
-      onclick: () => banner.remove(),
-    }, 'Dismiss'));
-
-    document.body.appendChild(banner);
   }
 
   function openExternal(url) {
@@ -214,12 +62,233 @@
     }
   }
 
-  // --- Backend swap mini-editor -------------------------------------------
-  // Opens an inline popover next to a clicked backend chip. Lets the user
-  // flip a chat role between HF and Ollama (the two local backends) without
-  // editing .env by hand. Remote backends (openai-compat / anthropic /
-  // gemini) need API URL + key + persona vocab handling — that's the full
-  // 'Add a Model' wizard which lives on designer's plate.
+  // --- Banner --------------------------------------------------------------
+
+  const BANNER_ID = 'sd-model-install-banner';
+
+  function clearBanner() {
+    const sdn = notify();
+    if (sdn) sdn.dismiss(BANNER_ID);
+  }
+
+  function showBanner(state) {
+    const sdn = notify();
+    if (!sdn) {
+      console.warn('[SeekDeep model-install] notify.js not loaded; state:', state);
+      return;
+    }
+    const missing = state.missing || [];
+    const ollamaDown = state.ollama_required && !state.ollama_available;
+    const hfMissing = missing.filter((m) => m.backend === 'hf');
+    const ollamaMissing = missing.filter((m) => m.backend === 'ollama');
+
+    // Friendly source list — flips between huggingface.co / Ollama daemon /
+    // both, depending on which backends have missing weights.
+    const backendSet = new Set(missing.map((m) => m.backend));
+    const sources = (() => {
+      if (backendSet.has('hf') && backendSet.has('ollama')) return 'huggingface.co + Ollama daemon';
+      if (backendSet.has('hf')) return 'huggingface.co';
+      if (backendSet.has('ollama')) return 'Ollama daemon';
+      return 'multiple sources';
+    })();
+    const fmt = (m) => '<code>' + m.model_id.split('/').pop() + '</code> [' + m.backend + ']';
+    const names = missing.map(fmt).slice(0, 3).join(', ');
+    const more = missing.length > 3 ? (' +' + (missing.length - 3) + ' more') : '';
+
+    const here = (location.pathname.split('/').pop() || '').toLowerCase();
+    const wizardLink = here === 'add-model.html'
+      ? ''
+      : ' &nbsp;·&nbsp; <a href="add-model.html" style="color:inherit; text-decoration:underline;">Full wizard →</a>';
+
+    let title, body, tone, primary;
+    if (ollamaDown) {
+      title = 'Ollama daemon not running';
+      body = ollamaMissing.length + ' role' + (ollamaMissing.length === 1 ? '' : 's')
+        + ' need the Ollama daemon. Install + start Ollama, then return here.'
+        + wizardLink;
+      tone = 'warn';
+      primary = { label: 'Get Ollama ↗', onClick: ({ close }) => { openExternal(state.ollama_install_url || 'https://ollama.com/download'); } };
+    } else {
+      title = 'Models not downloaded';
+      body = missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights from <em style="color:var(--hull); font-style:normal;">'
+        + sources + '</em>: ' + names + more + wizardLink;
+      tone = 'info';
+      const canDownloadNow = hfMissing.length > 0 || (ollamaMissing.length > 0 && state.ollama_available);
+      if (canDownloadNow) {
+        primary = { label: 'Download', onClick: ({ close }) => { openInstallModal(state); /* leave banner up; modal owns the next step */ } };
+      } else {
+        primary = null;
+      }
+    }
+
+    sdn.banner({
+      id: BANNER_ID,
+      tone,
+      title,
+      body,
+      primary,
+      secondary: { label: 'Dismiss', onClick: ({ close }) => close() },
+      dismissible: false,
+      sticky: true,
+    });
+  }
+
+  // --- Install modal -------------------------------------------------------
+
+  let modalOpen = false;
+  let rowEls = {}; // role -> { row, statusEl, dotEl }
+  let modalEl = null;
+
+  function setRowStatus(role, label, color) {
+    const r = rowEls[role];
+    if (!r) return;
+    r.statusEl.textContent = label;
+    r.statusEl.style.color = color;
+    r.dotEl.style.background = color;
+    r.dotEl.style.boxShadow = '0 0 6px ' + color;
+  }
+
+  function openInstallModal(state) {
+    if (modalOpen) return;
+    const sdn = notify();
+    if (!sdn) {
+      console.warn('[SeekDeep model-install] notify.js not loaded; cannot open modal.');
+      return;
+    }
+    const missing = state.missing || [];
+    const downloadable = (state.ollama_required && !state.ollama_available)
+      ? missing.filter((m) => m.backend !== 'ollama')
+      : missing;
+
+    modalOpen = true;
+    sdn.modal({
+      tone: 'info',
+      label: '◐ DOWNLOAD MODEL WEIGHTS',
+      title: 'Downloading model weights',
+      dismissible: true,
+      render: (bodyEl) => {
+        modalEl = bodyEl;
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-family: var(--font-mono, monospace); font-size: 11px; color: var(--hull-3, #7a8aa0); line-height: 1.5; margin-bottom: 12px;';
+        sub.innerHTML = 'HuggingFace pulls from huggingface.co · Ollama pulls from your local daemon (registry.ollama.ai). Each model can take 5-15 minutes depending on size + connection. Safe to leave this running.';
+
+        const list = document.createElement('div');
+        list.style.cssText = 'display: flex; flex-direction: column; gap: 8px; margin-top: 4px;';
+
+        rowEls = {};
+        for (const m of downloadable) {
+          const dot = document.createElement('span');
+          dot.style.cssText = 'display:inline-block; width:10px; height:10px; border-radius:50%; background:#7a8aa0; flex-shrink:0;';
+
+          const status = document.createElement('span');
+          status.style.cssText = 'font-family: var(--font-mono, monospace); font-size: 10px; color: #7a8aa0; letter-spacing: 0.14em; text-transform: uppercase;';
+          status.textContent = 'PENDING';
+
+          // Backend chip — colored by source. Chat roles with HF/Ollama
+          // backends are clickable: opens the swap mini-editor popover.
+          const backendColors = {
+            hf:               { bg: 'rgba(45, 212, 255, 0.15)', fg: 'var(--cyan-1, #2dd4ff)' },
+            ollama:           { bg: 'rgba(89, 220, 132, 0.15)', fg: '#59dc84' },
+            'openai-compat':  { bg: 'rgba(255, 184, 77, 0.15)', fg: 'var(--warn, #ffb84d)' },
+            anthropic:        { bg: 'rgba(255, 184, 77, 0.15)', fg: 'var(--warn, #ffb84d)' },
+            gemini:           { bg: 'rgba(255, 184, 77, 0.15)', fg: 'var(--warn, #ffb84d)' },
+          };
+          const bc = backendColors[m.backend] || { bg: 'rgba(122,138,160,0.15)', fg: '#7a8aa0' };
+          const chatRoleMatch = m.role.match(/^chat\.(.+)$/);
+          const canSwap = !!chatRoleMatch && (m.backend === 'hf' || m.backend === 'ollama');
+          const chip = document.createElement('span');
+          chip.dataset.sdBackendChip = canSwap ? 'swappable' : 'fixed';
+          chip.style.cssText = 'font-family: var(--font-mono, monospace); font-size: 9.5px; padding: 2px 7px; background:' + bc.bg + '; color:' + bc.fg + '; border-radius: 3px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600; margin-left: 8px; vertical-align: middle; cursor:' + (canSwap ? 'pointer' : 'default') + '; user-select: none;';
+          chip.title = canSwap ? 'Click to change backend (HF ↔ Ollama)' : 'This role\'s backend is fixed';
+          chip.textContent = (m.backend === 'hf' ? 'HuggingFace' : m.backend) + (canSwap ? ' ▾' : '');
+          if (canSwap) {
+            chip.addEventListener('click', (ev) => openSwapEditor(ev.target, m, chatRoleMatch[1]));
+          }
+
+          const titleRow = document.createElement('div');
+          titleRow.style.cssText = 'font-family: var(--font-display, system-ui), system-ui, sans-serif; font-size: 13px; color: var(--hull, #e1eaf5); display: flex; align-items: center; flex-wrap: wrap;';
+          const roleName = document.createElement('span');
+          roleName.textContent = m.role;
+          titleRow.appendChild(roleName);
+          titleRow.appendChild(chip);
+
+          const modelId = document.createElement('div');
+          modelId.style.cssText = 'font-family: var(--font-mono, monospace); font-size: 11px; color: var(--hull-3, #7a8aa0); margin-top: 2px;';
+          modelId.textContent = m.model_id;
+
+          const meta = document.createElement('div');
+          meta.appendChild(titleRow);
+          meta.appendChild(modelId);
+
+          const row = document.createElement('div');
+          row.style.cssText = 'display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; background: rgba(2,6,15,0.6); border: 1px solid rgba(45,212,255,0.15); border-radius: 6px;';
+          row.appendChild(dot);
+          row.appendChild(meta);
+          row.appendChild(status);
+
+          rowEls[m.role] = { row, statusEl: status, dotEl: dot };
+          list.appendChild(row);
+        }
+
+        bodyEl.appendChild(sub);
+        bodyEl.appendChild(list);
+      },
+      primary: { label: 'Close', onClick: () => { /* falls through to close */ } },
+    }).then(() => {
+      // Modal closed — drop refs, close any orphaned swap popover.
+      modalOpen = false;
+      rowEls = {};
+      modalEl = null;
+      closeSwapPopover();
+    });
+
+    // Subscribe to cross-tab events so installs kicked off elsewhere drive
+    // these rows too. Retried after 1s for fresh-page WS hookup race.
+    subscribeToInstallEvents();
+    setTimeout(subscribeToInstallEvents, 1000);
+
+    runSequentialDownloads(downloadable);
+  }
+
+  // --- Sequential downloader ----------------------------------------------
+
+  async function downloadOne(m) {
+    setRowStatus(m.role, 'DOWNLOADING…', 'var(--warn, #ffb84d)');
+    try {
+      const r = await fetch(BASE + '/model/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: m.model_id, backend: m.backend, auto_pull: true }),
+      });
+      let data = null;
+      try { data = await r.json(); } catch {}
+      if (!r.ok || !data || !data.ok) {
+        const note = (data && (data.note || data.error)) ? (data.note || data.error) : ('HTTP ' + r.status);
+        setRowStatus(m.role, 'FAILED · ' + String(note).slice(0, 60), 'var(--bad, #ff6b6b)');
+        const row = rowEls[m.role];
+        if (row && row.statusEl) row.statusEl.title = (data && (data.note || data.error)) || ('HTTP ' + r.status);
+        return false;
+      }
+      setRowStatus(m.role, 'DONE', 'var(--good, #6df0ff)');
+      return true;
+    } catch (err) {
+      setRowStatus(m.role, 'NETWORK ERROR', 'var(--bad, #ff6b6b)');
+      return false;
+    }
+  }
+
+  async function runSequentialDownloads(missing) {
+    // Sequential not parallel — concurrent HF cache writes on the same host
+    // churn disk + waste bandwidth.
+    for (const m of missing) {
+      await downloadOne(m);
+    }
+  }
+
+  // --- Swap mini-editor popover -------------------------------------------
+  // Inline popover next to a clicked backend chip; lets user flip a chat
+  // role between HF and Ollama. Remote backends (openai-compat / anthropic
+  // / gemini) need the full add-model.html wizard (API URL + key inputs).
 
   let swapPopover = null;
 
@@ -230,7 +299,6 @@
 
   function onDocClickToClose(ev) {
     if (swapPopover && !swapPopover.contains(ev.target)) {
-      // Don't close on chip-clicks; openSwapEditor handles those
       const isChip = ev.target.closest && ev.target.closest('[data-sd-backend-chip]');
       if (!isChip) closeSwapPopover();
     }
@@ -246,27 +314,27 @@
         left: rect.left + 'px',
         zIndex: '10000',
         width: '320px',
-        background: '#050b1a',
+        background: 'var(--ink, #050b1a)',
         border: '1px solid rgba(45, 212, 255, 0.4)',
         borderRadius: '8px',
         padding: '16px',
         boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
-        fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+        fontFamily: 'var(--font-mono, monospace)',
         fontSize: '11px',
-        color: '#e1eaf5',
+        color: 'var(--hull, #e1eaf5)',
         display: 'flex',
         flexDirection: 'column',
         gap: '10px',
       },
     });
     swapPopover.appendChild(el('div', {
-      style: { fontSize: '10px', letterSpacing: '0.16em', textTransform: 'uppercase', color: '#7a8aa0' },
+      style: { fontSize: '10px', letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--hull-3, #7a8aa0)' },
     }, 'Change backend · ' + modelRow.role));
 
     const backendSel = el('select', {
       style: {
         background: 'rgba(2,6,15,0.6)',
-        color: '#e1eaf5',
+        color: 'var(--hull, #e1eaf5)',
         border: '1px solid rgba(45,212,255,0.25)',
         borderRadius: '4px',
         padding: '6px 8px',
@@ -274,8 +342,8 @@
         fontSize: '11px',
       },
     },
-      el('option', { value: 'hf', ...(modelRow.backend === 'hf' ? { selected: 'selected' } : {}) }, 'HuggingFace (hf)'),
-      el('option', { value: 'ollama', ...(modelRow.backend === 'ollama' ? { selected: 'selected' } : {}) }, 'Ollama (local daemon)'),
+      el('option', { value: 'hf', selected: modelRow.backend === 'hf' ? 'selected' : null }, 'HuggingFace (hf)'),
+      el('option', { value: 'ollama', selected: modelRow.backend === 'ollama' ? 'selected' : null }, 'Ollama (local daemon)'),
     );
 
     const modelInput = el('input', {
@@ -284,7 +352,7 @@
       placeholder: 'e.g. Qwen/Qwen2.5-7B-Instruct or llama3.1:8b',
       style: {
         background: 'rgba(2,6,15,0.6)',
-        color: '#e1eaf5',
+        color: 'var(--hull, #e1eaf5)',
         border: '1px solid rgba(45,212,255,0.25)',
         borderRadius: '4px',
         padding: '6px 8px',
@@ -293,10 +361,9 @@
       },
     });
 
-    // Helper text reminds users that HF uses repo IDs, Ollama uses tags
-    const hint = el('div', { style: { color: '#7a8aa0', lineHeight: '1.55' } },
+    const hint = el('div', { style: { color: 'var(--hull-3, #7a8aa0)', lineHeight: '1.55' } },
       'HF: ',
-      el('code', { style: { color: '#2dd4ff' } }, 'owner/repo-name'),
+      el('code', { style: { color: 'var(--cyan-1, #2dd4ff)' } }, 'owner/repo-name'),
       ' (huggingface.co)',
       el('br', null),
       'Ollama: ',
@@ -310,7 +377,7 @@
       el('button', {
         style: {
           background: 'transparent',
-          color: '#7a8aa0',
+          color: 'var(--hull-3, #7a8aa0)',
           border: '1px solid rgba(45,212,255,0.18)',
           padding: '6px 10px',
           borderRadius: '4px',
@@ -324,8 +391,8 @@
       }, 'Cancel'),
       el('button', {
         style: {
-          background: '#2dd4ff',
-          color: '#02060f',
+          background: 'var(--cyan-1, #2dd4ff)',
+          color: 'var(--ink, #02060f)',
           border: 'none',
           padding: '6px 12px',
           borderRadius: '4px',
@@ -341,17 +408,12 @@
           const newModelId = (modelInput.value || '').trim();
           if (!newModelId) {
             saveStatus.textContent = '⚠ model_id required';
-            saveStatus.style.color = '#ff6b6b';
+            saveStatus.style.color = 'var(--bad, #ff6b6b)';
             return;
           }
           saveStatus.textContent = 'Saving + downloading…';
-          saveStatus.style.color = '#ffb84d';
+          saveStatus.style.color = 'var(--warn, #ffb84d)';
           try {
-            // POST /model/install with role= triggers .env patch AND pull.
-            // For ollama with daemon-down, the call will error fast and we
-            // surface that. For hf, this downloads ~5-15 minutes worth of
-            // weights — the existing modal row status will reflect that
-            // via the WS event subscription wired below.
             const r = await fetch(BASE + '/model/install', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -367,16 +429,15 @@
             if (!r.ok || !data || !data.ok) {
               const note = (data && (data.note || data.error || data.detail)) || ('HTTP ' + r.status);
               saveStatus.textContent = '⚠ ' + String(note).slice(0, 80);
-              saveStatus.style.color = '#ff6b6b';
+              saveStatus.style.color = 'var(--bad, #ff6b6b)';
               return;
             }
             saveStatus.textContent = '✓ Backend + model_id saved. Restart server to load.';
-            saveStatus.style.color = '#6df0ff';
-            // Re-probe to refresh the parent banner/modal state
+            saveStatus.style.color = 'var(--good, #6df0ff)';
             setTimeout(() => { closeSwapPopover(); probe(); }, 1500);
           } catch (err) {
             saveStatus.textContent = '⚠ ' + String(err);
-            saveStatus.style.color = '#ff6b6b';
+            saveStatus.style.color = 'var(--bad, #ff6b6b)';
           }
         },
       }, 'Save'),
@@ -384,32 +445,19 @@
 
     swapPopover.append(backendSel, modelInput, hint, saveStatus, buttons);
     document.body.appendChild(swapPopover);
-    // Defer the doc-click listener attachment so the current click event
-    // (which opened the popover) doesn't immediately close it.
     setTimeout(() => document.addEventListener('click', onDocClickToClose, true), 0);
   }
 
   // --- Cross-tab event subscription ---------------------------------------
-  // /model/install emits model.install.{started,complete,failed} on the
-  // /events WebSocket. Subscribing makes the modal track installs kicked
-  // off by OTHER browser tabs (e.g. user opens chat.html in a second tab
-  // mid-download). The bus is set up by events.js (auto-loaded by nav.js).
 
+  let installBusWired = false;
   function subscribeToInstallEvents() {
     const bus = window.SeekDeepEvents;
-    if (!bus || subscribeToInstallEvents._wired) return;
-    subscribeToInstallEvents._wired = true;
+    if (!bus || installBusWired) return;
+    installBusWired = true;
 
     function matchRow(data) {
-      // Match by model_id + backend — the role might be absent on cross-tab
-      // installs that didn't pass role=. We iterate rowEls and find the
-      // first matching row.
       for (const role of Object.keys(rowEls)) {
-        const r = rowEls[role];
-        if (!r || !r.row) continue;
-        // The model row's `m` reference isn't stored — but the role string
-        // matches `chat.<X>` or `image` / `vision` and rowEls is keyed by
-        // it. We re-look up via the banner's last state if needed.
         if (data.role && (data.role === role || data.role === role.replace(/^chat\./, ''))) return role;
       }
       return null;
@@ -417,244 +465,19 @@
 
     bus.on('model.install.started', (data) => {
       const role = matchRow(data);
-      if (role) setRowStatus(role, 'DOWNLOADING…', '#ffb84d');
+      if (role) setRowStatus(role, 'DOWNLOADING…', 'var(--warn, #ffb84d)');
     });
     bus.on('model.install.complete', (data) => {
       const role = matchRow(data);
-      if (role) setRowStatus(role, 'DONE', '#6df0ff');
+      if (role) setRowStatus(role, 'DONE', 'var(--good, #6df0ff)');
     });
     bus.on('model.install.failed', (data) => {
       const role = matchRow(data);
       if (role) {
         const msg = (data && data.error) ? String(data.error).slice(0, 60) : 'FAILED';
-        setRowStatus(role, 'FAILED · ' + msg, '#ff6b6b');
+        setRowStatus(role, 'FAILED · ' + msg, 'var(--bad, #ff6b6b)');
       }
     });
-  }
-
-  // --- Install modal -------------------------------------------------------
-
-  let modal = null;
-  let rowEls = {};   // role -> { row, status, dot }
-
-  function openInstallModal(state) {
-    if (modal) return;
-    const missing = state.missing || [];
-    // If Ollama is needed but daemon is down, skip ollama-backed rows in the
-    // modal — they'd fail-fast with "daemon not reachable" anyway. The banner
-    // already tells the user to install Ollama.
-    const downloadable = (state.ollama_required && !state.ollama_available)
-      ? missing.filter((m) => m.backend !== 'ollama')
-      : missing;
-    const overlay = el('div', {
-      id: 'sd-model-modal',
-      style: {
-        position: 'fixed',
-        inset: '0',
-        zIndex: '9998',
-        background: 'rgba(2, 6, 15, 0.75)',
-        display: 'grid',
-        placeItems: 'center',
-        backdropFilter: 'blur(4px)',
-      },
-    });
-
-    const card = el('div', {
-      style: {
-        width: 'min(640px, 92vw)',
-        maxHeight: '80vh',
-        background: '#050b1a',
-        border: '1px solid rgba(45, 212, 255, 0.25)',
-        borderRadius: '10px',
-        padding: '24px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        boxShadow: '0 30px 80px rgba(0, 0, 0, 0.5)',
-      },
-    });
-
-    const title = el('div', {
-      style: { fontFamily: 'Space Grotesk, system-ui, sans-serif', fontSize: '18px', color: '#e1eaf5' },
-    }, 'Downloading model weights');
-
-    const sub = el('div', {
-      style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px', color: '#7a8aa0', lineHeight: '1.5' },
-    }, 'HuggingFace pulls from huggingface.co · Ollama pulls from your local daemon (registry.ollama.ai). Each model can take 5-15 minutes depending on size + connection. Safe to leave this running.');
-
-    const list = el('div', {
-      style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' },
-    });
-
-    rowEls = {};
-    for (const m of downloadable) {
-      const dot = el('span', {
-        style: {
-          display: 'inline-block', width: '10px', height: '10px',
-          borderRadius: '50%', background: '#7a8aa0', flexShrink: '0',
-        },
-      });
-      const status = el('span', {
-        style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '10px', color: '#7a8aa0', letterSpacing: '0.14em', textTransform: 'uppercase' },
-      }, 'PENDING');
-      // Backend chip — colors hint at the source so the user knows where
-      // each weight is coming from. HF = cyan (huggingface.co), Ollama =
-      // green (local daemon), remotes = amber (network).
-      const backendColors = {
-        hf:               { bg: 'rgba(45, 212, 255, 0.15)', fg: '#2dd4ff' },
-        ollama:           { bg: 'rgba(89, 220, 132, 0.15)', fg: '#59dc84' },
-        'openai-compat':  { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
-        anthropic:        { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
-        gemini:           { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
-      };
-      const bc = backendColors[m.backend] || { bg: 'rgba(122, 138, 160, 0.15)', fg: '#7a8aa0' };
-      // Chat roles can have their backend swapped via the mini-editor popover
-      // (.env patch through POST /model/install with role=). Image + vision
-      // are always hf with a fixed model_id — no swap UI for those rows.
-      const chatRoleMatch = m.role.match(/^chat\.(.+)$/);
-      const canSwap = !!chatRoleMatch && (m.backend === 'hf' || m.backend === 'ollama');
-      const backendChip = el('span', {
-        'data-sd-backend-chip': canSwap ? 'swappable' : 'fixed',
-        style: {
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          fontSize: '9.5px',
-          padding: '2px 7px',
-          background: bc.bg,
-          color: bc.fg,
-          borderRadius: '3px',
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          fontWeight: '600',
-          marginLeft: '8px',
-          verticalAlign: 'middle',
-          cursor: canSwap ? 'pointer' : 'default',
-          userSelect: 'none',
-        },
-        title: canSwap ? 'Click to change backend (HF ↔ Ollama)' : 'This role\'s backend is fixed',
-        onclick: canSwap ? (ev) => openSwapEditor(ev.target, m, chatRoleMatch[1]) : null,
-      }, (m.backend === 'hf' ? 'HuggingFace' : m.backend) + (canSwap ? ' ▾' : ''));
-
-      const row = el('div', {
-        style: {
-          display: 'grid',
-          gridTemplateColumns: 'auto 1fr auto',
-          gap: '12px',
-          alignItems: 'center',
-          padding: '10px 14px',
-          background: 'rgba(2, 6, 15, 0.6)',
-          border: '1px solid rgba(45, 212, 255, 0.15)',
-          borderRadius: '6px',
-        },
-      },
-        dot,
-        el('div', null,
-          el('div', { style: { fontFamily: 'Space Grotesk, system-ui, sans-serif', fontSize: '13px', color: '#e1eaf5', display: 'flex', alignItems: 'center', flexWrap: 'wrap' } },
-            el('span', null, m.role),
-            backendChip,
-          ),
-          el('div', { style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px', color: '#7a8aa0', marginTop: '2px' } }, m.model_id),
-        ),
-        status,
-      );
-      rowEls[m.role] = { row, status, dot };
-      list.appendChild(row);
-    }
-
-    const actions = el('div', {
-      style: { display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' },
-    },
-      el('button', {
-        id: 'sd-model-modal-close',
-        style: {
-          background: 'transparent',
-          color: '#7a8aa0',
-          border: '1px solid rgba(45, 212, 255, 0.18)',
-          padding: '8px 16px',
-          borderRadius: '5px',
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          fontSize: '11px',
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          cursor: 'pointer',
-        },
-        onclick: closeInstallModal,
-      }, 'Close'),
-    );
-
-    card.append(title, sub, list, actions);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    modal = overlay;
-
-    // Subscribe to cross-tab events so the modal reflects installs kicked
-    // off elsewhere. Retried after a short delay because events.js / the
-    // WS connection may not be ready at modal-open time on a fresh page.
-    subscribeToInstallEvents();
-    setTimeout(subscribeToInstallEvents, 1000);
-
-    runSequentialDownloads(downloadable);
-  }
-
-  function closeInstallModal() {
-    if (!modal) return;
-    modal.remove();
-    modal = null;
-    rowEls = {};
-    // Re-probe — banner stays if anything failed
-    setTimeout(probe, 500);
-  }
-
-  function setRowStatus(role, label, color) {
-    const r = rowEls[role];
-    if (!r) return;
-    r.status.textContent = label;
-    r.status.style.color = color;
-    r.dot.style.background = color;
-    r.dot.style.boxShadow = '0 0 6px ' + color;
-  }
-
-  async function downloadOne(m) {
-    setRowStatus(m.role, 'DOWNLOADING…', '#ffb84d');
-    try {
-      const r = await fetch(BASE + '/model/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // No `role` field — we're downloading weights for an EXISTING role
-        // assignment, not creating one. /model/install with role= would patch
-        // .env to reassign, which we don't want here.
-        body: JSON.stringify({ model_id: m.model_id, backend: m.backend, auto_pull: true }),
-      });
-      // /model/install returns JSON even on 500 (when install_result.ok is
-      // false the server JSONResponse wraps it). We try to parse first; if
-      // that fails fall back to status code text.
-      let data = null;
-      try { data = await r.json(); } catch {}
-      if (!r.ok || !data || !data.ok) {
-        // Surface the server's diagnostic note when present — e.g.
-        // 'Ollama daemon not reachable at http://127.0.0.1:11434' or
-        // 'hf download failed: ...'. Falls back to raw status for the
-        // edge case where the server died entirely.
-        const note = (data && (data.note || data.error)) ? (data.note || data.error) : ('HTTP ' + r.status);
-        setRowStatus(m.role, 'FAILED · ' + note.slice(0, 60), '#ff6b6b');
-        const tooltip = (data && (data.note || data.error)) || ('HTTP ' + r.status);
-        const row = rowEls[m.role];
-        if (row && row.status) row.status.title = tooltip;
-        return false;
-      }
-      setRowStatus(m.role, 'DONE', '#6df0ff');
-      return true;
-    } catch (err) {
-      setRowStatus(m.role, 'NETWORK ERROR', '#ff6b6b');
-      return false;
-    }
-  }
-
-  async function runSequentialDownloads(missing) {
-    // Sequential not parallel — HF cache concurrent writes on the same
-    // host can churn the disk + waste bandwidth. Walk the list one at a time.
-    for (const m of missing) {
-      await downloadOne(m);
-    }
   }
 
   // --- Boot probe ----------------------------------------------------------
@@ -671,17 +494,11 @@
 
       const ollamaDown = data.ollama_required && !data.ollama_available;
 
-      // If everything's installed AND Ollama is fine (or not needed), clear
-      // any lingering banner and bail.
       if (data.all_local_present && !ollamaDown) {
-        const old = document.getElementById('sd-model-banner');
-        if (old) old.remove();
+        clearBanner();
         return;
       }
 
-      // Show banner when EITHER any local model is missing OR Ollama is
-      // needed but the daemon is down (so the user gets the "Get Ollama"
-      // call-to-action even if no model rows are pending).
       const hasWork = (Array.isArray(data.missing) && data.missing.length > 0) || ollamaDown;
       if (hasWork) {
         showBanner({
@@ -692,8 +509,7 @@
         });
       }
     } catch {
-      // /models/installed unreachable — server probably not up. Stay silent;
-      // the seekdeep-loading page handles that case.
+      // /models/installed unreachable — server probably not up yet.
     }
   }
 

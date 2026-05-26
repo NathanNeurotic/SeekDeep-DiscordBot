@@ -2,335 +2,561 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — starting…</title>
+<title>SeekDeep — Loading</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
 <style>
-  :root {
-    --ink: #02060f;
-    --substrate: #050b1a;
-    --substrate-2: #0a1428;
-    --hull: #e1eaf5;
-    --hull-2: #b6c4d4;
-    --hull-3: #7a8aa0;
-    --cyan-0: #6df0ff;
-    --cyan-1: #2dd4ff;
-    --cyan-2: #00a3d4;
-    --stroke: rgba(45,212,255,0.18);
-    --warn: #ffb84d;
-    --bad: #ff6b6b;
-    --font-display: 'Space Grotesk', system-ui, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--ink); color: var(--hull); font-family: var(--font-display); }
+  /* Self-contained — this page can render before nav.js / version.js / etc.
+     mount. Uses styles.css's design tokens (var(--cyan-1) etc.) so the
+     palette matches the rest of the GUI without hand-rolling new colors.
+
+     Merge note: designer-shipped visual chrome (designer zip 43) +
+     maintainer-shipped Tauri-command wiring at the bottom of <script>. The
+     Tauri integration is what makes the 'Install Python deps' button
+     actually install Python deps (vs. just opening installer.html which
+     was designer's original CTA). */
+  html, body { height: 100%; }
   body {
+    overflow: hidden;
     display: grid;
     place-items: center;
-    background:
-      radial-gradient(ellipse at top, rgba(45,212,255,0.06), transparent 50%),
-      linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%);
+    background: var(--ink, #000a1f);
   }
-  .stage {
-    width: min(560px, 90vw);
-    padding: 48px 40px;
-    border: 1px solid var(--stroke);
-    border-radius: 14px;
-    background:
-      linear-gradient(rgba(45,212,255,0.025) 1px, transparent 1px) 0 0 / 32px 32px,
-      linear-gradient(90deg, rgba(45,212,255,0.025) 1px, transparent 1px) 0 0 / 32px 32px,
-      linear-gradient(180deg, rgba(10,20,40,0.6), rgba(5,11,26,0.6));
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.05),
-      0 30px 80px rgba(0,0,0,0.5),
-      0 0 80px rgba(45,212,255,0.08);
+
+  .splash {
+    width: min(540px, calc(100vw - 36px));
     text-align: center;
     position: relative;
+    z-index: 2;
+    padding: 32px 36px;
   }
-  .mark {
-    width: 96px; height: 96px;
-    margin: 0 auto 28px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--cyan-1), var(--cyan-2));
-    display: grid; place-items: center;
-    box-shadow:
-      0 0 0 1px rgba(109,240,255,0.4),
-      0 0 40px rgba(45,212,255,0.4),
-      inset 0 0 30px rgba(2,6,15,0.3);
+
+  .splash-mark-wrap {
     position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 132px; height: 132px;
+    margin: 0 auto 26px;
   }
-  .mark::before, .mark::after {
-    content: ""; position: absolute; inset: -12px;
-    border: 1px dashed rgba(109,240,255,0.4);
+  .splash-mark {
+    width: 96px; height: 96px;
     border-radius: 50%;
-    animation: spin 8s linear infinite;
+    image-rendering: -webkit-optimize-contrast;
+    animation: markFloat 4.5s ease-in-out infinite;
   }
-  .mark::after {
-    inset: -22px;
-    border-style: solid;
-    border-color: rgba(45,212,255,0.18);
-    animation-duration: 20s;
-    animation-direction: reverse;
+  @keyframes markFloat {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-6px); }
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .mark span {
-    font-family: var(--font-mono); font-size: 36px; font-weight: 700;
-    color: var(--ink);
+  .splash-mark-wrap::before,
+  .splash-mark-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 35%, transparent);
+    box-shadow:
+      0 0 24px color-mix(in oklab, var(--cyan-1) 25%, transparent),
+      inset 0 0 24px color-mix(in oklab, var(--cyan-1) 12%, transparent);
+    pointer-events: none;
   }
-  h1 {
-    margin: 0 0 8px;
-    font-size: 24px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
+  .splash-mark-wrap::before { animation: ringPulse 2.6s ease-out infinite; }
+  .splash-mark-wrap::after {
+    inset: -12px;
+    border-style: dashed;
+    border-color: color-mix(in oklab, var(--cyan-1) 22%, transparent);
+    animation: ringSpin 18s linear infinite;
   }
-  .sub {
-    color: var(--hull-3);
-    font-size: 13px;
-    font-family: var(--font-mono);
+  @keyframes ringPulse {
+    0%   { opacity: 0.95; transform: scale(1); }
+    100% { opacity: 0;    transform: scale(1.45); }
+  }
+  @keyframes ringSpin {
+    to { transform: rotate(360deg); }
+  }
+
+  .splash-wm {
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 600;
     letter-spacing: 0.06em;
-    margin-bottom: 32px;
+    color: var(--hull);
+    margin: 0 0 8px;
   }
-  .status {
+  .splash-wm em {
+    font-style: normal;
+    color: var(--cyan-1);
+    text-shadow: 0 0 16px color-mix(in oklab, var(--cyan-1) 55%, transparent);
+  }
+  .splash-tagline {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+    margin: 0 0 28px;
+  }
+  .splash-tagline span[data-version] {
+    color: var(--cyan-1);
+  }
+
+  /* Status line — picks up live updates from the poller below */
+  .splash-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     font-family: var(--font-mono);
     font-size: 12px;
-    color: var(--cyan-1);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    min-height: 1.6em;
+    color: var(--hull-2);
+    letter-spacing: 0.06em;
+    margin-bottom: 14px;
+    min-height: 18px;
   }
-  .status .dot {
+  .splash-status .glyph {
     display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
+    width: 8px; height: 8px; border-radius: 50%;
     background: var(--cyan-1);
-    margin-right: 8px;
-    vertical-align: middle;
-    animation: pulse 1.2s ease-in-out infinite;
-    box-shadow: 0 0 8px var(--cyan-0);
+    box-shadow: 0 0 8px var(--cyan-1);
+    animation: dotPulse 1.4s ease-in-out infinite;
   }
-  @keyframes pulse {
+  .splash-status.is-ready .glyph { background: var(--good); box-shadow: 0 0 8px var(--good); animation: none; }
+  .splash-status.is-error .glyph { background: var(--bad);  box-shadow: 0 0 8px var(--bad);  animation: none; }
+  @keyframes dotPulse {
     0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.7); }
+    50%      { opacity: 0.35; transform: scale(0.8); }
   }
-  .bar {
+  .splash-status .label {
+    color: var(--cyan-1);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .splash-status.is-error .label { color: var(--bad); }
+  .splash-status.is-ready .label { color: var(--good); }
+  .splash-status .stage { color: var(--hull-2); }
+
+  /* Progress meter — indeterminate sweep until first /health, then locks
+     to determinate based on boot phase. */
+  .splash-bar {
     height: 2px;
-    background: var(--stroke);
-    margin-top: 18px;
+    background: rgba(45,212,255,0.10);
     border-radius: 999px;
     overflow: hidden;
     position: relative;
+    margin-bottom: 14px;
   }
-  .bar::before {
-    content: "";
-    position: absolute;
-    left: -30%;
-    top: 0; bottom: 0;
-    width: 30%;
+  .splash-bar i {
+    display: block;
+    height: 100%;
+    width: 25%;
     background: linear-gradient(90deg, transparent, var(--cyan-1), transparent);
-    animation: slide 1.6s ease-in-out infinite;
+    box-shadow: 0 0 12px var(--cyan-1);
+    animation: barSweep 1.8s ease-in-out infinite;
   }
-  @keyframes slide {
-    0% { left: -30%; }
-    100% { left: 100%; }
+  .splash-bar.determinate i {
+    width: var(--pct, 0%);
+    background: linear-gradient(90deg, var(--cyan-2), var(--cyan-1));
+    animation: none;
+    transition: width 0.5s ease-out;
+  }
+  @keyframes barSweep {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(420%); }
   }
 
-  .error {
-    display: none;
-    margin-top: 28px;
-    padding: 18px;
-    border: 1px solid rgba(255,107,107,0.35);
-    border-radius: 8px;
-    background: rgba(255,107,107,0.05);
+  /* Phase ladder — small mono list of boot steps; tick as they complete */
+  .splash-phases {
+    margin-top: 22px;
     text-align: left;
-  }
-  .error.show { display: block; }
-  .error.show ~ .bar { display: none; }
-  .error .label {
+    display: grid;
+    gap: 6px;
     font-family: var(--font-mono);
     font-size: 11px;
-    color: var(--bad);
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
+    color: var(--hull-3);
+    letter-spacing: 0.06em;
   }
-  .error p {
-    margin: 0 0 10px;
-    font-size: 13px;
-    color: var(--hull-2);
-    line-height: 1.55;
+  .splash-phase {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    gap: 10px;
+    align-items: baseline;
+    opacity: 0.55;
+    transition: opacity 0.18s ease, color 0.18s ease;
   }
-  .error code {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    background: rgba(2,6,15,0.6);
-    padding: 1px 6px;
-    border-radius: 3px;
-    color: var(--cyan-1);
-  }
-  .error button {
-    margin-top: 6px;
-    background: var(--cyan-1);
-    color: var(--ink);
-    border: none;
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    cursor: pointer;
-    font-weight: 600;
-  }
-  .error button:hover { background: var(--cyan-0); }
+  .splash-phase .mark { color: var(--hull-3); width: 16px; }
+  .splash-phase .what { color: var(--hull-2); }
+  .splash-phase .at   { color: var(--hull-3); font-size: 10px; }
+  .splash-phase.active { opacity: 1; color: var(--cyan-1); }
+  .splash-phase.active .mark { color: var(--cyan-1); }
+  .splash-phase.done   { opacity: 1; }
+  .splash-phase.done   .mark { color: var(--good); }
+  .splash-phase.done   .what { color: var(--hull); }
 
-  .foot {
-    margin-top: 28px;
+  /* Tray hint — Tauri-only affordance */
+  .splash-tray {
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px solid color-mix(in oklab, var(--cyan-1) 14%, transparent);
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--hull-3);
-    letter-spacing: 0.18em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
+  }
+  .splash-tray code {
+    background: rgba(45,212,255,0.08);
+    color: var(--cyan-1);
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 10px;
+  }
+
+  /* Failure CTA — only shown when /health fails repeatedly.
+     The two Tauri-wired buttons (Install Python deps / Get Python 3.11+ ↗)
+     replace designer's original 'Open installer' button so the user has
+     an in-app path to actually install the missing system dep — not just
+     a navigation to a design-system page. */
+  .splash-cta {
+    margin-top: 16px;
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+  }
+  .splash-status.is-error ~ .splash-cta { display: flex; }
+  .splash-cta button {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 8px 16px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--cyan-1);
+    color: var(--cyan-1);
+    border-radius: var(--r-md);
+    cursor: pointer;
+  }
+  .splash-cta button:hover {
+    background: rgba(45,212,255,0.10);
+    box-shadow: 0 0 14px rgba(45,212,255,0.25);
+  }
+  .splash-cta button.primary {
+    background: var(--cyan-1);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .splash-cta button.primary:hover {
+    background: var(--cyan-0);
+  }
+  .splash-cta .hint {
+    color: var(--hull-3);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .splash-cta .reason {
+    color: var(--hull-3);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.10em;
+  }
+  .splash-cta .reason code {
+    background: rgba(255,107,107,0.10);
+    color: var(--bad);
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 10px;
   }
 </style>
 </head>
 <body>
-  <div class="stage">
-    <div class="mark"><span>SD</span></div>
-    <h1>Starting SeekDeep</h1>
-    <div class="sub">Local AI server boot · 127.0.0.1:7865</div>
-    <div class="status" id="status"><span class="dot"></span>WAITING FOR /health</div>
-    <div class="bar"></div>
+  <!-- Inherit the shared abyss + rays + bubbles background from styles.css. -->
+  <div class="abyss"></div>
+  <div class="rays"></div>
 
-    <div class="error" id="error">
-      <div class="label">⚠ Server unreachable</div>
-      <p id="errorMsg">The local AI server didn't respond on <code>http://127.0.0.1:7865</code> after 60 seconds.</p>
-      <p>Most common cause: <strong>Python 3.11+ isn't installed yet</strong>, or the bundled Python deps haven't finished installing.</p>
-      <p id="reasonHint">Tauri shell reports: <code id="reasonCode">probing…</code></p>
-      <button id="retryBtn">Retry now</button>
-      <button id="installDepsBtn" style="margin-left:8px; background:rgba(45,212,255,0.12); color:var(--cyan-1); border:1px solid var(--cyan-1);">Install Python deps</button>
-      <button id="getPythonBtn" style="margin-left:8px; background:transparent; color:var(--hull-2); border:1px solid var(--stroke);">Get Python 3.11+ ↗</button>
+  <main class="splash" role="status" aria-live="polite">
+    <div class="splash-mark-wrap">
+      <!-- Real brand mark, base64-embedded. Survives offline / file:// /
+           service-worker-cold-start contexts because no asset fetch is
+           required to paint the splash. -->
+      <img
+        class="splash-mark"
+        alt="SeekDeep"
+        src="data:image/webp;base64,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"
+      />
     </div>
 
-    <div class="foot">SEEKDEEP · v<span id="ver">10.35.0</span></div>
-  </div>
+    <h1 class="splash-wm">SEEK<em>DEEP</em></h1>
+    <p class="splash-tagline"><span data-version>v10.35</span> · LOCAL · STANDALONE</p>
+
+    <div class="splash-bar" id="splashBar"><i></i></div>
+
+    <div class="splash-status" id="splashStatus">
+      <span class="glyph"></span>
+      <span class="label" id="splashLabel">BOOTING</span>
+      <span class="stage" id="splashStage">starting local AI server…</span>
+    </div>
+
+    <div class="splash-cta">
+      <div class="hint">Local server didn't respond. Most common cause: <strong>Python 3.11+ isn't installed</strong> or its dependencies haven't finished installing.</div>
+      <div class="reason">Tauri shell reports: <code id="reasonCode">probing…</code></div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+        <button id="splashRetry">▸ Retry</button>
+        <button id="splashInstallDeps" class="primary">Install Python deps</button>
+        <button id="splashGetPython">Get Python 3.11+ ↗</button>
+      </div>
+    </div>
+
+    <div class="splash-phases" id="splashPhases">
+      <div class="splash-phase" data-phase="server"><span class="mark">·</span><span class="what">Local AI server</span><span class="at">/health</span></div>
+      <div class="splash-phase" data-phase="deps">  <span class="mark">·</span><span class="what">Python dependencies</span><span class="at">/ml_deps</span></div>
+      <div class="splash-phase" data-phase="models"><span class="mark">·</span><span class="what">Resident models</span><span class="at">/models/installed</span></div>
+      <div class="splash-phase" data-phase="ws">    <span class="mark">·</span><span class="what">Event bus</span><span class="at">ws /events</span></div>
+    </div>
+
+    <div class="splash-tray">
+      Window will open automatically when ready &nbsp;·&nbsp; close goes to tray &nbsp;·&nbsp; <code>⌘Q</code> to quit
+    </div>
+  </main>
 
 <script>
-  // The server URL is fixed by the SeekDeep architecture. Both the bundled
-  // Python sidecar and the user's seekdeep_standalone_launcher.bat bind here.
-  const HEALTH_URL = 'http://127.0.0.1:7865/health';
-  const READY_URL  = 'http://127.0.0.1:7865/gui/chat.html';
+  /* Boot poller — runs entirely standalone (no nav.js / events.js needed).
+     Drives the phase ladder + status line + progress bar based on which
+     endpoints the local server can answer.
 
-  const POLL_MS    = 500;
-  const TIMEOUT_MS = 60000;
-  const startedAt  = Date.now();
+     Once all four phases are green, redirects to chat.html (or whatever
+     ?next= param is set). */
+  (function () {
+    const BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+      ? location.origin : 'http://127.0.0.1:7865';
+    const params = new URLSearchParams(location.search);
+    const NEXT = params.get('next') || 'chat.html';
 
-  const statusEl = document.getElementById('status');
-  const errorEl  = document.getElementById('error');
+    const $status  = document.getElementById('splashStatus');
+    const $label   = document.getElementById('splashLabel');
+    const $stage   = document.getElementById('splashStage');
+    const $bar     = document.getElementById('splashBar');
+    const phases   = ['server', 'deps', 'models', 'ws'];
+    const state    = { server: false, deps: false, models: false, ws: false };
+    let failures = 0;
 
-  // Stage hints that update as we wait. Helps the user understand why a
-  // 30s spawn isn't a hang — model imports + first uvicorn binding take
-  // a while on cold start.
-  const STAGES = [
-    { at: 0,     label: 'WAITING FOR /health' },
-    { at: 4000,  label: 'PROBING · cold start typical 5-15s' },
-    { at: 15000, label: 'STILL PROBING · this can take ~30s on first run' },
-    { at: 30000, label: 'STILL PROBING · cold model imports may take a minute' },
-    { at: 45000, label: 'NEARLY GIVING UP' },
-  ];
-
-  function updateStatus() {
-    const elapsed = Date.now() - startedAt;
-    let label = STAGES[0].label;
-    for (const s of STAGES) {
-      if (elapsed >= s.at) label = s.label;
+    function phaseEl(name) { return document.querySelector(`.splash-phase[data-phase="${name}"]`); }
+    function setActive(name) {
+      phases.forEach(p => phaseEl(p).classList.toggle('active', p === name));
     }
-    statusEl.innerHTML = '<span class="dot"></span>' + label;
-  }
+    function setDone(name) {
+      const el = phaseEl(name);
+      el.classList.remove('active');
+      el.classList.add('done');
+      el.querySelector('.mark').textContent = '✓';
+      state[name] = true;
+    }
+    function pct() {
+      const done = phases.filter(p => state[p]).length;
+      return Math.round((done / phases.length) * 100);
+    }
+    function refreshBar() {
+      $bar.classList.add('determinate');
+      $bar.style.setProperty('--pct', pct() + '%');
+    }
+    function setStage(text) { $stage.textContent = text; }
 
-  async function probe() {
-    try {
-      const r = await fetch(HEALTH_URL, {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(1500),
-      });
-      if (r.ok) {
-        // Server is up — hand off to chat.html and stop polling.
-        statusEl.innerHTML = '<span class="dot"></span>LIVE · LOADING PLAYGROUND';
-        setTimeout(() => { location.href = READY_URL; }, 250);
-        return true;
+    async function check(path, opts) {
+      try {
+        const r = await fetch(BASE + path, {
+          signal: AbortSignal.timeout((opts && opts.timeoutMs) || 2500),
+          cache: 'no-store',
+        });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    }
+
+    async function pollServer() {
+      setActive('server');
+      setStage('starting local AI server…');
+      const h = await check('/health');
+      if (!h) return false;
+      setDone('server'); refreshBar();
+      return h;
+    }
+    async function pollDeps() {
+      setActive('deps');
+      setStage('checking Python packages…');
+      const d = await check('/ml_deps');
+      // Treat "endpoint missing" or "no required missing" as success.
+      const ok = !d || !(d.missing || []).filter(m => !m.optional).length;
+      if (ok) setDone('deps'); refreshBar();
+      return ok;
+    }
+    async function pollModels() {
+      setActive('models');
+      setStage('listing installed models…');
+      const m = await check('/models/installed');
+      // First-boot users will have zero installed; let model-install.js
+      // surface the picker once we hand off to chat.html.
+      setDone('models'); refreshBar();
+      return m;
+    }
+    async function pollBus() {
+      setActive('ws');
+      setStage('opening event bus…');
+      // Don't actually open the WS here (we'd just close it immediately on
+      // redirect); a /health.ws probe is enough.
+      const h = await check('/health');
+      const ready = h && (h.events_ws_open === true || h.events_ws !== false);
+      setDone('ws'); refreshBar();
+      return ready;
+    }
+
+    async function run() {
+      const h = await pollServer();
+      if (!h) {
+        failures++;
+        if (failures >= 3) {
+          $status.classList.add('is-error');
+          $label.textContent = 'OFFLINE';
+          setStage('local server unreachable · ' + BASE);
+          return;
+        }
+        setTimeout(run, 800);
+        return;
       }
-    } catch {
-      // Connection refused / timeout — server not up yet. Try again.
+      // Mirror the live version into the tagline as soon as we have it.
+      if (h && h.version) {
+        document.querySelectorAll('[data-version]').forEach(el => {
+          el.textContent = String(h.version);
+        });
+      }
+
+      await pollDeps();
+      await pollModels();
+      await pollBus();
+
+      $status.classList.add('is-ready');
+      $label.textContent = 'READY';
+      setStage('opening ' + NEXT + '…');
+      setTimeout(() => { location.href = NEXT; }, 500);
     }
-    return false;
-  }
 
-  let pollTimer = null;
-
-  async function tick() {
-    updateStatus();
-    if (await probe()) return; // server up, redirect kicked in
-    if (Date.now() - startedAt > TIMEOUT_MS) {
-      clearInterval(pollTimer);
-      errorEl.classList.add('show');
-      statusEl.innerHTML = '<span class="dot" style="background:var(--bad);box-shadow:0 0 8px var(--bad)"></span>TIMED OUT';
-      return;
-    }
-    pollTimer = setTimeout(tick, POLL_MS);
-  }
-
-  document.getElementById('retryBtn').addEventListener('click', () => {
-    errorEl.classList.remove('show');
-    // Reset the start clock so the retry gets a fresh 60s budget.
-    tick.startedAt = Date.now();
-    tick();
-  });
-
-  // Tauri command hooks. These talk to the Rust shell so the user never has to
-  // touch the install dir / open a terminal / find files. Wrapped in feature
-  // detect so the page still works when opened directly in a browser (during
-  // dev / debugging).
-  const tauri = (typeof window !== 'undefined' && window.__TAURI__) || null;
-
-  document.getElementById('installDepsBtn').addEventListener('click', async () => {
-    if (!tauri) {
-      alert('In-app pip install requires the Tauri shell. Run from a non-bundled context: pip install -r requirements-local.txt');
-      return;
-    }
-    statusEl.innerHTML = '<span class="dot"></span>INSTALLING DEPS · pip install in progress';
-    errorEl.classList.remove('show');
-    try {
-      const out = await tauri.core.invoke('install_python_deps');
-      console.log('[SeekDeep] deps install result:', out);
-      // After pip succeeds, retry the spawn.
-      await tauri.core.invoke('retry_spawn');
-      tick.startedAt = Date.now();
-      tick();
-    } catch (err) {
-      document.getElementById('reasonCode').textContent = String(err);
-      errorEl.classList.add('show');
-    }
-  });
-
-  document.getElementById('getPythonBtn').addEventListener('click', async () => {
-    if (tauri) {
-      await tauri.core.invoke('open_external', { url: 'https://www.python.org/downloads/' });
-    } else {
-      window.open('https://www.python.org/downloads/', '_blank');
-    }
-  });
-
-  // Tauri shell pushes diagnostic events with a one-word reason code when the
-  // spawn fails (PYTHON_NOT_FOUND / DEPS_MISSING / SPAWN_FAILED / OK). The page
-  // surfaces these without revealing filesystem paths.
-  if (tauri) {
-    tauri.event.listen('sidecar:status', (ev) => {
-      const code = ev.payload && ev.payload.code;
-      if (code) document.getElementById('reasonCode').textContent = code;
+    document.getElementById('splashRetry').addEventListener('click', async () => {
+      failures = 0;
+      $status.classList.remove('is-error');
+      $label.textContent = 'BOOTING';
+      phases.forEach(p => {
+        const el = phaseEl(p);
+        el.classList.remove('done', 'active');
+        el.querySelector('.mark').textContent = '·';
+        state[p] = false;
+      });
+      $bar.classList.remove('determinate');
+      // Ask the Rust shell to re-run the boot sequence (probe :7865 + find
+      // python + spawn server). No-op in plain-browser contexts where Tauri
+      // isn't available — the poller's own retry below still runs.
+      const tauri = window.__TAURI__;
+      if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+        try { await tauri.core.invoke('retry_spawn'); } catch (_) {}
+      }
+      run();
     });
-  }
 
-  tick();
+    // ===== Tauri command wiring =============================================
+    // The three Tauri commands surfaced via buttons:
+    //   install_python_deps   — runs `python -m pip install --user -r
+    //                            requirements-local.txt` inside the Rust
+    //                            shell. No terminal, no setup_local.ps1.
+    //   open_external         — opens an URL in the system browser via
+    //                            tauri-plugin-opener. Used for python.org.
+    //   retry_spawn           — re-runs the Rust shell's boot_sequence
+    //                            (probe :7865, find python, spawn server).
+    //                            Bound to Retry above.
+    // sidecar:status event listener: the Rust shell emits one-word reason
+    // codes (PYTHON_NOT_FOUND / DEPS_MISSING / EXTRACT_FAILED / SPAWN_FAILED
+    // / EXTERNAL_SERVER_RUNNING / SPAWNING / RESTARTING) so the user
+    // understands WHY the server is stuck.
+    const tauri = (typeof window !== 'undefined' && window.__TAURI__) || null;
+
+    function setStatusLabel(label, kind) {
+      $status.classList.remove('is-error', 'is-ready');
+      if (kind === 'error') $status.classList.add('is-error');
+      if (kind === 'ready') $status.classList.add('is-ready');
+      $label.textContent = label;
+    }
+
+    document.getElementById('splashInstallDeps').addEventListener('click', async () => {
+      if (!tauri) {
+        setStage('Tauri shell required — open from the SeekDeep app.');
+        return;
+      }
+      setStatusLabel('INSTALLING', null);
+      setStage('pip install --user -r requirements-local.txt …');
+      try {
+        await tauri.core.invoke('install_python_deps');
+        setStage('deps installed · retrying boot…');
+        try { await tauri.core.invoke('retry_spawn'); } catch (_) {}
+        // Reset failure counter and re-enter the polling loop so the
+        // 4-phase ladder ticks through again with the freshly-bound server.
+        failures = 0;
+        $status.classList.remove('is-error');
+        $label.textContent = 'BOOTING';
+        phases.forEach(p => {
+          const el = phaseEl(p);
+          el.classList.remove('done', 'active');
+          el.querySelector('.mark').textContent = '·';
+          state[p] = false;
+        });
+        $bar.classList.remove('determinate');
+        run();
+      } catch (err) {
+        setStatusLabel('PIP FAILED', 'error');
+        setStage(String(err).slice(0, 80));
+      }
+    });
+
+    document.getElementById('splashGetPython').addEventListener('click', async () => {
+      const url = 'https://www.python.org/downloads/';
+      if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+        try { await tauri.core.invoke('open_external', { url }); return; }
+        catch (_) { /* fall through */ }
+      }
+      window.open(url, '_blank');
+    });
+
+    // Listen for Rust-side status pushes so the reason code reflects
+    // what's actually happening even before /health responds.
+    const REASON_LABELS = {
+      EXTERNAL_SERVER_RUNNING: 'external server detected',
+      EXTRACT_FAILED:          'failed to extract bundled resources',
+      RUNTIME_DIR_UNAVAILABLE: 'app data dir unavailable',
+      PYTHON_NOT_FOUND:        'Python 3.11+ not found on PATH',
+      DEPS_MISSING:            'boot deps not installed yet',
+      SPAWNING:                'spawning local_ai_server.py',
+      SPAWN_FAILED:            'spawn failed (see logs)',
+      RESTARTING:              'restarting AI server',
+    };
+    if (tauri && tauri.event && typeof tauri.event.listen === 'function') {
+      tauri.event.listen('sidecar:status', (ev) => {
+        const code = ev && ev.payload && ev.payload.code;
+        if (!code) return;
+        const codeEl = document.getElementById('reasonCode');
+        if (codeEl) codeEl.textContent = code + (REASON_LABELS[code] ? ' · ' + REASON_LABELS[code] : '');
+        if (code === 'PYTHON_NOT_FOUND' || code === 'DEPS_MISSING' || code === 'SPAWN_FAILED' || code === 'EXTRACT_FAILED') {
+          // Surface the failure state immediately rather than waiting for
+          // 3× failed /health probes. The user has actionable buttons.
+          $status.classList.add('is-error');
+          $label.textContent = code === 'PYTHON_NOT_FOUND' ? 'PYTHON MISSING' : (code === 'DEPS_MISSING' ? 'DEPS MISSING' : 'OFFLINE');
+        }
+      });
+    }
+
+    run();
+  })();
 </script>
 </body>
 </html>

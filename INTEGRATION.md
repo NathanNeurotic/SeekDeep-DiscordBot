@@ -429,6 +429,8 @@ Auto-loaded by `nav.js`'s `autoLoadSiblings` alongside `events.js / version.js /
 
 Self-gated via `window.__seekdeepMlDepsLoaded` so multiple injections no-op. Pages that want to suppress the banner can set that flag before `nav.js` runs.
 
+**Visual primitive:** as of commit `<refactor>`, both `ml-deps.js` and `model-install.js` render their banner + modal through the shared `window.SeekDeepNotify` API (designer zip 43, `gui/notify.js`). The banner stacks naturally below other notify banners; tone is `warn` for ML-deps-missing, `info` for model-weights-missing, `warn` for Ollama-daemon-down. Each file degrades gracefully when notify.js isn't loaded (console-warn + return).
+
 **Tauri auto-restart hook:** when the install completes, `ml-deps.js` checks for `window.__TAURI__` and calls the `restart_sidecar` command. The Rust shell kills the Python child, waits ~500 ms for port 7865 to release, then re-runs `boot_sequence`. The page auto-reloads ~5 s later to pick up `/ml_deps available:true`. Plain-browser users (no Tauri) get the manual restart hint instead.
 
 ## 3.10 · First-use HF model download UI (`/models/installed` + `/model/install`)
