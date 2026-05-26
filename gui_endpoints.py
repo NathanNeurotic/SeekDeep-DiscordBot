@@ -1236,6 +1236,177 @@ def register_gui_endpoints(
             },
         }
 
+    # ----- GET /stats/snapshot -----
+    # Live snapshot of everything the Control Center actually shows. Replaces
+    # the hardcoded placeholders that have lived in app.html since v0
+    # (PID 14882, Uptime 4h 12m, Reqs: 184, Latency: 48ms, Guilds: 3,
+    # "↑ 18% vs last 30d", chart bar heights, cache size, etc.).
+    #
+    # Schema:
+    #   {
+    #     ok, generated_at,
+    #     ai_server: { uptime_seconds, requests_24h, latency_p50_ms,
+    #                  latency_p95_ms, by_family_24h: {...} },
+    #     bot:       { total_chats, total_images, total_vision, guild_count,
+    #                  user_count, day_buckets: [{date, chats, images, vision}] (last 30d) },
+    #     deltas:    { messages_30d_pct, images_30d_pct, vision_30d_pct }
+    #                — % change of latest-30d window vs prior-30d window
+    #     cache:     { hf_size_bytes, hf_repo_count, ollama_tag_count }
+    #   }
+    #
+    # AI server stats come from the in-process request middleware (live, in
+    # memory). Bot stats come from data/server-stats.json which the bot
+    # writes on every chat/image/vision via index.js's seekdeepBumpServerStats.
+    # Cache size is huggingface_hub.scan_cache_dir().
+    @app.get("/stats/snapshot")
+    def get_stats_snapshot():
+        out: dict = {"ok": True, "generated_at": _now_iso()}
+
+        # AI server live counters
+        try:
+            import local_ai_server as _lai
+            out["ai_server"] = _lai._seekdeep_req_stats()
+        except Exception as e:
+            out["ai_server"] = {"error": str(e)}
+
+        # Bot stats from server-stats.json
+        bot_stats_path = _data_dir / "server-stats.json"
+        bot: dict = {
+            "total_chats": 0, "total_images": 0, "total_vision": 0,
+            "guild_count": 0, "user_count": 0, "day_buckets": [],
+        }
+        day_agg: dict[str, dict[str, int]] = {}
+        if bot_stats_path.is_file():
+            try:
+                raw = json.loads(bot_stats_path.read_text(encoding="utf-8"))
+                guilds = raw.get("guilds") or {}
+                bot["guild_count"] = len(guilds)
+                user_ids: set = set()
+                for g in guilds.values():
+                    if not isinstance(g, dict): continue
+                    bot["total_chats"]  += int(g.get("totalChats") or 0)
+                    bot["total_images"] += int(g.get("totalImages") or 0)
+                    bot["total_vision"] += int(g.get("totalVision") or 0)
+                    for uid in (g.get("users") or {}).keys():
+                        user_ids.add(uid)
+                    for date, bucket in (g.get("dayBuckets") or {}).items():
+                        if not isinstance(bucket, dict): continue
+                        d = day_agg.setdefault(date, {"chats": 0, "images": 0, "vision": 0})
+                        d["chats"]  += int(bucket.get("chats")  or 0)
+                        d["images"] += int(bucket.get("images") or 0)
+                        d["vision"] += int(bucket.get("vision") or 0)
+                bot["user_count"] = len(user_ids)
+            except Exception as e:
+                bot["error"] = str(e)
+        out["bot"] = bot
+
+        # Last-30-day buckets (newest last) with gap-filling
+        from datetime import date as _date, timedelta as _timedelta
+        today = _date.today()
+        day_buckets = []
+        for i in range(30):
+            d = today - _timedelta(days=29 - i)
+            key = d.isoformat()
+            b = day_agg.get(key, {"chats": 0, "images": 0, "vision": 0})
+            day_buckets.append({"date": key, **b})
+        out["bot"]["day_buckets"] = day_buckets
+
+        # 30-day deltas (current 30d vs prior 30d). If we don't have prior-30d
+        # data (fresh install or pre-rollover), report None so the GUI hides
+        # the delta instead of showing 0% or a misleading +100%.
+        def _sum_window(key: str, start_offset: int, end_offset: int) -> int:
+            total = 0
+            for i in range(start_offset, end_offset):
+                d = today - _timedelta(days=i)
+                b = day_agg.get(d.isoformat())
+                if b: total += int(b.get(key) or 0)
+            return total
+
+        def _pct_change(current: int, prior: int) -> float | None:
+            if prior == 0:
+                return None  # avoid divide-by-zero / +infinity
+            return round(((current - prior) / prior) * 100.0, 1)
+
+        out["deltas"] = {
+            "messages_30d_pct": _pct_change(_sum_window("chats", 0, 30),  _sum_window("chats", 30, 60)),
+            "images_30d_pct":   _pct_change(_sum_window("images", 0, 30), _sum_window("images", 30, 60)),
+            "vision_30d_pct":   _pct_change(_sum_window("vision", 0, 30), _sum_window("vision", 30, 60)),
+        }
+
+        # Cache: HF scan + Ollama tags
+        cache: dict = {"hf_size_bytes": None, "hf_repo_count": None, "ollama_tag_count": None}
+        try:
+            from huggingface_hub import scan_cache_dir
+            try:
+                from huggingface_hub.errors import CacheNotFound
+            except ImportError:
+                CacheNotFound = Exception
+            cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+            try:
+                info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+                cache["hf_size_bytes"] = int(info.size_on_disk)
+                cache["hf_repo_count"] = len(info.repos)
+            except CacheNotFound:
+                cache["hf_size_bytes"] = 0
+                cache["hf_repo_count"] = 0
+        except ImportError:
+            pass
+        # Ollama tag count (best-effort; daemon may be down)
+        try:
+            import local_ai_server as _lai
+            if _lai.ollama_available():
+                cache["ollama_tag_count"] = len(_lai.ollama_list_tags())
+        except Exception:
+            pass
+        out["cache"] = cache
+
+        return out
+
+    # ----- POST /cache/prune -----
+    # Frees disk space by deleting HF snapshots older than --keep-recent (oldest
+    # repos first, by last_accessed). Backs the app.html "Prune cache (4.2 GB)"
+    # button. Token-required because it's destructive.
+    @app.post("/cache/prune", dependencies=[Depends(_require_gui_token)])
+    def post_cache_prune():
+        try:
+            from huggingface_hub import scan_cache_dir
+            try:
+                from huggingface_hub.errors import CacheNotFound
+            except ImportError:
+                CacheNotFound = Exception
+        except ImportError:
+            raise HTTPException(503, "huggingface_hub not installed (install ML deps first)")
+
+        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+        try:
+            info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        except CacheNotFound:
+            return {"ok": True, "freed_bytes": 0, "note": "HF cache directory not found"}
+
+        # Conservative policy: only prune revisions that aren't the "current"
+        # (refs) revision. Pinned models we use every day stay put; we just
+        # drop downloaded-but-untagged-anymore revisions.
+        revisions_to_delete = []
+        for repo in info.repos:
+            for rev in repo.revisions:
+                if not rev.refs:  # not referenced by any ref → unreachable
+                    revisions_to_delete.append(rev.commit_hash)
+        if not revisions_to_delete:
+            return {"ok": True, "freed_bytes": 0, "note": "nothing to prune (all revisions still referenced)"}
+
+        try:
+            delete_strategy = info.delete_revisions(*revisions_to_delete)
+            freed = int(delete_strategy.expected_freed_size)
+            delete_strategy.execute()
+            return {
+                "ok": True,
+                "freed_bytes": freed,
+                "revisions_deleted": len(revisions_to_delete),
+                "note": f"deleted {len(revisions_to_delete)} unreferenced revision(s)",
+            }
+        except Exception as e:
+            raise HTTPException(500, f"prune failed: {e}")
+
     # ----- POST /deps/install -----
     # Pairs with GET /ml_deps on the local_ai_server side. When the user
     # clicks "Install ML libraries" in the GUI banner, this endpoint spawns

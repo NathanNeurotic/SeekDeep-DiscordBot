@@ -419,6 +419,79 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+# ===== Request counter + latency tracking =====
+# Powers the Control Center's per-service "Reqs: 184 · Latency: 48ms" cells
+# (previously hardcoded). In-memory rolling 24h counters bucketed by path
+# family (e.g. /chat/* → 'chat', /image/* → 'image'). Latency is a deque
+# of the last N samples; we compute p50/p95 on demand.
+#
+# Why not persist to disk: counters reset on every server restart, which
+# is fine for a "what's happening RIGHT NOW" dashboard. The bot side
+# already persists permanent totals to server-stats.json — these in-memory
+# stats are complementary (live request volume vs lifetime usage).
+import collections as _seekdeep_collections
+import threading as _seekdeep_req_threading
+
+_REQ_LOCK = _seekdeep_req_threading.Lock()
+_REQ_TOTAL = 0
+_REQ_BY_FAMILY: dict[str, int] = {}
+# Last 24h of requests as (epoch_ts, latency_ms, path_family) tuples,
+# capped at 20k entries (~13/sec sustained for a day, well above realistic).
+_REQ_RECENT: _seekdeep_collections.deque = _seekdeep_collections.deque(maxlen=20_000)
+_REQ_STARTED_AT = time.time()
+
+def _seekdeep_req_family(path: str) -> str:
+    """Bucket a URL path into a coarse family for the per-service tile.
+    `/chat`, `/chat/whatever` → 'chat'. `/health` → 'health'. Anything
+    without a slash-prefixed first segment → 'other'."""
+    p = (path or "").lstrip("/").split("/", 1)[0].lower()
+    return p or "root"
+
+@app.middleware("http")
+async def _seekdeep_count_requests(request, call_next):
+    family = _seekdeep_req_family(request.url.path)
+    t0 = time.time()
+    response = await call_next(request)
+    elapsed_ms = (time.time() - t0) * 1000.0
+    # WS upgrade requests don't have meaningful elapsed time at this layer;
+    # they'd skew the latency stats. Skip them.
+    if request.scope.get("type") == "http":
+        global _REQ_TOTAL
+        with _REQ_LOCK:
+            _REQ_TOTAL += 1
+            _REQ_BY_FAMILY[family] = _REQ_BY_FAMILY.get(family, 0) + 1
+            _REQ_RECENT.append((t0, elapsed_ms, family))
+    return response
+
+def _seekdeep_req_stats() -> dict:
+    """Snapshot of the counters for /stats/snapshot consumers. Computes
+    p50/p95 latency from the in-memory deque, plus 24h-window request
+    counts (filtered from the rolling deque)."""
+    now = time.time()
+    day_ago = now - 86400
+    with _REQ_LOCK:
+        recent = list(_REQ_RECENT)
+        total = _REQ_TOTAL
+        by_family_lifetime = dict(_REQ_BY_FAMILY)
+        started = _REQ_STARTED_AT
+    # Filter to 24h window
+    last_24h = [r for r in recent if r[0] >= day_ago]
+    latencies_ms = sorted(r[1] for r in last_24h)
+    by_family_24h: dict[str, int] = {}
+    for _, _l, fam in last_24h:
+        by_family_24h[fam] = by_family_24h.get(fam, 0) + 1
+    p50 = latencies_ms[len(latencies_ms) // 2] if latencies_ms else None
+    p95 = latencies_ms[int(len(latencies_ms) * 0.95)] if latencies_ms else None
+    return {
+        "uptime_seconds":   int(now - started),
+        "total_requests":   total,
+        "requests_24h":     len(last_24h),
+        "by_family_lifetime": by_family_lifetime,
+        "by_family_24h":      by_family_24h,
+        "latency_p50_ms":   round(p50, 1) if p50 is not None else None,
+        "latency_p95_ms":   round(p95, 1) if p95 is not None else None,
+    }
+
 # ===== SeekDeep GUI · static mount =====
 from fastapi.staticfiles import StaticFiles
 _GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
