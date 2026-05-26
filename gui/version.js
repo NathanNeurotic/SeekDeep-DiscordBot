@@ -7,7 +7,7 @@
  * Auto-loaded by nav.js (alongside events.js), so pages just need to
  * mark their version cells:
  *
- *   <span data-version>v10.35</span>
+ *   <span data-version>v10.35.6</span>
  *
  * The literal text inside the element is the static fallback that shows
  * if /health is unreachable (e.g. when opening the file directly without
@@ -17,7 +17,7 @@
  * Node bot, the FastAPI side-car, and the GUI are guaranteed to agree.
  *
  * To force the prefix, set data-version-prefix="v":
- *   <span data-version data-version-prefix="v">v10.35</span>
+ *   <span data-version data-version-prefix="v">v10.35.6</span>
  * If /health.version is "10.35", the element becomes "v10.35".
  *
  * To suppress the prefix entirely, use data-version-raw:
@@ -37,7 +37,7 @@
     if (!state.version) return;
     // Skip outer elements that have a [data-version] descendant — they're
     // wrapper pills like <span class="pill" data-version>v10.35 · LOCAL</span>
-    // where the inner <span data-version>v10.35</span> is the real cell.
+    // where the inner <span data-version>v10.35.6</span> is the real cell.
     // Without this guard, setting textContent on the wrapper would wipe the
     // " · LOCAL" suffix (and any other siblings). The inner node still gets
     // rewritten via the descendant pass.

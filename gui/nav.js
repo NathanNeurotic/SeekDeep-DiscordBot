@@ -632,7 +632,7 @@
       <div class="sd-jump-list" id="sdJumpList"></div>
       <div class="sd-jump-foot">
         <span><kbd>⌘K</kbd> open · <kbd>Esc</kbd> close · <kbd>↵</kbd> jump</span>
-        <span><span data-version>v10.35</span> · LOCAL</span>
+        <span><span data-version>v10.35.6</span> · LOCAL</span>
       </div>
     </div>
   `;
