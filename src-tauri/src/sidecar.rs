@@ -375,17 +375,28 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Windows: prefer the `py` launcher with -3 over a bare `python.exe`.
-    // The Microsoft Store ships a 0-byte `python.exe` STUB on every fresh
-    // Windows 10/11 install that opens the Store when invoked. `py -3`
-    // skips that stub and finds a real Python 3.x installation.
+    // Windows: prefer the `py` launcher over a bare `python.exe`. The MS
+    // Store ships a 0-byte `python.exe` STUB on every fresh Win10/11
+    // install that opens the Store when invoked — `py` skips that stub.
+    //
+    // BUT: `py -3` returns the HIGHEST-installed Python 3.x. If the user
+    // has both 3.14 and 3.11 installed, that's 3.14 — which has no
+    // PyTorch wheels yet. So we walk `py -0p` and prefer a torch-
+    // compatible version (≤ 3.12 right now) before falling back to
+    // whatever `py -3` picks. Matches the max_torch_supported value
+    // reported by /system/runtime so the GUI and the sidecar agree on
+    // what counts as usable.
     #[cfg(windows)]
     {
+        if let Some(p) = py_launcher_prefer_torch_compat() {
+            return Some(p);
+        }
+        // Fallback: bare `py -3` (highest 3.x) — last resort if the
+        // walker couldn't parse `py -0p` or found nothing torch-
+        // compatible. Better to spawn against 3.14 and let pip / torch
+        // surface the clear error than to give up entirely.
         if let Ok(out) = quiet_command_str("py").args(["-3", "--version"]).output() {
             if out.status.success() {
-                // Resolve to the actual python.exe path so spawn_server can
-                // pass it directly. `py -3 -c "import sys; print(sys.executable)"`
-                // returns the real interpreter.
                 if let Ok(exec) = quiet_command_str("py")
                     .args(["-3", "-c", "import sys; print(sys.executable)"])
                     .output()
@@ -446,6 +457,62 @@ fn is_windows_store_stub(p: &Path) -> bool {
 
 #[cfg(not(windows))]
 fn is_windows_store_stub(_p: &Path) -> bool { false }
+
+/// Maximum Python minor version with current PyTorch wheel coverage.
+/// Bump this when pytorch.org adds wheels for the next 3.x. Keep in
+/// sync with gui_endpoints.py /system/runtime python.max_torch_supported
+/// so the GUI and sidecar agree on what counts as torch-compatible.
+const MAX_TORCH_PY_MINOR: u32 = 12;
+
+/// Walk `py -0p` output and return the path to the highest-numbered
+/// Python ≤ 3.MAX_TORCH_PY_MINOR. None if py launcher isn't installed,
+/// no qualifying versions are present, or every parsed entry resolves
+/// to the Windows Store stub. This is the layer that fixes the
+/// "Python 3.14 default but no torch wheels exist" trap on machines
+/// that ALSO have a 3.11 / 3.12 installed alongside 3.14.
+///
+/// `py -0p` output format (Windows Python launcher 3.x):
+///   -V:3.14 *      C:\Users\me\AppData\Local\Programs\Python\Python314\python.exe
+///   -V:3.12        C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe
+///   -V:3.11        C:\Python311\python.exe
+/// We parse `-V:<major>.<minor>` + the path (last whitespace-separated
+/// token on the line).
+#[cfg(windows)]
+fn py_launcher_prefer_torch_compat() -> Option<PathBuf> {
+    let out = quiet_command_str("py").args(["-0p"]).output().ok()?;
+    if !out.status.success() { return None; }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // (minor_version, path) pairs for every 3.x entry we can parse.
+    let mut candidates: Vec<(u32, PathBuf)> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Want lines that start with -V:3. — skip non-3.x and headers.
+        // Use match-continue, not ?, so a line we can't parse doesn't
+        // abort the whole walk (e.g. blank lines, header rows).
+        let v_idx = match trimmed.find("-V:3.") { Some(i) => i, None => continue };
+        let after_v = &trimmed[v_idx + "-V:3.".len()..];
+        // Minor version: digits until space, asterisk, or tab.
+        let minor_str: String = after_v.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if minor_str.is_empty() { continue; }
+        let minor: u32 = match minor_str.parse() { Ok(n) => n, Err(_) => continue };
+        if minor > MAX_TORCH_PY_MINOR { continue; }
+        // Path: last whitespace-separated chunk that contains "python".
+        let path_str = trimmed.split_whitespace()
+            .filter(|s| s.to_lowercase().contains("python"))
+            .last();
+        if let Some(p) = path_str {
+            let pb = PathBuf::from(p);
+            if pb.is_file() && !is_windows_store_stub(&pb) {
+                candidates.push((minor, pb));
+            }
+        }
+    }
+    // Highest torch-compatible minor wins (3.12 > 3.11 > 3.10 > ...).
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.into_iter().next().map(|(_, p)| p)
+}
 
 /// Quick smoke test: does this Python have our minimum boot deps installed?
 /// If false, the user needs to run install_python_deps before we can spawn.

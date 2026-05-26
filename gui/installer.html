@@ -1516,7 +1516,7 @@ const SEEKDEEP_BASE = (function() {
         const pyTooNewForTorch = rt.python?.torch_supported_by_version === false;
         if (pyTooNewForTorch) {
           // Root cause is the Python row, not the GPU — point there.
-          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but the running Python (${rt.python.version}) has no PyTorch wheels yet — see the Python row above. Until you set SEEKDEEP_PYTHON to a 3.11/3.12 interpreter (or use seekdeep_launcher.bat which already does), no GPU work runs through this sidecar.`);
+          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but the running Python (${rt.python.version}) has no PyTorch wheels yet — see the Python row above. Set SEEKDEEP_PYTHON to a 3.11 or 3.12 interpreter and restart, or install one of those alongside 3.${rt.python?.minor ?? '14'} (the Tauri sidecar auto-prefers the torch-compatible version when both are present).`);
         } else if (gpu.torch_present === false) {
           setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but PyTorch isn't installed yet. Click "Install ML libraries" in the Control Center (or run "pip install -r requirements-ml.txt") to unlock local chat/image/vision.`);
         } else {
@@ -1570,7 +1570,7 @@ const SEEKDEEP_BASE = (function() {
         if (!py.meets_min) {
           setCheckState('python', 'bad', `${baseLine} — need ≥ ${py.min_required}. The AI server is running on a too-old Python; install 3.11 or 3.12 and point SEEKDEEP_PYTHON at it in .env.`);
         } else if (py.torch_supported_by_version === false) {
-          setCheckState('python', 'bad', `${baseLine} — PyTorch has no wheels for Python ${py.version} yet (max supported: ${py.max_torch_supported}). The Tauri sidecar picked this Python but it can't load torch. Fix: install Python 3.11 or 3.12, then in .env set SEEKDEEP_PYTHON=C:\\\\path\\\\to\\\\python3.11\\\\python.exe and Reload .env. Your .bat launcher uses .venv which is probably already 3.11 and works.`);
+          setCheckState('python', 'bad', `${baseLine} — PyTorch has no wheels for Python ${py.version} yet (max supported: ${py.max_torch_supported}). Either install Python 3.11 or 3.12 alongside this version (the Tauri sidecar walks the py launcher's list and auto-prefers a torch-compatible interpreter when one is present), or in .env set SEEKDEEP_PYTHON=C:\\\\path\\\\to\\\\python3.12\\\\python.exe and Reload .env. The .bat launcher already runs through .venv which is on 3.11 — that's why it works for you and the sidecar didn't.`);
         } else if (py.torch_present === false) {
           setCheckState('python', 'bad', `${baseLine} — Python version is fine but torch isn't installed in it. Click "Install ML libraries" in the Control Center, or point SEEKDEEP_PYTHON in .env at a venv that has torch.`);
         } else if (!py.torch_cuda_runtime) {
