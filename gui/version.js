@@ -35,6 +35,13 @@
 
   function applyTo(el) {
     if (!state.version) return;
+    // Skip outer elements that have a [data-version] descendant — they're
+    // wrapper pills like <span class="pill" data-version>v10.35 · LOCAL</span>
+    // where the inner <span data-version>v10.35</span> is the real cell.
+    // Without this guard, setting textContent on the wrapper would wipe the
+    // " · LOCAL" suffix (and any other siblings). The inner node still gets
+    // rewritten via the descendant pass.
+    if (el.querySelector('[data-version]')) return;
     const raw = el.hasAttribute('data-version-raw');
     const prefix = el.getAttribute('data-version-prefix');
     let text = state.version;

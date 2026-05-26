@@ -534,7 +534,7 @@ const ENDPOINTS = [
     title: 'Route Inspector',
     desc: 'Read-only routing diagnostic. Returns the full plan for a given role: which backend serves it, which model ID resolves, fallback chain, and (for HF) whether the model is already loaded or would require an evict-and-swap. The bot\'s regex-based <span class="mono">seekdeepSelectChatModelRole</span> still happens upstream in <span class="mono">index.js</span> — this endpoint describes what happens <em>after</em> role selection. Pass an optional <span class="mono">prompt</span> just to visualize the first 240 chars in the response.',
     fields: [
-      { key: 'role', label: 'Role', type: 'select', options: ['default_chat','lightweight_chat','quality_chat','reasoning_chat','fallback_chat'], default: 'default_chat' },
+      { key: 'role', label: 'Role', type: 'select', options: ['default_chat','lightweight_chat','quality_text','reasoning_code','fallback_chat'], default: 'default_chat' },
       { key: 'prompt', label: 'Prompt (optional · echoes back the first 240 chars)', type: 'textarea', default: '' },
     ],
   },
