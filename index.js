@@ -8707,8 +8707,8 @@ const commands = [
     .setName('image')
     .setDescription('Generate an image locally.')
     .addStringOption((o) => o.setName('prompt').setDescription('Image prompt').setRequired(true))
-    .addIntegerOption((o) => o.setName('width').setDescription('Width, default 1024').setRequired(false))
-    .addIntegerOption((o) => o.setName('height').setDescription('Height, default 1024').setRequired(false))
+    .addIntegerOption((o) => o.setName('width').setDescription('Width, default 1024').setRequired(false).setMinValue(256).setMaxValue(1536))
+    .addIntegerOption((o) => o.setName('height').setDescription('Height, default 1024').setRequired(false).setMinValue(256).setMaxValue(1536))
     .addIntegerOption((o) => o.setName('seed').setDescription('Optional seed').setRequired(false))
     .addStringOption((o) =>
       o.setName('quality')
@@ -8848,7 +8848,7 @@ const commands = [
     .setDescription('Transform an image using a text prompt.')
     .addStringOption((o) => o.setName('prompt').setDescription('How to transform the image').setRequired(true))
     .addAttachmentOption((o) => o.setName('image').setDescription('Source image to transform').setRequired(false))
-    .addNumberOption((o) => o.setName('strength').setDescription('Transformation strength 0.05-1.0 (default 0.6)').setRequired(false)),
+    .addNumberOption((o) => o.setName('strength').setDescription('Transformation strength 0.05-1.0 (default 0.6)').setRequired(false).setMinValue(0.05).setMaxValue(1.0)),
   new SlashCommandBuilder()
     .setName('upscale')
     .setDescription('Upscale an image to a larger resolution.')
@@ -15195,10 +15195,10 @@ async function seekdeepAutoTranslateMessage(message) {
       },
     );
     if (answer && answer.trim()) {
-      await message.reply({
-        content: `**Translation:** ${answer.trim()}`,
-        allowedMentions: { repliedUser: false },
-      });
+      // Chunk via sendLongMessageReply — maxNewTokens=600 can yield ~3-4k
+      // chars in some languages, which silently fails Discord's 2000-char
+      // message limit. AUD-016.
+      await sendLongMessageReply(message, `**Translation:** ${answer.trim()}`);
     }
   } catch (err) {
     console.warn('[SeekDeep] auto-translate failed:', err?.message || err);

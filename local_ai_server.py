@@ -1352,6 +1352,15 @@ def image_to_b64_png(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# Absolute disk paths leak local filesystem layout to direct HTTP callers
+# (Discord-facing code already only forwards filename, but the raw API
+# response included e.g. C:\Users\nathan\AppData\…\out\img2img_…png).
+# Gate via LOCAL_AI_DEBUG_PATHS=on (default off). AUD-021.
+_LOCAL_AI_DEBUG_PATHS = os.getenv("LOCAL_AI_DEBUG_PATHS", "").strip().lower() in ("1","on","true","yes")
+def _maybe_debug_path(out_path) -> dict:
+    return {"debug_path": str(out_path)} if _LOCAL_AI_DEBUG_PATHS else {}
+
+
 def open_image_b64(data: str, *, mode: str = "RGB", max_bytes: int = None) -> Image.Image:
     """Decode base64 image_b64 → PIL.Image with consistent error handling.
 
@@ -3526,7 +3535,7 @@ def image(req: ImageRequest):
     result = image_pipe(**args)
     img = result.images[0]
 
-    ts = int(time.time())
+    ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_image_{ts}.png"
     out_path = OUTPUT_DIR / safe_name
     img.save(out_path)
@@ -3536,7 +3545,7 @@ def image(req: ImageRequest):
         "original_prompt": req.prompt.strip(),
         "refined_prompt": final_prompt_for_response,
         "filename": safe_name,
-        "path": str(out_path),
+        **_maybe_debug_path(out_path),
         "forced_steps": int(args.get("num_inference_steps", requested_steps)),
         "seed": seed,
     }
@@ -3590,7 +3599,7 @@ def img2img(req: Img2ImgRequest):
     result = i2i_pipe(**args)
     img = result.images[0]
 
-    ts = int(time.time())
+    ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_img2img_{ts}.png"
     out_path = OUTPUT_DIR / safe_name
     img.save(out_path)
@@ -3599,7 +3608,7 @@ def img2img(req: Img2ImgRequest):
         "image_b64": image_to_b64_png(img),
         "original_prompt": req.prompt.strip(),
         "filename": safe_name,
-        "path": str(out_path),
+        **_maybe_debug_path(out_path),
         "strength": float(req.strength),
         "seed": seed,
     }
@@ -3784,7 +3793,7 @@ def upscale(req: UpscaleRequest):
 
         selected = select_output_bytes(img)
         png_bytes = encode_image_bytes(img, "PNG")
-        ts = int(time.time())
+        ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
         safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
         out_path = OUTPUT_DIR / safe_name
         out_path.write_bytes(selected["bytes"])
@@ -3792,7 +3801,7 @@ def upscale(req: UpscaleRequest):
             "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
             "png_b64": base64.b64encode(png_bytes).decode("ascii"),
             "filename": safe_name,
-            "path": str(out_path),
+            **_maybe_debug_path(out_path),
             "method": "lanczos",
             "resample": resample_name,
             "sharpened": sharpened,
@@ -3884,7 +3893,7 @@ def upscale(req: UpscaleRequest):
 
             selected = select_output_bytes(img)
             png_bytes = encode_image_bytes(img, "PNG")
-            ts = int(time.time())
+            ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
             safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
             out_path = OUTPUT_DIR / safe_name
             out_path.write_bytes(selected["bytes"])
@@ -3892,7 +3901,7 @@ def upscale(req: UpscaleRequest):
                 "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
                 "png_b64": base64.b64encode(png_bytes).decode("ascii"),
                 "filename": safe_name,
-                "path": str(out_path),
+                **_maybe_debug_path(out_path),
                 "method": "realesrgan",
                 "resample": resample_name,
                 "sharpened": sharpened,
@@ -3996,7 +4005,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     img = img.resize((1024, 1024), Image.LANCZOS)
 
-    ts = int(time.time())
+    ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_pix2pix_{ts}.png"
     out_path = OUTPUT_DIR / safe_name
     img.save(out_path)
@@ -4005,7 +4014,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
         "image_b64": image_to_b64_png(img),
         "instruction": req.instruction.strip(),
         "filename": safe_name,
-        "path": str(out_path),
+        **_maybe_debug_path(out_path),
     }
 
 
@@ -4110,7 +4119,7 @@ def inpaint_endpoint(req: InpaintRequest):
     result = inpaint_pipe(**args)
     img = result.images[0]
 
-    ts = int(time.time())
+    ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_inpaint_{ts}.png"
     out_path = OUTPUT_DIR / safe_name
     img.save(out_path)
@@ -4120,7 +4129,7 @@ def inpaint_endpoint(req: InpaintRequest):
         "prompt": req.prompt.strip(),
         "remove_target": remove_target,
         "filename": safe_name,
-        "path": str(out_path),
+        **_maybe_debug_path(out_path),
         "strength": float(req.strength),
     }
 
@@ -4157,7 +4166,7 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
             detail=f"CLIPSeg model/dependencies are unavailable: {exc}"
         )
 
-    ts = int(time.time())
+    ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_mask_preview_{ts}.png"
     out_path = OUTPUT_DIR / safe_name
     mask_img.save(out_path)
@@ -4166,7 +4175,7 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
         "image_b64": image_to_b64_png(mask_img),
         "remove_target": remove_target,
         "filename": safe_name,
-        "path": str(out_path),
+        **_maybe_debug_path(out_path),
     }
 
 
