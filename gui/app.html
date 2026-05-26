@@ -2939,9 +2939,11 @@ const SEEKDEEP_BASE = (function() {
     recountDirty();
   };
   function recountDirty() {
-    const dirtyCount = document.querySelectorAll('#sec-discord .save, #sec-models .save, #sec-vram .save, #sec-memory .save, #sec-image .save, #sec-chat .save, #sec-search .save, #sec-admin .save').length
-      ? [...document.querySelectorAll('.config-row .save')].filter(s => s.textContent.includes('DIRTY')).length
-      : 0;
+    // Section-agnostic: any .config-row .save inside any cfg-section.
+    // Was an explicit per-section list that missed paths/remote/features/
+    // personas (no DIRTY tags painted for those, no save dispatch).
+    const allSaves = document.querySelectorAll('.cfg-section .config-row .save');
+    const dirtyCount = [...allSaves].filter(s => s.textContent.includes('DIRTY')).length;
     const counter = document.getElementById('cfg-dirty-count');
     if (counter) counter.textContent = dirtyCount;
     // Per-section dirty tags — populate the .sec-dirty span inside each
@@ -2957,8 +2959,12 @@ const SEEKDEEP_BASE = (function() {
       tag.textContent = n > 0 ? (n + ' dirty') : '';
     });
   }
-  // dirty-flag tracking for native inputs/selects
-  document.querySelectorAll('#sec-discord input, #sec-discord select, #sec-models input, #sec-models select, #sec-vram input, #sec-vram select, #sec-memory input, #sec-memory select, #sec-image input, #sec-image select, #sec-chat input, #sec-chat select, #sec-search input, #sec-search select, #sec-admin input, #sec-admin select').forEach(el => {
+  // dirty-flag tracking for native inputs/selects. Was an explicit
+  // per-section selector list that missed sec-paths / sec-remote /
+  // sec-features / sec-personas — so changes in those sections never
+  // marked the row DIRTY, never showed up in the per-section dirty
+  // count, and didn't get POSTed by Save. Cover every cfg-section row.
+  document.querySelectorAll('.cfg-section .config-row input, .cfg-section .config-row select').forEach(el => {
     el.addEventListener('change', () => markDirty(el));
     el.addEventListener('input',  () => markDirty(el));
   });

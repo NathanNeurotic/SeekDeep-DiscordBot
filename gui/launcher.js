@@ -598,18 +598,44 @@
       const label = (btn.textContent || '').toLowerCase().trim();
       if (label === '⟳ reload .env') {
         btn.addEventListener('click', async () => {
-          // .env changes only take effect on Python restart. In Tauri, ask
-          // the Rust shell to kill + respawn the sidecar; outside Tauri,
-          // hit /launcher/ai-server/restart (which only works for managed
-          // ai-server spawns, otherwise informs the user via the toast).
+          // .env changes only take effect on process restart. Both the AI
+          // server (Python uvicorn) and the Discord bot (node index.js)
+          // need to be restarted: AI-server-side keys (LOCAL_*_MODEL_ID,
+          // VRAM_*, HF_HUB_OFFLINE, etc.) and bot-side keys (DISCORD_TOKEN,
+          // SEEKDEEP_ADMIN_IDS, persona env defaults, feature flags) live
+          // in the same .env file. Was: only restarted the AI server, so
+          // bot-side changes silently didn't apply until manual restart.
+          const sdn = notify();
           const tauri = window.__TAURI__;
+          // 1) AI server: Tauri restart_sidecar or fallback to launcher
           if (tauri && tauri.core) {
             try { await tauri.core.invoke('restart_sidecar'); }
-            catch (err) { const sdn = notify(); if (sdn) sdn.toast({ tone: 'bad', title: 'Restart failed', body: String(err), ttl: 4000 }); }
-            const sdn = notify(); if (sdn) sdn.toast({ tone: 'info', title: 'Restarting AI server with new .env…', ttl: 3500 });
+            catch (err) { if (sdn) sdn.toast({ tone: 'bad', title: 'AI-server restart failed', body: String(err), ttl: 4000 }); }
           } else {
-            launcherCall('ai-server', 'restart');
+            await launcherCall('ai-server', 'restart');
           }
+          // 2) Bot: skip if not currently running (no point restarting an
+          // exited bot — user would expect Start instead). Probe state via
+          // the launcher status pump's cached data if we have it, else fire
+          // and rely on launcher endpoint's own handling.
+          let botShouldRestart = true;
+          try {
+            const r = await fetch(BASE + '/launchers/status', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            if (r.ok) {
+              const d = await r.json();
+              const bot = (d && d.services && d.services.bot) || {};
+              botShouldRestart = bot.state === 'running';
+            }
+          } catch { /* fall through and try anyway */ }
+          if (botShouldRestart) {
+            await launcherCall('bot', 'restart');
+          }
+          if (sdn) sdn.toast({
+            tone: 'info',
+            title: 'Reloading .env',
+            body: botShouldRestart ? 'Restarting AI server + bot…' : 'Restarting AI server (bot wasn\'t running — start it manually if you need bot-side env keys)',
+            ttl: 4500,
+          });
         });
       } else if (label === '⤓ flush model cache') {
         btn.addEventListener('click', unloadAll);
