@@ -153,12 +153,22 @@ jobs:
             - **macOS:** download `.dmg`, drag SeekDeep to Applications. First launch: right-click the app → "Open" → confirm. Required because the build is unsigned.
             - **Linux:** download `.AppImage`, `chmod +x` it, run.
 
-            **Prerequisites on your machine** (NOT bundled in the app — install once):
-            - Python 3.11+
-            - Node.js 20+
-            - Optional: Ollama (for local Ollama backend), Docker (for SearXNG web search)
+            **One system dependency** (the app will surface this in the loading overlay if missing):
+            - **Python 3.11+** — install from [python.org](https://www.python.org/downloads/) before first launch.
 
-            **First run:** the app opens a window pointing at `http://127.0.0.1:7865/gui/chat.html`. You need to start the local AI server separately for now (`seekdeep_standalone_launcher.bat` on Windows, or `npm run start:standalone`). Sidecar auto-start is coming in a future build.
+            **What happens on first run:**
+
+            1. The app extracts its bundled Python code to `%APPDATA%/SeekDeep/app/` (or platform equivalent).
+            2. The loading overlay finds your system Python and checks for the boot dependencies (fastapi, uvicorn, pydantic, etc).
+               - If they're missing, click **"Install Python deps"** — the app runs `pip install --user -r requirements-local.txt` for you (~30 MB, ~30 seconds). No terminal required.
+            3. The local AI server boots and the loading page redirects to the playground.
+            4. If you open `/image`, `/vision`, or use local-model `/chat`, a banner offers to install the **heavy ML libraries** (torch + transformers + diffusers, ~2 GB). Click once, the app pip-installs them in the background with a live progress modal.
+
+            **No setup script. No terminal. No filesystem rummaging.** Configuration flows through the in-app Tweaks panel.
+
+            **Remote-only usage:** if you only plan to route `/chat` to OpenAI-compatible / Anthropic / Gemini endpoints, you can skip the 2 GB ML download entirely — those backends are HTTP-only.
+
+            **Optional:** [Ollama](https://ollama.com/) for local-model `/chat` via the Ollama daemon; Docker for self-hosted SearXNG web search.
 
             See [CHANGELOG](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) for what's in this build.
           releaseDraft: false
