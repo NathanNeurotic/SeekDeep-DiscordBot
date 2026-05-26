@@ -1540,7 +1540,7 @@
           <div class="cp-panel" style="padding: 0; display: flex; flex-direction: column;">
             <div class="cp-conv" id="cpConv" style="flex: 1;"></div>
             <div class="cp-input">
-              <input id="cpInput" placeholder="Message SeekDeep…  ( · web auto · clinical · default_chat )" />
+              <input id="cpInput" placeholder="Message SeekDeep… (Enter to send · Shift+Enter for newline)" />
               <button class="btn btn-primary" id="cpSendBtn">Send</button>
             </div>
           </div>
@@ -2309,6 +2309,11 @@ const SEEKDEEP_BASE = (function() {
       // /health responded. cLIVE only owns its own .pill here. (Previously
       // cLIVE stamped STACK HEALTHY whenever /health 200'd, lying about
       // the stack when bot or searxng were exited.)
+      // Null-guard: app.html doesn't ship a #liveModePill in markup; the
+      // sd-live-pill nav.js injects into the topnav reflects /events bus
+      // state instead. Without the guard, setMode would throw on the first
+      // probe success/failure and break the rest of LIVE.probe().
+      if (!pill) return;
       if (mode === 'live') {
         pill.classList.add('on'); pill.classList.remove('warn');
         pill.innerHTML = '<span class="dot"></span>LIVE · :7865';
