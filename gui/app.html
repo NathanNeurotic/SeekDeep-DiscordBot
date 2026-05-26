@@ -3800,6 +3800,59 @@ const SEEKDEEP_BASE = (function() {
     }
   })();
 
+  // ===== Boot sequence panel (launcher pane) · last startup-related lines ====
+  // Uses /logs/tail to scrape the last ~200 lines and filter for boot-like
+  // markers (uvicorn / Application startup / clientReady / Discord ready /
+  // models loaded / SeekDeep boot / archive snapshot scheduled / etc.).
+  // Replaces the static "no boot.* events yet" empty-state with a real
+  // last-10-startup-lines view that refreshes when the launcher pane
+  // becomes active OR every 30s otherwise.
+  (function wireBootSequencePanel() {
+    const wrap = document.getElementById('bootSeqLog');
+    if (!wrap) return;
+
+    const BOOT_RE = /uvicorn|application startup|application shutdown|clientReady|client ?ready|discord ?ready|registered.*commands|loaded.*model|warmed|spawned|SeekDeep boot|archive snapshot|status rotation|fastapi|reloading|environment|listening on|started server|model_loaded|sidecar/i;
+
+    async function load() {
+      try {
+        const r = await fetch(SEEKDEEP_BASE + '/logs/tail?lines=200', { signal: AbortSignal.timeout(3500), cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const lines = Array.isArray(data.lines) ? data.lines : [];
+        const boot = lines.filter(l => BOOT_RE.test(l)).slice(-12);
+        if (!boot.length) {
+          wrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ no boot.* events in the last 200 log lines — services may have been up a while. See the Logs pane for the full tail.</div>';
+          return;
+        }
+        wrap.innerHTML = '';
+        boot.forEach(raw => {
+          const m = raw.match(/^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*\[?(INFO|WARN|ERR|ERROR|DBG|DEBUG)?\]?\s*\[?(\w+[-\w]*)?\]?\s*[:|]?\s*(.*)$/i);
+          const ts = (m && m[1]) || '';
+          const lvl = ((m && m[2]) || 'INFO').toLowerCase().replace('error','err').replace('debug','dbg');
+          const lvlCls = ['info','warn','err','dbg'].includes(lvl) ? lvl : 'info';
+          const src = (m && m[3]) || '';
+          const msg = ((m && m[4]) || raw).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const el = document.createElement('div');
+          el.className = 'log-line';
+          el.innerHTML = `<span class="ts">${ts}</span><span class="lvl ${lvlCls}">${lvl.toUpperCase()}</span><span class="src">${src}</span><span class="msg">${msg}</span>`;
+          wrap.appendChild(el);
+        });
+      } catch (err) {
+        wrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--warn); font-style:italic;">▸ /logs/tail unreachable — start the AI server</div>';
+      }
+    }
+    // Refresh whenever the launcher pane becomes active + every 30s.
+    function onActive() {
+      const pane = document.querySelector('[data-pane="launcher"]');
+      if (pane && pane.classList.contains('active')) load();
+    }
+    document.querySelectorAll('.sidebar a[data-mod="launcher"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(onActive, 50))
+    );
+    onActive();  // initial
+    setInterval(onActive, 30000);
+  })();
+
   // ===== Chat playground · live wiring (POST /chat) =====
   // Send button hits SEEKDEEP_BASE + '/chat' with the active role / persona /
   // web mode / temperature. On failure (server offline, timeout, HTTP error)
