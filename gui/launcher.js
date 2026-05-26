@@ -80,6 +80,18 @@
       data = await r.json();
     } catch { return; }
     if (!data || !data.services) return;
+    // Sidebar Launcher badge: "N UP" / "N DOWN".
+    let up = 0, total = 0;
+    for (const s of Object.values(data.services)) {
+      total++;
+      if (s && s.state === 'running') up++;
+    }
+    const sbLauncher = document.getElementById('sbLauncherBadge');
+    if (sbLauncher) {
+      sbLauncher.textContent = up + ' UP';
+      sbLauncher.classList.toggle('warn', up > 0 && up < total);
+      sbLauncher.classList.toggle('bad',  up === 0);
+    }
     for (const svc of Object.keys(data.services)) {
       const s = data.services[svc];
       const card = document.querySelector('.launcher-card[data-svc="' + svc + '"]');
@@ -122,6 +134,28 @@
 
       card.classList.toggle('up', s.state === 'running');
     }
+  }
+
+  // --- Sidebar GPU badge pump (lightweight /gpu probe every 10s) ----------
+  // The cLIVE pump in app.html already calls /gpu but only writes to the
+  // GPU pane numbers, not the sidebar badge. We want the sidebar badge to
+  // update on every page even before the user clicks into the GPU pane.
+  async function pumpGpuBadge() {
+    const badge = document.getElementById('sbGpuBadge');
+    if (!badge) return;
+    try {
+      const r = await fetch(BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const g = await r.json();
+      if (g.used_pct != null) {
+        badge.textContent = Math.round(g.used_pct) + '%';
+        badge.classList.toggle('warn', g.used_pct >= 75);
+        badge.classList.toggle('bad',  g.used_pct >= 92);
+      } else if (g.available === false) {
+        badge.textContent = 'CPU';
+        badge.classList.remove('warn', 'bad');
+      }
+    } catch { /* keep last good value */ }
   }
 
   // --- Stats snapshot pump ------------------------------------------------
@@ -208,6 +242,12 @@
       }
     }
 
+    // ---- Sidebar Models badge --------------------------------------------
+    const sbModels = document.getElementById('sbModelsBadge');
+    if (sbModels && snap.cache && snap.cache.hf_repo_count != null) {
+      sbModels.textContent = String(snap.cache.hf_repo_count);
+    }
+
     // ---- Models pane: cache size cells ---------------------------------
     const cache = snap.cache || {};
     if (cache.hf_size_bytes != null) {
@@ -281,12 +321,50 @@
   // --- Button wiring ------------------------------------------------------
 
   async function launcherCall(svc, action) {
+    // ai-server is self-hosted (it's the very process serving this request),
+    // so /launcher/ai-server/{start,stop,restart} always 409s. When running
+    // under Tauri, route restart/stop to the Rust shell's restart_sidecar
+    // command instead — that kills + respawns from outside the Python proc.
+    // Outside Tauri, surface a clear toast instead of "HTTP 409".
+    if (svc === 'ai-server' && (action === 'restart' || action === 'start')) {
+      const tauri = window.__TAURI__;
+      if (tauri && tauri.core) {
+        try {
+          await tauri.core.invoke('restart_sidecar');
+          const sdn = notify();
+          if (sdn) sdn.toast({ tone: 'info', title: 'ai-server restarting via Tauri sidecar…', ttl: 4000 });
+          setTimeout(pumpStatus, 1500);
+        } catch (err) {
+          const sdn = notify();
+          if (sdn) sdn.toast({ tone: 'bad', title: 'ai-server restart failed', body: String(err), ttl: 5000 });
+        }
+        return;
+      }
+      // Browser / non-Tauri mode: explain instead of 409
+      const sdn = notify();
+      if (sdn) sdn.toast({
+        tone: 'info', title: 'ai-server is self-hosted',
+        body: 'Restart it from the SeekDeep tray (or relaunch the .exe). The launcher endpoint refuses self-restart to avoid killing this request handler.',
+        ttl: 6000,
+      });
+      return;
+    }
+    if (svc === 'ai-server' && action === 'stop') {
+      const sdn = notify();
+      if (sdn) sdn.toast({
+        tone: 'info', title: 'ai-server can\'t stop itself',
+        body: 'Quit SeekDeep from the tray to shut down the local AI server.',
+        ttl: 6000,
+      });
+      return;
+    }
     try {
       const r = await fetch(BASE + '/launcher/' + svc + '/' + action, { method: 'POST' });
       const sdn = notify();
+      const body = await r.json().catch(() => ({}));
       if (sdn) {
         if (r.ok) sdn.toast({ tone: 'good', title: svc + ' ' + action + ' OK', ttl: 3000 });
-        else sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' failed', body: 'HTTP ' + r.status, ttl: 5000 });
+        else sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' failed', body: 'HTTP ' + r.status + (body.detail ? ' · ' + body.detail : ''), ttl: 6000 });
       }
       setTimeout(pumpStatus, 600);
     } catch (err) {
@@ -415,6 +493,9 @@
     // backend-side (HF cache scan, bot-stats file read, day-bucket sums).
     pumpStatsSnapshot();
     setInterval(pumpStatsSnapshot, 30000);
+    // GPU sidebar badge pump (10s; cheap /gpu probe).
+    pumpGpuBadge();
+    setInterval(pumpGpuBadge, 10000);
   }
 
   if (document.readyState === 'loading') {

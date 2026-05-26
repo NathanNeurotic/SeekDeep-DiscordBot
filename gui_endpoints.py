@@ -31,6 +31,7 @@ import json
 import time
 import secrets
 import asyncio
+import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -485,6 +486,17 @@ def _detect_running(service: str, log_dir: Path) -> tuple[str, int | None]:
     """
     Return (state, pid) by consulting both in-process state and PID file.
     State is one of: "running", "not-running", "exited", "unknown".
+
+    Special cases:
+      ai-server: If we reach this function, the AI server is by definition
+                 running — it's the process serving this HTTP request. So
+                 when no PID file / tracked-spawn match, return our own
+                 process PID with state="running" instead of the misleading
+                 "not-running" that would make the launcher card lie.
+      searxng:   No PID file — fall back to a TCP port probe on the
+                 configured searxng port (default 8080). If the port
+                 accepts a connection, report running; else unknown
+                 (it might be docker-managed, or just down).
     """
     # 1. In-process spawn we tracked
     proc = _PROCESSES.get(service)
@@ -500,7 +512,29 @@ def _detect_running(service: str, log_dir: Path) -> tuple[str, int | None]:
     if pid is not None:
         return ("running" if _pid_alive(pid) else "not-running"), pid
 
-    # 3. No info — for services we don't track this way (e.g. searxng)
+    # 3. Service-specific fallbacks (we know more about ai-server / searxng
+    #    than the generic "no PID file = not running")
+    if service == "ai-server":
+        # We ARE the ai-server. Return our own PID, state running.
+        return "running", os.getpid()
+    if service == "searxng":
+        # Probe the configured searxng port. If something accepts the
+        # connection, it's "running"; if connection refused, "not-running";
+        # any other socket error → "unknown".
+        port_str = (os.getenv("SEARXNG_PORT") or "").strip() or "8080"
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 8080
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return "running", None
+        except ConnectionRefusedError:
+            return "not-running", None
+        except OSError:
+            return "unknown", None
+
+    # 4. No info — for services we don't track this way
     if service not in _PID_FILE_NAMES:
         return "unknown", None
     return "not-running", None
