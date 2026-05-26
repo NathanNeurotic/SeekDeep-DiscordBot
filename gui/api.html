@@ -661,7 +661,54 @@ const ENDPOINTS = [
     group: 'TOOLING',
     id: 'unload', method: 'POST', path: '/unload',
     title: 'Unload',
-    desc: 'Force-unload the currently resident model and clear CUDA cache. Useful when the task-LRU isn\'t aggressive enough.',
+    desc: 'Force-unload the currently resident model and clear CUDA cache. Useful when the task-LRU isn\'t aggressive enough. Token-required.',
+    fields: [],
+  },
+
+  // ======== CONTROL CENTER WIRING (added during the post-v10.35 stabilization wave) ========
+  {
+    group: 'CONTROL',
+    id: 'stats_snapshot', method: 'GET', path: '/stats/snapshot',
+    title: 'Stats snapshot',
+    desc: 'Aggregated dashboard payload: AI-server live counters (uptime, requests_24h, latency p50/p95, by_family_24h), bot lifetime totals (total_chats/images/vision, guild_count, user_count, 30-day day_buckets, by_persona / by_chat_model breakdowns), 30-day percent deltas, and HF cache size + Ollama tag count. Powers every Stats-pane widget in app.html. No token required.',
+    fields: [],
+  },
+  {
+    group: 'CONTROL',
+    id: 'launchers_status', method: 'GET', path: '/launchers/status',
+    title: 'Launcher status',
+    desc: 'Per-service state for the Control Center launcher cards. Returns {services: {ai-server, bot, searxng}: {state, pid?, uptime_seconds?, started_at?}}. ai-server self-reports via os.getpid() (the request IS being served by it); searxng probes port 8080 via TCP; bot reads logs/bot.pid. No token required.',
+    fields: [],
+  },
+  {
+    group: 'CONTROL',
+    id: 'cache_prune', method: 'POST', path: '/cache/prune',
+    title: 'Prune HF cache',
+    desc: 'Delete HuggingFace cache revisions that aren\'t referenced by any ref (i.e. orphaned downloads from older model versions). Returns {ok, freed_bytes, revisions_deleted, note}. Token-required (destructive).',
+    fields: [],
+  },
+  {
+    group: 'CONTROL',
+    id: 'persona_get', method: 'GET', path: '/persona',
+    title: 'Persona state',
+    desc: 'Read the active global persona override + valid_personas list (built-in + any custom slugs from data/custom-personas.json). No token required.',
+    fields: [],
+  },
+  {
+    group: 'CONTROL',
+    id: 'persona_post', method: 'POST', path: '/persona',
+    title: 'Set persona',
+    desc: 'Set or clear a global persona override. Body: {persona: "<slug>"} sets the override, {action: "clear"} removes it. Slug must be in valid_personas (built-in or a custom slug created via the Discord <span class="mono">@SeekDeep persona create</span> command). Token-required.',
+    fields: [
+      { key: 'persona', label: 'Persona slug', type: 'text', default: 'neurotic' },
+      { key: 'scope',   label: 'Scope',        type: 'select', options: ['global','channel','server'], default: 'global' },
+    ],
+  },
+  {
+    group: 'CONTROL',
+    id: 'memory_users', method: 'GET', path: '/memory/users',
+    title: 'Memory · users',
+    desc: 'Summary of every user with stored facts (Discord IDs + fact counts). Token-required after the v10.35.x sensitive-reads policy lockdown — user facts can contain arbitrary remembered text.',
     fields: [],
   },
 ];
