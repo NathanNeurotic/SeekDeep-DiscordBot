@@ -87,8 +87,24 @@
     const hfMissing = missing.filter((m) => m.backend === 'hf');
     const ollamaMissing = missing.filter((m) => m.backend === 'ollama');
 
-    const names = missing.map((m) => m.model_id.split('/').pop()).slice(0, 3).join(', ');
+    // Show "<model_id> [backend]" so the user can see at a glance whether
+    // each row comes from HF, Ollama, or a remote provider. With a mixed
+    // setup the source becomes important — Ollama tags pull from the
+    // user's daemon, HF repos pull from huggingface.co, remotes don't
+    // download anything.
+    const fmt = (m) => m.model_id.split('/').pop() + ' [' + m.backend + ']';
+    const names = missing.map(fmt).slice(0, 3).join(', ');
     const more = missing.length > 3 ? ` +${missing.length - 3} more` : '';
+
+    // Are the missing models a mix of backends? Banner copy adapts.
+    const backendSet = new Set(missing.map((m) => m.backend));
+    const mixed = backendSet.size > 1;
+    const sources = (() => {
+      if (backendSet.has('hf') && backendSet.has('ollama')) return 'huggingface.co + Ollama daemon';
+      if (backendSet.has('hf')) return 'huggingface.co';
+      if (backendSet.has('ollama')) return 'Ollama daemon';
+      return 'multiple sources';
+    })();
 
     const text = el('div', { style: { flex: '1', lineHeight: '1.5' } });
     if (ollamaDown) {
@@ -99,7 +115,9 @@
     } else {
       text.append(
         el('strong', { style: { color: '#2dd4ff', marginRight: '8px' } }, '◐ Models not downloaded'),
-        missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights: ',
+        missing.length + ' role' + (missing.length === 1 ? '' : 's') + ' need weights from ',
+        el('em', { style: { color: '#e1eaf5', fontStyle: 'normal' } }, sources),
+        ': ',
         el('code', { style: { color: '#2dd4ff', background: 'rgba(45,212,255,0.12)', padding: '1px 5px', borderRadius: '3px' } }, names + more),
       );
     }
@@ -224,7 +242,7 @@
 
     const sub = el('div', {
       style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px', color: '#7a8aa0', lineHeight: '1.5' },
-    }, 'Each model can take 5-15 minutes depending on size + connection. Safe to leave this running.');
+    }, 'HuggingFace pulls from huggingface.co · Ollama pulls from your local daemon (registry.ollama.ai). Each model can take 5-15 minutes depending on size + connection. Safe to leave this running.');
 
     const list = el('div', {
       style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' },
@@ -241,6 +259,33 @@
       const status = el('span', {
         style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '10px', color: '#7a8aa0', letterSpacing: '0.14em', textTransform: 'uppercase' },
       }, 'PENDING');
+      // Backend chip — colors hint at the source so the user knows where
+      // each weight is coming from. HF = cyan (huggingface.co), Ollama =
+      // green (local daemon), remotes = amber (network).
+      const backendColors = {
+        hf:               { bg: 'rgba(45, 212, 255, 0.15)', fg: '#2dd4ff' },
+        ollama:           { bg: 'rgba(89, 220, 132, 0.15)', fg: '#59dc84' },
+        'openai-compat':  { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
+        anthropic:        { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
+        gemini:           { bg: 'rgba(255, 184, 77, 0.15)', fg: '#ffb84d' },
+      };
+      const bc = backendColors[m.backend] || { bg: 'rgba(122, 138, 160, 0.15)', fg: '#7a8aa0' };
+      const backendChip = el('span', {
+        style: {
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          fontSize: '9.5px',
+          padding: '2px 7px',
+          background: bc.bg,
+          color: bc.fg,
+          borderRadius: '3px',
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          fontWeight: '600',
+          marginLeft: '8px',
+          verticalAlign: 'middle',
+        },
+      }, m.backend === 'hf' ? 'HuggingFace' : m.backend);
+
       const row = el('div', {
         style: {
           display: 'grid',
@@ -255,7 +300,10 @@
       },
         dot,
         el('div', null,
-          el('div', { style: { fontFamily: 'Space Grotesk, system-ui, sans-serif', fontSize: '13px', color: '#e1eaf5' } }, m.role),
+          el('div', { style: { fontFamily: 'Space Grotesk, system-ui, sans-serif', fontSize: '13px', color: '#e1eaf5', display: 'flex', alignItems: 'center', flexWrap: 'wrap' } },
+            el('span', null, m.role),
+            backendChip,
+          ),
           el('div', { style: { fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: '11px', color: '#7a8aa0', marginTop: '2px' } }, m.model_id),
         ),
         status,
