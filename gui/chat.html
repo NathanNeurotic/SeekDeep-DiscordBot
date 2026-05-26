@@ -708,12 +708,45 @@
       const modelLabel = h.loaded_chat_model_id || (h.models && h.models.chat) || h.model;
       if (modelLabel) set('cBotModel', String(modelLabel).split('/').pop());
       const g = h.gpu || {};
+      // Lift the diagnostic out of the bare "cpu · no gpu" string. Three
+      // failure shapes the user actually hits:
+      //   a) nvidia-smi detected GPU, torch CAN'T see it -> wheel/arch
+      //      mismatch (cu121 wheel + Blackwell RTX 50-series is the
+      //      current poster-child). Tell the user what wheel is loaded
+      //      so they can match it against their card.
+      //   b) torch isn't installed yet (pre-ML-deps state) -> tell them
+      //      to click Install ML libraries.
+      //   c) no GPU at all -> "cpu only" is honest.
+      // Also drop a tooltip on the cell so hovering surfaces the link
+      // to the Installer's GPU row which has the long-form fix.
+      const cell = document.getElementById('cBotVram');
+      function setVramCell(text, title) {
+        if (!cell) return;
+        cell.textContent = text;
+        if (title) cell.setAttribute('title', title);
+        else cell.removeAttribute('title');
+      }
       if (g.used_mb != null && g.total_mb != null) {
-        set('cBotVram', `${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
+        setVramCell(`${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(0)} GB`);
       } else if (g.available === false) {
-        set('cBotVram', 'cpu · no gpu');
+        const nv = g.nvidia_smi || {};
+        if (nv.detected) {
+          // GPU is here; torch just can't see it.
+          const gpuName = nv.name || 'NVIDIA GPU';
+          const wheel = g.torch_cuda_built || (g.torch_present === false ? 'no torch' : 'cpu-only');
+          if (g.torch_present === false) {
+            setVramCell('no torch · ' + gpuName,
+              `${gpuName} detected by driver but PyTorch isn't installed. Open the Installer or click Install ML libraries in Control Center.`);
+          } else {
+            setVramCell(`wrong wheel · ${gpuName}`,
+              `${gpuName} detected by driver, but torch.cuda.is_available()=False — the loaded torch wheel (${wheel}) doesn't match this GPU. RTX 50-series (Blackwell) needs cu124+. See the Installer's GPU row for the fix.`);
+          }
+        } else {
+          setVramCell('cpu only · no gpu',
+            'No NVIDIA GPU detected by driver. Inference will run on CPU (slow). If you DO have a GPU, check that the driver is installed and nvidia-smi works in a shell.');
+        }
       } else {
-        set('cBotVram', '—');
+        setVramCell('—');
       }
       if (h.queue_depth != null) set('cBotQueue', String(h.queue_depth));
       else if (h.queue != null) set('cBotQueue', String(h.queue));
