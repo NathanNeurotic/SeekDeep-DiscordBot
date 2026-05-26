@@ -244,7 +244,7 @@ When `SEEKDEEP_TEST_MODE=1` is set in the environment, the bot:
 
 ## Data Persistence (`data/*.json`)
 
-All runtime state is stored as flat JSON files in the `data/` directory. Each file is read on demand and written back atomically. The `data/` directory is auto-created on first write. All files are gitignored except `archive-guild-config.json` (tracked so archive channel bindings survive fresh clones).
+All runtime state is stored as flat JSON files in the `data/` directory. Each file is read on demand and written back atomically. The `data/` directory is auto-created on first write. All runtime files are gitignored (real `archive-guild-config.json` carries server/channel/user IDs and is NOT tracked); `data/archive-guild-config.sample.json` IS tracked as a schema reference, and `data/.gitkeep` keeps the empty directory in the repo.
 
 ### `archive-guild-config.json`
 
@@ -373,12 +373,17 @@ Per-guild custom auto-reaction rules and built-in toggle overrides.
       "rules": [
         {
           "id": "r_1716048000000_abc",
-          "emoji": "👀",            // the reaction emoji
+          "emoji": "👀",                       // the reaction emoji
           "pattern": "sus",                    // substring match
           "regex": false,                      // true if /regex/flags syntax
-          "channelId": "",                     // "" = all channels
-          "userId": "",                        // "" = all users
-          "enabled": true
+          // scope/target replaced the old channelId/userId pair after v10.4.x.
+          // scope = "guild" | "channel" | "user"; target = id-or-empty.
+          // empty target on a channel/user scope means "any channel/any user".
+          "scope": "guild",
+          "target": "",
+          "enabled": true,
+          "createdBy": "123456789012345678",
+          "createdAt": "2026-05-26T09:00:00.000Z"
         }
       ],
       "builtins": {
