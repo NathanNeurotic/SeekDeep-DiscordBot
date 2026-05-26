@@ -2977,7 +2977,19 @@ const SEEKDEEP_BASE = (function() {
     if (liveOk) {
       btn.classList.remove('btn-primary');
       btn.classList.add('btn-ghost');
-      btn.innerHTML = '<span id="cfg-dirty-count">0</span> saved · clean · LIVE';
+      btn.innerHTML = '<span id="cfg-dirty-count">0</span> saved to .env · click Reload .env to apply';
+      // Toast a reminder that the running processes still have the old
+      // env values until restart. Was silent — user clicked Save, saw a
+      // green checkmark, then their changes silently didn't apply
+      // because they hadn't hit Reload .env.
+      if (Object.keys(updates).length > 0 && window.SeekDeepNotify?.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'info',
+          title: `Saved ${Object.keys(updates).length} value${Object.keys(updates).length === 1 ? '' : 's'} to .env`,
+          body: 'Click <strong>⟳ Reload .env</strong> in the Launcher panel to restart the AI server + bot so they pick up the new values.',
+          ttl: 8000,
+        });
+      }
     } else {
       btn.classList.remove('btn-primary');
       btn.classList.add('btn-ghost');
@@ -2990,7 +3002,7 @@ const SEEKDEEP_BASE = (function() {
       btn.classList.add('btn-primary');
       btn.style.color = '';
       btn.innerHTML = '<span id="cfg-dirty-count">0</span> pending · save';
-    }, 2400);
+    }, 5000);  // longer so the user has time to read "click Reload .env"
   });
 
   // Config filter
