@@ -310,6 +310,7 @@
         <button id="splashRetry">▸ Retry</button>
         <button id="splashInstallDeps" class="primary">Install Python deps</button>
         <button id="splashGetPython">Get Python 3.11+ ↗</button>
+        <button id="splashViewLogs">View server log</button>
       </div>
     </div>
 
@@ -536,6 +537,15 @@
         catch (_) { /* fall through */ }
       }
       window.open(url, '_blank');
+    });
+
+    document.getElementById('splashViewLogs').addEventListener('click', async () => {
+      if (!tauri || !tauri.core || typeof tauri.core.invoke !== 'function') {
+        setStage('View log requires the Tauri shell — log lives at %APPDATA%\\SeekDeep\\logs\\');
+        return;
+      }
+      try { await tauri.core.invoke('view_logs'); }
+      catch (err) { setStage('view_logs failed: ' + String(err).slice(0, 100)); }
     });
 
     // Listen for Rust-side status pushes so the reason code reflects

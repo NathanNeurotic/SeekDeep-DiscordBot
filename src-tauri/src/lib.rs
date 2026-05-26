@@ -49,6 +49,22 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("open_url: {e}"))
 }
 
+/// Open the SeekDeep log directory in the OS file manager. Used by the
+/// loading overlay's "View server log" button when boot fails, so the
+/// user can read `server.log` without hunting through `%APPDATA%`.
+#[tauri::command]
+fn view_logs(app: tauri::AppHandle) -> Result<(), String> {
+    let log_dir = sidecar::app_log_dir(&app)?;
+    // Ensure the dir exists so the opener doesn't error on a fresh install
+    // that hasn't spawned the server yet.
+    std::fs::create_dir_all(&log_dir).map_err(|e| format!("mkdir log_dir: {e}"))?;
+    let path_str = log_dir.to_string_lossy().to_string();
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path_str, None::<&str>)
+        .map_err(|e| format!("open_path: {e}"))
+}
+
 /// Kill the spawned Python sidecar and re-run the boot sequence. Called from
 /// the frontend after `deps.install.complete` fires — torch / transformers /
 /// diffusers carry native extensions that can't be hot-imported into an
@@ -138,6 +154,7 @@ pub fn run() {
             open_external,
             restart_sidecar,
             check_for_update,
+            view_logs,
         ])
         .setup(|app| {
             // --- System tray ---------------------------------------------

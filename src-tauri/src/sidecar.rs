@@ -170,7 +170,10 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
 /// Find a Python interpreter we can spawn. Order:
 ///   1. <runtime>/.venv/Scripts/python.exe   (Windows venv)
 ///   2. <runtime>/.venv/bin/python           (Unix venv)
-///   3. python3 / python / py on PATH
+///   3. py.exe -3 (Windows Python launcher; preferred on Windows because
+///      the Microsoft Store python.exe stub launches the Store installer
+///      instead of starting Python)
+///   4. python3 / python on PATH
 ///
 /// Returns None if we can't find anything usable.
 pub fn find_python(runtime: &Path) -> Option<PathBuf> {
@@ -185,18 +188,77 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Fall back to system Python. We test invocation rather than just
-    // checking PATH so we know it actually launches.
-    for name in &["python3", "python", "py"] {
-        let probe = Command::new(name).arg("--version").output();
-        if let Ok(out) = probe {
+    // Windows: prefer the `py` launcher with -3 over a bare `python.exe`.
+    // The Microsoft Store ships a 0-byte `python.exe` STUB on every fresh
+    // Windows 10/11 install that opens the Store when invoked. `py -3`
+    // skips that stub and finds a real Python 3.x installation.
+    #[cfg(windows)]
+    {
+        if let Ok(out) = Command::new("py").args(["-3", "--version"]).output() {
             if out.status.success() {
+                // Resolve to the actual python.exe path so spawn_server can
+                // pass it directly. `py -3 -c "import sys; print(sys.executable)"`
+                // returns the real interpreter.
+                if let Ok(exec) = Command::new("py")
+                    .args(["-3", "-c", "import sys; print(sys.executable)"])
+                    .output()
+                {
+                    if exec.status.success() {
+                        let path = String::from_utf8_lossy(&exec.stdout).trim().to_string();
+                        if !path.is_empty() {
+                            let pb = PathBuf::from(&path);
+                            if pb.is_file() && !is_windows_store_stub(&pb) {
+                                return Some(pb);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to system Python. We test invocation AND verify the exe
+    // isn't the Windows Store stub (which would otherwise pass --version
+    // by launching the Store, then exit successfully with empty stdout).
+    for name in &["python3", "python"] {
+        if let Ok(out) = Command::new(name).arg("--version").output() {
+            if out.status.success() {
+                // Resolve to actual path so we can stub-check.
+                if let Ok(exec) = Command::new(name)
+                    .args(["-c", "import sys; print(sys.executable)"])
+                    .output()
+                {
+                    if exec.status.success() {
+                        let path = String::from_utf8_lossy(&exec.stdout).trim().to_string();
+                        if !path.is_empty() {
+                            let pb = PathBuf::from(&path);
+                            if pb.is_file() && !is_windows_store_stub(&pb) {
+                                return Some(pb);
+                            }
+                        }
+                    }
+                }
+                // If we couldn't resolve a path, accept the name as-is (the
+                // env-resolved PATH lookup will work for the spawn too).
                 return Some(PathBuf::from(name));
             }
         }
     }
     None
 }
+
+/// The Microsoft Store ships a 0-byte python.exe at
+/// %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe on every fresh Win10/11
+/// install. Invoking it launches the Store installer instead of starting
+/// Python, which is a terrible UX for a sidecar. Detect by path substring.
+#[cfg(windows)]
+fn is_windows_store_stub(p: &Path) -> bool {
+    let s = p.to_string_lossy().to_lowercase().replace('/', "\\");
+    s.contains("\\microsoft\\windowsapps\\python")
+}
+
+#[cfg(not(windows))]
+fn is_windows_store_stub(_p: &Path) -> bool { false }
 
 /// Quick smoke test: does this Python have our minimum boot deps installed?
 /// If false, the user needs to run install_python_deps before we can spawn.
