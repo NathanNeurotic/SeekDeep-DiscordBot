@@ -768,6 +768,56 @@ def first_model_device(model: Any):
             return "cpu"
 
 
+def _seekdeep_nvidia_smi_probe() -> dict:
+    """Probe the NVIDIA driver for GPU presence *without* needing PyTorch.
+
+    Returns {detected: bool, name?, total_mb?, driver?, error?}. The point
+    is to distinguish "no GPU at all" from "GPU is here, PyTorch just isn't
+    installed yet" — the installer page lied as 'no GPU · CPU mode' for
+    fresh installs with the hardware fine but ML deps not pulled.
+
+    nvidia-smi ships with the NVIDIA driver on every supported OS, so this
+    works before requirements-ml.txt is ever installed. Cheap subprocess
+    (~50ms on a healthy install). 2s hard timeout so a hung driver can't
+    stall /gpu.
+    """
+    import subprocess
+    out: dict = {"detected": False}
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except FileNotFoundError:
+        out["error"] = "nvidia-smi not on PATH"
+        return out
+    except subprocess.TimeoutExpired:
+        out["error"] = "nvidia-smi timed out (driver may be hung)"
+        return out
+    except Exception as exc:
+        out["error"] = str(exc)[:160]
+        return out
+    if r.returncode != 0:
+        out["error"] = (r.stderr or r.stdout or "").strip()[:160] or "non-zero exit"
+        return out
+    # First GPU only (most installs are single-GPU; we don't need a list
+    # to answer "is there a GPU here").
+    line = (r.stdout or "").strip().splitlines()
+    if not line:
+        return out
+    parts = [p.strip() for p in line[0].split(",")]
+    if len(parts) >= 2:
+        out["detected"] = True
+        out["name"] = parts[0]
+        try:
+            out["total_mb"] = int(round(float(parts[1])))
+        except Exception:
+            pass
+        if len(parts) >= 3:
+            out["driver"] = parts[2]
+    return out
+
+
 def gpu_stats() -> dict:
     """Return current GPU state. Used by /health and /gpu.
 
@@ -780,6 +830,12 @@ def gpu_stats() -> dict:
     When reserved_mb approaches total_mb on Windows, the driver starts
     overflowing allocations into system shared memory. That's the proximate
     cause of "the bot generated 2 images and now everything is laggy".
+
+    Includes an nvidia_smi sub-block so the installer page can distinguish
+    "no GPU at all" (nvidia_smi.detected=false) from "GPU detected but
+    PyTorch not installed yet" (available=false, nvidia_smi.detected=true).
+    Before this, fresh installs with a 4090 + no torch showed "no GPU ·
+    CPU mode" — the bug your screenshot caught.
     """
     stats: dict = {
         "available": False,
@@ -787,12 +843,20 @@ def gpu_stats() -> dict:
         "loaded_task": loaded_task,
         "loaded_chat_role": loaded_chat_role,
         "loaded_chat_model_id": loaded_chat_model_id,
+        "nvidia_smi": _seekdeep_nvidia_smi_probe(),
     }
     try:
         import torch
         if not torch.cuda.is_available():
+            # torch present but no CUDA. Carry over the nvidia_smi result
+            # so the GUI can still show the actual hardware.
+            if stats["nvidia_smi"].get("detected"):
+                stats["torch_present"] = True
+                stats["cuda_visible_to_torch"] = False
             return stats
         stats["available"] = True
+        stats["torch_present"] = True
+        stats["cuda_visible_to_torch"] = True
         stats["allocated_mb"] = round(torch.cuda.memory_allocated() / (1024 ** 2), 1)
         stats["reserved_mb"] = round(torch.cuda.memory_reserved() / (1024 ** 2), 1)
         try:
@@ -817,8 +881,14 @@ def gpu_stats() -> dict:
             "vision": KEEP_RESIDENT_VISION,
             "image": KEEP_RESIDENT_IMAGE,
         }
+    except ImportError:
+        # torch isn't installed (typical pre-ML-deps state). Surface a
+        # specific flag so the installer page can offer a "install ML
+        # deps" action instead of falsely declaring "no GPU".
+        stats["torch_present"] = False
+        stats["cuda_visible_to_torch"] = False
     except Exception as exc:
-        stats["error"] = str(exc)
+        stats["error"] = str(exc)[:240]
     return stats
 
 

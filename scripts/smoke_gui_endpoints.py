@@ -175,6 +175,15 @@ def main() -> int:
     check("POST /launcher/bot/status without token -> 401",
           r.status_code == 401, f"got {r.status_code}")
 
+    # ---- GET /system/docker (open; installer page Docker probe) -----------
+    r = c.get("/system/docker")
+    check("GET /system/docker -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, state} where state in {running, installed_not_running, not_installed, error}",
+          body.get("ok") in (True, False)
+          and body.get("state") in ("running", "installed_not_running", "not_installed", "error"),
+          f"body={body}")
+
     if token:
         r = c.post("/launcher/bot/status", headers={_TOKEN_HEADER: token})
         check("POST /launcher/bot/status with correct token -> 200",

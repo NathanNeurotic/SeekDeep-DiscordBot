@@ -908,6 +908,54 @@ def register_gui_endpoints(
             "generated_at": _now_iso(),
         }
 
+    # ----- GET /system/docker -----
+    # Probe-only Docker check. Spawns `docker info` then `docker --version`
+    # to distinguish:
+    #   running                — daemon is up + reachable
+    #   installed_not_running  — CLI works but daemon isn't (Desktop closed)
+    #   not_installed          — `docker` not on PATH
+    # Installer page (and the Control Center) call this instead of inferring
+    # Docker state from SearXNG reachability — which lied because SearXNG
+    # being down doesn't tell you anything about Docker (the user might have
+    # Docker running but never started the SearXNG container).
+    @app.get("/system/docker")
+    def get_system_docker():
+        # `docker info` blocks until the daemon responds; 3s is enough on a
+        # healthy install and short enough not to hang the installer page.
+        try:
+            r = subprocess.run(
+                ["docker", "info", "--format", "{{.ServerVersion}}"],
+                capture_output=True, text=True, timeout=3,
+            )
+        except FileNotFoundError:
+            return {"ok": True, "state": "not_installed",
+                    "detail": "`docker` not on PATH — install Docker Desktop"}
+        except subprocess.TimeoutExpired:
+            return {"ok": True, "state": "installed_not_running",
+                    "detail": "`docker info` timed out (daemon unresponsive — try restarting Docker Desktop)"}
+        except Exception as exc:
+            return {"ok": False, "state": "error", "detail": str(exc)[:160]}
+        if r.returncode == 0:
+            return {"ok": True, "state": "running",
+                    "server_version": (r.stdout or "").strip()[:80] or None}
+        # `docker info` failed — try `docker --version` to see if at least
+        # the CLI is installed. That distinguishes "Docker installed but
+        # daemon stopped" from "Docker not installed at all".
+        try:
+            r2 = subprocess.run(
+                ["docker", "--version"], capture_output=True, text=True, timeout=2,
+            )
+        except Exception:
+            return {"ok": True, "state": "not_installed",
+                    "detail": "`docker --version` failed too"}
+        if r2.returncode == 0:
+            stderr_first = (r.stderr or "").splitlines()
+            hint = stderr_first[0][:160] if stderr_first else "Docker installed but daemon not running"
+            return {"ok": True, "state": "installed_not_running", "detail": hint,
+                    "client_version": (r2.stdout or "").strip()[:80] or None}
+        return {"ok": True, "state": "not_installed",
+                "detail": "`docker --version` exited non-zero"}
+
     # AUD-003: which data files contain user-identifying info and should be
     # token-gated. Stats / built-in stacks stay public so the dashboard pane
     # works without the GUI nav.js token interceptor being loaded.

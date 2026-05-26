@@ -1430,6 +1430,17 @@ const SEEKDEEP_BASE = (function() {
       return true;
     } catch { return false; }
   }
+  async function probeDocker() {
+    // /system/docker spawns `docker info` server-side, distinguishing
+    // running / installed-but-stopped / not-installed. Replaces the old
+    // "infer from SearXNG" path which lied because SearXNG being down
+    // doesn't say anything about Docker (could be a stopped container).
+    try {
+      const r = await fetch(SEEKDEEP_BASE + '/system/docker', { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
 
   async function runAllChecks() {
     const all = ['node','python','git','docker','gpu','disk','aiserver','searxng'];
@@ -1440,23 +1451,44 @@ const SEEKDEEP_BASE = (function() {
 
     if (ai.up) {
       setCheckState('aiserver', 'ok', 'live on :7865');
-      const gpu = await probeAiGpu();
-      // /gpu returns { available: true|false, total_mb, used_mb, used_pct, ... }.
-      // Previously this checked gpu.detected which doesn't exist as a field
-      // — so CPU-only installs (gpu.available=false) fell through to the
-      // green "detected (no detail)" branch and falsely claimed CUDA was
-      // present. Now honors the real field.
+      const [gpu, docker] = await Promise.all([probeAiGpu(), probeDocker()]);
+
+      // ---- GPU row ----------------------------------------------------
+      // /gpu now returns { available, total_mb, used_mb, ..., nvidia_smi:
+      //   { detected, name, total_mb, driver } }.
+      // We distinguish four states:
+      //   1. torch + CUDA running   → green "X GB · Y% used"
+      //   2. nvidia-smi sees GPU, torch missing → yellow "GPU detected,
+      //      install ML deps to enable local chat/image/vision"
+      //   3. nvidia-smi sees GPU, torch present but no CUDA → yellow
+      //      "GPU + driver OK, but PyTorch CUDA build missing"
+      //   4. nvidia-smi finds nothing → yellow "no GPU · CPU mode"
+      // Was: always (2)/(3)/(4) collapsed to "no GPU · CPU mode" — fresh
+      // installs with a 4090 saw the same red dot as users without a GPU.
       if (gpu && gpu.total_mb) {
         const usedPct = Math.round((gpu.used_mb / gpu.total_mb) * 100);
-        setCheckState('gpu', 'ok', `${(gpu.total_mb/1024).toFixed(1)} GB · ${usedPct}% used`);
+        const name = (gpu.nvidia_smi && gpu.nvidia_smi.name) ? gpu.nvidia_smi.name : (gpu.device_name || 'CUDA device');
+        setCheckState('gpu', 'ok', `${name} · ${(gpu.total_mb/1024).toFixed(1)} GB · ${usedPct}% used`);
+      } else if (gpu && gpu.nvidia_smi && gpu.nvidia_smi.detected) {
+        // GPU is here; PyTorch just can't see it. Either torch isn't
+        // installed (typical pre-ML-deps state) or the user has a
+        // CPU-only torch wheel.
+        const name = gpu.nvidia_smi.name || 'NVIDIA GPU';
+        const totalGb = gpu.nvidia_smi.total_mb ? (gpu.nvidia_smi.total_mb / 1024).toFixed(1) : null;
+        const totalTag = totalGb ? ` · ${totalGb} GB VRAM` : '';
+        if (gpu.torch_present === false) {
+          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but PyTorch isn't installed yet → run "Install ML libraries" in the Control Center (or "pip install -r requirements-ml.txt") to unlock local chat/image/vision.`);
+        } else {
+          setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but the installed PyTorch wheel doesn't include CUDA. Reinstall with: pip install --index-url https://download.pytorch.org/whl/cu121 torch.`);
+        }
       } else if (gpu && gpu.available === false) {
-        // No CUDA / no torch. Not necessarily a "bad" — fine for remote
-        // backends or CPU-only experimentation. Show as warning yellow
-        // with an honest message instead of fake green or scary red.
-        setCheckState('gpu', 'bad', 'no GPU · CPU mode (ok for remote backends; local HF chat/image/vision will be slow or unavailable)');
+        // No GPU at all (nvidia-smi didn't find one). Honest yellow.
+        const err = gpu.nvidia_smi && gpu.nvidia_smi.error;
+        setCheckState('gpu', 'bad', 'no GPU · CPU mode' + (err ? ' (' + err + ')' : '') + ' — ok for remote backends; local HF chat/image/vision will be slow or unavailable.');
       } else {
         setCheckState('gpu', 'ok', 'detected (no detail)');
       }
+
       // node / python / git / disk inferred from server presence (the only
       // way this page can talk to the server is if Node spawned the bot
       // OR Python is running uvicorn — same thing means git+disk are fine).
@@ -1464,18 +1496,27 @@ const SEEKDEEP_BASE = (function() {
       setCheckState('python', 'ok', 'FastAPI alive');
       setCheckState('git', 'ok', 'assumed (repo cloned)');
       setCheckState('disk', 'ok', 'enough to run (~80 GB recommended)');
-      // Docker is independent — it only matters for SearXNG. If SearXNG
-      // is up, Docker is obviously fine. If SearXNG is down it could be
-      //   (a) Docker installed but not started — fixable via "open Docker"
-      //   (b) Docker not installed — fixable via Install link
-      //   (c) Docker installed + running but user never launched the searxng container
-      // The page can't distinguish these from the browser; the honest
-      // message acknowledges that instead of jumping straight to "Install"
-      // for users who definitely already have Docker.
-      if (sx) {
-        setCheckState('docker', 'ok', 'searxng container up');
+
+      // ---- Docker row -------------------------------------------------
+      // /system/docker tells us the real state — running / installed_not_
+      // running / not_installed. SearXNG state is a separate signal: even
+      // when Docker is up, the user might not have launched the SearXNG
+      // container. Both surface cleanly in the row.
+      if (docker && docker.state === 'running') {
+        const ver = docker.server_version ? ` v${docker.server_version}` : '';
+        if (sx) {
+          setCheckState('docker', 'ok', `Docker daemon up${ver} · searxng container up`);
+        } else {
+          setCheckState('docker', 'bad', `Docker daemon up${ver} — but searxng container isn't running. Web search will be unavailable until you start the searxng container (e.g. \`docker compose up -d searxng\`).`);
+        }
+      } else if (docker && docker.state === 'installed_not_running') {
+        setCheckState('docker', 'bad', `Docker is installed but the daemon isn't running. Click "Try start" to launch Docker Desktop, or open it manually. ${docker.detail ? '(' + docker.detail + ')' : ''}`);
+      } else if (docker && docker.state === 'not_installed') {
+        setCheckState('docker', 'bad', 'Docker not installed — install Docker Desktop to enable SearXNG-backed web search.');
       } else {
-        setCheckState('docker', 'bad', 'searxng not reachable — Docker may not be running, or the container isn\'t started. Web search will be unavailable until then. (This check infers Docker state from SearXNG; can\'t directly probe Docker from the browser.)');
+        // Probe itself failed (server unreachable mid-check?). Fall back
+        // to the searxng-inference message instead of fabricating a state.
+        setCheckState('docker', sx ? 'ok' : 'bad', sx ? 'searxng container up' : 'docker probe failed — try running System Check again');
       }
     } else {
       setCheckState('aiserver', 'bad', ai.reason);
