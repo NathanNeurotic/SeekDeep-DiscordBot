@@ -190,8 +190,29 @@
   (function installErrorSurfacing() {
     const recent = new Map();  // msg -> lastShownTs
     const TOAST_THROTTLE_MS = 10000;
+    // AbortError + TimeoutError on polling endpoints are NORMAL during
+    // server restarts (Reload .env, ML install respawn, sidecar crash
+    // recovery). Toasting them spams the user with "SeekDeep /logs/tail
+    // POLL · TimeoutError: signal timed out" every time they restart
+    // anything — which is exactly when they're paying the most attention
+    // and the toasts look most broken. Filter at the surface so every
+    // SeekDeepDebug.warn() caller benefits without per-call boilerplate.
+    // Real errors (HTTP 5xx, CORS, JSON parse, network unreachable in
+    // ways that aren't a timeout) still toast normally.
+    function isBenignTransient(detail) {
+      if (!detail) return false;
+      const name = detail.name || '';
+      if (name === 'AbortError' || name === 'TimeoutError') return true;
+      const msg = String(detail.message || detail || '');
+      return /timed out|aborted|signal timed out/i.test(msg);
+    }
     function surface(label, detail) {
       try {
+        if (isBenignTransient(detail)) {
+          // Console-only — still show up in dev tools for debugging.
+          console.warn('[SeekDeep ' + label + '] (transient) ' + String(detail && detail.message || detail));
+          return;
+        }
         const msg = String(detail || '').slice(0, 600);
         if (!msg) return;
         const key = label + '::' + msg.slice(0, 120);

@@ -1053,9 +1053,16 @@ def register_gui_endpoints(
             "fix": "GPU is optional but strongly recommended for local chat/image. CPU mode is slow.",
             "blocking": False,
         })
-        # 7. searxng container reachable (web search)
+        # 7. searxng container reachable (web search). 1s was too tight —
+        # SearXNG behind WSL2 Docker can take 1-3s to answer cold. The
+        # firstrun checklist then said "⚠ container running" while the
+        # Launcher card said "HEALTHY" on the SAME load, because the
+        # Launcher card uses a longer-running HTTP probe with more
+        # tolerance. Bump to 3s + try GET /healthz (which actually proves
+        # SearXNG is reachable, not just that something owns the port).
+        searxng_up = False
         try:
-            with socket.create_connection(("127.0.0.1", 8080), timeout=1):
+            with socket.create_connection(("127.0.0.1", 8080), timeout=3):
                 searxng_up = True
         except Exception:
             searxng_up = False
