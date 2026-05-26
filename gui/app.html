@@ -804,49 +804,16 @@
 
         <div class="panel-flat" style="padding: 22px; margin-bottom: 18px;">
           <div class="eyebrow" style="margin-bottom: 14px;">Resident models — VRAM breakdown</div>
-          <div style="display: grid; grid-template-columns: 200px 1fr 100px 100px 100px; gap: 14px; padding: 10px 0; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); letter-spacing: 0.14em; text-transform: uppercase; border-bottom: 1px solid var(--stroke);">
-            <span>ROLE / MODEL</span><span>USAGE</span><span>SIZE</span><span>STATE</span><span>LAST USE</span>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 200px 1fr 100px 100px 100px; gap: 14px; padding: 14px 0; align-items: center; font-family: var(--font-mono); font-size: 12px;">
-            <div><div style="color: var(--cyan-1);">default_chat</div><div style="font-size: 10px; color: var(--hull-3);">Llama-3.1-8B · 4bit</div></div>
-            <div class="bar"><i style="width: 36%"></i></div>
-            <div>5.1 GB</div>
-            <div><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RES</span></div>
-            <div style="color: var(--hull-3);">12s ago</div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 200px 1fr 100px 100px 100px; gap: 14px; padding: 14px 0; align-items: center; font-family: var(--font-mono); font-size: 12px;">
-            <div><div style="color: var(--cyan-1);">image / sdxl</div><div style="font-size: 10px; color: var(--hull-3);">Dreamshaper-XL · fp16</div></div>
-            <div class="bar"><i style="width: 47%"></i></div>
-            <div>6.8 GB</div>
-            <div><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RES</span></div>
-            <div style="color: var(--cyan-1);">running</div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 200px 1fr 100px 100px 100px; gap: 14px; padding: 14px 0; align-items: center; font-family: var(--font-mono); font-size: 12px;">
-            <div><div style="color: var(--cyan-1);">vision</div><div style="font-size: 10px; color: var(--hull-3);">Qwen2.5-VL-3B</div></div>
-            <div class="bar"><i style="width: 24%"></i></div>
-            <div>3.4 GB</div>
-            <div><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICT</span></div>
-            <div style="color: var(--hull-3);">14m ago</div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 200px 1fr 100px 100px 100px; gap: 14px; padding: 14px 0; align-items: center; font-family: var(--font-mono); font-size: 12px;">
-            <div><div style="color: var(--hull-3);">system reserve</div><div style="font-size: 10px; color: var(--hull-3);">OS · CUDA overhead</div></div>
-            <div class="bar"><i style="width: 28%; background: linear-gradient(90deg, #14306b, #0d2152); box-shadow: none;"></i></div>
-            <div>4.0 GB</div>
-            <div style="color: var(--hull-3);">RESERVE</div>
-            <div style="color: var(--hull-3);">—</div>
+          <div id="residentModelsList" class="tiny muted" style="padding: 14px 4px; font-family: var(--font-mono);">
+            — no resident models · the AI server tracks loaded_chat_role / image_pipe / vision_model in /health; we populate this list from those.
           </div>
         </div>
 
         <div class="chart-wrap">
           <h3>VRAM · last 60s</h3>
-          <svg class="spark" viewBox="0 0 600 80" preserveAspectRatio="none">
-            <path class="area" d="M0 60 L40 58 L80 52 L120 55 L160 48 L200 40 L240 38 L280 30 L320 24 L360 28 L400 22 L440 18 L480 26 L520 20 L560 14 L600 12 L600 80 L0 80 Z"/>
-            <path class="line" d="M0 60 L40 58 L80 52 L120 55 L160 48 L200 40 L240 38 L280 30 L320 24 L360 28 L400 22 L440 18 L480 26 L520 20 L560 14 L600 12"/>
-          </svg>
+          <div class="tiny muted" style="padding: 24px 4px; font-family: var(--font-mono); text-align: center;">
+            — VRAM history sampler not shipped. /gpu returns instantaneous values only.
+          </div>
         </div>
       </section>
 
@@ -895,15 +862,20 @@
             <span>MODEL</span><span>ROLE</span><span>QUANT</span><span>SIZE</span><span>STATE</span><span></span>
           </div>
 
-          <div class="model-row" data-role="default_chat" data-backend="hf" data-model="meta-llama/Llama-3.1-8B-Instruct"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">default_chat</span><span>4bit</span><span>5.1 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
-          <div class="model-row" data-role="image" data-backend="hf" data-model="Lykon/dreamshaper-xl-1-0"><span class="name">Lykon/dreamshaper-xl-1-0</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">image</span><span>fp16</span><span>6.8 GB</span><span data-role-state><span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
-          <div class="model-row" data-role="vision" data-backend="hf" data-model="Qwen/Qwen2.5-VL-3B-Instruct"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">vision</span><span>fp16</span><span>3.4 GB</span><span data-role-state><span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span></span><div class="actions"><button class="btn-mini">📌 PIN</button><button class="btn-mini">↯ EVICT</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
-          <div class="model-row" data-role="quality_text" data-backend="hf" data-model="mistralai/Mistral-Nemo-Instruct-2407"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">quality_text</span><span>4bit</span><span>7.2 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>WARM</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-          <div class="model-row" data-role="reasoning_code" data-backend="hf" data-model="microsoft/phi-4"><span class="name">microsoft/phi-4</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">reasoning_code</span><span>4bit</span><span>9.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-          <div class="model-row" data-role="fallback_chat" data-backend="hf" data-model="ibm-granite/granite-3.3-8b-instruct"><span class="name">ibm-granite/granite-3.3-8b-instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">fallback_chat</span><span>4bit</span><span>4.9 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-          <div class="model-row" data-role="lightweight_chat" data-backend="hf" data-model="google/gemma-3n-E4B-it"><span class="name">google/gemma-3n-E4B-it</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">lightweight_chat</span><span>4bit</span><span>3.1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-          <div class="model-row" data-backend="hf" data-model="timbrooks/instruct-pix2pix"><span class="name">timbrooks/instruct-pix2pix</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">pix2pix</span><span>fp16</span><span>2.6 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
-          <div class="model-row" data-backend="hf" data-model="CIDAS/clipseg-rd64-refined"><span class="name">CIDAS/clipseg-rd64-refined</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">inpaint mask</span><span>fp16</span><span>0.4 GB</span><span><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span></span><div class="actions"><button class="btn-mini">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <!-- SIZE column shows approximate model footprint (HF metadata), not
+               actually-downloaded bytes; state column is filled by applyHealth
+               based on real loaded_chat_role + gpu.loaded fields. Initial
+               state is UNLOADED so a fresh install doesn't falsely claim
+               every model is RESIDENT or CACHED. -->
+          <div class="model-row" data-role="default_chat" data-backend="hf" data-model="meta-llama/Llama-3.1-8B-Instruct"><span class="name">meta-llama/Llama-3.1-8B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">default_chat</span><span>4bit</span><span>~5 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="image" data-backend="hf" data-model="Lykon/dreamshaper-xl-1-0"><span class="name">Lykon/dreamshaper-xl-1-0</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">image</span><span>fp16</span><span>~7 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="vision" data-backend="hf" data-model="Qwen/Qwen2.5-VL-3B-Instruct"><span class="name">Qwen/Qwen2.5-VL-3B-Instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">vision</span><span>fp16</span><span>~3 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕</button></div></div>
+          <div class="model-row" data-role="quality_text" data-backend="hf" data-model="mistralai/Mistral-Nemo-Instruct-2407"><span class="name">mistralai/Mistral-Nemo-Instruct-2407</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">quality_text</span><span>4bit</span><span>~7 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="reasoning_code" data-backend="hf" data-model="microsoft/phi-4"><span class="name">microsoft/phi-4</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">reasoning_code</span><span>4bit</span><span>~9 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="fallback_chat" data-backend="hf" data-model="ibm-granite/granite-3.3-8b-instruct"><span class="name">ibm-granite/granite-3.3-8b-instruct</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">fallback_chat</span><span>4bit</span><span>~5 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-role="lightweight_chat" data-backend="hf" data-model="google/gemma-3n-E4B-it"><span class="name">google/gemma-3n-E4B-it</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">lightweight_chat</span><span>4bit</span><span>~3 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-backend="hf" data-model="timbrooks/instruct-pix2pix"><span class="name">timbrooks/instruct-pix2pix</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">pix2pix</span><span>fp16</span><span>~3 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
+          <div class="model-row" data-backend="hf" data-model="CIDAS/clipseg-rd64-refined"><span class="name">CIDAS/clipseg-rd64-refined</span> <span class="m-backend hf" title="Local Hugging Face">HF</span><span class="role">inpaint mask</span><span>fp16</span><span>&lt;1 GB</span><span data-role-state><span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span></span><div class="actions"><button class="btn-mini" data-act="warm">▸ WARM</button><button class="btn-mini" data-act="inspect">⌕</button><button class="btn-mini bad" data-act="remove">✕ REMOVE</button></div></div>
         </div>
       </section>
 
@@ -2377,23 +2349,83 @@ const SEEKDEEP_BASE = (function() {
         // user the truth ("CPU mode") so they don't stare at empty fields.
         this.setText('sb-vram', 'CPU');
       }
-      // Models pane — mark loaded + pinned roles
-      const loaded = h.loaded;
+      // Models pane — mark loaded + pinned roles.
+      // /health returns loaded_chat_role (not "loaded") + a gpu.loaded
+      // object {chat_model, vision_model, image_pipe} of booleans. The
+      // old code checked `h.loaded` which doesn't exist as a field, so
+      // NOTHING ever matched "RESIDENT" and every chat role fell through
+      // to a misleading "CACHED" badge even on installs that hadn't
+      // downloaded any models.
+      const loadedChatRole = h.loaded_chat_role || null;
       const pinned = h.keep_resident || {};
+      const gpuLoaded = (h.gpu && h.gpu.loaded) || {};
+      const visionLoaded = !!gpuLoaded.vision_model;
+      const imageLoaded  = !!gpuLoaded.image_pipe;
       document.querySelectorAll('.model-row[data-role]').forEach(row => {
         const role = row.dataset.role;
         const cell = row.querySelector('[data-role-state]');
         if (!cell) return;
-        if (role === loaded) {
+        const isResident =
+          (role === loadedChatRole) ||
+          (role === 'vision' && visionLoaded) ||
+          (role === 'image'  && imageLoaded);
+        if (isResident) {
           cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span>';
         } else if (pinned[role]) {
           cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>PINNED</span>';
-        } else if (role && role.endsWith('_chat')) {
-          cell.innerHTML = '<span class="pill" style="padding: 2px 6px;"><span class="dot"></span>CACHED</span>';
         } else {
-          cell.innerHTML = '<span class="pill warn" style="padding: 2px 6px;"><span class="dot"></span>EVICTABLE</span>';
+          // Honest "not loaded right now" instead of fake CACHED/EVICTABLE.
+          // We can't tell from /health whether the weights are downloaded
+          // — that requires an HF cache scan (cache.hf_repo_count from
+          //   /stats/snapshot tells you how many; individual presence is
+          //   not exposed). So just say UNLOADED.
+          cell.innerHTML = '<span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span>';
         }
       });
+
+      // Resident models list in the GPU pane — populate from the same
+      // gpu.loaded booleans + the loaded_chat_role. Empty list = honest
+      // "no models resident right now" instead of the previously-hardcoded
+      // squid-art mock data.
+      const residentHost = document.getElementById('residentModelsList');
+      if (residentHost) {
+        const items = [];
+        if (loadedChatRole) items.push({ role: loadedChatRole, kind: 'chat',   id: h.loaded_chat_model_id || (h.models && h.models.chat) || loadedChatRole });
+        if (visionLoaded)   items.push({ role: 'vision',       kind: 'vision', id: (h.models && h.models.vision) || 'vision' });
+        if (imageLoaded)    items.push({ role: 'image',        kind: 'image',  id: (h.models && h.models.image) || 'image' });
+        if (!items.length) {
+          residentHost.className = 'tiny muted';
+          residentHost.style.fontFamily = 'var(--font-mono)';
+          residentHost.textContent = '— no models resident right now · load via Warm buttons in Model manager, or run a /chat / /image / /vision request to trigger task-LRU load';
+        } else {
+          residentHost.className = '';
+          residentHost.style.fontFamily = '';
+          residentHost.innerHTML = '';
+          // XSS-safe row builder: every model id / role string goes via
+          // textContent. it.role + it.id come from /health response which
+          // is server-controlled, but escape anyway for defense in depth.
+          for (const it of items) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display: grid; grid-template-columns: 200px 1fr 100px; gap: 14px; padding: 10px 0; align-items: center; font-family: var(--font-mono); font-size: 12px; border-bottom: 1px solid var(--stroke);';
+            const lblWrap = document.createElement('div');
+            const lblRole = document.createElement('div');
+            lblRole.style.color = 'var(--cyan-1)';
+            lblRole.textContent = String(it.role);
+            const lblId = document.createElement('div');
+            lblId.style.cssText = 'font-size: 10px; color: var(--hull-3);';
+            lblId.textContent = String(it.id).split('/').pop();
+            lblWrap.appendChild(lblRole); lblWrap.appendChild(lblId);
+            const kind = document.createElement('div');
+            kind.style.cssText = 'color: var(--hull-3); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;';
+            kind.textContent = it.kind;
+            const state = document.createElement('div');
+            state.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RES</span>';
+            row.appendChild(lblWrap); row.appendChild(kind); row.appendChild(state);
+            residentHost.appendChild(row);
+          }
+        }
+      }
+
       if (h.model) {
         document.title = 'SeekDeep — ' + h.model;
       }
