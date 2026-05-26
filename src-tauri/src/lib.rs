@@ -180,6 +180,81 @@ fn check_for_update() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Try to start Docker Desktop. Returns one of:
+///   { ok: true,  state: "running"        }  — `docker info` already works, no action needed.
+///   { ok: true,  state: "launched"       }  — Docker was installed but not running; we launched it.
+///   { ok: false, state: "not_installed"  }  — `docker --version` failed; user needs the Install link.
+///   { ok: false, state: "launch_failed", detail: "..." }  — found Docker exe but spawn failed.
+///
+/// Called from the Installer page's Docker row instead of jumping straight
+/// to the "Install Docker" link. Saves users who already have Docker
+/// installed but never launched the Desktop app from a useless trip to
+/// docker.com.
+#[tauri::command]
+fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
+    // 1. Probe: is Docker already running?
+    let info = std::process::Command::new("docker")
+        .arg("info")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if matches!(info, Ok(s) if s.success()) {
+        return Ok(serde_json::json!({ "ok": true, "state": "running" }));
+    }
+    // 2. Probe: is Docker installed at all?
+    let ver = std::process::Command::new("docker")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if !matches!(ver, Ok(s) if s.success()) {
+        return Ok(serde_json::json!({ "ok": false, "state": "not_installed" }));
+    }
+    // 3. Docker is installed but not running. Try to launch Docker Desktop.
+    #[cfg(windows)]
+    {
+        // The standard install path. If the user has it elsewhere, the spawn
+        // will fail and we surface "launch_failed" so they can launch
+        // manually.
+        let candidates = [
+            r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
+            r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
+        ];
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                let spawn = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", path])
+                    .spawn();
+                if spawn.is_ok() {
+                    return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
+                }
+            }
+        }
+        return Ok(serde_json::json!({
+            "ok": false,
+            "state": "launch_failed",
+            "detail": "couldn't find Docker Desktop.exe in the default install paths; launch it manually from the Start menu.",
+        }));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let spawn = std::process::Command::new("open").args(["-a", "Docker"]).spawn();
+        if spawn.is_ok() {
+            return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
+        }
+        return Ok(serde_json::json!({ "ok": false, "state": "launch_failed", "detail": "open -a Docker failed" }));
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        // Linux: Docker is usually a systemd service. Try systemctl start.
+        let spawn = std::process::Command::new("systemctl").args(["--user", "start", "docker"]).status();
+        if matches!(spawn, Ok(s) if s.success()) {
+            return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
+        }
+        return Ok(serde_json::json!({ "ok": false, "state": "launch_failed", "detail": "systemctl --user start docker failed; try `sudo systemctl start docker`" }));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -193,6 +268,7 @@ pub fn run() {
             restart_sidecar,
             check_for_update,
             view_logs,
+            try_start_docker_desktop,
         ])
         .setup(|app| {
             // --- System tray ---------------------------------------------

@@ -2608,8 +2608,8 @@ const SEEKDEEP_BASE = (function() {
         setPill(state);
         setCardUp(state === 'running' || state === 'starting' || state === 'already-running');
       } catch (e) {
-        // Local fallback for offline / 404
-        setPill('LOCAL-MOCK');
+        // Local fallback when server is unreachable
+        setPill('OFFLINE');
         setCardUp(act === 'start' || act === 'restart');
       }
     }

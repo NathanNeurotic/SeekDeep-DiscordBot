@@ -817,7 +817,8 @@
               <span class="status-dot"></span>
               <div class="name">Docker · compose<span class="hint">runs the SearXNG container</span></div>
               <div class="read" data-read>—</div>
-              <a class="copy-btn" href="https://www.docker.com/products/docker-desktop/" target="_blank">Install</a>
+              <button class="copy-btn" id="dockerTryStartBtn" style="cursor:pointer;" title="Probe Docker; if installed but not running, launch Docker Desktop">Try start</button>
+              <a class="copy-btn" id="dockerInstallLink" href="https://www.docker.com/products/docker-desktop/" target="_blank" style="display:none;">Install</a>
             </div>
             <div class="check-row" data-check="gpu">
               <span class="status-dot"></span>
@@ -1440,20 +1441,42 @@ const SEEKDEEP_BASE = (function() {
     if (ai.up) {
       setCheckState('aiserver', 'ok', 'live on :7865');
       const gpu = await probeAiGpu();
+      // /gpu returns { available: true|false, total_mb, used_mb, used_pct, ... }.
+      // Previously this checked gpu.detected which doesn't exist as a field
+      // — so CPU-only installs (gpu.available=false) fell through to the
+      // green "detected (no detail)" branch and falsely claimed CUDA was
+      // present. Now honors the real field.
       if (gpu && gpu.total_mb) {
         const usedPct = Math.round((gpu.used_mb / gpu.total_mb) * 100);
         setCheckState('gpu', 'ok', `${(gpu.total_mb/1024).toFixed(1)} GB · ${usedPct}% used`);
-      } else if (gpu && gpu.detected === false) {
-        setCheckState('gpu', 'bad', 'no CUDA device');
+      } else if (gpu && gpu.available === false) {
+        // No CUDA / no torch. Not necessarily a "bad" — fine for remote
+        // backends or CPU-only experimentation. Show as warning yellow
+        // with an honest message instead of fake green or scary red.
+        setCheckState('gpu', 'bad', 'no GPU · CPU mode (ok for remote backends; local HF chat/image/vision will be slow or unavailable)');
       } else {
         setCheckState('gpu', 'ok', 'detected (no detail)');
       }
-      // node / python / docker / disk inferred from server presence
+      // node / python / git / disk inferred from server presence (the only
+      // way this page can talk to the server is if Node spawned the bot
+      // OR Python is running uvicorn — same thing means git+disk are fine).
       setCheckState('node', 'ok', 'server up implies node ok');
       setCheckState('python', 'ok', 'FastAPI alive');
       setCheckState('git', 'ok', 'assumed (repo cloned)');
-      setCheckState('docker', sx ? 'ok' : 'bad', sx ? 'searxng container up' : 'compose not running');
       setCheckState('disk', 'ok', 'enough to run (~80 GB recommended)');
+      // Docker is independent — it only matters for SearXNG. If SearXNG
+      // is up, Docker is obviously fine. If SearXNG is down it could be
+      //   (a) Docker installed but not started — fixable via "open Docker"
+      //   (b) Docker not installed — fixable via Install link
+      //   (c) Docker installed + running but user never launched the searxng container
+      // The page can't distinguish these from the browser; the honest
+      // message acknowledges that instead of jumping straight to "Install"
+      // for users who definitely already have Docker.
+      if (sx) {
+        setCheckState('docker', 'ok', 'searxng container up');
+      } else {
+        setCheckState('docker', 'bad', 'searxng not reachable — Docker may not be running, or the container isn\'t started. Web search will be unavailable until then. (This check infers Docker state from SearXNG; can\'t directly probe Docker from the browser.)');
+      }
     } else {
       setCheckState('aiserver', 'bad', ai.reason);
       // Fall back to "unknown" yellow for everything else
@@ -1465,6 +1488,48 @@ const SEEKDEEP_BASE = (function() {
   }
 
   document.getElementById('runChecks').addEventListener('click', runAllChecks);
+
+  // Docker row "Try start" button. Tauri path: invoke try_start_docker_desktop
+  // which probes `docker info` → `docker --version` → spawns Docker Desktop
+  // if installed but not running. Browser path: swap to the Install link
+  // (we can't shell out from a browser).
+  (function wireDockerTryStart() {
+    const tryBtn = document.getElementById('dockerTryStartBtn');
+    const installLink = document.getElementById('dockerInstallLink');
+    if (!tryBtn) return;
+    const isTauri = !!(window.__TAURI__) || (window.location.hostname || '') === 'tauri.localhost';
+    if (!isTauri || !window.__TAURI__?.core) {
+      // Non-Tauri: hide the Try button, show the Install link.
+      tryBtn.style.display = 'none';
+      if (installLink) installLink.style.display = '';
+      return;
+    }
+    tryBtn.addEventListener('click', async () => {
+      const sdn = window.SeekDeepNotify;
+      tryBtn.textContent = 'Probing…';
+      tryBtn.disabled = true;
+      try {
+        const result = await window.__TAURI__.core.invoke('try_start_docker_desktop');
+        if (result?.state === 'running') {
+          if (sdn) sdn.toast({ tone: 'good', title: 'Docker is already running', ttl: 4000 });
+        } else if (result?.state === 'launched') {
+          if (sdn) sdn.toast({ tone: 'good', title: 'Docker Desktop launching…', body: 'Give it ~20-30 s to start up, then re-run System Check.', ttl: 6000 });
+        } else if (result?.state === 'not_installed') {
+          if (sdn) sdn.toast({ tone: 'info', title: 'Docker not installed', body: 'Opening docker.com/products/docker-desktop in your browser.', ttl: 5000 });
+          if (installLink) installLink.click();
+        } else {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Docker launch failed', body: result?.detail || 'unknown error; launch Docker Desktop manually', ttl: 7000 });
+        }
+        // Re-probe in 2s so the row updates if Docker came up fast.
+        setTimeout(runAllChecks, 2000);
+      } catch (err) {
+        if (sdn) sdn.toast({ tone: 'bad', title: 'try_start_docker_desktop failed', body: String(err), ttl: 6000 });
+      } finally {
+        tryBtn.textContent = 'Try start';
+        tryBtn.disabled = false;
+      }
+    });
+  })();
   document.getElementById('resetChecks').addEventListener('click', () => {
     ['node','python','git','docker','gpu','disk','aiserver','searxng'].forEach(c => {
       setCheckState(c, null, '—');

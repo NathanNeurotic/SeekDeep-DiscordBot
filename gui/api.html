@@ -482,7 +482,7 @@
           <h2>RESPONSE</h2>
           <span class="resp-status idle" id="respStatus">IDLE</span>
         </div>
-        <div class="resp-empty">▸ <em>Send a request</em> to see the response here.<br/><br/>Standby until first send · then the LIVE/MOCK pill in the title bar reflects whether the local AI server is reachable.</div>
+        <div class="resp-empty">▸ <em>Send a request</em> to see the response here.<br/><br/>Standby until first send · then the LIVE/OFFLINE pill in the title bar reflects whether the local AI server is reachable.</div>
       </section>
 
     </div>
@@ -962,7 +962,7 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
   } else {
     bodyHTML = `
       <div class="resp-body">
-        <div class="rh"><span>RESPONSE BODY · <em style="font-style:normal; color:var(--cyan-1);">${ok ? 'LIVE' : 'MOCK (server offline)'}</em></span><button class="copy-btn" id="copyResp">COPY</button></div>
+        <div class="rh"><span>RESPONSE BODY · <em style="font-style:normal; color:var(--cyan-1);">${ok ? 'LIVE' : 'OFFLINE · canned sample below'}</em></span><button class="copy-btn" id="copyResp">COPY</button></div>
         <pre>${prettyJSON(body)}</pre>
       </div>
     `;
