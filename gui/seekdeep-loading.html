@@ -427,53 +427,84 @@
     }
 
     // Patience tuning: Python 3.14 + cold uvicorn + fastapi imports can take
-    // 15-30s on first launch. 20 attempts × ~4s/attempt ≈ 80s before we
-    // show OFFLINE state — AND we keep polling indefinitely after that so
-    // a slow Python eventually rescues itself.
+    // 15-30s on first launch. We poll forever; the FAILURE_THRESHOLD just
+    // controls when we show the visual "waiting" state. The moment /health
+    // returns 200 we redirect — NO dependency on /ml_deps / /models/installed
+    // / WS probes, because any of those hanging would block us indefinitely
+    // even when the server is clearly responding (real user case: 15 200 OK
+    // /health responses in the log while the page sat on BOOTING forever
+    // because something downstream caught the chain).
     const FAILURE_THRESHOLD = 20;
     const POLL_INTERVAL_MS  = 1500;
     let offlineShown = false;
 
-    async function run() {
-      const h = await pollServer();
-      if (!h) {
+    async function attemptBoot() {
+      // No re-entrance guard: Retry / Install Python deps handlers call
+      // run() to kick a fresh probe loop, and any old loop becomes
+      // garbage when location.href fires. Parallel loops racing to a
+      // successful navigate is fine — first to win, others get GC'd.
+      setActive('server');
+      setStage('starting local AI server…');
+
+      while (true) {
+        let h = null;
+        try {
+          const r = await fetch(BASE + '/health', {
+            signal: AbortSignal.timeout(2500),
+            cache: 'no-store',
+          });
+          if (r.ok) {
+            try { h = await r.json(); }
+            catch (jsonErr) {
+              // 200 but body isn't JSON — server is alive, that's enough.
+              console.warn('[seekdeep-loading] /health body not JSON', jsonErr);
+              h = { ok: true, version: null };
+            }
+          }
+        } catch (err) {
+          console.warn('[seekdeep-loading] /health probe failed:', err);
+        }
+
+        if (h) {
+          // First success: clear error UI, tick all phases visually for
+          // continuity, mirror the version, then redirect. The phase ticks
+          // are pure visual flourish — no probes — so they can't hang.
+          if (offlineShown) {
+            $status.classList.remove('is-error');
+            $label.textContent = 'BOOTING';
+            offlineShown = false;
+          }
+          if (h.version) {
+            document.querySelectorAll('[data-version]').forEach(el => {
+              el.textContent = String(h.version);
+            });
+          }
+          setDone('server'); refreshBar();
+          setActive('deps');  setDone('deps');  refreshBar();
+          setActive('models');setDone('models');refreshBar();
+          setActive('ws');    setDone('ws');    refreshBar();
+          $status.classList.add('is-ready');
+          $label.textContent = 'READY';
+          setStage('opening ' + NEXT + '…');
+          setTimeout(() => { location.href = NEXT; }, 300);
+          return;
+        }
+
+        // Probe failed. Bump counter, show OFFLINE after threshold, retry.
         failures++;
         if (failures >= FAILURE_THRESHOLD && !offlineShown) {
           $status.classList.add('is-error');
-          $label.textContent = 'OFFLINE';
+          $label.textContent = 'WAITING';
           setStage('still waiting for ' + BASE + '/health … (will keep trying)');
           offlineShown = true;
-          // DON'T return — keep retrying forever. The visual error state is
-          // for the user; the auto-recovery is the real safety net.
         }
-        setTimeout(run, POLL_INTERVAL_MS);
-        return;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
       }
-      // /health came back — clear error state if we'd shown it.
-      if (offlineShown) {
-        $status.classList.remove('is-error');
-        $label.textContent = 'BOOTING';
-        offlineShown = false;
-      }
-
-      // Mirror the live version into the tagline as soon as we have it.
-      if (h && h.version) {
-        document.querySelectorAll('[data-version]').forEach(el => {
-          el.textContent = String(h.version);
-        });
-      }
-
-      // Tick the remaining phase ladder cells — these are informational only;
-      // /health succeeding is the only gate that matters for redirect.
-      try { await pollDeps(); } catch {}
-      try { await pollModels(); } catch {}
-      try { await pollBus(); } catch {}
-
-      $status.classList.add('is-ready');
-      $label.textContent = 'READY';
-      setStage('opening ' + NEXT + '…');
-      setTimeout(() => { location.href = NEXT; }, 500);
     }
+
+    // Keep the legacy `run()` name so the existing Retry / install-deps
+    // handlers below still work without touching them.
+    const run = attemptBoot;
 
     document.getElementById('splashRetry').addEventListener('click', async () => {
       failures = 0;
