@@ -2106,21 +2106,47 @@ async function postLocal(pathname, body, options = {}) {
   }
 
   // Auth: the AI server now token-gates /chat /vision /image /img2img /upscale
-  // /instruct-pix2pix /inpaint /inpaint_mask_preview /chart (P0 security fix,
-  // see commit message). Bot + server share .env so we read SEEKDEEP_GUI_TOKEN
-  // from process.env. Header is omitted when empty so the server's 401 message
-  // explains how to set it instead of silently looking unauthed.
+  // /instruct-pix2pix /inpaint /inpaint_mask_preview /chart. Bot + server share
+  // .env so we read SEEKDEEP_GUI_TOKEN from process.env. Header is omitted when
+  // empty so the server's 401 message explains how to set it instead of silently
+  // looking unauthed. On 401, self-heal via _seekdeepReReadTokenFromEnvFile and
+  // retry once — matches seekdeepEmitGuiEvent's recovery pattern. Breaks the
+  // chicken-and-egg where the AI server rotated .env's token mid-session and
+  // the bot's cached process.env value is stale.
   const headers = { 'content-type': 'application/json' };
-  const tok = (process.env.SEEKDEEP_GUI_TOKEN || '').trim();
+  let tok = (process.env.SEEKDEEP_GUI_TOKEN || '').trim();
   if (tok) headers['X-SeekDeep-Token'] = tok;
 
+  const url = `${LOCAL_AI_BASE_URL}${pathname}`;
+  const payload = seekdeepJsonStringifySafe(body);
   try {
-    return await fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
-      method: 'POST',
-      headers,
-      body: seekdeepJsonStringifySafe(body),
-      signal: controller?.signal,
-    });
+    try {
+      return await fetchJson(url, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: controller?.signal,
+      });
+    } catch (err) {
+      // fetchJson throws "fetchJson HTTP 401" style errors. Detect 401 and try
+      // refreshing the token from .env once.
+      const msg = String(err?.message || err);
+      const is401 = /\b401\b/.test(msg);
+      if (!is401) throw err;
+      const fresh = typeof _seekdeepReReadTokenFromEnvFile === 'function'
+        ? _seekdeepReReadTokenFromEnvFile()
+        : null;
+      if (!fresh || fresh === tok) throw err;
+      process.env.SEEKDEEP_GUI_TOKEN = fresh;
+      console.warn(`[SeekDeep] ${pathname} got 401; .env had a newer token — retrying once.`);
+      headers['X-SeekDeep-Token'] = fresh;
+      return await fetchJson(url, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: controller?.signal,
+      });
+    }
   } catch (err) {
     if (err?.name === 'AbortError') {
       throw new Error(`Local AI request timed out after ${(timeoutMs / 1000).toFixed(1)} seconds.`);
