@@ -1257,7 +1257,7 @@
         <section class="step-pane" data-step="models">
           <p class="lede">Pick the models SeekDeep will load. <strong style="color:var(--hull);">Defaults are tuned for a 24GB GPU.</strong> Each model loads only when the matching task fires; the task-LRU keeps just one chat model resident.</p>
           <p class="lede" style="font-size: 12px; color: var(--hull-3); margin-top: 4px;">
-            ▸ These nine cards are a curated subset. The full live catalog (including Ollama backends + newly-added models) lives in <a href="app.html#models" style="color:var(--cyan-1); text-decoration: underline;">Control Center → Model manager → Browse recommended</a>. Setting a model there flows back to the same <code>LOCAL_*_MODEL_ID</code> .env keys.
+            ▸ Cards below are pulled from the live catalog (<code>/models/catalog</code>) on page load — HF + Ollama, sized for your detected VRAM. If the AI server is unreachable, you'll see a curated fallback set. More install actions + on-disk model presence live in <a href="app.html#models" style="color:var(--cyan-1); text-decoration: underline;">Control Center → Model manager</a>.
           </p>
 
           <div style="font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; margin-top: 4px;">▸ DEFAULT_CHAT · pick one</div>
@@ -2410,15 +2410,122 @@ const SEEKDEEP_BASE = (function() {
     refreshVramBudget();
     updateEnvPreview();
   }
-  document.querySelectorAll('.selectable').forEach(card => {
-    card.addEventListener('click', () => {
+  // Event delegation on the three role grids so re-rendered cards from
+  // renderModelCardsFromCatalog() still respond to clicks without
+  // re-attaching N handlers on every refetch.
+  ['chatModels', 'visionModels', 'imageModels'].forEach(gridId => {
+    const grid = document.getElementById(gridId);
+    if (!grid) return;
+    grid.addEventListener('click', (e) => {
+      const card = e.target.closest('.selectable');
+      if (!card || !grid.contains(card)) return;
       const role = card.dataset.role;
+      if (!role) return;
       state.selections[role] = card.dataset.id;
       state.sizes[role] = parseFloat(card.dataset.size) || 0;
       saveState();
       applySelections();
     });
   });
+
+  // Replace the hardcoded selectable cards with live data from
+  // /models/catalog (HF + Ollama merged). Falls back silently to the
+  // hardcoded list when the AI server is unreachable so first-run
+  // wizard still works pre-spawn. Reads /config in parallel so the
+  // current LOCAL_*_MODEL_ID values mark the right card as selected
+  // even when the user reopens the wizard after a prior apply.
+  async function renderModelCardsFromCatalog() {
+    let catalog = null;
+    let envCurrent = {};
+    try {
+      const [catRes, cfgRes] = await Promise.all([
+        fetch(SEEKDEEP_BASE + '/models/catalog', { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
+        fetch(SEEKDEEP_BASE + '/config', { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
+      ]);
+      if (catRes && catRes.ok) catalog = await catRes.json();
+      if (cfgRes && cfgRes.ok) {
+        const c = await cfgRes.json();
+        envCurrent = (c && c.env) || {};
+      }
+    } catch (_) {
+      return;  // server offline; hardcoded cards stay as fallback
+    }
+    if (!catalog || !catalog.ok) return;
+
+    const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[ch]));
+    const roles = [
+      { id: 'chat',   gridId: 'chatModels',   entries: catalog.chat   || [], envKey: 'LOCAL_CHAT_MODEL_ID',   allowNone: false },
+      { id: 'vision', gridId: 'visionModels', entries: catalog.vision || [], envKey: 'LOCAL_VISION_MODEL_ID', allowNone: true  },
+      { id: 'image',  gridId: 'imageModels',  entries: catalog.image  || [], envKey: 'LOCAL_IMAGE_MODEL_ID',  allowNone: true  },
+    ];
+
+    for (const r of roles) {
+      const grid = document.getElementById(r.gridId);
+      if (!grid || !r.entries.length) continue;
+      // Selection priority: existing localStorage state > current .env > first entry.
+      // The fall-through means a fresh install with no localStorage AND no .env
+      // value yet still picks something sensible (catalog's recommended top entry).
+      const current = state.selections[r.id]
+                   || envCurrent[r.envKey]
+                   || r.entries[0]?.repo_id;
+      grid.innerHTML = '';
+      for (const e of r.entries) {
+        const isSelected = e.repo_id === current;
+        const backendTag = e.backend === 'ollama' ? '🦙 ollama' : 'hf';
+        const sizeStr = (e.size_gb || 0) + ' GB';
+        const shortName = String(e.repo_id || '').split('/').pop() || e.repo_id;
+        const card = document.createElement('div');
+        card.className = 'selectable' + (isSelected ? ' selected' : '');
+        card.dataset.role = r.id;
+        card.dataset.id = e.repo_id;
+        card.dataset.size = String(e.size_gb || 0);
+        card.dataset.backend = e.backend || 'hf';
+        card.innerHTML =
+          '<div class="check"></div>' +
+          '<div class="head">' +
+            '<span class="role">' + esc(e.tier || '—') + ' · ' + esc(backendTag) + '</span>' +
+            '<span class="size">' + esc(sizeStr) + '</span>' +
+          '</div>' +
+          '<h4>' + esc(shortName) + '</h4>' +
+          '<div class="id">' + esc(e.repo_id) + '</div>' +
+          (e.why ? '<div class="tiny" style="font-size:10px;color:var(--hull-3);margin-top:4px;line-height:1.3;">' + esc(e.why) + '</div>' : '') +
+          (e.gated ? '<div class="tiny" style="font-size:10px;color:var(--warn);margin-top:2px;">⚠ gated · needs HF_TOKEN</div>' : '');
+        grid.appendChild(card);
+      }
+      // Add a "Skip / none" card for vision + image (chat is required).
+      if (r.allowNone) {
+        const isNone = current === 'none';
+        const noneCard = document.createElement('div');
+        noneCard.className = 'selectable' + (isNone ? ' selected' : '');
+        noneCard.dataset.role = r.id;
+        noneCard.dataset.id = 'none';
+        noneCard.dataset.size = '0';
+        noneCard.dataset.backend = 'none';
+        noneCard.innerHTML =
+          '<div class="check"></div>' +
+          '<div class="head"><span class="role">SKIP</span><span class="size">0 GB</span></div>' +
+          '<h4>No ' + r.id + '</h4>' +
+          '<div class="id">disables /' + r.id + ' + downstream pipelines</div>';
+        grid.appendChild(noneCard);
+      }
+      // Sync state from the now-selected card so VRAM budget + env preview
+      // reflect the live catalog values (e.g. a model's size_gb may differ
+      // from the prior hardcoded HTML).
+      if (current && current !== 'none') {
+        state.selections[r.id] = current;
+        const sel = r.entries.find(e => e.repo_id === current);
+        state.sizes[r.id] = sel?.size_gb || 0;
+      } else if (current === 'none') {
+        state.selections[r.id] = 'none';
+        state.sizes[r.id] = 0;
+      }
+    }
+    saveState();
+    applySelections();
+  }
+  // Kick off the dynamic render. If it fails (server offline, network
+  // error), the hardcoded cards stay visible — wizard remains usable.
+  renderModelCardsFromCatalog();
 
   // Detected GPU capacity from /gpu — populated by refreshVramCapacity().
   // 24 GB was the previous hardcoded default that pretended every user had
