@@ -1526,6 +1526,156 @@ def register_gui_endpoints(
             "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
         }
 
+    # ----- GET /system/bootstrap-status -----
+    # Quick probe of what setup_local.ps1 + `npm install` would do.
+    # Returns flags + summary copy the Installer's Step-3 panel can
+    # render so the user sees what's actually missing (usually nothing
+    # for Tauri-bundled users) instead of being told to drop to
+    # PowerShell. Token-free since it's just filesystem checks.
+    @app.get("/system/bootstrap-status")
+    def get_bootstrap_status():
+        ready_dirs = ["logs", "models", "outputs", "temp", "searxng"]
+        present_dirs = {d: (root / d).is_dir() for d in ready_dirs}
+        env_file = (root / ".env").is_file()
+        env_default = (root / ".env.default").is_file()
+        # Venv: .venv exists with a python executable in either Win or
+        # Unix layout. Bonus: do the live python have fastapi importable?
+        venv_win = (root / ".venv" / "Scripts" / "python.exe").is_file()
+        venv_nix = (root / ".venv" / "bin" / "python").is_file() or (root / ".venv" / "bin" / "python3").is_file()
+        venv_present = venv_win or venv_nix
+        # We can't easily import-check OTHER venvs from here, so the
+        # "deps installed" signal is just: did we boot? If we got here,
+        # the running python at sys.executable has fastapi/uvicorn/etc.
+        # The relevant thing for setup_local.ps1 is the REPO .venv.
+        node_modules = (root / "node_modules").is_dir()
+        package_json = (root / "package.json").is_file()
+        # All-clear when env exists, venv exists, node_modules exists.
+        all_done = bool(env_file and venv_present and node_modules)
+        steps = [
+            {"id": "env",          "label": "`.env` file present",                "ok": env_file,
+             "fix": None if env_file else ("Copy .env.default -> .env" if env_default else "No .env.default to seed from")},
+            {"id": "venv",         "label": "Python virtualenv (.venv) present", "ok": venv_present,
+             "fix": None if venv_present else "Create .venv with `python -m venv .venv` + pip install requirements-local.txt"},
+            {"id": "node_modules", "label": "Discord bot deps (node_modules)",   "ok": node_modules,
+             "fix": None if node_modules else ("Run `npm install` in repo root" if package_json else "No package.json found")},
+            {"id": "data_dirs",    "label": "Working dirs (logs, models, outputs, temp, searxng)",
+             "ok": all(present_dirs.values()),
+             "fix": None if all(present_dirs.values())
+                    else "Create: " + ", ".join(d for d, ok in present_dirs.items() if not ok)},
+        ]
+        return {
+            "ok": True, "ready": all_done, "steps": steps,
+            "repo_root": str(root),
+        }
+
+    # ----- POST /system/bootstrap -----
+    # Run the equivalent of setup_local.ps1 + `npm install` server-side.
+    # This is the GUI button the Installer's Step-3 panel calls so the
+    # user never has to open PowerShell. Token-gated because it spawns
+    # subprocesses + writes to disk. Streams progress on the event bus
+    # as `bootstrap.line` events.
+    #
+    # What it does, in order (skipping any already-present):
+    #   1. mkdir logs/ models/ outputs/ temp/ searxng/
+    #   2. Copy .env.default -> .env if .env missing
+    #   3. python -m venv .venv  (if .venv missing)
+    #   4. .venv/.../python -m pip install -r requirements-local.txt
+    #   5. npm install  (if node_modules missing)
+    @app.post("/system/bootstrap", dependencies=[Depends(_require_gui_token)])
+    def post_bootstrap():
+        import shutil, threading
+        def _publish(line: str):
+            event_bus.publish_sync({"type": "bootstrap.line", "data": {"line": str(line)}})
+
+        def run_bootstrap():
+            try:
+                event_bus.publish_sync({"type": "bootstrap.started", "data": {}})
+                # 1. Working dirs
+                for d in ("logs", "models", "outputs", "temp", "searxng"):
+                    p = root / d
+                    if not p.is_dir():
+                        p.mkdir(parents=True, exist_ok=True)
+                        _publish(f"mkdir {d}/")
+                # 2. .env from .env.default
+                env_p = root / ".env"
+                env_d = root / ".env.default"
+                if not env_p.is_file() and env_d.is_file():
+                    shutil.copyfile(env_d, env_p)
+                    _publish("cp .env.default -> .env")
+                elif env_p.is_file():
+                    _publish(".env already exists (preserved)")
+                # 3. python -m venv .venv
+                venv_py_win = root / ".venv" / "Scripts" / "python.exe"
+                venv_py_nix = root / ".venv" / "bin" / "python"
+                if not venv_py_win.is_file() and not venv_py_nix.is_file():
+                    _publish("python -m venv .venv  (creating virtualenv)")
+                    proc = subprocess.Popen(
+                        [sys.executable, "-m", "venv", str(root / ".venv")],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, cwd=str(root),
+                    )
+                    if proc.stdout:
+                        for line in proc.stdout:
+                            _publish(line.rstrip())
+                    proc.wait()
+                    if proc.returncode != 0:
+                        event_bus.publish_sync({"type": "bootstrap.failed",
+                                                "data": {"step": "venv", "exit_code": proc.returncode}})
+                        return
+                # 4. pip install requirements-local.txt into the .venv
+                venv_py = venv_py_win if venv_py_win.is_file() else venv_py_nix
+                req = root / "requirements-local.txt"
+                if venv_py.is_file() and req.is_file():
+                    _publish(f"{venv_py.name} -m pip install -r requirements-local.txt")
+                    proc = subprocess.Popen(
+                        [str(venv_py), "-m", "pip", "install", "--upgrade",
+                         "--disable-pip-version-check", "-r", str(req)],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, cwd=str(root),
+                    )
+                    if proc.stdout:
+                        for line in proc.stdout:
+                            _publish(line.rstrip())
+                    proc.wait()
+                    if proc.returncode != 0:
+                        event_bus.publish_sync({"type": "bootstrap.failed",
+                                                "data": {"step": "pip_install_local", "exit_code": proc.returncode}})
+                        return
+                # 5. npm install
+                node_modules = root / "node_modules"
+                pkg_json = root / "package.json"
+                if not node_modules.is_dir() and pkg_json.is_file():
+                    _publish("npm install  (Discord.js + jszip)")
+                    try:
+                        proc = subprocess.Popen(
+                            ["npm", "install"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, cwd=str(root),
+                            shell=(os.name == "nt"),  # npm.cmd on Windows
+                        )
+                        if proc.stdout:
+                            for line in proc.stdout:
+                                _publish(line.rstrip())
+                        proc.wait()
+                        if proc.returncode != 0:
+                            event_bus.publish_sync({"type": "bootstrap.failed",
+                                                    "data": {"step": "npm_install", "exit_code": proc.returncode}})
+                            return
+                    except FileNotFoundError:
+                        _publish("npm not on PATH — install Node 20+ (nodejs.org) and re-run this step")
+                        event_bus.publish_sync({"type": "bootstrap.failed",
+                                                "data": {"step": "npm_install", "error": "npm not found"}})
+                        return
+                event_bus.publish_sync({"type": "bootstrap.complete", "data": {}})
+            except Exception as exc:
+                _publish(f"✕ unexpected error: {exc}")
+                event_bus.publish_sync({"type": "bootstrap.failed",
+                                        "data": {"error": str(exc)[:300]}})
+
+        threading.Thread(target=run_bootstrap, daemon=True).start()
+        return {"ok": True, "started": True,
+                "note": "subscribe to bootstrap.line / bootstrap.complete / bootstrap.failed on /events"}
+
     # ----- GET /system/detect-venv -----
     # Scan filesystem locations the user is likely to have a venv with
     # working torch + CUDA. The Tauri sidecar's find_python() walks
