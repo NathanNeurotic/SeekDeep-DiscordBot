@@ -2712,10 +2712,14 @@ def register_gui_endpoints(
             try:
                 event_bus.publish_sync({"type": "deps.install.started",
                                         "data": {"variant": variant, "index_url": index_url}})
+                # torchaudio is intentionally omitted: SeekDeep doesn't
+                # import it, and pinning it causes ResolutionImpossible
+                # when audio's torch-pin lags vision's. See
+                # requirements-ml.txt for the reasoning.
                 cmd = [sys.executable, "-m", "pip", "install",
                        "--upgrade", "--force-reinstall", "--no-deps",
                        "--index-url", index_url,
-                       "torch", "torchvision", "torchaudio",
+                       "torch", "torchvision",
                        "--disable-pip-version-check"]
                 if not in_venv:
                     cmd.insert(4, "--user")  # before --index-url
@@ -3597,7 +3601,22 @@ def register_gui_endpoints(
                     tail_text = "\n".join(tail).strip()
                     hint = ""
                     blob = tail_text.lower()
-                    if "no matching distribution found" in blob or "could not find a version" in blob:
+                    if "resolutionimpossible" in blob or "conflicting dependencies" in blob:
+                        # pip's dependency resolver gave up — usually because
+                        # we pinned package A to a version whose torch-pin
+                        # disagrees with our own torch-pin. The pip output
+                        # already names the culprits ("X depends on torch==Y");
+                        # we point the user at the conflict resolution path.
+                        hint = (
+                            "Dependency conflict between two pinned packages. "
+                            "Read the 'The conflict is caused by:' lines above "
+                            "— they name which packages disagree on a torch "
+                            "version. Drop the optional one from "
+                            "requirements-ml.txt, or pin all three to a "
+                            "matching triple (torch/torchvision/torchaudio all "
+                            "ship the same minor)."
+                        )
+                    elif "no matching distribution found" in blob or "could not find a version" in blob:
                         # Disambiguate: if pip printed a "(from versions: ...)"
                         # list with cu-tagged builds available, the running
                         # Python isn't the problem — the requirements file

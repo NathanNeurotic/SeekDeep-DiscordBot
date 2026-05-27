@@ -28,16 +28,15 @@
 # Verified-available on https://download.pytorch.org/whl/cu128/ as of 2026-05:
 #   torch       2.11.0+cu128  (latest cu128 — cp310..cp314)
 #   torchvision 0.26.0+cu128  (matches torch 2.11)
-#   torchaudio  2.10.0+cu128  (audio lags one minor — that's normal)
-# Previously pinned 2.5.1+cu128 which was REMOVED from the cu128 index;
-# users on a fresh install hit "No matching distribution found for
-# torch==2.5.1+cu128" and the install loop dead-ended.
+# torchaudio is INTENTIONALLY OMITTED — SeekDeep imports torch +
+# torchvision (via diffusers/transformers) but never torchaudio. Pinning
+# it caused a ResolutionImpossible: torchaudio 2.10.0+cu128 hard-pins
+# torch==2.10.0, which conflicts with our torch 2.11.0 pin. Keep it out
+# until SeekDeep actually grows an audio surface.
 torch==2.11.0+cu128 ; platform_system == "Windows"
 torchvision==0.26.0+cu128 ; platform_system == "Windows"
-torchaudio==2.10.0+cu128 ; platform_system == "Windows"
 torch ; platform_system != "Windows"
 torchvision ; platform_system != "Windows"
-torchaudio ; platform_system != "Windows"
 accelerate>=1.2.0
 bitsandbytes>=0.45.0
 transformers>=4.51.0
