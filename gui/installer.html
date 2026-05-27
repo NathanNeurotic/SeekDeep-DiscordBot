@@ -1256,6 +1256,9 @@
         <!-- ============ STEP 5 — MODELS ============ -->
         <section class="step-pane" data-step="models">
           <p class="lede">Pick the models SeekDeep will load. <strong style="color:var(--hull);">Defaults are tuned for a 24GB GPU.</strong> Each model loads only when the matching task fires; the task-LRU keeps just one chat model resident.</p>
+          <p class="lede" style="font-size: 12px; color: var(--hull-3); margin-top: 4px;">
+            ▸ These nine cards are a curated subset. The full live catalog (including Ollama backends + newly-added models) lives in <a href="app.html#models" style="color:var(--cyan-1); text-decoration: underline;">Control Center → Model manager → Browse recommended</a>. Setting a model there flows back to the same <code>LOCAL_*_MODEL_ID</code> .env keys.
+          </p>
 
           <div style="font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; margin-top: 4px;">▸ DEFAULT_CHAT · pick one</div>
           <div class="selectable-grid" id="chatModels">
