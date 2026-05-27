@@ -213,6 +213,91 @@
     });
   }
 
+  // Live progress for long-running fix-actions (pip installs, model
+  // warmups, etc). Subscribes to deps.install.line / .complete / .failed
+  // events from the AI server's WebSocket bus and streams a 'elapsed · N
+  // lines · <last line>' indicator on the step row. Replaces the silent
+  // 5-minute freeze users used to see between 'install started' and the
+  // /system/firstrun re-probe.
+  function runFixWithProgress(li, c, btn, origLabel, fa) {
+    const startedAt = Date.now();
+    let lineCount = 0;
+    let lastLine  = '';
+    let settled   = false;
+    const progressLine = document.createElement('div');
+    progressLine.style.fontFamily = 'var(--font-mono)';
+    progressLine.style.fontSize   = '11px';
+    progressLine.style.color      = 'var(--cyan-1)';
+    progressLine.style.opacity    = '0.78';
+    progressLine.style.marginTop  = '4px';
+    progressLine.style.padding    = '4px 8px';
+    progressLine.style.background = 'rgba(0, 200, 255, 0.04)';
+    progressLine.style.border     = '1px solid rgba(0, 200, 255, 0.18)';
+    progressLine.style.borderRadius = '3px';
+    li.appendChild(progressLine);
+
+    const esc = (s) => String(s || '').replace(/[<>&]/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+    const updateUI = () => {
+      const sec = Math.round((Date.now() - startedAt) / 1000);
+      const m = Math.floor(sec / 60), s = sec % 60;
+      const elapsed = m > 0 ? `${m}m${String(s).padStart(2,'0')}s` : `${s}s`;
+      const tail = lastLine.length > 80 ? '…' + lastLine.slice(-79) : lastLine;
+      progressLine.innerHTML = `<span style="color: var(--good); margin-right: 6px;">⏳</span>`
+        + `<strong style="color: var(--cyan-1);">${elapsed}</strong>`
+        + ` · ${lineCount} log line${lineCount === 1 ? '' : 's'} · `
+        + (tail ? `<span style="opacity:0.7;">${esc(tail)}</span>` : '<span style="opacity:0.5;">waiting for output…</span>');
+      if (btn) btn.textContent = `… ${elapsed}`;
+    };
+    updateUI();
+    const ticker = setInterval(updateUI, 1000);
+
+    const offLine = window.SeekDeepEvents.on('deps.install.line', (data) => {
+      lineCount += 1;
+      if (data && typeof data.line === 'string') lastLine = data.line;
+      updateUI();
+    });
+
+    const completeType = fa.watch_events.find(t => /\.complete$/.test(t)) || 'deps.install.complete';
+    const failedType   = fa.watch_events.find(t => /\.failed$/.test(t))   || 'deps.install.failed';
+
+    const finish = (ok, msg) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(ticker);
+      try { offLine(); } catch {}
+      try { offComplete(); } catch {}
+      try { offFailed(); } catch {}
+      progressLine.remove();
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+      if (ok) {
+        appendLog(`✓ ${msg || 'install complete'} (${lineCount} log lines · ${elapsedSec}s)`, 'ok');
+        setStepClass(li, 'done');
+        li.querySelector('.mark').textContent = '✓';
+        if (btn) { btn.textContent = '✓ DONE'; btn.style.background = 'var(--good)'; }
+        setTimeout(probe, 1500);
+      } else {
+        appendLog(`✕ ${msg || 'install failed'} (after ${elapsedSec}s)`, 'err');
+        setStepClass(li, 'bad');
+        li.querySelector('.mark').textContent = '✕';
+        if (btn) {
+          btn.textContent = '✕ FAILED · retry';
+          btn.style.background = 'var(--bad)';
+          btn.disabled = false;
+          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+        }
+      }
+    };
+
+    const offComplete = window.SeekDeepEvents.on(completeType, (data) => finish(true,  data?.note  || data?.detail));
+    const offFailed   = window.SeekDeepEvents.on(failedType,   (data) => finish(false, data?.error || data?.detail));
+
+    // Hard timeout: 15 min covers the worst-case PyTorch download on a
+    // slow connection. If no terminal event arrives by then, surface
+    // 'install timed out — check Logs viewer' so the user isn't staring
+    // at an indefinite spinner.
+    setTimeout(() => finish(false, 'install timed out after 15 min — check Logs viewer for the pip output'), 15 * 60 * 1000);
+  }
+
   async function runFix(li, c) {
     const fa = c.fix_action;
     if (!fa) return;
@@ -270,6 +355,16 @@
       const result = await r.json().catch(() => ({}));
       if (r.ok && result.ok !== false) {
         appendLog('✓ ' + (result.note || 'fix complete'), 'ok');
+        // Long-running fix with watch_events: the POST returned 'install
+        // started' instantly but the actual work (pip install ~2GB of
+        // PyTorch wheels) takes 1-5 minutes. Without live progress the
+        // user thinks the wizard froze. Subscribe to deps.install.line
+        // events and stream a 'Xs · N log lines · <last line>' indicator
+        // until the terminal event fires.
+        if (Array.isArray(fa.watch_events) && fa.watch_events.length && window.SeekDeepEvents?.on) {
+          runFixWithProgress(li, c, btn, origLabel, fa);
+          return;
+        }
         setStepClass(li, 'done');
         li.querySelector('.mark').textContent = '✓';
         if (btn) { btn.textContent = '✓ DONE'; btn.style.background = 'var(--good)'; }
