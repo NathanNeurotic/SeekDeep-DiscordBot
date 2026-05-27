@@ -101,7 +101,19 @@ data/prompt-templates.json
 data/user-facts.json
 data/persona-overrides.json
 data/custom-personas.json
+data/auto-reactions.json
 !data/.gitkeep
+
+# Personal scratch from AI/audit sessions — never publish.
+AUDIT*.md
+REPO_AUDIT*.md
+
+# Stale clipboard/screenshot uploads. The repo had 31 of these tracked
+# with zero documentation references (antigravity AUD-006). Existing
+# tracked blobs were removed with `git rm --cached` in commit `<future>`;
+# this rule keeps new ones out.
+docs/uploads/
+gui/uploads/
 
 # Tauri build artifacts (Rust target dir + generated schemas)
 src-tauri/target/
