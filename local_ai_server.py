@@ -2977,6 +2977,16 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
 
     resolved_role, model_id = resolve_chat_role(role)
 
+    # Empty model_id (LOCAL_CHAT_MODEL_ID blank in .env) would bubble up as a
+    # cryptic HF OSError "Repo id must use alphanumeric chars". Surface the
+    # real config problem instead so the user knows what to fix.
+    if not (model_id or "").strip():
+        raise ValueError(
+            f"chat role={resolved_role!r} has no model_id configured. "
+            f"Set LOCAL_CHAT_MODEL_ID in .env (e.g. meta-llama/Llama-3.1-8B-Instruct) "
+            f"or set the per-role override for this role, then restart the AI server."
+        )
+
     # When the default chat model is pinned, skip lightweight routing.
     # Case 1 (warm): pinned model already loaded — swap cost (~7-14s) dwarfs
     #   generation savings on a short reply.
@@ -3161,6 +3171,8 @@ def _classify_chat_load_failure(exc: Exception) -> str:
         return "hf-load-error"
     if "tokenizer" in msg:
         return "tokenizer-load-failure"
+    if name == "ValueError" and "model_id configured" in msg:
+        return "no-model-configured"
     return f"chat-load-error:{name}"
 
 
