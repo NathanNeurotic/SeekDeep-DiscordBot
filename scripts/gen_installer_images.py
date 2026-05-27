@@ -48,11 +48,15 @@ def make_wix_banner() -> None:
     """493 x 58 — white text-safe zone on LEFT, dark brand on RIGHT.
 
     WiX banner title is drawn at approx (15, 6); subtitle at (25, 23).
-    Reserving left 343 px for text, right 150 px for brand."""
+    The subtitle on dialogs like 'Destination Folder' can run ~75 chars,
+    extending past x=395. Brand zone must stay narrow so the subtitle
+    isn't visually crowded. Reserving left 398 px for text, right 95 px
+    for brand. (Earlier 150 px brand zone clipped the 'another.' tail
+    of the destination-folder subtitle — user reported in 2026-05-27.)"""
     W, H = 493, 58
     canvas = Image.new("RGB", (W, H), WHITE)
-    # Right-side brand panel: dark gradient strip with a small mascot.
-    brand_w = 150
+    # Right-side brand panel: dark strip with a small mascot.
+    brand_w = 95
     brand = Image.new("RGB", (brand_w, H), DARK)
     canvas.paste(brand, (W - brand_w, 0))
     # Mascot inside the dark zone (32px tall, centered vertically)
