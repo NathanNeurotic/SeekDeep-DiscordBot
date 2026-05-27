@@ -35,6 +35,7 @@ import asyncio
 import socket
 import subprocess
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -219,6 +220,31 @@ _PID_FILE_NAMES = {
     "bot":       "bot.pid",
     # searxng has no PID file; we treat "missing PID file" as "unknown" for it
 }
+
+# ============================================================================
+# LIFECYCLE STATE TRUTH SOURCE
+# ============================================================================
+# Single source of truth for "is service X running, and how many instances".
+# Status pills + launcher cards + firstrun checks ALL read from here. The
+# fragmented detection (Popen handle vs PID file vs port probe) is preserved
+# inside _service_state() with a deterministic precedence, but callers see
+# one stable shape: {state, pid, count, source, transitioning, last_change}.
+#
+# Why this exists: status pills used to lie for up to ~5s because the 4
+# detection paths disagreed and the polling cadence was the only correction
+# mechanism. Now state changes publish to event_bus immediately, so pills
+# update on the WS bus the moment the backend notices, not on the next poll.
+
+# Services currently mid-action (start/stop/restart/kill-all). Reads as
+# "transitioning" until the action returns. Prevents the red-flash-during-
+# restart UX where stop emits "not-running" before start emits "running".
+_TRANSITIONING: set[str] = set()
+_TRANSITIONING_LOCK = threading.Lock()
+
+# Last-known state per service, so we can detect transitions and emit
+# `service.state.changed` events. Keyed by service name; value is the
+# previous dict returned by _service_state() (sans transitioning flag).
+_LAST_SERVICE_STATE: dict[str, dict] = {}
 
 # Loopback IPs that may fetch GET /token. Anything else gets 403.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -635,60 +661,172 @@ def _read_pid_file(log_dir: Path, service: str) -> int | None:
 
 def _detect_running(service: str, log_dir: Path) -> tuple[str, int | None]:
     """
-    Return (state, pid) by consulting both in-process state and PID file.
-    State is one of: "running", "not-running", "exited", "unknown".
-
-    Special cases:
-      ai-server: If we reach this function, the AI server is by definition
-                 running — it's the process serving this HTTP request. So
-                 when no PID file / tracked-spawn match, return our own
-                 process PID with state="running" instead of the misleading
-                 "not-running" that would make the launcher card lie.
-      searxng:   No PID file — fall back to a TCP port probe on the
-                 configured searxng port (default 8080). If the port
-                 accepts a connection, report running; else unknown
-                 (it might be docker-managed, or just down).
+    Backwards-compatible (state, pid) wrapper around _service_state.
+    Prefer _service_state for new callers — it also returns count + source.
     """
+    info = _service_state(service, log_dir)
+    return info["state"], info["pid"]
+
+
+def _service_state(service: str, log_dir: Path) -> dict:
+    """
+    ONE source of truth for service lifecycle state. Returns:
+      {
+        "state":  "running" | "not-running" | "exited" | "transitioning" | "unknown",
+        "pid":    int | None,    # primary PID (oldest of `count` instances)
+        "count":  int,           # how many matching procs are alive (bot pile-up detection)
+        "source": str,           # which detection mechanism resolved this state
+        "transitioning": bool,   # True if a start/stop/restart action is in flight
+      }
+
+    Detection precedence (first hit wins, then count is augmented):
+      1. We just kicked off start/stop/restart → "transitioning"
+      2. _PROCESSES[svc] Popen handle is alive → "running" via "tracked-popen"
+      3. PID file written by launcher.bat resolves to an alive pid → "running" via "pid-file"
+      4. Service-specific probes:
+           ai-server: this very process IS ai-server → "running" via "self-host"
+           searxng:   TCP probe on the configured port → "running"/"not-running" via "port-probe"
+      5. For bot: also psutil-scan for orphan node.exe procs running our index.js — this
+         catches launcher.bat-spawned bots whose PID file got cleaned + manual pile-ups.
+      6. Nothing matched → "not-running" (or "unknown" for non-tracked services)
+
+    After resolving state, for the bot specifically, do a psutil pile-up
+    scan so `count` reflects ALL alive instances regardless of which one
+    won precedence above. This is what makes "running (3 instances)" possible.
+    """
+    # 0. Transitioning beats everything: the UI should freeze on yellow
+    #    while we're mid-action, not flap between red and green.
+    with _TRANSITIONING_LOCK:
+        is_transitioning = service in _TRANSITIONING
+
+    state: str = "not-running"
+    pid: int | None = None
+    source: str = "none"
+
     # 1. In-process spawn we tracked
     proc = _PROCESSES.get(service)
     if proc is not None:
         rc = proc.poll()
         if rc is None:
-            return "running", proc.pid
-        # Process we started has exited; fall through to PID-file check
-        # in case the user restarted via launcher.bat.
+            state, pid, source = "running", proc.pid, "tracked-popen"
 
-    # 2. PID file written by launcher.bat
-    pid = _read_pid_file(log_dir, service)
-    if pid is not None:
-        return ("running" if _pid_alive(pid) else "not-running"), pid
+    # 2. PID file written by launcher.bat (only check if step 1 didn't win)
+    if state != "running":
+        fpid = _read_pid_file(log_dir, service)
+        if fpid is not None:
+            if _pid_alive(fpid):
+                state, pid, source = "running", fpid, "pid-file"
+            else:
+                state, pid, source = "not-running", fpid, "pid-file-stale"
 
-    # 3. Service-specific fallbacks (we know more about ai-server / searxng
-    #    than the generic "no PID file = not running")
-    if service == "ai-server":
-        # We ARE the ai-server. Return our own PID, state running.
-        return "running", os.getpid()
-    if service == "searxng":
-        # Probe the configured searxng port. If something accepts the
-        # connection, it's "running"; if connection refused, "not-running";
-        # any other socket error → "unknown".
-        port_str = (os.getenv("SEARXNG_PORT") or "").strip() or "8080"
+    # 3. Service-specific fallbacks
+    if state not in ("running",) and source == "none":
+        if service == "ai-server":
+            state, pid, source = "running", os.getpid(), "self-host"
+        elif service == "searxng":
+            port_str = (os.getenv("SEARXNG_PORT") or "").strip() or "8080"
+            try:
+                port = int(port_str)
+            except ValueError:
+                port = 8080
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    state, source = "running", "port-probe"
+            except ConnectionRefusedError:
+                state, source = "not-running", "port-probe"
+            except OSError:
+                state, source = "unknown", "port-probe-error"
+
+    # 4. Bot-specific orphan scan — catches launcher.bat spawns whose PID
+    #    file was deleted, plus manual pile-ups. Augments `count` always;
+    #    if state was "not-running" but procs exist, flip to running.
+    count = 1 if state == "running" else 0
+    if service == "bot":
         try:
-            port = int(port_str)
-        except ValueError:
-            port = 8080
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return "running", None
-        except ConnectionRefusedError:
-            return "not-running", None
-        except OSError:
-            return "unknown", None
+            bot_cwd = _resolve_bot_cwd(log_dir.parent)
+            procs = _find_bot_processes(bot_cwd)
+            if procs:
+                count = len(procs)
+                if state != "running":
+                    state, pid, source = "running", procs[0]["pid"], "psutil-scan"
+                elif source == "tracked-popen":
+                    # Keep tracked pid as primary, but reflect higher count
+                    pass
+                else:
+                    pid = procs[0]["pid"]
+        except Exception:
+            # psutil might not be installed; fall back to count from state.
+            pass
 
-    # 4. No info — for services we don't track this way
-    if service not in _PID_FILE_NAMES:
-        return "unknown", None
-    return "not-running", None
+    # Service tracked but no signal at all
+    if state == "not-running" and source == "none":
+        source = "no-signal"
+
+    # Unknown for services we don't track
+    if service not in _PID_FILE_NAMES and service not in {"ai-server", "searxng"}:
+        state, source = "unknown", "untracked"
+
+    if is_transitioning:
+        # Preserve discovered pid/count for UX continuity but flag the
+        # state as transitioning so pills show yellow.
+        return {"state": "transitioning", "pid": pid, "count": count,
+                "source": source, "transitioning": True}
+
+    return {"state": state, "pid": pid, "count": count,
+            "source": source, "transitioning": False}
+
+
+def _emit_state_change_if_any(service: str, current: dict) -> None:
+    """Compare `current` to last cached state; on change, publish a
+    `service.state.changed` event on the bus and update the cache. Status
+    pills + launcher cards subscribe to this so they update on the WS bus
+    immediately instead of waiting for the next 5s poll to notice."""
+    prev = _LAST_SERVICE_STATE.get(service)
+    # Compare on the fields that actually drive UI rendering. The `source`
+    # field is diagnostic — don't fire events when only `source` changes.
+    keys = ("state", "pid", "count", "transitioning")
+    if prev is not None and all(prev.get(k) == current.get(k) for k in keys):
+        return
+    _LAST_SERVICE_STATE[service] = {k: current.get(k) for k in keys}
+    try:
+        event_bus.publish_sync({
+            "type": "service.state.changed",
+            "data": {
+                "service": service,
+                "state": current.get("state"),
+                "pid": current.get("pid"),
+                "count": current.get("count"),
+                "source": current.get("source"),
+                "transitioning": current.get("transitioning"),
+                "prev_state": (prev or {}).get("state"),
+            },
+        })
+    except Exception:
+        pass
+
+
+def _begin_transition(service: str) -> None:
+    """Mark a service as mid-action. UI pills should render yellow while
+    this is set. Pair with _end_transition() in a try/finally."""
+    with _TRANSITIONING_LOCK:
+        _TRANSITIONING.add(service)
+    try:
+        event_bus.publish_sync({
+            "type": "service.state.changed",
+            "data": {"service": service, "state": "transitioning",
+                     "transitioning": True, "source": "action-begin"},
+        })
+    except Exception:
+        pass
+
+
+def _end_transition(service: str) -> None:
+    with _TRANSITIONING_LOCK:
+        _TRANSITIONING.discard(service)
+    # Force-emit current state after the lock clears so UI re-paints
+    # immediately on the now-settled state.
+    # _LAST_SERVICE_STATE may still hold "transitioning" — invalidate.
+    _LAST_SERVICE_STATE.pop(service, None)
 
 
 def _resolve_bot_cwd(default_cwd: Path) -> Path:
@@ -1283,47 +1421,54 @@ def register_gui_endpoints(
     # dispatcher so FastAPI matches the specific path first.
     @app.post("/launcher/bot/kill-all", dependencies=[Depends(_require_gui_token)])
     async def post_launcher_bot_kill_all():
-        bot_cwd = _resolve_bot_cwd(root)
-        procs = _find_bot_processes(bot_cwd)
-        killed: list[dict] = []
-        failed: list[dict] = []
-        for entry in procs:
-            pid = entry["pid"]
-            ok, err = _kill_pid(pid)
-            row = {"pid": pid, "cmdline": entry.get("cmdline", "")[:200],
-                   "source": entry.get("source", "?")}
-            if ok:
-                if err:
-                    row["note"] = err  # e.g. "already-dead"
-                killed.append(row)
-            else:
-                row["error"] = err or "unknown"
-                failed.append(row)
-        # Also clear in-process tracking + stale PID file so the launcher
-        # card flips to "not-running" on the next status poll.
-        proc = _PROCESSES.pop("bot", None)
-        if proc is not None:
-            try:
-                if proc.poll() is None:
-                    proc.kill()
-            except Exception:
-                pass
+        _begin_transition("bot")
         try:
-            pid_name = _PID_FILE_NAMES.get("bot")
-            if pid_name:
-                pid_path = _log_dir / pid_name
-                if pid_path.is_file():
-                    pid_path.unlink()
-        except OSError:
-            pass
-        return {
-            "ok": not failed,
-            "service": "bot",
-            "scope": str(bot_cwd),
-            "found": len(procs),
-            "killed": killed,
-            "failed": failed,
-        }
+            bot_cwd = _resolve_bot_cwd(root)
+            procs = _find_bot_processes(bot_cwd)
+            killed: list[dict] = []
+            failed: list[dict] = []
+            for entry in procs:
+                pid = entry["pid"]
+                ok, err = _kill_pid(pid)
+                row = {"pid": pid, "cmdline": entry.get("cmdline", "")[:200],
+                       "source": entry.get("source", "?")}
+                if ok:
+                    if err:
+                        row["note"] = err  # e.g. "already-dead"
+                    killed.append(row)
+                else:
+                    row["error"] = err or "unknown"
+                    failed.append(row)
+            # Also clear in-process tracking + stale PID file so the launcher
+            # card flips to "not-running" on the next status poll.
+            proc = _PROCESSES.pop("bot", None)
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass
+            try:
+                pid_name = _PID_FILE_NAMES.get("bot")
+                if pid_name:
+                    pid_path = _log_dir / pid_name
+                    if pid_path.is_file():
+                        pid_path.unlink()
+            except OSError:
+                pass
+            return {
+                "ok": not failed,
+                "service": "bot",
+                "scope": str(bot_cwd),
+                "found": len(procs),
+                "killed": killed,
+                "failed": failed,
+            }
+        finally:
+            _end_transition("bot")
+            # Force a state recomputation + event publish so UI pills
+            # update immediately on the now-settled state.
+            _emit_state_change_if_any("bot", _service_state("bot", _log_dir))
 
     # ----- POST /launcher/{service}/{action} -----
     @app.post("/launcher/{service}/{action}", dependencies=[Depends(_require_gui_token)])
@@ -1333,19 +1478,34 @@ def register_gui_endpoints(
         if action not in ALLOWED_ACTIONS:
             raise HTTPException(400, f"unknown action · allowed: {sorted(ALLOWED_ACTIONS)}")
 
-        if action == "start":   return _start_service(service, root, _log_dir)
-        if action == "stop":    return _stop_service(service, _log_dir)
-        if action == "status":  return _status_service(service, _log_dir)
-        if action == "restart":
-            # Refuse restart for self-hosted services up-front rather than
-            # killing this very request handler half-way through.
-            if service in SELF_HOSTED_SERVICES:
-                raise HTTPException(409,
-                    f"{service} is self-hosted; refusing to restart it from inside the AI server. "
-                    f"Use seekdeep_launcher.bat instead.")
-            _stop_service(service, _log_dir)
-            time.sleep(0.5)
-            return _start_service(service, root, _log_dir)
+        # `status` is a read-only query — no transition lock needed.
+        if action == "status":
+            return _status_service(service, _log_dir)
+
+        # start/stop/restart are state-changing. Wrap in transition lock so
+        # the UI shows yellow "transitioning" pills instead of flickering
+        # red/green during the action.
+        _begin_transition(service)
+        try:
+            if action == "start":
+                return _start_service(service, root, _log_dir)
+            if action == "stop":
+                return _stop_service(service, _log_dir)
+            if action == "restart":
+                # Refuse restart for self-hosted services up-front rather than
+                # killing this very request handler half-way through.
+                if service in SELF_HOSTED_SERVICES:
+                    raise HTTPException(409,
+                        f"{service} is self-hosted; refusing to restart it from inside the AI server. "
+                        f"Use seekdeep_launcher.bat instead.")
+                _stop_service(service, _log_dir)
+                time.sleep(0.5)
+                return _start_service(service, root, _log_dir)
+        finally:
+            _end_transition(service)
+            # Force a state recomputation + event publish so UI pills
+            # update immediately on the now-settled state.
+            _emit_state_change_if_any(service, _service_state(service, _log_dir))
 
     # ----- GET /launchers/status -----
     # Per-service status snapshot for the Control Center launcher cards.
@@ -1361,8 +1521,12 @@ def register_gui_endpoints(
     def get_launchers_status():
         services_out = {}
         for svc in sorted(ALLOWED_SERVICES):
-            base_status = _status_service(svc, _log_dir)
-            pid = base_status.get("pid")
+            # _service_state is the single source of truth — returns
+            # {state, pid, count, source, transitioning}. Augmented here
+            # with the schema callers already depend on (ok, service,
+            # uptime_seconds, started_at, last_error, last_error_log).
+            info = _service_state(svc, _log_dir)
+            pid = info["pid"]
             uptime_s = None
             started_at = None
             if pid is not None:
@@ -1384,7 +1548,7 @@ def register_gui_endpoints(
             # complaints — a silent EXITED pill with no error surface.
             last_error = None
             err_log_name = None
-            if base_status.get("state") in ("exited", "not-running"):
+            if info["state"] in ("exited", "not-running"):
                 try:
                     err_logs = sorted(
                         _log_dir.glob(f"{svc}-*.gui.err.log"),
@@ -1401,12 +1565,22 @@ def register_gui_endpoints(
                 except OSError:
                     pass
             services_out[svc] = {
-                **base_status,
+                "ok": True,
+                "service": svc,
+                "state": info["state"],
+                "pid": pid,
+                "count": info["count"],
+                "source": info["source"],
+                "transitioning": info["transitioning"],
                 "uptime_seconds": uptime_s,
                 "started_at":      started_at,
                 "last_error":      last_error,
                 "last_error_log":  err_log_name,
             }
+            # Fire service.state.changed if anything user-visible flipped
+            # since the last query. UI subscribers update immediately,
+            # without waiting for the next 5s poll to notice.
+            _emit_state_change_if_any(svc, info)
         return {
             "ok": True,
             "services": services_out,

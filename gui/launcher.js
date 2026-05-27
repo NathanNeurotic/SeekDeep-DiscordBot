@@ -72,6 +72,32 @@
 
   // --- Card status pump ---------------------------------------------------
 
+  // Event-driven invalidation: the backend publishes service.state.changed
+  // on every transition AND on each /launchers/status request that detects
+  // a change. When the WS bus delivers one, force a poll immediately so the
+  // pill flips without waiting up to 5s for the regular cycle. This is the
+  // half of the "stop lying about state" fix that runs in the browser; the
+  // backend half is _emit_state_change_if_any in gui_endpoints.py.
+  function wireStateChangeBus() {
+    if (window.__seekdeepStateChangeWired) return;
+    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') {
+      // events.js not loaded yet — re-try when DOMContentLoaded fires.
+      setTimeout(wireStateChangeBus, 250);
+      return;
+    }
+    window.__seekdeepStateChangeWired = true;
+    window.SeekDeepEvents.on('service.state.changed', () => {
+      // Coalesce bursts (e.g. restart fires N events) into one poll per 200ms.
+      if (window.__seekdeepStateChangePending) return;
+      window.__seekdeepStateChangePending = true;
+      setTimeout(() => {
+        window.__seekdeepStateChangePending = false;
+        pumpStatus();
+      }, 200);
+    });
+  }
+  wireStateChangeBus();
+
   // Tracks consecutive /launchers/status failures so we can flip the cards
   // to UNKNOWN after 3 misses instead of leaving them in PROBING forever
   // (which would be a quiet lie when the AI server is genuinely down).
@@ -169,18 +195,28 @@
         if (/uptime/i.test(txt)) em.textContent = fmtUptime(s.uptime_seconds);
       });
 
-      // Health pill
+      // Health pill — honors transitioning (yellow during start/stop/restart)
+      // and count (e.g. "RUNNING · 3 INSTANCES" for bot pile-ups).
       const pill = card.querySelector('.pill');
       if (pill) {
         const dot = pill.querySelector('.dot');
+        const isTransitioning = s.transitioning === true || s.state === 'transitioning';
         const isUp = s.state === 'running';
         const isExited = s.state === 'exited' || s.state === 'not-running';
-        pill.classList.toggle('on', isUp);
-        pill.classList.toggle('bad', isExited);
+        pill.classList.toggle('on', isUp && !isTransitioning);
+        pill.classList.toggle('bad', isExited && !isTransitioning);
+        pill.classList.toggle('warn', isTransitioning);
         pill.innerHTML = '';
         if (dot) pill.appendChild(dot.cloneNode(true));
         else { const d = document.createElement('span'); d.className = 'dot'; pill.appendChild(d); }
-        pill.appendChild(document.createTextNode(isUp ? 'HEALTHY' : (isExited ? 'EXITED' : 'UNKNOWN')));
+        let label;
+        if (isTransitioning) label = '… TRANSITIONING';
+        else if (isUp) label = (s.count && s.count > 1)
+          ? `RUNNING · ${s.count} INSTANCES`
+          : 'HEALTHY';
+        else if (isExited) label = 'EXITED';
+        else label = 'UNKNOWN';
+        pill.appendChild(document.createTextNode(label));
       }
 
       // Show last_error tail when the service has exited, so the user sees
