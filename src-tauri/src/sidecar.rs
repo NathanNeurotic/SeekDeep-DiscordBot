@@ -220,6 +220,46 @@ fn installed_version_for_diagnostic(stamp: &Path) -> Option<String> {
     std::fs::read_to_string(stamp).ok().map(|s| s.trim().to_string())
 }
 
+/// True iff the bundled gui_endpoints.py in resource_dir is newer than the
+/// extracted copy at runtime. Used to bypass the EXTERNAL_SERVER_RUNNING
+/// short-circuit in boot_sequence() so a fresh MSI install with the SAME
+/// CARGO_PKG_VERSION still triggers re-extraction. Without this check,
+/// reinstalling the nightly MSI over a running same-version SeekDeep just
+/// updates _up_/ but never refreshes the extracted runtime — every bug
+/// fix shipped without a version bump becomes invisible to users.
+fn bundle_is_newer_than_runtime(app: &AppHandle) -> bool {
+    let runtime = match app_runtime_dir(app) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let resource_root = match app.path().resource_dir() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    // Probe gui_endpoints.py specifically — it's the most-edited file and
+    // a reliable canary for "the bundle changed."
+    let bundle_candidates = [
+        resource_root.join("_up_").join("gui_endpoints.py"),
+        resource_root.join("gui_endpoints.py"),
+    ];
+    let runtime_path = runtime.join("gui_endpoints.py");
+    let runtime_mtime = match fs::metadata(&runtime_path).and_then(|m| m.modified()) {
+        Ok(m) => m,
+        Err(_) => return true,  // runtime missing — definitely need to extract
+    };
+    for src in &bundle_candidates {
+        if let Ok(meta) = fs::metadata(src) {
+            if let Ok(bundle_mtime) = meta.modified() {
+                if bundle_mtime > runtime_mtime {
+                    return true;
+                }
+                return false;  // found bundle, it's NOT newer
+            }
+        }
+    }
+    false  // no bundle gui_endpoints.py found — odd, but don't force extract
+}
+
 pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     let runtime = app_runtime_dir(app)?;
     let resource_root = app
@@ -1030,7 +1070,29 @@ pub fn boot_sequence(app: AppHandle) {
     //   4. If port is bound but /health doesn't speak SeekDeep → refuse
     //      to clobber. Some unrelated process owns the port.
     let our_version = env!("CARGO_PKG_VERSION");
-    if server_already_listening() {
+    // If the bundle in resource_dir is NEWER than the extracted runtime,
+    // a fresh MSI was just installed over a running same-version SeekDeep.
+    // The old extraction is stale; we must kill the running server and
+    // re-extract or the bundled fixes never reach the user. This bypass
+    // is the fix for the 2026-05-27 deadlock where reinstalling the SFS-
+    // fix nightly didn't help because the version string hadn't bumped.
+    let bundle_is_fresh = bundle_is_newer_than_runtime(&app);
+    // If a fresh MSI bundle is sitting in resource_dir but a stale server
+    // is still on :7865, that server is running the OLD extracted code.
+    // Kill it before extraction so the new server spawns against the
+    // freshly-extracted files.
+    if server_already_listening() && bundle_is_fresh {
+        let _ = app.emit(
+            "sidecar:status",
+            serde_json::json!({
+                "code": "STALE_SERVER_REPLACED",
+                "detail": "newer bundle detected; killing existing :7865 server to load fresh code",
+            }),
+        );
+        kill_listener_on_7865();
+        std::thread::sleep(Duration::from_millis(800));
+    }
+    if server_already_listening() && !bundle_is_fresh {
         match server_identity() {
             Some(remote_version) if remote_version == our_version => {
                 emit_status(&app, "EXTERNAL_SERVER_RUNNING");
