@@ -505,6 +505,134 @@ def main() -> int:
         c.post(f"/memory/presets/{SMOKE_UID2}", json={"presets": []},
                headers={_TOKEN_HEADER: token})
 
+    # =====================================================================
+    # Prompt templates — write endpoints (close the marketplace
+    # persistence gap that previously routed all writes through Discord
+    # slash commands). Token-gated; CRUD on prompt-templates.json.
+    # =====================================================================
+    SMOKE_PROMPT_GUILD = "999000999000999000"
+    SMOKE_PROMPT_USER  = "888000888000888000"
+    SMOKE_PROMPT_NAME  = "smoke-test-tpl"
+    SMOKE_PROMPT_ID    = f"{SMOKE_PROMPT_GUILD}:{SMOKE_PROMPT_USER}:{SMOKE_PROMPT_NAME}"
+
+    # Auth gates
+    r = c.post("/prompts/template", json={
+        "guild_id": SMOKE_PROMPT_GUILD, "owner_user_id": SMOKE_PROMPT_USER,
+        "name": SMOKE_PROMPT_NAME, "prompt": "test {{var}}",
+    })
+    check("POST /prompts/template without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    r = c.delete(f"/prompts/template/{SMOKE_PROMPT_ID}")
+    check("DELETE /prompts/template/{id} without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Create
+        r = c.post("/prompts/template", headers={_TOKEN_HEADER: token}, json={
+            "guild_id": SMOKE_PROMPT_GUILD, "owner_user_id": SMOKE_PROMPT_USER,
+            "name": SMOKE_PROMPT_NAME, "prompt": "Summarize {{topic}} in {{count}} bullets.",
+        })
+        check("POST /prompts/template create -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, id, created:true, vars:[topic,count]}",
+              body.get("ok") is True and body.get("created") is True
+              and body.get("id") == SMOKE_PROMPT_ID
+              and set(body.get("vars") or []) == {"topic", "count"},
+              f"body={body}")
+
+        # Update (same name re-posts) — created flag should flip false
+        r = c.post("/prompts/template", headers={_TOKEN_HEADER: token}, json={
+            "guild_id": SMOKE_PROMPT_GUILD, "owner_user_id": SMOKE_PROMPT_USER,
+            "name": SMOKE_PROMPT_NAME, "prompt": "Updated {{topic}}.",
+        })
+        check("POST /prompts/template update -> 200 created:false",
+              r.status_code == 200 and r.json().get("created") is False,
+              f"got {r.status_code} body={r.json() if r.status_code == 200 else None}")
+
+        # Validation
+        r = c.post("/prompts/template", headers={_TOKEN_HEADER: token}, json={
+            "guild_id": "", "owner_user_id": "u", "name": "n", "prompt": "x",
+        })
+        check("POST /prompts/template missing guild_id -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+        r = c.post("/prompts/template", headers={_TOKEN_HEADER: token}, json={
+            "guild_id": "g", "owner_user_id": "u", "name": "bad space", "prompt": "x",
+        })
+        check("POST /prompts/template invalid name -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Delete
+        r = c.delete(f"/prompts/template/{SMOKE_PROMPT_ID}",
+                     headers={_TOKEN_HEADER: token})
+        check("DELETE /prompts/template/{id} -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        r = c.delete(f"/prompts/template/{SMOKE_PROMPT_ID}",
+                     headers={_TOKEN_HEADER: token})
+        check("DELETE /prompts/template/{id} second time -> 404",
+              r.status_code == 404, f"got {r.status_code}")
+
+    # =====================================================================
+    # Auto-react rules — write endpoints (close the GUI-editor gap that
+    # routed every change through @SeekDeep reactrule). Token-gated CRUD
+    # on auto-reactions.json + per-guild builtin toggles.
+    # =====================================================================
+    SMOKE_REACT_GUILD = "777000777000777000"
+
+    r = c.post("/reacts/rule", json={"guild_id": SMOKE_REACT_GUILD, "emoji": ":star:", "pattern": "test"})
+    check("POST /reacts/rule without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Create
+        r = c.post("/reacts/rule", headers={_TOKEN_HEADER: token}, json={
+            "guild_id": SMOKE_REACT_GUILD, "emoji": ":star:", "pattern": "smoke-test-pattern",
+        })
+        check("POST /reacts/rule create -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        rule_id = (body.get("rule") or {}).get("id")
+        check("  ...returns {ok, rule:{id, emoji, pattern, enabled, hits:0}}",
+              body.get("ok") is True and isinstance(rule_id, str) and rule_id.startswith("rr_")
+              and body["rule"].get("emoji") == ":star:"
+              and body["rule"].get("pattern") == "smoke-test-pattern",
+              f"body={body}")
+
+        # Patch — toggle enabled, update pattern
+        r = c.patch(f"/reacts/rule/{rule_id}", headers={_TOKEN_HEADER: token},
+                    json={"enabled": False, "pattern": "smoke-updated"})
+        check("PATCH /reacts/rule/{id} -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...applied enabled=false + new pattern",
+              (body.get("rule") or {}).get("enabled") is False
+              and (body.get("rule") or {}).get("pattern") == "smoke-updated",
+              f"body={body}")
+
+        # Builtin toggle per-guild
+        r = c.post("/reacts/builtin/long_message", headers={_TOKEN_HEADER: token},
+                   json={"guild_id": SMOKE_REACT_GUILD, "enabled": True, "threshold": 800})
+        check("POST /reacts/builtin/long_message -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...persists threshold=800",
+              (body.get("value") or {}).get("threshold") == 800,
+              f"body={body}")
+
+        # Unknown builtin
+        r = c.post("/reacts/builtin/bogus", headers={_TOKEN_HEADER: token},
+                   json={"guild_id": SMOKE_REACT_GUILD, "enabled": True})
+        check("POST /reacts/builtin/<unknown> -> 400",
+              r.status_code == 400, f"got {r.status_code}")
+
+        # Delete rule
+        r = c.delete(f"/reacts/rule/{rule_id}", headers={_TOKEN_HEADER: token})
+        check("DELETE /reacts/rule/{id} -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        r = c.delete(f"/reacts/rule/{rule_id}", headers={_TOKEN_HEADER: token})
+        check("DELETE /reacts/rule/{id} second time -> 404",
+              r.status_code == 404, f"got {r.status_code}")
+
     # ---- GET /config (Item F: redacted env map for dynamic-facts IIFE) ----
     r = c.get("/config")
     check("GET /config -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

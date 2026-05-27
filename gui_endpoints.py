@@ -2413,6 +2413,230 @@ def register_gui_endpoints(
         _atomic_write_json(_memory_presets_path, store)
         return {"ok": True}
 
+    # =====================================================================
+    # Prompt templates — GUI write endpoints. The bot already writes to
+    # data/prompt-templates.json via @SeekDeep template slash commands;
+    # this closes the GUI persistence gap (was read-only before).
+    #
+    # Schema on disk (matches bot writer):
+    #   { guilds: { <gid>: { <uid>: { <name>: { prompt, vars?,
+    #                                            createdAt, updatedAt,
+    #                                            usedCount } } } } }
+    # IDs surfaced to the GUI are "<gid>:<uid>:<name>" — match the
+    # _normalize_prompt_templates fan-out so the same id works for read
+    # and write paths.
+    # =====================================================================
+    _prompt_templates_path = _data_dir / "prompt-templates.json"
+
+    def _read_prompt_templates_store() -> dict:
+        if not _prompt_templates_path.is_file():
+            return {"guilds": {}}
+        try:
+            data = json.loads(_prompt_templates_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"guilds": {}}
+            data["guilds"] = data.get("guilds") or {}
+            return data
+        except Exception:
+            return {"guilds": {}}
+
+    import re as _re_for_vars
+    _PROMPT_VAR_RE = _re_for_vars.compile(r"\{\{\s*([a-z0-9_-]{1,40})\s*\}\}", _re_for_vars.IGNORECASE)
+
+    @app.post("/prompts/template", dependencies=[Depends(_require_gui_token)])
+    def post_prompt_template(body: dict):
+        guild_id = str((body or {}).get("guild_id") or "").strip()
+        owner_user_id = str((body or {}).get("owner_user_id") or "").strip()
+        name = str((body or {}).get("name") or "").strip()
+        prompt = str((body or {}).get("prompt") or "")
+        if not guild_id or not owner_user_id or not name:
+            raise HTTPException(400, "guild_id, owner_user_id, and name are required")
+        if not prompt:
+            raise HTTPException(400, "prompt body is required (non-empty)")
+        if len(name) > 80 or not _re_for_vars.match(r"^[a-zA-Z0-9_\-]{1,80}$", name):
+            raise HTTPException(400, "name must be 1-80 chars of [a-zA-Z0-9_-]")
+        if len(prompt) > 8000:
+            raise HTTPException(400, "prompt body exceeds 8000 chars")
+        # Re-derive vars from the body so they stay in sync with what the
+        # user actually typed. Caller can pass a vars[] override but we
+        # ignore it — vars are an emergent property of the prompt text.
+        vars_seen: list[str] = []
+        for m in _PROMPT_VAR_RE.finditer(prompt):
+            v = m.group(1).lower()
+            if v not in vars_seen:
+                vars_seen.append(v)
+        store = _read_prompt_templates_store()
+        g = store["guilds"].setdefault(guild_id, {})
+        u = g.setdefault(owner_user_id, {})
+        now = _now_iso()
+        existing = u.get(name) if isinstance(u.get(name), dict) else None
+        u[name] = {
+            "prompt":    prompt,
+            "vars":      vars_seen,
+            "createdAt": (existing or {}).get("createdAt") or now,
+            "updatedAt": now,
+            "usedCount": int((existing or {}).get("usedCount") or 0),
+        }
+        _atomic_write_json(_prompt_templates_path, store)
+        return {
+            "ok": True,
+            "id": f"{guild_id}:{owner_user_id}:{name}",
+            "created": existing is None,
+            "vars": vars_seen,
+            "char_count": len(prompt),
+        }
+
+    @app.delete("/prompts/template/{template_id:path}", dependencies=[Depends(_require_gui_token)])
+    def delete_prompt_template(template_id: str):
+        parts = template_id.split(":", 2)
+        if len(parts) != 3:
+            raise HTTPException(400, "template_id must be '<guild_id>:<owner_user_id>:<name>'")
+        guild_id, owner_user_id, name = parts
+        store = _read_prompt_templates_store()
+        g = store["guilds"].get(guild_id) or {}
+        u = g.get(owner_user_id) or {}
+        if name not in u:
+            raise HTTPException(404, f"no template {template_id}")
+        del u[name]
+        # Prune empty branches so the file doesn't accumulate orphan keys.
+        if not u:
+            del g[owner_user_id]
+        if not g:
+            del store["guilds"][guild_id]
+        _atomic_write_json(_prompt_templates_path, store)
+        return {"ok": True, "removed": template_id}
+
+    # =====================================================================
+    # Auto-react rules — GUI write endpoints. Same persistence-gap fix
+    # for the React Rules pane. The bot owns the file but writes are
+    # additive so the GUI can write too without racing the bot's
+    # @SeekDeep reactrule command (atomic file write + read-modify-write).
+    #
+    # Schema on disk:
+    #   { guilds: { <gid>: { rules: [{id, emoji, pattern, scope?, target?,
+    #                                  enabled, hits, createdAt}],
+    #                        builtins: { <key>: { enabled, emoji?,
+    #                                              threshold? } } } } }
+    # =====================================================================
+    _auto_reactions_path = _data_dir / "auto-reactions.json"
+
+    def _read_auto_reactions_store() -> dict:
+        if not _auto_reactions_path.is_file():
+            return {"guilds": {}}
+        try:
+            data = json.loads(_auto_reactions_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"guilds": {}}
+            data["guilds"] = data.get("guilds") or {}
+            return data
+        except Exception:
+            return {"guilds": {}}
+
+    def _new_rule_id() -> str:
+        return f"rr_{secrets.token_hex(8)}"
+
+    @app.post("/reacts/rule", dependencies=[Depends(_require_gui_token)])
+    def post_reacts_rule(body: dict):
+        guild_id = str((body or {}).get("guild_id") or "").strip()
+        emoji = str((body or {}).get("emoji") or "").strip()
+        pattern = str((body or {}).get("pattern") or "").strip()
+        scope = str((body or {}).get("scope") or "").strip().lower()
+        target = str((body or {}).get("target") or "").strip()
+        enabled = (body or {}).get("enabled")
+        if enabled is None: enabled = True
+        if not guild_id or not emoji or not pattern:
+            raise HTTPException(400, "guild_id, emoji, and pattern are required")
+        if scope and scope not in ("channel", "user"):
+            raise HTTPException(400, "scope must be 'channel' or 'user' (or omitted)")
+        if scope and not target:
+            raise HTTPException(400, "scope was set but target is empty")
+        if len(pattern) > 400:
+            raise HTTPException(400, "pattern exceeds 400 chars")
+        store = _read_auto_reactions_store()
+        g = store["guilds"].setdefault(guild_id, {})
+        rules = g.setdefault("rules", [])
+        rule = {
+            "id":       _new_rule_id(),
+            "emoji":    emoji,
+            "pattern":  pattern,
+            "enabled":  bool(enabled),
+            "hits":     0,
+            "createdAt": _now_iso(),
+        }
+        if scope:
+            rule["scope"] = scope
+            rule["target"] = target
+        rules.append(rule)
+        _atomic_write_json(_auto_reactions_path, store)
+        return {"ok": True, "rule": rule}
+
+    @app.patch("/reacts/rule/{rule_id}", dependencies=[Depends(_require_gui_token)])
+    def patch_reacts_rule(rule_id: str, body: dict):
+        # Locate the rule across guilds — GUI may not know which guild
+        # owns it from the id alone.
+        store = _read_auto_reactions_store()
+        for gid, g in store["guilds"].items():
+            for r in (g.get("rules") or []):
+                if r.get("id") == rule_id:
+                    if "emoji" in body and body["emoji"]:
+                        r["emoji"] = str(body["emoji"])
+                    if "pattern" in body and body["pattern"]:
+                        if len(str(body["pattern"])) > 400:
+                            raise HTTPException(400, "pattern exceeds 400 chars")
+                        r["pattern"] = str(body["pattern"])
+                    if "enabled" in body:
+                        r["enabled"] = bool(body["enabled"])
+                    if "scope" in body:
+                        s = str(body["scope"] or "").lower()
+                        if s and s not in ("channel", "user"):
+                            raise HTTPException(400, "scope must be 'channel' or 'user'")
+                        if s:
+                            r["scope"] = s
+                            r["target"] = str(body.get("target") or r.get("target") or "")
+                        else:
+                            r.pop("scope", None); r.pop("target", None)
+                    r["updatedAt"] = _now_iso()
+                    _atomic_write_json(_auto_reactions_path, store)
+                    return {"ok": True, "rule": r, "guild_id": gid}
+        raise HTTPException(404, f"no rule {rule_id}")
+
+    @app.delete("/reacts/rule/{rule_id}", dependencies=[Depends(_require_gui_token)])
+    def delete_reacts_rule(rule_id: str):
+        store = _read_auto_reactions_store()
+        for gid, g in store["guilds"].items():
+            rules = g.get("rules") or []
+            for i, r in enumerate(rules):
+                if r.get("id") == rule_id:
+                    rules.pop(i)
+                    _atomic_write_json(_auto_reactions_path, store)
+                    return {"ok": True, "removed": rule_id, "guild_id": gid}
+        raise HTTPException(404, f"no rule {rule_id}")
+
+    @app.post("/reacts/builtin/{key}", dependencies=[Depends(_require_gui_token)])
+    def post_reacts_builtin(key: str, body: dict):
+        # Per-guild builtin toggle. Body: { guild_id, enabled?, threshold? }
+        guild_id = str((body or {}).get("guild_id") or "").strip()
+        if not guild_id:
+            raise HTTPException(400, "guild_id is required")
+        key = key.strip()
+        ALLOWED_BUILTINS = {"long_message", "forwarded", "code_block", "image_only", "link_only"}
+        if key not in ALLOWED_BUILTINS:
+            raise HTTPException(400, f"unknown builtin key {key!r}; allowed: {sorted(ALLOWED_BUILTINS)}")
+        store = _read_auto_reactions_store()
+        g = store["guilds"].setdefault(guild_id, {})
+        builtins = g.setdefault("builtins", {})
+        b = builtins.setdefault(key, {})
+        if "enabled" in body:  b["enabled"] = bool(body["enabled"])
+        if "threshold" in body and body["threshold"] is not None:
+            try:
+                b["threshold"] = int(body["threshold"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "threshold must be an integer")
+        if "emoji" in body and body["emoji"]:
+            b["emoji"] = str(body["emoji"])
+        _atomic_write_json(_auto_reactions_path, store)
+        return {"ok": True, "key": key, "guild_id": guild_id, "value": b}
+
     # ----- Heartbeat producer -----
     # Emits {"type":"heartbeat","data":{"server_time_ms":...,"subscribers":N}}
     # every HEARTBEAT_SEC. Gives clients a connection-keepalive AND a canary
