@@ -998,13 +998,21 @@
 
   // CPU-only mode banner — surfaces when /health says no CUDA.
   // Auto-detect on load, refresh every minute in case a GPU comes online.
+  //
+  // NOTE: cuda_available===false has TWO causes — (a) torch isn't installed
+  // yet (ml_deps_missing), or (b) torch IS installed but can't see CUDA.
+  // The CPU-ONLY banner only makes sense for (b); for (a), the ml-deps
+  // banner is the right CTA, and claiming "no CUDA device detected" when
+  // we literally cannot import torch is just lying — the user may well
+  // have a 5090 sitting right there. Gate on h.gpu.torch_present === true.
   async function checkGpuMode() {
     const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
     try {
       const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
       if (!r.ok) return;
       const h = await r.json();
-      const noCuda = h.cuda_available === false;
+      const torchPresent = (h && h.gpu && h.gpu.torch_present === true);
+      const noCuda = (h.cuda_available === false) && torchPresent;
       let banner = document.querySelector('.sd-cpu-banner');
       if (noCuda) {
         if (!banner) {

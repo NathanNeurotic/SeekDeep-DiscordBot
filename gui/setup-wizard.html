@@ -178,6 +178,9 @@
         : (!c.ok ? `<button class="skip" data-act="skip">Skip</button>` : '');
 
       // Prompt rows: one per prompt_for entry, plus error slot.
+      // The .prompt-err div is also reused by runFix() to show install /
+      // fix failure reasons inline (so the user doesn't have to scroll
+      // down to the log panel to learn WHY their pip install failed).
       let promptHtml = '';
       if (hasPrompt) {
         for (const p of fa.prompt_for) {
@@ -189,8 +192,10 @@
                      autocomplete="off" spellcheck="false" />
             </div>`;
         }
-        promptHtml += `<div class="prompt-err" style="display:none;"></div>`;
       }
+      // Always emit an err slot so failure surfacing works on rows that
+      // had no prompt_for (ml_deps, searxng, etc.).
+      promptHtml += `<div class="prompt-err" style="display:none;"></div>`;
 
       li.innerHTML = `
         <span class="mark">${mark}</span>
@@ -307,14 +312,19 @@
         // the user sees 'exit_code 1' and has no idea why. Backend
         // already classifies common Windows / Python pitfalls into a
         // hint string (see gui_endpoints.py post_deps_install).
+        let hoverTip = '';
         if (payload && typeof payload === 'object') {
-          if (payload.hint) appendLog(`  → ${payload.hint}`, 'err');
+          if (payload.hint) { appendLog(`  → ${payload.hint}`, 'err'); hoverTip += payload.hint; }
           if (payload.cmd)  appendLog(`  $ ${payload.cmd}`);
           if (payload.detail) {
             const lines = String(payload.detail).split(/\r?\n/).filter(s => s.trim()).slice(-12);
             if (lines.length) {
               appendLog('  ─── last ' + lines.length + ' pip output line(s) ───');
               for (const ln of lines) appendLog('  ' + ln);
+              // Last non-empty pip line goes in the tooltip too — gives
+              // 'No matching distribution for torch' style context on hover
+              // without making the user re-run to find out why.
+              if (!hoverTip) hoverTip = lines[lines.length - 1].slice(0, 200);
             }
           }
         }
@@ -324,7 +334,18 @@
           btn.textContent = '✕ FAILED · retry';
           btn.style.background = 'var(--bad)';
           btn.disabled = false;
-          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+          if (hoverTip) btn.title = hoverTip + '\n\n(click retry, or scroll down for the full pip output)';
+          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; btn.title = origLabel; runFix(li, c); }, { once: true });
+        }
+        // Surface the failure reason inline so the user doesn't have to
+        // hunt for it in the log panel. Show hint first (already
+        // human-friendly via gui_endpoints classifier), fall back to
+        // raw error message + a pointer to the log.
+        const inlineErr = li.querySelector('.prompt-err');
+        if (inlineErr) {
+          const reason = (payload && payload.hint) || msg || 'install failed';
+          inlineErr.style.display = '';
+          inlineErr.textContent = '✕ ' + reason + ' — see log below for full pip output.';
         }
       }
     };
@@ -345,6 +366,9 @@
     const btn = li.querySelector('button[data-act="fix"]');
     const errEl = li.querySelector('.prompt-err');
     const origLabel = btn ? btn.textContent : 'FIX';
+    // Clear any prior inline failure reason from a previous attempt so
+    // the user sees a fresh slate on retry.
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
     // Read prompt_for inputs (if any), validate, and merge into the
     // request body. body_template is the base shape; for /config the
@@ -422,7 +446,13 @@
           btn.textContent = '✕ FAILED · retry';
           btn.style.background = 'var(--bad)';
           btn.disabled = false;
-          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+          btn.title = String(err).slice(0, 240);
+          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; btn.title = origLabel; runFix(li, c); }, { once: true });
+        }
+        const inlineErr = li.querySelector('.prompt-err');
+        if (inlineErr) {
+          inlineErr.style.display = '';
+          inlineErr.textContent = '✕ ' + String(err).slice(0, 300);
         }
       }
     } catch (err) {
@@ -433,7 +463,13 @@
         btn.textContent = '✕ ERROR · retry';
         btn.style.background = 'var(--bad)';
         btn.disabled = false;
-        btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+        btn.title = String(err.message || err).slice(0, 240);
+        btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; btn.title = origLabel; runFix(li, c); }, { once: true });
+      }
+      const inlineErr = li.querySelector('.prompt-err');
+      if (inlineErr) {
+        inlineErr.style.display = '';
+        inlineErr.textContent = '✕ ' + String(err.message || err).slice(0, 300);
       }
     }
   }
