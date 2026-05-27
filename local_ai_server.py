@@ -131,12 +131,15 @@ def _seekdeep_install_file_logging() -> None:
         s = _re_apikey.sub(r"\1[redacted]", s)
         return s
     _re_py_warning = re.compile(r":\s*\d+:\s*\w+Warning\b")  # 'file.py:765: DeprecationWarning'
+    # tqdm-style progress lines look like 'Loading weights: 100%|██…| 5/5'.
+    # huggingface_hub writes them to stderr; without this they spam [ERR]
+    # all over a healthy model load and make the Logs viewer look on fire.
+    _re_progress = re.compile(r"\b\d+%\|[█▉▊▋▌▍▎▏ #\->= ]*\|")
     class _Tee:
         def __init__(self, real, level):
             self.real = real
             self.level = level  # default severity if no inline marker
             self._sticky = None  # carries severity across continuation lines
-            self._sticky_until_blank = False
         def write(self, data):
             try:
                 self.real.write(data)
@@ -147,10 +150,11 @@ def _seekdeep_install_file_logging() -> None:
                     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
                     for line in str(data).splitlines():
                         if not line:
-                            # Blank line terminates a sticky multi-line warning.
-                            if self._sticky_until_blank:
-                                self._sticky = None
-                                self._sticky_until_blank = False
+                            # Blank line — keep sticky state. Python warning
+                            # blocks contain blank lines inside the message;
+                            # resetting on blank would split a single warning
+                            # across [WARN]+[ERR] tags. Sticky is broken
+                            # only when a NEW level marker arrives.
                             continue
                         # Sniff per-line severity. Uvicorn + Python warnings
                         # write to stderr too; blindly tagging everything from
@@ -161,19 +165,25 @@ def _seekdeep_install_file_logging() -> None:
                         new_sticky = None
                         if stripped.startswith("INFO:") or stripped.startswith("INFO "):
                             lvl = "INFO"
+                            new_sticky = None  # info marker breaks sticky warning
+                            self._sticky = None
                         elif (stripped.startswith("WARNING:")
                               or stripped.startswith("WARN:")
                               or stripped.startswith("UserWarning")
                               or _re_py_warning.search(line)):
                             lvl = "WARN"
-                            new_sticky = "WARN"  # tag continuation lines too
+                            new_sticky = "WARN"
                         elif stripped.startswith("DEBUG:"):
                             lvl = "DEBUG"
+                            self._sticky = None
                         elif stripped.startswith("ERROR:") or stripped.startswith("CRITICAL:"):
                             lvl = "ERR"
                         elif stripped.startswith("Traceback ") or stripped.startswith("  File "):
                             lvl = "ERR"
                             new_sticky = "ERR"
+                        elif _re_progress.search(line):
+                            # tqdm progress: tag as INFO regardless of stream.
+                            lvl = "INFO"
                         else:
                             # Continuation line — if we're inside a sticky
                             # multi-line warning/traceback, inherit its level.
@@ -181,7 +191,6 @@ def _seekdeep_install_file_logging() -> None:
                                 lvl = self._sticky
                         if new_sticky is not None:
                             self._sticky = new_sticky
-                            self._sticky_until_blank = True
                         sink.write(f"[{ts}] [{lvl}] {_redact(line)}\n")
             except Exception:
                 pass
@@ -2467,7 +2476,12 @@ def models_available_endpoint():
                      "ollama": _MODEL_CATALOG_OLLAMA,
                  },
                  "hf_token_set": bool((os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()),
-                 "vram_total_mb": vram_total_mb() if cuda_available() else 0}
+                 "vram_total_mb": vram_total_mb() if cuda_available() else 0,
+                 # Surface offline-lock so the catalog modal can disable
+                 # HF install buttons before the user hits a 500. Same flag
+                 # /health exposes; inline here to avoid a second round-trip.
+                 "env_offline": (str(os.getenv("HF_HUB_OFFLINE", "")).strip().lower()
+                                 in ("1", "true", "yes", "on"))}
     # Resilient HF scan — catches WinError 448 / OSError on bad symlinks and
     # returns whatever portion of the cache was readable.
     try:
@@ -3076,8 +3090,30 @@ def model_uninstall(req: ModelUninstallRequest):
     # request falls through to whatever LOCAL_CHAT_BACKEND globally points
     # at. We BLANK rather than DELETE the lines so the user can re-fill
     # them in the GUI later without losing comment context.
+    #
+    # SAFETY: only blank when the requested model actually matches the
+    # current binding. Otherwise a Model Manager Remove on a stale row
+    # (hardcoded HTML rows ship with default model IDs that may not
+    # match the user's live LOCAL_CHAT_MODEL_ID) would detach the wrong
+    # role and silently change which model /chat routes to.
     role = (req.role or "").strip().lower()
     if role:
+        current_id_key = _env_key_for_role(role, "model_id")
+        current_id     = (os.getenv(current_id_key) or "").strip() if current_id_key else ""
+        # Normalize for the ollama: prefix that the picker writes.
+        norm_current = current_id.split(":", 1)[1] if current_id.startswith("ollama:") else current_id
+        norm_request = (req.model_id or "").strip()
+        if current_id and norm_current and norm_current != norm_request:
+            # Role is bound to a DIFFERENT model than the one being removed.
+            # Skip the env detach silently — uninstall_result still reflects
+            # the disk-level removal but we don't touch the binding.
+            uninstall_result["env_patched"] = False
+            uninstall_result["env_skip_reason"] = (
+                f"role={role!r} is currently bound to {current_id!r}, "
+                f"not the removed {norm_request!r}. .env left untouched."
+            )
+            uninstall_result["role"] = role
+            return uninstall_result
         env_keys_to_blank: list[str] = []
         model_id_key = _env_key_for_role(role, "model_id")
         backend_key  = _env_key_for_role(role, "backend")

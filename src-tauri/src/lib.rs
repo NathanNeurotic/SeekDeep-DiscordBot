@@ -419,18 +419,43 @@ pub fn run() {
                         // duplicating that plumbing in Rust.
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus();
+                            // Fetch the GUI token explicitly so this works
+                            // even when nav.js's fetch monkey-patch isn't
+                            // loaded yet (e.g. tray click during loading
+                            // splash, which deliberately skips nav.js).
+                            // Also auto-restart the sidecar after a successful
+                            // update so the new code actually takes effect.
                             let _ = w.eval(r#"
                                 (async () => {
+                                  const sdn = window.SeekDeepNotify;
+                                  const toast = (t, title, body, ttl=8000) => sdn?.toast?.({tone:t, title, body, ttl});
+                                  let token = '';
+                                  try {
+                                    const tr = await fetch('http://127.0.0.1:7865/token');
+                                    if (tr.ok) { const tj = await tr.json(); token = tj.token || tj.value || ''; }
+                                  } catch {}
+                                  if (!token) { toast('bad', 'Self-update failed', 'Could not fetch GUI token from /token'); return; }
+                                  window.__seekdeepRestartingUntil = Date.now() + 15000;
                                   try {
                                     const r = await fetch('http://127.0.0.1:7865/system/self-update', {
-                                      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+                                      method: 'POST',
+                                      headers: {'Content-Type': 'application/json', 'X-SeekDeep-Token': token},
+                                      body: '{}'
                                     });
                                     const j = await r.json();
-                                    const sdn = window.SeekDeepNotify;
-                                    if (r.ok && j.ok && sdn?.toast) sdn.toast({tone:'good', title:'Self-update OK', body:`Updated ${(j.updated||[]).length} file(s) -- restart AI server to apply.`, ttl:8000});
-                                    else if (sdn?.toast) sdn.toast({tone:'bad', title:'Self-update failed', body: (j.detail||j.error||('HTTP '+r.status)), ttl:8000});
+                                    if (!r.ok || !j.ok) { toast('bad', 'Self-update failed', j.detail || j.error || ('HTTP '+r.status)); return; }
+                                    const count = (j.downloaded || j.updated || []).length;
+                                    toast('good', 'Self-update OK', `Updated ${count} file(s) -- restarting AI server now...`, 5000);
+                                    // Auto-restart so the patched code takes effect.
+                                    try {
+                                      if (window.__TAURI__?.core) await window.__TAURI__.core.invoke('restart_sidecar');
+                                      else await fetch('http://127.0.0.1:7865/launcher/ai-server/restart', {method:'POST', headers:{'X-SeekDeep-Token': token}});
+                                      toast('good', 'AI server restarting', `Will be live in a few seconds.`, 5000);
+                                    } catch (re) {
+                                      toast('warn', 'Restart failed', 'Update applied but restart did not fire — restart manually. ' + (re.message||re));
+                                    }
                                   } catch (e) {
-                                    if (window.SeekDeepNotify?.toast) window.SeekDeepNotify.toast({tone:'bad', title:'Self-update failed', body: String(e.message||e), ttl:8000});
+                                    toast('bad', 'Self-update failed', String(e.message||e));
                                   }
                                 })();
                             "#);

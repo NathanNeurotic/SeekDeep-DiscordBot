@@ -264,14 +264,14 @@
   // Config pane dirty rows, prompts.html in-progress edits). Now we ask
   // the user first if anything's dirty, otherwise reload silently.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (e) => {
+    navigator.serviceWorker.addEventListener('message', async (e) => {
       const m = e && e.data;
       if (!m || m.type !== 'seekdeep:sw-cleaned' || !m.reload) return;
       const hasDirty = document.querySelectorAll('.cfg-section .save').length
         ? [...document.querySelectorAll('.cfg-section .save')].some(s => /DIRTY/i.test(s.textContent || ''))
         : false;
       if (hasDirty) {
-        if (!confirm('SeekDeep service worker was cleaned up — reload now? Unsaved config changes will be lost.')) return;
+        if (!await (window.SeekDeepConfirm || window.confirm)('SeekDeep service worker was cleaned up — reload now? Unsaved config changes will be lost.')) return;
       }
       try { location.reload(); } catch (_) {}
     });

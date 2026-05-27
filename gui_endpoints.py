@@ -424,12 +424,15 @@ def _safe_scan_hf_cache(cache_dir: str | None = None):
 
 
 class _EmptyScanInfo:
-    """Stand-in for huggingface_hub.HFCacheInfo when scan fails completely."""
+    """Stand-in for huggingface_hub.HFCacheInfo when scan fails completely.
+
+    Deliberately does NOT define delete_revisions — callers detect partial
+    scans via hasattr() and surface a 503 instead of crashing inside prune.
+    """
     size_on_disk = 0
     repos = ()
     warnings = ()
-    def delete_revisions(self, *_args, **_kw):
-        raise RuntimeError("scan failed; cannot prune")
+    # NOTE: no delete_revisions attribute by design — see /cache/prune guard.
 
 
 class _StubRepo:

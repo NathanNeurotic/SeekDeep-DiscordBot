@@ -2235,7 +2235,7 @@
             catch (err) { alert('Edit failed: ' + err.message); }
           }
           async function doRemove(rule) {
-            if (!confirm(`Remove rule ${rule.emoji} → ${rule.pattern}?`)) return;
+            if (!await (window.SeekDeepConfirm || window.confirm)(`Remove rule ${rule.emoji} → ${rule.pattern}?`)) return;
             try { await callRule('DELETE', rule.id); loaded = false; load(); }
             catch (err) { alert('Remove failed: ' + err.message); }
           }
@@ -2720,7 +2720,7 @@
         const dirtyCount = [...document.querySelectorAll('.config-row .save')]
           .filter(s => s.textContent.includes('DIRTY')).length;
         if (dirtyCount > 0) {
-          if (!confirm(`You have ${dirtyCount} unsaved config change${dirtyCount === 1 ? '' : 's'}. Switch panes anyway?\n\n(Values stay in the form until you reload the page — Save them first, or hit Cancel here to stay on Bot config.)`)) {
+          if (!await (window.SeekDeepConfirm || window.confirm)(`You have ${dirtyCount} unsaved config change${dirtyCount === 1 ? '' : 's'}. Switch panes anyway?\n(Values stay in the form until you reload the page — Save them first, or hit Cancel here to stay on Bot config.)`)) {
             return;
           }
         }
@@ -3440,11 +3440,23 @@ const SEEKDEEP_BASE = (function() {
       liveOk = true;
     }
 
-    document.querySelectorAll('.config-row .save').forEach(s => {
-      s.textContent = 'SAVED';
-      s.style.color = '';
-    });
     btn.disabled = false;
+    // Only flip row markers to SAVED when the POST actually succeeded.
+    // On failure, keep dirty markers so the user knows nothing was written.
+    if (liveOk) {
+      document.querySelectorAll('.config-row .save').forEach(s => {
+        s.textContent = 'SAVED';
+        s.style.color = '';
+      });
+    } else {
+      btn.style.color = 'var(--warn)';
+      if (window.SeekDeepNotify?.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'bad', title: 'Save failed · changes NOT written',
+          body: errMsg, ttl: 6000,
+        });
+      }
+    }
 
     if (liveOk) {
       btn.classList.remove('btn-primary');
@@ -4479,12 +4491,53 @@ const SEEKDEEP_BASE = (function() {
                   const r = await fetch(SEEKDEEP_BASE + fa.endpoint, init);
                   const result = await r.json().catch(() => ({}));
                   if (r.ok && result.ok !== false) {
-                    btn.textContent = '✓ DONE';
-                    btn.style.background = 'var(--good)';
-                    if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label, body: result.note || 'Fix complete · re-checking…', ttl: 5000 });
-                    // Re-poll firstrun after a short delay so the user
-                    // sees the row turn green if the fix succeeded.
-                    setTimeout(load, fa.long_running ? 4000 : 2000);
+                    // If the endpoint exposes watch_events (e.g. /system/
+                    // reinstall-torch returns immediately and runs in a
+                    // background thread), we MUST wait for the matching
+                    // event before showing DONE. Otherwise users see green
+                    // while pip is still downloading 2 GB of torch wheels.
+                    if (Array.isArray(fa.watch_events) && fa.watch_events.length && window.SeekDeepEvents?.subscribe) {
+                      btn.textContent = '⏳ running…';
+                      if (sdn?.toast) sdn.toast({ tone: 'info', title: c.label, body: result.note || 'Background work started · waiting for completion event…', ttl: 5000 });
+                      let resolved = false;
+                      const unsub = window.SeekDeepEvents.subscribe((evt) => {
+                        if (resolved) return;
+                        const evType = evt?.type || '';
+                        if (!fa.watch_events.includes(evType)) return;
+                        resolved = true;
+                        try { unsub && unsub(); } catch {}
+                        const failed = /\.(failed|error)$/.test(evType);
+                        if (!failed) {
+                          btn.textContent = '✓ DONE';
+                          btn.style.background = 'var(--good)';
+                          if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label + ' · complete', body: evt?.data?.note || 'Fix applied · re-checking…', ttl: 5000 });
+                          setTimeout(load, 1500);
+                        } else {
+                          btn.textContent = '✕ FAILED';
+                          btn.style.background = 'var(--bad)';
+                          const err = evt?.data?.error || evt?.data?.note || 'event reported failure';
+                          if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · fix failed', body: String(err).slice(0, 240), ttl: 8000 });
+                          setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
+                        }
+                      });
+                      // Hard cap: if no event arrives in 15 min, surface the timeout.
+                      setTimeout(() => {
+                        if (resolved) return;
+                        resolved = true;
+                        try { unsub && unsub(); } catch {}
+                        btn.textContent = '⚠ TIMED OUT';
+                        btn.style.background = 'var(--warn)';
+                        if (sdn?.toast) sdn.toast({ tone: 'warn', title: c.label + ' · timeout', body: 'No completion event arrived in 15 min. Check the Logs viewer.', ttl: 10000 });
+                        setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
+                      }, 15 * 60 * 1000);
+                    } else {
+                      btn.textContent = '✓ DONE';
+                      btn.style.background = 'var(--good)';
+                      if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label, body: result.note || 'Fix complete · re-checking…', ttl: 5000 });
+                      // Re-poll firstrun after a short delay so the user
+                      // sees the row turn green if the fix succeeded.
+                      setTimeout(load, fa.long_running ? 4000 : 2000);
+                    }
                   } else {
                     btn.textContent = '✕ FAILED';
                     btn.style.background = 'var(--bad)';
@@ -5297,9 +5350,37 @@ root.render(<App />);
       const model = row.dataset.model || row.querySelector('.name')?.firstChild?.textContent?.trim();
       const role = row.dataset.role || '';
       const backend = row.dataset.backend || 'hf';
-      if (!confirm(`Remove ${model}?\nBackend: ${backend.toUpperCase()}\nRole: ${role || '(unassigned)'}`)) return;
+      const sdn = window.SeekDeepNotify;
+      const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
+      // Hydrate role binding from live /models/available BEFORE confirming, so
+      // we don't tell the user they're detaching a role that's actually
+      // pointing at a different model than the stale HTML row claims.
+      // Hardcoded rows ship with default model_ids (e.g. Llama-3.1-8B-Instruct
+      // for default_chat) that may not match the user's live config.
+      let liveRoleBindsThisModel = false;
+      let liveRoleModelId = '';
+      if (role) {
+        try {
+          const ar = await fetch(base + '/models/available', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+          if (ar.ok) {
+            const ad = await ar.json();
+            const cur = ad.current || {};
+            const envKey = role === 'image' ? 'LOCAL_IMAGE_MODEL_ID'
+                         : role === 'vision' ? 'LOCAL_VISION_MODEL_ID'
+                         : 'LOCAL_CHAT_MODEL_ID';
+            liveRoleModelId = String(cur[envKey] || '').replace(/^ollama:/, '');
+            liveRoleBindsThisModel = (liveRoleModelId === model);
+          }
+        } catch {}
+      }
+      const detachWarning = (role && liveRoleBindsThisModel)
+        ? `\n\nThis role currently points at this model. Removing it will blank the ${role} binding in .env and the next /chat will fall back to whatever LOCAL_CHAT_BACKEND points at.`
+        : (role && liveRoleModelId && liveRoleModelId !== model)
+          ? `\n\nNote: role "${role}" is currently bound to "${liveRoleModelId}", NOT this model. Removing the disk cache for "${model}" will not change the role binding.`
+          : '';
+      const okPrompt = window.SeekDeepConfirm || (async (msg) => window.confirm(msg));
+      if (!await okPrompt(`Remove ${model}?\nBackend: ${backend.toUpperCase()}\nRole: ${role || '(unassigned)'}${detachWarning}`)) return;
       try {
-        const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
         const r = await fetch(base + '/model/uninstall', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -5311,12 +5392,16 @@ root.render(<App />);
           row.style.opacity = '0.4';
           row.querySelector('[data-role-state]')?.replaceChildren();
           row.querySelector('[data-role-state]')?.append(Object.assign(document.createElement('span'), { className: 'pill bad', innerHTML: '<span class="dot"></span>NOT INSTALLED' }));
-          alert(`✓ uninstalled${freed}`);
+          const body = data.env_skip_reason ? `${data.env_skip_reason}${freed}` : `Removed${freed}`;
+          if (sdn?.toast) sdn.toast({ tone: 'good', title: '✓ uninstalled', body, ttl: 6000 });
+          else alert(`✓ uninstalled${freed}`);
         } else {
-          alert(`✕ ${r.status} · ${data.error || r.statusText}`);
+          if (sdn?.toast) sdn.toast({ tone: 'bad', title: `✕ HTTP ${r.status}`, body: data.error || r.statusText, ttl: 6000 });
+          else alert(`✕ ${r.status} · ${data.error || r.statusText}`);
         }
       } catch (e) {
-        alert(`✕ couldn't reach /model/uninstall · ${e.message || e}`);
+        if (sdn?.toast) sdn.toast({ tone: 'bad', title: '✕ couldn\'t reach /model/uninstall', body: String(e.message || e), ttl: 6000 });
+        else alert(`✕ couldn't reach /model/uninstall · ${e.message || e}`);
       }
     });
   });
@@ -5802,6 +5887,11 @@ root.render(<App />);
       goBtn.disabled = true;
       goBtn.textContent = '⏳ restarting…';
       const sdn = window.SeekDeepNotify;
+      // Set the shared restart-window flag BEFORE invoking. The sidecar:
+      // status listener in launcher.js would catch RESTARTING eventually,
+      // but there's a race where /logs/tail polls fail before the event
+      // arrives. Explicit set wins.
+      window.__seekdeepRestartingUntil = Date.now() + 12000;
       try {
         const tauri = window.__TAURI__;
         if (tauri && tauri.core) {
@@ -5841,6 +5931,7 @@ root.render(<App />);
     const hfCached = new Set((lastScan.hf?.repos || []).map(r => r.repo_id));
     const ollamaTags = new Set((lastScan.ollama?.tags || []).map(t => t.name));
     const hfTokenSet = lastScan.hf_token_set === true;
+    const envOffline = lastScan.env_offline === true;
     const vramGb = (lastScan.vram_total_mb || 0) / 1024;
     const role = focusRole || 'chat';
 
@@ -5851,7 +5942,7 @@ root.render(<App />);
         <div style="padding:18px 22px;border-bottom:1px solid var(--stroke);display:flex;justify-content:space-between;align-items:center;">
           <div>
             <h3 style="margin:0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">▸ Recommended models</h3>
-            <div class="tiny muted" style="font-family:var(--font-mono);font-size:11px;margin-top:4px;">Curated · one-click install · auto-rescans when done · your VRAM: ${vramGb.toFixed(0)} GB${hfTokenSet ? '' : ' · ⚠ HF_TOKEN not set: gated models will fail'}</div>
+            <div class="tiny muted" style="font-family:var(--font-mono);font-size:11px;margin-top:4px;">Curated · one-click install · auto-rescans when done · your VRAM: ${vramGb.toFixed(0)} GB${hfTokenSet ? '' : ' · ⚠ HF_TOKEN not set: gated models will fail'}${envOffline ? ' · ⛓ OFFLINE LOCK ACTIVE: HF installs will fail until you Unlock cache from the Launcher → Quick actions' : ''}</div>
           </div>
           <button id="cmClose" class="btn btn-ghost" style="padding:6px 14px;font-size:11px;">✕ Close</button>
         </div>
@@ -5908,7 +5999,15 @@ root.render(<App />);
           <div style="text-align:right;display:flex;flex-direction:column;gap:6px;">
             ${isCached
               ? `<button class="btn btn-primary cm-use" data-id="${entry.repo_id.replace(/"/g,'&quot;')}" data-backend="${entry.backend}" data-role-target="${entry.role}" style="padding:8px 12px;font-size:11px;">▸ Use as ${entry.role}</button>`
-              : `<button class="btn btn-${gated && !hfTokenSet ? 'ghost' : 'primary'} cm-install" data-id="${entry.repo_id.replace(/"/g,'&quot;')}" data-backend="${entry.backend}" data-role-target="${entry.role}" data-size="${entry.size_gb}" data-gated="${gated}" style="padding:8px 12px;font-size:11px;${gated && !hfTokenSet ? 'opacity:0.6;cursor:not-allowed;' : ''}" ${gated && !hfTokenSet ? 'disabled' : ''}>▸ Install</button>`
+              : (() => {
+                  // Block HF installs while offline-lock is active; Ollama
+                  // pulls go through the daemon and are unaffected.
+                  const blockedByOffline = envOffline && entry.backend === 'hf';
+                  const blockedByGate    = gated && !hfTokenSet;
+                  const disabled = blockedByOffline || blockedByGate;
+                  const label = blockedByOffline ? '⛓ Locked offline' : '▸ Install';
+                  return `<button class="btn btn-${disabled ? 'ghost' : 'primary'} cm-install" data-id="${entry.repo_id.replace(/"/g,'&quot;')}" data-backend="${entry.backend}" data-role-target="${entry.role}" data-size="${entry.size_gb}" data-gated="${gated}" style="padding:8px 12px;font-size:11px;${disabled ? 'opacity:0.6;cursor:not-allowed;' : ''}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+                })()
             }
             <div class="cm-progress tiny muted" style="font-family:var(--font-mono);font-size:10px;text-align:right;min-height:12px;"></div>
           </div>`;

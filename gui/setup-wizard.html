@@ -410,8 +410,8 @@
     sessionStorage.setItem('seekdeep:firstrun:wizard-completed', '1');
     location.href = 'app.html';
   });
-  skipAllBtn.addEventListener('click', () => {
-    if (!confirm('Skip remaining setup and open SeekDeep?\n\nYou can return to the wizard later from Control Center.')) return;
+  skipAllBtn.addEventListener('click', async () => {
+    if (!await (window.SeekDeepConfirm || window.confirm)('Skip remaining setup and open SeekDeep?\nYou can return to the wizard later from Control Center.')) return;
     sessionStorage.setItem('seekdeep:firstrun:wizard-skipped', '1');
     location.href = 'app.html';
   });
