@@ -1825,30 +1825,62 @@
           <div class="actions"></div>
         </div>
 
-        <div class="panel-flat" style="padding: 4px 14px;">
+        <div class="panel-flat" style="padding: 14px;">
+          <!-- Inline create-rule form: matches POST /reacts/rule. Guild ID
+               comes from the user (Discord Developer Mode → Copy ID); a
+               datalist suggests guilds we've already seen rules for. -->
+          <div id="reactRuleAdd" style="display:grid; grid-template-columns: 80px 1fr 110px 1fr 160px 96px; gap:8px; align-items:end; margin-bottom:14px;">
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Emoji</div>
+              <input id="rrEmoji" type="text" placeholder="🔥" maxlength="32" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:14px;" />
+            </div>
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Pattern (substring or /regex/)</div>
+              <input id="rrPattern" type="text" placeholder="hello world  OR  /bug.*report/i" maxlength="400" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;" />
+            </div>
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Scope</div>
+              <select id="rrScope" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;">
+                <option value="">any</option>
+                <option value="channel">channel</option>
+                <option value="user">user</option>
+              </select>
+            </div>
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Target (channel/user ID)</div>
+              <input id="rrTarget" type="text" placeholder="optional · ignored if scope=any" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;" />
+            </div>
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Guild ID</div>
+              <input id="rrGuildId" type="text" placeholder="required · Discord guild ID" list="rrGuildList" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;" />
+              <datalist id="rrGuildList"></datalist>
+            </div>
+            <div>
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">&nbsp;</div>
+              <button id="rrAddBtn" style="width:100%; padding:8px 10px; background:var(--cyan-2); color:#000; border:0; border-radius:var(--r-sm); cursor:pointer; font-family:var(--font-mono); font-size:12px; letter-spacing:0.08em;">▸ ADD</button>
+            </div>
+          </div>
+          <div id="rrAddStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-bottom:10px; min-height:14px;"></div>
+
           <div style="display: grid; grid-template-columns: 50px 1fr 200px 140px 100px auto; gap: 12px; padding: 12px 0; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; border-bottom: 1px solid var(--stroke);">
             <span>EMOJI</span><span>PATTERN</span><span>SCOPE</span><span>HITS</span><span>STATE</span><span></span>
           </div>
 
           <div id="reactRulesList">
-            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— loading custom rules from <span style="color:var(--cyan-1);">/data/auto-reactions.json</span>… (rules persist; GUI editor is read-only — use <span style="color:var(--cyan-1);">@SeekDeep reactrule</span> to add/edit/remove)</div>
+            <div class="tiny muted" style="padding: 16px 4px; font-family: var(--font-mono);">— loading custom rules from <span style="color:var(--cyan-1);">/data/auto-reactions.json</span>…</div>
           </div>
         </div>
 
         <div class="rule"></div>
 
-        <h2 style="font-size: 18px; margin-bottom: 14px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--hull-3);">Built-in stacks</h2>
-        <!-- 5 built-in keys per @SeekDeep reactrule builtin <key> on|off.
-             Toggles reflect data/auto-reactions.json[guild].builtins[key].
-             Use the Discord command to flip per-guild; this is a read-only
-             status grid. -->
+        <h2 style="font-size: 18px; margin-bottom: 6px; font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--hull-3);">Built-in stacks</h2>
+        <div class="tiny muted" style="margin-bottom: 14px; font-family: var(--font-mono);">▸ click a toggle to flip · uses the Guild ID from the form above (per-guild state)</div>
         <div class="cards-3" id="builtinReactStacks">
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="long_message"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">long_message</div><div class="tiny muted">🧶 on messages over the length threshold</div></div><div class="toggle" data-builtin-toggle="long_message"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="forwarded"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">forwarded</div><div class="tiny muted">📨 on forwarded messages (messageSnapshots)</div></div><div class="toggle" data-builtin-toggle="forwarded"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="code_block"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">code_block</div><div class="tiny muted">💻 on messages containing fenced code blocks</div></div><div class="toggle" data-builtin-toggle="code_block"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="image_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">image_only</div><div class="tiny muted">🖼 on messages whose only content is an image attachment</div></div><div class="toggle" data-builtin-toggle="image_only"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center;" data-builtin="link_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">link_only</div><div class="tiny muted">🔗 on messages whose only content is a URL</div></div><div class="toggle" data-builtin-toggle="link_only"></div></div>
-          <div class="card-mini" style="display:flex; justify-content: center; align-items: center; opacity:0.6;"><div style="text-align:center;"><div class="tiny muted" style="font-family: var(--font-mono); letter-spacing: 0.08em;">▸ toggle with</div><div style="font-family: var(--font-mono); color:var(--cyan-1); margin-top:2px;">@SeekDeep reactrule builtin &lt;key&gt; on|off</div></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center; cursor:pointer;" data-builtin="long_message"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">long_message</div><div class="tiny muted">🧶 on messages over the length threshold</div></div><div class="toggle" data-builtin-toggle="long_message"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center; cursor:pointer;" data-builtin="forwarded"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">forwarded</div><div class="tiny muted">📨 on forwarded messages (messageSnapshots)</div></div><div class="toggle" data-builtin-toggle="forwarded"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center; cursor:pointer;" data-builtin="code_block"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">code_block</div><div class="tiny muted">💻 on messages containing fenced code blocks</div></div><div class="toggle" data-builtin-toggle="code_block"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center; cursor:pointer;" data-builtin="image_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">image_only</div><div class="tiny muted">🖼 on messages whose only content is an image attachment</div></div><div class="toggle" data-builtin-toggle="image_only"></div></div>
+          <div class="card-mini" style="display:flex; justify-content: space-between; align-items: center; cursor:pointer;" data-builtin="link_only"><div><div style="font-family: var(--font-mono); color: var(--cyan-1);">link_only</div><div class="tiny muted">🔗 on messages whose only content is a URL</div></div><div class="toggle" data-builtin-toggle="link_only"></div></div>
         </div>
       </section>
 
@@ -2033,14 +2065,58 @@
         document.querySelectorAll('[data-builtin-toggle]').forEach(t => {
           const key = t.getAttribute('data-builtin-toggle');
           const b = builtins[key];
-          if (!b) { t.classList.remove('on'); return; }
-          t.classList.toggle('on', b.enabled === true);
-          const guildsOn = Array.isArray(b.guilds_on) ? b.guilds_on : [];
-          t.title = (b.enabled ? 'ON' : 'OFF') + (guildsOn.length ? ' in ' + guildsOn.length + ' guild' + (guildsOn.length === 1 ? '' : 's') : '') + (b.threshold ? ' · threshold ' + b.threshold : '');
+          if (!b) { t.classList.remove('on'); }
+          else {
+            t.classList.toggle('on', b.enabled === true);
+            const guildsOn = Array.isArray(b.guilds_on) ? b.guilds_on : [];
+            t.title = (b.enabled ? 'ON' : 'OFF') + (guildsOn.length ? ' in ' + guildsOn.length + ' guild' + (guildsOn.length === 1 ? '' : 's') : '') + (b.threshold ? ' · threshold ' + b.threshold : '');
+          }
+          // Wire click → POST /reacts/builtin/{key}. Idempotent: replace any
+          // existing handler so reloading the panel doesn't stack listeners.
+          if (!t.__wired) {
+            t.__wired = true;
+            t.addEventListener('click', async () => {
+              const gid = document.getElementById('rrGuildId')?.value.trim() || '';
+              if (!gid) {
+                const statusEl = document.getElementById('rrAddStatus');
+                if (statusEl) {
+                  statusEl.style.color = 'var(--warn)';
+                  statusEl.textContent = '▸ enter a Guild ID in the form above first — built-in toggles are per-guild';
+                }
+                return;
+              }
+              const next = !t.classList.contains('on');
+              t.classList.toggle('on', next);  // optimistic
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/reacts/builtin/' + encodeURIComponent(key), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ guild_id: gid, enabled: next }),
+                });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+              } catch (err) {
+                t.classList.toggle('on', !next);  // revert
+                alert(`Toggle ${key} failed: ${err.message}`);
+              }
+            });
+          }
         });
+        // Populate the guild-ID datalist with any guilds we've already seen
+        // rules for, so the Add form auto-suggests instead of forcing the
+        // user to look up the ID every time.
+        try {
+          const dl = document.getElementById('rrGuildList');
+          if (dl) {
+            const seen = Array.isArray(data.guilds_with_rules) ? data.guilds_with_rules
+                       : (data.guilds && typeof data.guilds === 'object') ? Object.keys(data.guilds)
+                       : [];
+            dl.innerHTML = '';
+            seen.forEach(gid => { const o = document.createElement('option'); o.value = String(gid); dl.appendChild(o); });
+          }
+        } catch {}
         const rules = data.rules || (Array.isArray(data) ? data : []);
         if (!rules.length) {
-          list.innerHTML = '<div style="padding:20px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--hull-3); letter-spacing:0.06em;">▸ no custom rules defined · use <span style="color:var(--cyan-1);">@SeekDeep reactrule add &lt;emoji&gt; when &lt;pattern&gt;</span> in Discord to create one</div>';
+          list.innerHTML = '<div style="padding:20px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--hull-3); letter-spacing:0.06em;">▸ no custom rules defined · fill in the form above and click <span style="color:var(--cyan-1);">▸ ADD</span></div>';
           return;
         }
         list.innerHTML = '';
@@ -2067,35 +2143,44 @@
           const btnEdit    = mk('button', 'btn-mini', 'EDIT');
           const btnInspect = mk('button', 'btn-mini', '⌕'); btnInspect.setAttribute('data-act','inspect');
           const btnRemove  = mk('button', 'btn-mini bad', '✕ REMOVE'); btnRemove.setAttribute('data-act','remove');
-          // Per-row buttons. Inspect renders a local modal with the full
-          // rule JSON (no backend needed). Edit/Remove + the toggle don't
-          // have a GUI write endpoint yet — the bot owns the data file
-          // and only the @SeekDeep reactrule slash commands persist
-          // changes. Surface that honestly instead of silently no-opping.
-          function showDiscordHint(action, rule) {
-            const cmd = action === 'edit'
-              ? `@SeekDeep reactrule edit ${rule.id || '<rule-id>'} <emoji> when <new-pattern>`
-              : action === 'remove'
-                ? `@SeekDeep reactrule remove ${rule.id || '<rule-id>'}`
-                : `@SeekDeep reactrule toggle ${rule.id || '<rule-id>'}`;
-            const m = document.createElement('div');
-            m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
-            m.innerHTML = `
-              <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:540px;color:var(--hull-2);font-family:var(--font-grotesk);">
-                <h3 style="margin:0 0 8px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">${action.toUpperCase()} rule · ${rule.emoji || '?'}</h3>
-                <p style="color:var(--hull-3);font-size:13px;line-height:1.55;margin-bottom:12px;">
-                  GUI write endpoint isn't wired yet — the bot owns the rules file and only the slash command persists changes. Run this in any guild channel where SeekDeep is present:
-                </p>
-                <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${cmd}</pre>
-                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
-                  <button id="rrCopy" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy</button>
-                  <button id="rrClose" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
-                </div>
-              </div>`;
-            document.body.appendChild(m);
-            m.querySelector('#rrCopy').onclick = async () => { try { await navigator.clipboard.writeText(cmd); } catch {} };
-            m.querySelector('#rrClose').onclick = () => m.remove();
-            m.onclick = (e) => { if (e.target === m) m.remove(); };
+          // Per-row buttons hit POST/PATCH/DELETE /reacts/rule directly.
+          // nav.js auto-injects X-SeekDeep-Token on writes.
+          async function callRule(method, ruleId, body) {
+            const init = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) init.body = JSON.stringify(body);
+            const url = SEEKDEEP_BASE + '/reacts/rule' + (ruleId ? '/' + encodeURIComponent(ruleId) : '');
+            const r = await fetch(url, init);
+            if (!r.ok) {
+              let msg = 'HTTP ' + r.status;
+              try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+              throw new Error(msg);
+            }
+            return r.json();
+          }
+          async function doEdit(rule) {
+            const emoji = prompt('New emoji (blank = keep current):', rule.emoji || '');
+            if (emoji == null) return;
+            const pattern = prompt('New pattern (blank = keep current):', rule.pattern || '');
+            if (pattern == null) return;
+            const body = {};
+            if (emoji.trim()) body.emoji = emoji.trim();
+            if (pattern.trim()) body.pattern = pattern.trim();
+            if (!Object.keys(body).length) return;
+            try { await callRule('PATCH', rule.id, body); loaded = false; load(); }
+            catch (err) { alert('Edit failed: ' + err.message); }
+          }
+          async function doRemove(rule) {
+            if (!confirm(`Remove rule ${rule.emoji} → ${rule.pattern}?`)) return;
+            try { await callRule('DELETE', rule.id); loaded = false; load(); }
+            catch (err) { alert('Remove failed: ' + err.message); }
+          }
+          async function doToggle(rule, toggleEl) {
+            const next = !(rule.enabled !== false);
+            try {
+              await callRule('PATCH', rule.id, { enabled: next });
+              toggleEl.classList.toggle('on', next);
+              rule.enabled = next;
+            } catch (err) { alert('Toggle failed: ' + err.message); }
           }
           btnInspect.addEventListener('click', () => {
             const m = document.createElement('div');
@@ -2113,9 +2198,9 @@
             m.querySelector('#riClose').onclick = () => m.remove();
             m.onclick = (e) => { if (e.target === m) m.remove(); };
           });
-          btnEdit.addEventListener('click', () => showDiscordHint('edit', rule));
-          btnRemove.addEventListener('click', () => showDiscordHint('remove', rule));
-          toggle.addEventListener('click', () => showDiscordHint('toggle', rule));
+          btnEdit.addEventListener('click', () => doEdit(rule));
+          btnRemove.addEventListener('click', () => doRemove(rule));
+          toggle.addEventListener('click', () => doToggle(rule, toggle));
           actions.appendChild(btnEdit); actions.append(' '); actions.appendChild(btnInspect); actions.appendChild(btnRemove);
           row.appendChild(actions);
           list.appendChild(row);
@@ -2125,6 +2210,60 @@
       }
     }
     function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    // Wire the inline create-rule form. POST /reacts/rule with body
+    // { guild_id, emoji, pattern, scope?, target? }. nav.js auto-injects
+    // X-SeekDeep-Token. On success we reload the rules list.
+    (function wireAddRule() {
+      const btn = document.getElementById('rrAddBtn');
+      const statusEl = document.getElementById('rrAddStatus');
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        const emoji   = document.getElementById('rrEmoji')?.value.trim() || '';
+        const pattern = document.getElementById('rrPattern')?.value.trim() || '';
+        const scope   = document.getElementById('rrScope')?.value || '';
+        const target  = document.getElementById('rrTarget')?.value.trim() || '';
+        const guildId = document.getElementById('rrGuildId')?.value.trim() || '';
+        if (!emoji || !pattern || !guildId) {
+          statusEl.style.color = 'var(--warn)';
+          statusEl.textContent = '▸ emoji, pattern, and guild ID are all required';
+          return;
+        }
+        if (scope && !target) {
+          statusEl.style.color = 'var(--warn)';
+          statusEl.textContent = '▸ scope was set but target is empty — pick a channel/user ID or set scope = any';
+          return;
+        }
+        statusEl.style.color = 'var(--hull-3)';
+        statusEl.textContent = '▸ saving…';
+        btn.disabled = true;
+        try {
+          const body = { guild_id: guildId, emoji, pattern, enabled: true };
+          if (scope) { body.scope = scope; body.target = target; }
+          const r = await fetch(SEEKDEEP_BASE + '/reacts/rule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) {
+            let msg = 'HTTP ' + r.status;
+            try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+            throw new Error(msg);
+          }
+          statusEl.style.color = 'var(--cyan-1)';
+          statusEl.textContent = '▸ rule added · refreshing…';
+          // Clear form
+          ['rrEmoji','rrPattern','rrTarget'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+          loaded = false;
+          await load();
+          statusEl.textContent = '';
+        } catch (err) {
+          statusEl.style.color = 'var(--warn)';
+          statusEl.textContent = '▸ add failed · ' + err.message;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    })();
     function onActive() {
       const pane = document.querySelector('[data-pane="reacts"]');
       if (pane && pane.classList.contains('active')) load();
@@ -3840,8 +3979,18 @@ const SEEKDEEP_BASE = (function() {
           signal: inflightCtl.signal,
         });
         if (!r.ok) {
-          const txt = await r.text().catch(() => '');
-          throw new Error('HTTP ' + r.status + (txt ? ' · ' + txt.slice(0, 160) : ''));
+          // Try to parse the response body as JSON first — /image and friends
+          // return {error, reason, detail} on 503/500 just like /chat does.
+          // Without this the user sees a generic "HTTP 503" instead of the
+          // real cause (gated repo, OOM, missing diffusers cache, etc.).
+          let payload = null;
+          const raw = await r.text().catch(() => '');
+          try { payload = raw ? JSON.parse(raw) : null; } catch {}
+          const err = new Error('HTTP ' + r.status);
+          err.httpStatus = r.status;
+          err.body = payload || {};
+          err.bodyText = raw;
+          throw err;
         }
         const ct = r.headers.get('Content-Type') || '';
         let url;
@@ -3894,7 +4043,6 @@ const SEEKDEEP_BASE = (function() {
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
         const aborted = (e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || e))));
-        const msg = String(e && e.message || e);
         if (aborted) {
           setStatus(`CANCELLED · ${(ms/1000).toFixed(1)}s · ${endpoint}`, 'warn');
           refs.placeholder.style.display = 'grid';
@@ -3902,10 +4050,26 @@ const SEEKDEEP_BASE = (function() {
           refs.placeholder.style.whiteSpace = '';
           refs.placeholder.style.textAlign = '';
           refs.placeholder.style.fontSize = '';
+        } else if (e && e.httpStatus && e.body && (e.body.error || e.body.detail || e.body.message)) {
+          // Server gave us a structured error (503 model-load-failure, 500
+          // diffusers crash, etc.). Render the real cause + detail so the
+          // user doesn't have to dig through server.log.
+          const body = e.body || {};
+          const errMsg = String(body.error || body.message || ('HTTP ' + e.httpStatus));
+          const reason = body.reason ? `${body.reason.toUpperCase()} · ` : '';
+          const detail = body.detail ? `\n\n${String(body.detail).slice(0, 600)}` : '';
+          setStatus(`HTTP ${e.httpStatus} · ${(ms/1000).toFixed(1)}s · ${endpoint} · ${reason}${String(body.reason || errMsg).slice(0, 40)}`, 'bad');
+          refs.placeholder.style.display = 'grid';
+          refs.placeholder.textContent = `[ERROR — HTTP ${e.httpStatus} ${endpoint}\n${errMsg}${detail}]`;
+          refs.placeholder.style.whiteSpace = 'pre-line';
+          refs.placeholder.style.textAlign = 'left';
+          refs.placeholder.style.fontSize = '11px';
         } else {
+          const msg = String(e && e.message || e);
+          const extra = e && e.bodyText ? '\n' + e.bodyText.slice(0, 300) : '';
           setStatus(`OFFLINE · ${(ms/1000).toFixed(1)}s · ${endpoint} · ${msg.slice(0, 60)}`, 'bad');
           refs.placeholder.style.display = 'grid';
-          refs.placeholder.textContent = `[ERROR — ${SEEKDEEP_BASE}${endpoint}\n${msg}]`;
+          refs.placeholder.textContent = `[ERROR — ${SEEKDEEP_BASE}${endpoint}\n${msg}${extra}]`;
           refs.placeholder.style.whiteSpace = 'pre-line';
           refs.placeholder.style.textAlign = 'center';
           refs.placeholder.style.fontSize = '11px';
