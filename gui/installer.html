@@ -1431,7 +1431,7 @@
               <div class="k">Warmup completed — chat / image / vision present in cache</div>
               <div class="d">Auto-toggles when warmup_local_cache.py exits with code 0.</div>
             </div>
-            <div class="toggle" data-flag="warmup_done"></div>
+            <div class="toggle" data-flag="warmup_done" data-readonly="true" title="Status indicator — reflects chat-model cache state, not a settings toggle"></div>
           </div>
 
           <script>
@@ -1465,6 +1465,27 @@
               return true;
             }
             if (!wireBus()) { let n = 0; const iv = setInterval(() => { if (wireBus() || ++n > 30) clearInterval(iv); }, 250); }
+            // Probe actual cache state at page load so the toggle reflects
+            // disk reality, not a clicked-once localStorage value. We use
+            // /system/firstrun's chat_model check as the canary because it
+            // verifies the model files are physically present in the HF
+            // cache directory (not just that .env names one).
+            (async function probeWarmupState() {
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/system/firstrun', {
+                  cache: 'no-store', signal: AbortSignal.timeout(8000),
+                });
+                if (!r.ok) return;
+                const data = await r.json();
+                const checks = (data && Array.isArray(data.checks)) ? data.checks : [];
+                const chat = checks.find(c => c && (c.id === 'chat_model' || c.id === 'chat'));
+                if (chat && chat.ok === true) {
+                  if (tg && !tg.classList.contains('on')) tg.classList.add('on');
+                } else {
+                  if (tg && tg.classList.contains('on')) tg.classList.remove('on');
+                }
+              } catch (_) { /* server offline; leave toggle off */ }
+            })();
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
               runBtn.textContent = '… DOWNLOADING';
@@ -1817,9 +1838,22 @@ const SEEKDEEP_BASE = (function() {
   document.getElementById('backBtn').addEventListener('click', () => goTo(state.currentStep - 1));
   document.getElementById('skipBtn').addEventListener('click', () => goTo(state.currentStep + 1));
 
-  // Toggles
+  // Toggles. Two kinds, distinguished by data-readonly:
+  //   * Settings toggles (default): clickable, persisted to localStorage,
+  //     reflected in .env preview. e.g. quant_4bit, web_auto.
+  //   * Read-only status indicators (data-readonly="true"): NOT clickable,
+  //     NOT persisted, state comes from runtime probes. e.g. warmup_done,
+  //     which must reflect actual disk cache state — not a flag the user
+  //     accidentally clicked once and locked ON in localStorage.
   document.querySelectorAll('.toggle').forEach(t => {
     const flag = t.dataset.flag;
+    const readonly = t.dataset.readonly === 'true';
+    if (readonly) {
+      t.style.cursor = 'default';
+      t.style.pointerEvents = 'none';
+      t.style.opacity = '0.85';
+      return;
+    }
     if (state.flags[flag] !== undefined) {
       t.classList.toggle('on', !!state.flags[flag]);
     } else {
@@ -1832,6 +1866,11 @@ const SEEKDEEP_BASE = (function() {
       updateEnvPreview();
     });
   });
+  // Wipe any historic localStorage state for the read-only indicators —
+  // earlier versions wired them as clickable, so users may have flipped
+  // them ON and that wrong state persisted across reloads.
+  ['warmup_done'].forEach(k => { if (state.flags && k in state.flags) delete state.flags[k]; });
+  saveState();
 
   // Copy buttons
   document.body.addEventListener('click', (e) => {
