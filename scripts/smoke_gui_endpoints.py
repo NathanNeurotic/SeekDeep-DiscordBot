@@ -175,6 +175,27 @@ def main() -> int:
     check("POST /launcher/bot/status without token -> 401",
           r.status_code == 401, f"got {r.status_code}")
 
+    # ---- POST /launcher/bot/kill-all — nuke-piled-up-bot-instances ----
+    # Right-click context menu calls this when node.exe instances accumulate
+    # outside the launcher's tracking. Always returns 200 (no procs to kill
+    # is a valid state, "found":0). 401 without token.
+    r = c.post("/launcher/bot/kill-all")
+    check("POST /launcher/bot/kill-all without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    if token:
+        r = c.post("/launcher/bot/kill-all", headers={_TOKEN_HEADER: token})
+        check("POST /launcher/bot/kill-all with token -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, service:'bot', scope, found, killed:[], failed:[]}",
+              body.get("ok") is True
+              and body.get("service") == "bot"
+              and isinstance(body.get("scope"), str)
+              and isinstance(body.get("found"), int)
+              and isinstance(body.get("killed"), list)
+              and isinstance(body.get("failed"), list),
+              f"body keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
+
     # ---- GET /system/docker (open; installer page Docker probe) -----------
     r = c.get("/system/docker")
     check("GET /system/docker -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

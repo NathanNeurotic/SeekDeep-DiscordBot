@@ -812,6 +812,143 @@ def _status_service(service: str, log_dir: Path) -> dict:
     return out
 
 
+def _find_bot_processes(bot_cwd: Path) -> list[dict]:
+    # Enumerate all node processes running index.js whose cwd OR command line
+    # points at bot_cwd. Returning [{pid,cmdline,cwd,source}] — scoped to this
+    # repo so we never kill an unrelated Node project the user is running.
+    bot_cwd_str = str(bot_cwd.resolve()).lower()
+    found: list[dict] = []
+    seen_pids: set[int] = set()
+    # 1) psutil — cleanest. Installed via accelerate on systems with ML deps,
+    #    may be absent on a fresh boot-deps-only install.
+    try:
+        import psutil  # type: ignore
+        my_pid = os.getpid()
+        for p in psutil.process_iter(["pid", "name", "cmdline", "cwd"]):
+            try:
+                pid = p.info.get("pid")
+                if not pid or pid == my_pid or pid in seen_pids:
+                    continue
+                name = (p.info.get("name") or "").lower()
+                if not name.startswith("node"):
+                    continue
+                cmdline = p.info.get("cmdline") or []
+                joined = " ".join(cmdline).lower()
+                if "index.js" not in joined:
+                    continue
+                # Match by cwd or by cmdline-contains-bot_cwd. Either signal
+                # is enough; both is best.
+                pcwd = ""
+                try:
+                    pcwd = (p.info.get("cwd") or p.cwd() or "").lower()
+                except Exception:
+                    pcwd = ""
+                if bot_cwd_str not in pcwd and bot_cwd_str not in joined:
+                    continue
+                found.append({"pid": pid, "cmdline": " ".join(cmdline)[:400],
+                              "cwd": pcwd, "source": "psutil"})
+                seen_pids.add(pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # Process vanished mid-iteration or we lack rights to inspect
+                # it — skip silently, the kill list just won't include it.
+                continue
+        return found
+    except ImportError:
+        pass
+    except Exception:
+        # psutil might be present but fail (perm errors etc.); fall through.
+        pass
+    # 2) Windows fallback — PowerShell + WMI exposes CommandLine on Win32_Process.
+    if os.name == "nt":
+        try:
+            ps_cmd = (
+                "Get-CimInstance Win32_Process -Filter \"Name='node.exe' OR Name='node'\" "
+                "| Where-Object { $_.CommandLine -like '*index.js*' } "
+                "| Select-Object ProcessId, CommandLine, ExecutablePath "
+                "| ConvertTo-Json -Compress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            raw = (out.stdout or "").strip()
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                for entry in data:
+                    pid = entry.get("ProcessId")
+                    cmd = (entry.get("CommandLine") or "")
+                    if not pid or pid in seen_pids:
+                        continue
+                    # Cmdline must contain the bot_cwd path — without psutil's
+                    # cwd() probe this is our only safety check against killing
+                    # an unrelated Node project.
+                    if bot_cwd_str not in cmd.lower():
+                        continue
+                    found.append({"pid": int(pid), "cmdline": cmd[:400],
+                                  "cwd": "", "source": "wmi"})
+                    seen_pids.add(int(pid))
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+            pass
+        return found
+    # 3) POSIX fallback — `ps -eo pid,args` then grep node+index.js+cwd.
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=10,
+        )
+        for line in (out.stdout or "").splitlines()[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            args = parts[1]
+            args_lc = args.lower()
+            if pid in seen_pids:
+                continue
+            if "node" not in args_lc or "index.js" not in args_lc:
+                continue
+            if bot_cwd_str not in args_lc:
+                continue
+            found.append({"pid": pid, "cmdline": args[:400],
+                          "cwd": "", "source": "ps"})
+            seen_pids.add(pid)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return found
+
+
+def _kill_pid(pid: int, timeout_s: float = 2.0) -> tuple[bool, str | None]:
+    # Terminate a single PID gracefully, escalating to force-kill if it
+    # outlives `timeout_s`. Returns (killed, error_message_or_None).
+    if not _pid_alive(pid):
+        return True, "already-dead"
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False, capture_output=True, timeout=10,
+            )
+        else:
+            os.kill(pid, 15)  # SIGTERM
+            for _ in range(int(timeout_s * 4)):
+                time.sleep(0.25)
+                if not _pid_alive(pid):
+                    return True, None
+            os.kill(pid, 9)   # SIGKILL
+            time.sleep(0.25)
+        return (not _pid_alive(pid)), (None if not _pid_alive(pid) else "still-alive")
+    except (OSError, PermissionError) as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 # ====================================================================
 # DATA FILE NORMALIZERS
 # ====================================================================
@@ -1136,6 +1273,57 @@ def register_gui_endpoints(
         if path is None:
             return JSONResponse({"ok": False, "error": "no log file"}, status_code=404)
         return StreamingResponse(_stream_log(path), media_type="text/event-stream")
+
+    # ----- POST /launcher/bot/kill-all -----
+    # Nuclear option for when bot instances have piled up — enumerate every
+    # node process running index.js scoped to this repo's cwd and force-kill
+    # them. Safety: matches MUST contain the resolved bot_cwd path in cwd
+    # or cmdline, so we never reach into an unrelated Node project the user
+    # is running. Declared BEFORE the generic /launcher/{service}/{action}
+    # dispatcher so FastAPI matches the specific path first.
+    @app.post("/launcher/bot/kill-all", dependencies=[Depends(_require_gui_token)])
+    async def post_launcher_bot_kill_all():
+        bot_cwd = _resolve_bot_cwd(root)
+        procs = _find_bot_processes(bot_cwd)
+        killed: list[dict] = []
+        failed: list[dict] = []
+        for entry in procs:
+            pid = entry["pid"]
+            ok, err = _kill_pid(pid)
+            row = {"pid": pid, "cmdline": entry.get("cmdline", "")[:200],
+                   "source": entry.get("source", "?")}
+            if ok:
+                if err:
+                    row["note"] = err  # e.g. "already-dead"
+                killed.append(row)
+            else:
+                row["error"] = err or "unknown"
+                failed.append(row)
+        # Also clear in-process tracking + stale PID file so the launcher
+        # card flips to "not-running" on the next status poll.
+        proc = _PROCESSES.pop("bot", None)
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
+        try:
+            pid_name = _PID_FILE_NAMES.get("bot")
+            if pid_name:
+                pid_path = _log_dir / pid_name
+                if pid_path.is_file():
+                    pid_path.unlink()
+        except OSError:
+            pass
+        return {
+            "ok": not failed,
+            "service": "bot",
+            "scope": str(bot_cwd),
+            "found": len(procs),
+            "killed": killed,
+            "failed": failed,
+        }
 
     # ----- POST /launcher/{service}/{action} -----
     @app.post("/launcher/{service}/{action}", dependencies=[Depends(_require_gui_token)])

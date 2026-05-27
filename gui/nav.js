@@ -1303,6 +1303,59 @@
     inject('launcher.js', null);
   })();
 
+  // ===== Kill-all-bot-instances action (right-click menu item) =============
+  // When bot processes pile up (stale launcher PIDs, leaked node.exe from
+  // a crashed sidecar restart, manual `node index.js` runs that escaped
+  // the launcher), the launcher card's "stop" only kills the one we know
+  // about. This nukes every node.exe running this repo's index.js. Scoped
+  // server-side to the resolved bot_cwd path so unrelated Node projects
+  // are never touched.
+  async function killAllBotInstances() {
+    const ok = await (window.SeekDeepConfirm
+      ? window.SeekDeepConfirm({
+          title: 'Kill all SeekDeep bot processes?',
+          body: 'This force-kills every node.exe running this repo\'s index.js — '
+              + 'including any that piled up outside the launcher. The Discord bot '
+              + 'will go offline until you start it again.',
+          confirmLabel: 'Kill all',
+          destructive: true,
+        })
+      : Promise.resolve(window.confirm('Kill all SeekDeep bot processes?')));
+    if (!ok) return;
+    let body = null;
+    try {
+      const r = await fetch('/launcher/bot/kill-all', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body?.detail || body?.error || `HTTP ${r.status}`);
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      if (window.SeekDeepNotify?.toast) {
+        window.SeekDeepNotify.toast({ title: 'Kill-all failed', body: msg, tone: 'error' });
+      } else {
+        alert('Kill-all failed: ' + msg);
+      }
+      return;
+    }
+    const killedN = (body?.killed || []).length;
+    const failedN = (body?.failed || []).length;
+    const foundN  = body?.found ?? (killedN + failedN);
+    const tone = failedN ? 'warning' : (killedN ? 'success' : 'info');
+    const title = killedN === 0 && foundN === 0
+      ? 'No bot processes found'
+      : `Killed ${killedN} bot process${killedN === 1 ? '' : 'es'}`
+        + (failedN ? ` (${failedN} failed)` : '');
+    const detail = (body?.killed || []).slice(0, 6).map(k => `PID ${k.pid}`).join(', ')
+      + (killedN > 6 ? `, +${killedN - 6} more` : '');
+    if (window.SeekDeepNotify?.toast) {
+      window.SeekDeepNotify.toast({ title, body: detail, tone });
+    } else if (foundN === 0) {
+      // No toast helper and nothing to report — stay silent.
+    } else {
+      alert(`${title}\n${detail}`);
+    }
+  }
+
   // ===== Custom contextmenu: SeekDeep-styled, no generic browser menu =====
   // Default Chromium right-click made the app feel like a webpage (Save As,
   // View Source, etc.). Replace with a tight branded menu: Reload always;
@@ -1318,6 +1371,8 @@
       .sd-ctx-item:hover{background:#1d2330}
       .sd-ctx-item.disabled{color:#5a6170;cursor:default}
       .sd-ctx-item.disabled:hover{background:transparent}
+      .sd-ctx-item.danger{color:#ff6868}
+      .sd-ctx-item.danger:hover{background:#3a1212;color:#ffb0b0}
       .sd-ctx-sep{height:1px;background:#2a2f3a;margin:4px 0}
       .sd-ctx-kbd{margin-left:auto;font-size:11px;color:#8a92a3;padding:1px 5px;border:1px solid #2a2f3a;border-radius:3px}
     `;
@@ -1339,7 +1394,9 @@
           return;
         }
         const el = document.createElement('div');
-        el.className = 'sd-ctx-item' + (it.disabled ? ' disabled' : '');
+        el.className = 'sd-ctx-item'
+          + (it.disabled ? ' disabled' : '')
+          + (it.danger ? ' danger' : '');
         const label = document.createElement('span');
         label.textContent = it.label;
         el.appendChild(label);
@@ -1391,6 +1448,8 @@
       }
       if (items.length) items.push('-');
       items.push({ label: 'Reload', kbd: 'F5', action: () => location.reload() });
+      items.push('-');
+      items.push({ label: 'Kill all bot instances', danger: true, action: () => killAllBotInstances() });
       build(items, e.clientX, e.clientY);
     }, true);
     document.addEventListener('mousedown', (e) => {
