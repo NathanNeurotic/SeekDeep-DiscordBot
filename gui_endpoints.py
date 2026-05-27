@@ -1332,6 +1332,51 @@ def register_gui_endpoints(
                 ollama_up = True
         except Exception:
             ollama_up = False
+        # PyTorch GPU compatibility — catches the silent CPU-fallback case
+        # where the user's GPU has a newer compute capability than the
+        # installed torch wheel knows about (e.g. RTX 50-series sm_120 with
+        # a cu121 torch that only supports up to sm_90). Without this check
+        # chat works but uses CPU; user sees 'slow' with no obvious reason.
+        try:
+            import torch as _torch  # type: ignore
+            if _torch.cuda.is_available():
+                cap_major, cap_minor = _torch.cuda.get_device_capability(0)
+                cap = f"sm_{cap_major}{cap_minor}"
+                arch_list = list(_torch.cuda.get_arch_list() or [])
+                gpu_supported = cap in arch_list
+                # Map known compute caps to recommended cu128+ wheels.
+                # Blackwell (sm_120) needs cu128+; Hopper (sm_90) cu121+.
+                rec_variant = "cu128" if (cap_major, cap_minor) >= (12, 0) else (
+                    "cu126" if (cap_major, cap_minor) >= (9, 0) else "cu121")
+                if not gpu_supported:
+                    checks.append({
+                        "id": "torch_gpu_compat",
+                        "label": f"PyTorch supports your GPU ({cap})",
+                        "ok": False,
+                        "fix": (f"GPU is {cap} but installed PyTorch only supports up to "
+                                f"{arch_list[-1] if arch_list else 'unknown'}. "
+                                f"Falls back to CPU silently. Reinstall PyTorch with {rec_variant} "
+                                f"wheels (Blackwell / RTX 50-series support)."),
+                        "fix_action": {
+                            "endpoint": "/system/reinstall-torch", "method": "POST",
+                            "label": f"Reinstall PyTorch ({rec_variant})",
+                            "body": {"variant": rec_variant},
+                            "long_running": True,
+                            "watch_events": ["deps.install.complete", "deps.install.failed"],
+                        },
+                        "blocking": False,
+                    })
+                else:
+                    checks.append({
+                        "id": "torch_gpu_compat",
+                        "label": f"PyTorch supports your GPU ({cap})",
+                        "ok": True, "fix": "", "blocking": False,
+                    })
+        except ImportError:
+            pass  # ml_deps check already covers missing torch
+        except Exception:
+            pass  # torch installed but probe failed; not blocking
+
         # Ollama parity with HF: detect installed-ness, daemon state, auth.
         # Each failure gets a one-click fix button so the user doesn't have
         # to remember where Ollama lives or how to start it.
@@ -2328,6 +2373,66 @@ def register_gui_endpoints(
             return {"ok": False, "error": "winget install timed out after 15 minutes"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
+
+    # ----- POST /system/reinstall-torch -----
+    # Force-reinstall the torch/torchvision/torchaudio triple from PyTorch's
+    # CUDA-specific wheel index. Use when the firstrun probe detects a GPU
+    # whose compute capability isn't in the installed torch's arch_list
+    # (e.g. RTX 50-series sm_120 on a cu121 wheel that only supports sm_90).
+    #
+    # Variant maps to the pip index URL:
+    #   cu118 -> https://download.pytorch.org/whl/cu118
+    #   cu121 -> https://download.pytorch.org/whl/cu121
+    #   cu124 -> https://download.pytorch.org/whl/cu124
+    #   cu126 -> https://download.pytorch.org/whl/cu126
+    #   cu128 -> https://download.pytorch.org/whl/cu128  (Blackwell/sm_120)
+    #   cpu   -> https://download.pytorch.org/whl/cpu
+    #
+    # Streams pip stdout/stderr to event_bus as deps.install.line; emits
+    # deps.install.complete or .failed at the end so the wizard's progress
+    # spinner can resolve.
+    _ALLOWED_TORCH_VARIANTS = {"cu118", "cu121", "cu124", "cu126", "cu128", "cpu"}
+
+    @app.post("/system/reinstall-torch", dependencies=[Depends(_require_gui_token)])
+    def post_reinstall_torch(body: dict | None = None):
+        import sys
+        import threading
+        variant = ((body or {}).get("variant") or "cu128").strip().lower()
+        if variant not in _ALLOWED_TORCH_VARIANTS:
+            raise HTTPException(400, f"variant must be one of {sorted(_ALLOWED_TORCH_VARIANTS)}; got {variant!r}")
+        index_url = f"https://download.pytorch.org/whl/{variant}"
+        py_str_lower = sys.executable.lower()
+        in_venv = (bool(os.environ.get("VIRTUAL_ENV"))
+                   or ".venv" in py_str_lower or "\\venv\\" in py_str_lower or "/venv/" in py_str_lower)
+        def run():
+            try:
+                event_bus.publish_sync({"type": "deps.install.started",
+                                        "data": {"variant": variant, "index_url": index_url}})
+                cmd = [sys.executable, "-m", "pip", "install",
+                       "--upgrade", "--force-reinstall", "--no-deps",
+                       "--index-url", index_url,
+                       "torch", "torchvision", "torchaudio",
+                       "--disable-pip-version-check"]
+                if not in_venv:
+                    cmd.insert(4, "--user")  # before --index-url
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, bufsize=1)
+                for line in iter(proc.stdout.readline, ""):
+                    line = line.rstrip()
+                    if line:
+                        event_bus.publish_sync({"type": "deps.install.line", "data": {"line": line}})
+                rc = proc.wait()
+                ok = rc == 0
+                event_bus.publish_sync({
+                    "type": "deps.install.complete" if ok else "deps.install.failed",
+                    "data": {"variant": variant, "exit_code": rc,
+                             "note": f"torch/{variant} reinstalled · restart AI server to pick up the new wheel" if ok else None},
+                })
+            except Exception as exc:
+                event_bus.publish_sync({"type": "deps.install.failed",
+                                        "data": {"variant": variant, "error": str(exc)[:400]}})
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "variant": variant, "index_url": index_url, "note": "install started · subscribe to deps.install.* events for progress"}
 
     # ----- POST /system/install-ollama -----
     # Same winget pattern as Docker. After install, the user can either run

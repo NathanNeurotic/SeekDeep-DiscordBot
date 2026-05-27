@@ -133,7 +133,7 @@ def _seekdeep_install_file_logging() -> None:
     class _Tee:
         def __init__(self, real, level):
             self.real = real
-            self.level = level
+            self.level = level  # default severity if no inline marker
         def write(self, data):
             try:
                 self.real.write(data)
@@ -143,8 +143,23 @@ def _seekdeep_install_file_logging() -> None:
                 if data and data.strip():
                     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
                     for line in str(data).splitlines():
-                        if line:
-                            sink.write(f"[{ts}] [{self.level}] {_redact(line)}\n")
+                        if not line:
+                            continue
+                        # Sniff per-line severity: uvicorn + Python logging
+                        # write INFO and WARNING to stderr too, so blindly
+                        # tagging everything from stderr as [ERR] makes the
+                        # logs viewer look like a fire when nothing's wrong.
+                        lvl = self.level
+                        stripped = line.lstrip()
+                        if stripped.startswith("INFO:") or stripped.startswith("INFO "):
+                            lvl = "INFO"
+                        elif stripped.startswith("WARNING:") or stripped.startswith("WARN:") or stripped.startswith("UserWarning"):
+                            lvl = "WARN"
+                        elif stripped.startswith("DEBUG:"):
+                            lvl = "DEBUG"
+                        elif stripped.startswith("ERROR:") or stripped.startswith("CRITICAL:"):
+                            lvl = "ERR"
+                        sink.write(f"[{ts}] [{lvl}] {_redact(line)}\n")
             except Exception:
                 pass
         def flush(self):
