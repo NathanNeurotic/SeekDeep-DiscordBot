@@ -80,6 +80,10 @@ checkpoints/
 diagnostics/
 SeekDeep-publish-audit-*.txt
 .previous_chat_model.txt
+# Self-update sentinel — written by POST /system/self-update so the Tauri
+# extractor knows not to clobber hot-patched files on next boot. Per-install
+# state, never commit.
+.self-updated
 
 # Local Discord/server state. These are user/server-specific runtime files,
 # not distributable defaults.
