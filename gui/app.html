@@ -783,8 +783,17 @@
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Reload .env</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⤓ Flush model cache</button>
               <button id="qaLockCacheBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Toggle HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE. Forces HF + Transformers to local cache only — no network calls for model loads. Restarts the sidecar so the env change takes effect.">⛚ Lock cache (offline)</button>
+              <button id="qaSelfUpdateBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Pull the latest local_ai_server.py + gui_endpoints.py + gui/ from main on GitHub. Use this when the bundled MSI is stale (chat errors still mention old copy, fixes haven't landed, etc.).">⤴ Self-update (pull latest from GitHub)</button>
               <button class="btn btn-ghost" style="justify-content: flex-start;">⟳ Smoke test</button>
               <button class="btn btn-ghost" style="justify-content: flex-start; color: var(--bad);">↯ Force kill all</button>
+            </div>
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--stroke);">
+              <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:6px;">Bot repo path</div>
+              <div style="display:flex; gap:6px;">
+                <input id="qaBotCwd" type="text" placeholder="auto-detect" style="flex:1; padding:6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:11px;" />
+                <button id="qaBotCwdSave" class="btn btn-ghost" style="padding:6px 10px; font-size:11px;">Save</button>
+              </div>
+              <div id="qaBotCwdStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:10px; margin-top:4px; min-height:12px;"></div>
             </div>
           </div>
         </div>

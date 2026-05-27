@@ -551,6 +551,33 @@ def _detect_running(service: str, log_dir: Path) -> tuple[str, int | None]:
     return "not-running", None
 
 
+def _resolve_bot_cwd(default_cwd: Path) -> Path:
+    """Pick where to run `node index.js` from. Order: SEEKDEEP_BOT_CWD env
+    override → default_cwd if it has index.js → known clone locations
+    (~/SeekDeep-DiscordBot, ./../SeekDeep-DiscordBot). Returns the first
+    directory whose index.js exists, or default_cwd as a last resort so
+    the caller still surfaces a sensible error path."""
+    override = (os.getenv("SEEKDEEP_BOT_CWD") or "").strip()
+    if override:
+        p = Path(override).expanduser().resolve()
+        if (p / "index.js").is_file():
+            return p
+    if (default_cwd / "index.js").is_file():
+        return default_cwd
+    candidates = [
+        Path.home() / "SeekDeep-DiscordBot",
+        default_cwd.parent / "SeekDeep-DiscordBot",
+        default_cwd.parent.parent / "SeekDeep-DiscordBot",
+    ]
+    for c in candidates:
+        try:
+            if (c / "index.js").is_file():
+                return c.resolve()
+        except OSError:
+            continue
+    return default_cwd
+
+
 def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     if service in SELF_HOSTED_SERVICES:
         raise HTTPException(409,
@@ -562,6 +589,22 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     cmd = _service_command(service)
     if not cmd:
         raise HTTPException(400, f"no command mapping for service {service!r}")
+    # For the Discord bot we need index.js + node_modules in cwd. In Tauri
+    # mode the AI server runs from %APPDATA%/SeekDeep/app/ where these
+    # files don't exist. Auto-resolve to the user's actual repo dir.
+    if service == "bot":
+        cwd = _resolve_bot_cwd(cwd)
+        if not (cwd / "index.js").is_file():
+            raise HTTPException(400,
+                f"bot files not found · `index.js` is missing from {cwd}. "
+                f"Set SEEKDEEP_BOT_CWD in .env to the absolute path of your "
+                f"SeekDeep-DiscordBot repo (the directory that contains "
+                f"index.js + node_modules), then click Start again.")
+        if not (cwd / "node_modules").is_dir():
+            raise HTTPException(400,
+                f"bot dependencies missing · `node_modules` is not present in {cwd}. "
+                f"Run `npm install` in that directory (or use the Installer's "
+                f"setup button), then click Start again.")
     # Route stdout/stderr to per-launch log files so failures aren't invisible.
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -577,9 +620,12 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
         )
         _PROCESSES[service] = proc
         return {"ok": True, "service": service, "state": "starting",
-                "pid": proc.pid, "log": str(out_log.name)}
+                "pid": proc.pid, "log": str(out_log.name), "cwd": str(cwd)}
     except FileNotFoundError as e:
-        raise HTTPException(500, f"failed to start {service}: {e}")
+        raise HTTPException(500,
+            f"failed to start {service}: {e} · is `{cmd[0]}` on PATH? "
+            f"(Tauri inherits the parent process env — try running the Tauri "
+            f"shell from a terminal where `node`/`docker` is reachable.)")
 
 
 def _stop_service(service: str, log_dir: Path) -> dict:
@@ -978,10 +1024,34 @@ def register_gui_endpoints(
                             started_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
                         except OSError:
                             pass
+            # When a GUI-spawned service has exited, surface a tail of its
+            # most recent .gui.err.log so the launcher card can show WHY
+            # instead of just "EXITED". Was the #1 cause of "feels broken"
+            # complaints — a silent EXITED pill with no error surface.
+            last_error = None
+            err_log_name = None
+            if base_status.get("state") in ("exited", "not-running"):
+                try:
+                    err_logs = sorted(
+                        _log_dir.glob(f"{svc}-*.gui.err.log"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    for candidate in err_logs:
+                        if candidate.stat().st_size > 0:
+                            tail = _tail(candidate, 20)
+                            if tail:
+                                last_error = "\n".join(tail)[-1200:]
+                                err_log_name = candidate.name
+                                break
+                except OSError:
+                    pass
             services_out[svc] = {
                 **base_status,
                 "uptime_seconds": uptime_s,
                 "started_at":      started_at,
+                "last_error":      last_error,
+                "last_error_log":  err_log_name,
             }
         return {
             "ok": True,

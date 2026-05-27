@@ -177,6 +177,28 @@
         pill.appendChild(document.createTextNode(isUp ? 'HEALTHY' : (isExited ? 'EXITED' : 'UNKNOWN')));
       }
 
+      // Show last_error tail when the service has exited, so the user sees
+      // WHY instead of just "EXITED". Idempotent: one .launcher-error div
+      // per card, replaced in place on each pump.
+      let errBox = card.querySelector('.launcher-error');
+      if (s.state === 'exited' || s.state === 'not-running') {
+        if (s.last_error) {
+          if (!errBox) {
+            errBox = document.createElement('div');
+            errBox.className = 'launcher-error';
+            errBox.style.cssText = 'grid-column: 1 / -1; margin-top: 10px; padding: 10px 12px; background: rgba(255,85,85,0.06); border: 1px solid rgba(255,85,85,0.35); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.45;';
+            card.appendChild(errBox);
+          }
+          const fileLine = s.last_error_log
+            ? `<div style="color: var(--hull-3); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px;">▸ exit log · logs/${s.last_error_log}</div>`
+            : '';
+          const escaped = String(s.last_error).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+          errBox.innerHTML = fileLine + `<pre style="margin:0; white-space:pre-wrap; word-break:break-word; color:var(--bad); font-size:10.5px;">${escaped}</pre>`;
+        }
+      } else if (errBox) {
+        errBox.remove();
+      }
+
       card.classList.toggle('up', s.state === 'running');
     }
   }
@@ -727,6 +749,88 @@
         } finally {
           lockBusy = false;
           paintLock();
+        }
+      });
+    }
+
+    // ---- Self-update button -------------------------------------------
+    // Pulls latest local_ai_server.py + gui_endpoints.py + gui/ from main
+    // on GitHub via POST /system/self-update. Use when the bundled MSI is
+    // stale and fixes haven't landed for this user.
+    const suBtn = document.getElementById('qaSelfUpdateBtn');
+    if (suBtn) {
+      suBtn.addEventListener('click', async () => {
+        if (!confirm('Self-update?\n\nFetches latest local_ai_server.py + gui_endpoints.py + gui/ from main on GitHub, writes them to the runtime dir, and marks them as user-patched so Tauri won\'t clobber them on next boot.\n\nYou will need to restart the AI server for the changes to take effect.')) return;
+        const sdn = notify();
+        const orig = suBtn.textContent;
+        suBtn.disabled = true;
+        suBtn.textContent = '⏳ Updating…';
+        try {
+          const r = await fetch(BASE + '/system/self-update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+            signal: AbortSignal.timeout(60000),
+          });
+          if (!r.ok) {
+            let msg = 'HTTP ' + r.status;
+            try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+            throw new Error(msg);
+          }
+          const j = await r.json();
+          const updated = (j.updated && j.updated.length) || 0;
+          if (sdn) sdn.toast({ tone: 'good', title: 'Self-update OK', body: `Updated ${updated} file(s). Restart the AI server to apply.`, ttl: 8000 });
+          suBtn.textContent = '✓ Updated · restart server';
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Self-update failed', body: String(err.message || err), ttl: 8000 });
+          suBtn.textContent = orig;
+        } finally {
+          suBtn.disabled = false;
+        }
+      });
+    }
+
+    // ---- Bot CWD field -----------------------------------------------
+    // Lets the user point `node index.js` at their actual repo dir when
+    // running under Tauri (where cwd defaults to %APPDATA%/SeekDeep/app/).
+    // Saved to .env as SEEKDEEP_BOT_CWD via POST /config; blank = auto-detect.
+    const cwdInput = document.getElementById('qaBotCwd');
+    const cwdSave = document.getElementById('qaBotCwdSave');
+    const cwdStatus = document.getElementById('qaBotCwdStatus');
+    if (cwdInput && cwdSave) {
+      // Prefill from /config (server returns redacted env keys; SEEKDEEP_BOT_CWD is not secret).
+      (async () => {
+        try {
+          const r = await fetch(BASE + '/config', { cache: 'no-store' });
+          if (!r.ok) return;
+          const j = await r.json();
+          const val = (j.env && j.env.SEEKDEEP_BOT_CWD) || (j.SEEKDEEP_BOT_CWD) || '';
+          if (val && cwdInput.value === '') cwdInput.value = String(val);
+        } catch {}
+      })();
+      cwdSave.addEventListener('click', async () => {
+        const val = (cwdInput.value || '').trim();
+        cwdSave.disabled = true;
+        cwdStatus.style.color = 'var(--hull-3)';
+        cwdStatus.textContent = '▸ saving…';
+        try {
+          const r = await fetch(BASE + '/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: { SEEKDEEP_BOT_CWD: val } }),
+          });
+          if (!r.ok) {
+            let msg = 'HTTP ' + r.status;
+            try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+            throw new Error(msg);
+          }
+          cwdStatus.style.color = 'var(--cyan-1)';
+          cwdStatus.textContent = val ? `▸ saved · restart bot to use ${val}` : '▸ cleared · will auto-detect on next start';
+        } catch (err) {
+          cwdStatus.style.color = 'var(--warn)';
+          cwdStatus.textContent = '▸ save failed · ' + (err.message || err);
+        } finally {
+          cwdSave.disabled = false;
         }
       });
     }
