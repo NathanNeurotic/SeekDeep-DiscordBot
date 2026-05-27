@@ -5758,6 +5758,79 @@ root.render(<App />);
                                'var(--hull-3)';
   }
 
+  // After any model-config save, prompt the user to restart the AI server
+  // so the new env var takes effect. Single source of truth so Save / Use /
+  // Install all behave consistently. Tauri shell path uses restart_sidecar;
+  // standalone GUI falls back to /launcher/ai-server/restart (which 409s
+  // for the self-hosted server and we toast that as a known limitation).
+  // Track pending env changes so the bar can summarize multi-key edits
+  // (user picks chat + image + vision back-to-back, gets ONE restart bar
+  // with all 3 listed instead of 3 separate prompts to dismiss).
+  const _pendingChanges = new Map();  // envKey -> newValue
+  function showRestartPrompt(envKey, newValue) {
+    if (envKey) _pendingChanges.set(envKey, newValue);
+    // Replace any existing prompt — don't stack them.
+    const existing = document.getElementById('mpRestartPrompt');
+    if (existing) existing.remove();
+    const box = document.createElement('div');
+    box.id = 'mpRestartPrompt';
+    // Fixed bottom-center so it sits above any modal (catalog, install,
+    // etc.). High z-index beats the catalog modal's 9999. Slide-up
+    // animation makes it feel native; user dismiss = Later.
+    box.style.cssText = 'position:fixed; left:50%; bottom:20px; transform:translateX(-50%); z-index:10001; min-width:480px; max-width:min(720px, 92vw); padding:14px 18px; background:var(--substrate-2); border:1px solid var(--cyan-2); border-radius:var(--r-md); display:flex; align-items:center; gap:14px; font-family:var(--font-mono); font-size:12px; color:var(--hull-1); box-shadow:0 12px 40px rgba(0,0,0,0.6), 0 0 24px rgba(45,212,255,0.15);';
+    const changeRows = Array.from(_pendingChanges.entries()).map(([k, v]) => {
+      const safeV = String(v || '').replace(/[<>"&]/g, '');
+      return `<div style="color:var(--cyan-1); line-height:1.5;">▸ ${k} = ${safeV}</div>`;
+    }).join('');
+    const noun = _pendingChanges.size === 1 ? 'change saved' : `${_pendingChanges.size} changes saved`;
+    box.innerHTML = `
+      <div style="flex:1;">
+        ${changeRows}
+        <div class="tiny muted" style="font-size:10.5px; margin-top:5px;">${noun} · won't take effect until the AI server restarts.</div>
+      </div>
+      <button id="mpRestartGo" class="btn btn-primary" style="padding:8px 16px; font-size:12px; white-space:nowrap;">▸ Restart now</button>
+      <button id="mpRestartLater" class="btn btn-ghost" style="padding:8px 14px; font-size:11px;">Later</button>
+    `;
+    document.body.appendChild(box);
+    box.querySelector('#mpRestartLater').onclick = () => {
+      box.remove();
+      // Keep _pendingChanges populated so if user makes ANOTHER change
+      // before restarting, the bar comes back showing all pending edits.
+    };
+    box.querySelector('#mpRestartGo').onclick = async () => {
+      const goBtn = box.querySelector('#mpRestartGo');
+      goBtn.disabled = true;
+      goBtn.textContent = '⏳ restarting…';
+      const sdn = window.SeekDeepNotify;
+      try {
+        const tauri = window.__TAURI__;
+        if (tauri && tauri.core) {
+          // Tauri path: kills + respawns the sidecar process with fresh env.
+          await tauri.core.invoke('restart_sidecar');
+          if (sdn?.toast) sdn.toast({ tone: 'good', title: 'AI server restarting', body: `${envKey} change will be live in a few seconds.`, ttl: 5000 });
+        } else {
+          // Standalone GUI: try the HTTP route; self-hosted ai-server can't
+          // restart itself so this 409s. Surface honestly.
+          const r = await fetch(BASE + '/launcher/ai-server/restart', { method: 'POST' });
+          if (r.ok) {
+            if (sdn?.toast) sdn.toast({ tone: 'good', title: 'AI server restarting', ttl: 5000 });
+          } else if (r.status === 409) {
+            if (sdn?.toast) sdn.toast({ tone: 'warn', title: 'Self-restart not allowed', body: 'You\'re running the AI server standalone (not via Tauri). Stop + start it manually with seekdeep_launcher.bat option 8.', ttl: 8000 });
+          } else {
+            throw new Error('HTTP ' + r.status);
+          }
+        }
+        goBtn.textContent = '✓ restarting';
+        _pendingChanges.clear();
+        setTimeout(() => { box.remove(); rescan(); }, 2500);
+      } catch (err) {
+        if (sdn?.toast) sdn.toast({ tone: 'bad', title: 'Restart failed', body: String(err.message || err), ttl: 8000 });
+        goBtn.disabled = false;
+        goBtn.textContent = '▸ Retry';
+      }
+    };
+  }
+
   function openCatalogModal(focusRole) {
     // focusRole: 'chat' | 'vision' | 'image' | 'ollama' | undefined (= chat default)
     if (!lastScan || !lastScan.catalog) {
@@ -5802,7 +5875,10 @@ root.render(<App />);
       const list = m.querySelector('#cmList');
       list.innerHTML = '';
       entries.forEach(entry => {
-        const isCached = activeRole === 'ollama'
+        // Check the right inventory based on the ENTRY's backend, not the
+        // tab. Future catalog entries with backend=ollama on the Chat tab
+        // would otherwise be wrongly checked against the HF cache.
+        const isCached = entry.backend === 'ollama'
           ? ollamaTags.has(entry.repo_id)
           : hfCached.has(entry.repo_id);
         const fits = !entry.size_gb || entry.size_gb <= vramGb;
@@ -5871,7 +5947,8 @@ root.render(<App />);
           });
         }
         btn.textContent = '✓ done';
-        prog.textContent = '✓ set as default · restart AI server';
+        prog.textContent = '✓ saved as default';
+        if (envKey) showRestartPrompt(envKey, id);
         setTimeout(() => { rescan(); }, 500);
       } catch (err) {
         prog.style.color = 'var(--warn)';
@@ -5899,7 +5976,8 @@ root.render(<App />);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         btn.textContent = '✓';
         prog.style.color = 'var(--cyan-1)';
-        prog.textContent = '✓ set as default · restart AI server';
+        prog.textContent = '✓ saved as default';
+        showRestartPrompt(envKey, id);
         setTimeout(() => { rescan(); }, 600);
       } catch (err) {
         prog.style.color = 'var(--warn)';
@@ -5941,9 +6019,10 @@ root.render(<App />);
         throw new Error(msg);
       }
       $('mpStatus').style.color = 'var(--cyan-1)';
-      $('mpStatus').textContent = `✓ ${envKey} = ${val} · restart AI server for the change to take effect`;
+      $('mpStatus').textContent = `✓ ${envKey} saved`;
       btnEl.textContent = '✓';
       setTimeout(() => { btnEl.textContent = orig; }, 2000);
+      showRestartPrompt(envKey, val);
     } catch (err) {
       $('mpStatus').style.color = 'var(--warn)';
       $('mpStatus').textContent = `${envKey} save failed · ${err.message || err}`;
