@@ -292,6 +292,26 @@ async function seekdeepFetchGuiTokenOnce() {
   // Defer the first try so dotenv + module init has finished settling.
   setTimeout(tick, 250);
 })();
+// Re-read SEEKDEEP_GUI_TOKEN from .env on disk. process.env is loaded once
+// at boot (dotenv); if the AI server rotated the token in .env later (which
+// happens any time the server boots and the previous token was missing),
+// the bot's cached env is stale. Use this to recover from 401s without
+// requiring a full bot restart.
+function _seekdeepReReadTokenFromEnvFile() {
+  try {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) return null;
+    const text = fs.readFileSync(envPath, 'utf8');
+    for (const raw of text.split(/\r?\n/)) {
+      const m = /^\s*SEEKDEEP_GUI_TOKEN\s*=\s*(.*?)\s*$/.exec(raw);
+      if (m) return m[1].replace(/^['"]|['"]$/g, '').trim() || null;
+    }
+  } catch (_) {}
+  return null;
+}
+
 async function seekdeepEmitGuiEvent(type, data) {
   if (SEEKDEEP_EVENTS_DISABLED) return;
   const tok = process.env.SEEKDEEP_GUI_TOKEN;
@@ -311,8 +331,33 @@ async function seekdeepEmitGuiEvent(type, data) {
       clearTimeout(timer);
     }
     if (r && r.status === 401) {
-      SEEKDEEP_EVENTS_DISABLED = true;
-      console.warn('[SeekDeep] GUI events emit got 401 — token mismatch; disabling further emits. Restart bot after rotating SEEKDEEP_GUI_TOKEN.');
+      // Self-heal once: AI server may have rotated the token in .env since
+      // the bot loaded dotenv. Re-read the file, update process.env, retry.
+      // Only triggers once per call site — if the rotation is real and the
+      // retry also 401s, fall through to the disable path so we don't loop.
+      const fresh = _seekdeepReReadTokenFromEnvFile();
+      if (fresh && fresh !== tok) {
+        process.env.SEEKDEEP_GUI_TOKEN = fresh;
+        console.warn(`[SeekDeep] GUI events emit got 401; .env had a newer token — reloaded and retrying.`);
+        try {
+          const ctl2 = new AbortController();
+          const tm2 = setTimeout(() => ctl2.abort(), 2000);
+          try {
+            r = await fetch(`${LOCAL_AI_BASE_URL}/events/emit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-SeekDeep-Token': fresh },
+              body: JSON.stringify({ type, data: data || {} }),
+              signal: ctl2.signal,
+            });
+          } finally {
+            clearTimeout(tm2);
+          }
+        } catch (_) { /* fall through */ }
+      }
+      if (r && r.status === 401) {
+        SEEKDEEP_EVENTS_DISABLED = true;
+        console.warn('[SeekDeep] GUI events emit got 401 (after .env re-read) — token mismatch persists; disabling further emits. Restart bot after rotating SEEKDEEP_GUI_TOKEN.');
+      }
     }
   } catch (_) {
     // Server might be offline; bot must keep working regardless.
