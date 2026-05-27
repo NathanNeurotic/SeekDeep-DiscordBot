@@ -274,6 +274,13 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         "requirements-local.txt",
         "requirements-ml.txt",
         ".env.default",
+        // scripts/doctor.mjs is run by the Installer's System check step
+        // via `node scripts/doctor.mjs`. Without these copied into the
+        // runtime dir, the spawn fails with Cannot find module — broke
+        // the System check probe in fresh Tauri installs.
+        "scripts/doctor.mjs",
+        "scripts/preflight.mjs",
+        "scripts/smoke_gui_endpoints.py",
     ];
     let mut copied: u32 = 0;
     let mut skipped: u32 = 0;
@@ -288,6 +295,10 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
             resource_root.join(f),
         ];
         let dst = runtime.join(f);
+        // Ensure parent dir exists (e.g. for nested paths like scripts/doctor.mjs).
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
+        }
         for src in &candidates {
             if src.is_file() {
                 fs::copy(src, &dst).map_err(|e| format!("cp {src:?} -> {dst:?}: {e}"))?;

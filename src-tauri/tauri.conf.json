@@ -53,7 +53,10 @@
       "../requirements-local.txt",
       "../requirements-ml.txt",
       "../.env.default",
-      "../gui/**/*"
+      "../gui/**/*",
+      "../scripts/doctor.mjs",
+      "../scripts/preflight.mjs",
+      "../scripts/smoke_gui_endpoints.py"
     ],
     "externalBin": [],
     "windows": {

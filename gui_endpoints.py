@@ -1579,26 +1579,30 @@ def register_gui_endpoints(
                 errors.append(f"{fname}: {str(exc)[:120]}")
         # 2) gui/ tree — list via contents API, recurse one level (the
         # tree is flat — no nested subdirs as of 2026-05).
-        try:
-            api_resp = _fetch(contents_url)
-            import json as _json
-            entries = _json.loads(api_resp)
-            if isinstance(entries, list):
-                for entry in entries:
-                    if not isinstance(entry, dict) or entry.get("type") != "file":
-                        continue
-                    name = entry.get("name") or ""
-                    download_url = entry.get("download_url") or ""
-                    if not name or not download_url:
-                        continue
-                    try:
-                        content = _fetch(download_url)
-                        _write(f"gui/{name}", content)
-                        downloaded.append({"path": f"gui/{name}", "bytes": len(content)})
-                    except Exception as exc:
-                        errors.append(f"gui/{name}: {str(exc)[:120]}")
-        except Exception as exc:
-            errors.append(f"gui/ listing: {str(exc)[:120]}")
+        # Plus scripts/ tree — same pattern. The Installer's System
+        # check step runs node scripts/doctor.mjs which has to exist.
+        for sub in ("gui", "scripts"):
+            sub_contents_url = f"https://api.github.com/repos/{REPO}/contents/{sub}?ref={ref}"
+            try:
+                api_resp = _fetch(sub_contents_url)
+                import json as _json
+                entries = _json.loads(api_resp)
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if not isinstance(entry, dict) or entry.get("type") != "file":
+                            continue
+                        name = entry.get("name") or ""
+                        download_url = entry.get("download_url") or ""
+                        if not name or not download_url:
+                            continue
+                        try:
+                            content = _fetch(download_url)
+                            _write(f"{sub}/{name}", content)
+                            downloaded.append({"path": f"{sub}/{name}", "bytes": len(content)})
+                        except Exception as exc:
+                            errors.append(f"{sub}/{name}: {str(exc)[:120]}")
+            except Exception as exc:
+                errors.append(f"{sub}/ listing: {str(exc)[:120]}")
         # 3) Sentinel — tells sidecar.rs not to clobber these on the next
         # Tauri boot. Future versions of the extractor should read this
         # and skip files listed inside, OR compare mtimes.

@@ -278,7 +278,9 @@
     font-family: var(--font-mono);
   }
 
-  /* Slash hint menu */
+  /* Slash hint menu — fully collapsed by default (display:none beats
+     max-height:0 because padding + border still rendered a visible
+     ~18px empty bar above the composer on the unopened state). */
   .slash-menu {
     position: absolute;
     bottom: calc(100% + 4px);
@@ -288,12 +290,12 @@
     border-radius: 10px;
     box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 60px rgba(45,212,255,0.15);
     padding: 8px;
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.2s ease, padding 0.2s ease;
+    max-height: 360px;
+    overflow-y: auto;
     z-index: 5;
+    display: none;
   }
-  .slash-menu.open { max-height: 360px; padding: 8px; overflow-y: auto; }
+  .slash-menu.open { display: block; }
   .slash-item {
     display: grid; grid-template-columns: 96px 1fr 120px; gap: 14px;
     padding: 8px 12px;
