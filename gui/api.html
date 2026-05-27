@@ -742,9 +742,16 @@ Object.entries(groups).forEach(([group, list]) => {
 });
 
 // Task 9 · drive per-rail-item offline state from a single /health ping (plus the bus when present).
+// Timeout was 2000ms which was too tight — /health calls ollama_available()
+// (up to 2s by itself) plus per-role backend resolution, so a healthy
+// server with ollama configured often takes 2-3s to answer. Background
+// probe was timing out RIGHT as the foreground SEND REQUEST succeeded —
+// the rail showed every endpoint OFFLINE while the response panel
+// showed a live 200 OK. Bumped to 8s to match what /health legitimately
+// takes on a fully-loaded install.
 async function probeBackendReachable() {
   try {
-    const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+    const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(8000), cache: 'no-store' });
     return r.ok;
   } catch { return false; }
 }
@@ -941,12 +948,20 @@ function prettyJSON(obj, plain = false) {
 // ===========================================================
 const respPane = document.getElementById('respPane');
 function setLiveMode(mode) {
+  // Null-guard: `liveModePill` was a designer placeholder that never
+  // got rendered. Calls to this function used to throw
+  // "Cannot read properties of null (reading 'classList')" which the
+  // global error surface caught and turned into a red toast — visible
+  // to the user as a SEEKDEEP UNHANDLED PROMISE notification on every
+  // SEND REQUEST. Now it's a no-op if the target isn't there. The
+  // actual live/offline display happens via setStatus + the rail's
+  // refreshOfflineState pass.
   const pill = document.getElementById('liveModePill');
+  if (!pill) return;
   if (mode === 'live') {
     pill.classList.add('on'); pill.classList.remove('warn');
     pill.innerHTML = '<span class="dot"></span>LIVE · :7865';
   } else if (mode === 'mock' || mode === 'offline') {
-    // Legacy 'mock' callers map to OFFLINE — there's no mock chat path.
     pill.classList.remove('on'); pill.classList.add('warn');
     pill.innerHTML = '<span class="dot"></span>OFFLINE · :7865';
   } else {
