@@ -382,6 +382,111 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
 
 
 # ====================================================================
+# HF CACHE SCAN — resilient against WinError 448 + symlink trust issues
+# ====================================================================
+# huggingface_hub.scan_cache_dir() calls Path.is_dir() on every snapshot
+# file. On Windows, HF cache uses symlinks (snapshots/<rev>/file →
+# blobs/<sha>) and the OS occasionally throws WinError 448 "untrusted
+# mount point" when the link target crosses a security boundary (file
+# backup mount, Dev Drive, etc). One bad symlink would crash the entire
+# scan and 500 the endpoint. This wrapper catches per-repo errors and
+# returns whatever scan completed plus a list of bad repos.
+
+def _safe_scan_hf_cache(cache_dir: str | None = None):
+    """Returns (info_or_None, error_str_or_None). info exposes size_on_disk
+    + repos. error_str is set only when the scan completely failed or hit
+    a symlink crash that prevented full enumeration."""
+    try:
+        from huggingface_hub import scan_cache_dir
+    except ImportError:
+        return None, "huggingface_hub not installed"
+    try:
+        from huggingface_hub.errors import CacheNotFound
+    except ImportError:
+        CacheNotFound = Exception  # type: ignore
+
+    cache_dir = cache_dir or (os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None)
+    try:
+        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        return info, None
+    except CacheNotFound:
+        return _EmptyScanInfo(), None
+    except OSError as exc:
+        # WinError 448 (untrusted mount point), ENOENT on broken symlinks, etc.
+        # Fall back to a manual directory walk that skips unreadable files.
+        try:
+            info = _manual_hf_cache_scan(cache_dir)
+            return info, f"partial scan · skipped unreadable files · {type(exc).__name__}: {exc}"[:280]
+        except Exception as inner:
+            return _EmptyScanInfo(), f"{type(exc).__name__}: {exc} (fallback: {inner})"[:280]
+    except Exception as exc:
+        return _EmptyScanInfo(), f"{type(exc).__name__}: {exc}"[:280]
+
+
+class _EmptyScanInfo:
+    """Stand-in for huggingface_hub.HFCacheInfo when scan fails completely."""
+    size_on_disk = 0
+    repos = ()
+    warnings = ()
+    def delete_revisions(self, *_args, **_kw):
+        raise RuntimeError("scan failed; cannot prune")
+
+
+class _StubRepo:
+    """Minimal HFCacheInfo.Repo stand-in for partial scans."""
+    def __init__(self, repo_id, repo_path, size_on_disk, nb_files, last_modified):
+        self.repo_id       = repo_id
+        self.repo_type     = "model"
+        self.repo_path     = repo_path
+        self.size_on_disk  = size_on_disk
+        self.nb_files      = nb_files
+        self.last_modified = last_modified
+        self.revisions     = ()
+
+
+def _manual_hf_cache_scan(cache_dir: str | None):
+    """Walk the HF cache directly when huggingface_hub.scan_cache_dir() crashes
+    on a symlink. We trade detail (no per-revision tracking, no refs) for
+    resilience. Used only as the fallback path."""
+    root = Path(cache_dir) if cache_dir else Path(os.path.expanduser("~/.cache/huggingface/hub"))
+    if not root.is_dir():
+        return _EmptyScanInfo()
+    repos = []
+    total_bytes = 0
+    for entry in root.iterdir():
+        try:
+            name = entry.name
+            if not name.startswith("models--") and not name.startswith("datasets--") and not name.startswith("spaces--"):
+                continue
+            repo_id = name.split("--", 1)[1].replace("--", "/") if "--" in name else name
+            size = 0
+            nfiles = 0
+            try:
+                for p in entry.rglob("*"):
+                    try:
+                        if p.is_file():
+                            size += p.stat().st_size
+                            nfiles += 1
+                    except OSError:
+                        # Skip the file that crashed scan_cache_dir originally.
+                        continue
+            except OSError:
+                pass
+            try:
+                last_mod = entry.stat().st_mtime
+            except OSError:
+                last_mod = 0
+            repos.append(_StubRepo(repo_id, str(entry), size, nfiles, last_mod))
+            total_bytes += size
+        except Exception:
+            continue
+    info = _EmptyScanInfo()
+    info.size_on_disk = total_bytes  # type: ignore
+    info.repos = tuple(repos)        # type: ignore
+    return info
+
+
+# ====================================================================
 # LOG TAILING
 # ====================================================================
 
@@ -2923,21 +3028,14 @@ def register_gui_endpoints(
         # Cache: HF scan + Ollama tags
         cache: dict = {"hf_size_bytes": None, "hf_repo_count": None, "ollama_tag_count": None}
         try:
-            from huggingface_hub import scan_cache_dir
-            try:
-                from huggingface_hub.errors import CacheNotFound
-            except ImportError:
-                CacheNotFound = Exception
-            cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-            try:
-                info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
-                cache["hf_size_bytes"] = int(info.size_on_disk)
-                cache["hf_repo_count"] = len(info.repos)
-            except CacheNotFound:
-                cache["hf_size_bytes"] = 0
-                cache["hf_repo_count"] = 0
-        except ImportError:
-            pass
+            info, scan_err = _safe_scan_hf_cache()
+            if info is not None:
+                cache["hf_size_bytes"] = int(getattr(info, "size_on_disk", 0) or 0)
+                cache["hf_repo_count"] = len(getattr(info, "repos", []) or [])
+            if scan_err:
+                cache["scan_error"] = scan_err
+        except Exception as exc:
+            cache["scan_error"] = f"{type(exc).__name__}: {exc}"[:200]
         # Ollama tag count (best-effort; daemon may be down)
         try:
             import local_ai_server as _lai
@@ -2955,20 +3053,15 @@ def register_gui_endpoints(
     # button. Token-required because it's destructive.
     @app.post("/cache/prune", dependencies=[Depends(_require_gui_token)])
     def post_cache_prune():
-        try:
-            from huggingface_hub import scan_cache_dir
-            try:
-                from huggingface_hub.errors import CacheNotFound
-            except ImportError:
-                CacheNotFound = Exception
-        except ImportError:
-            raise HTTPException(503, "huggingface_hub not installed (install ML deps first)")
-
-        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-        try:
-            info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
-        except CacheNotFound:
-            return {"ok": True, "freed_bytes": 0, "note": "HF cache directory not found"}
+        info, scan_err = _safe_scan_hf_cache()
+        if info is None:
+            raise HTTPException(503, scan_err or "huggingface_hub not installed (install ML deps first)")
+        if not info.repos:
+            return {"ok": True, "freed_bytes": 0,
+                    "note": scan_err or "HF cache directory not found"}
+        if scan_err and not hasattr(info, "delete_revisions"):
+            # Partial-scan fallback can't call delete_revisions — surface honestly.
+            raise HTTPException(503, f"cache scan only completed partially; prune unavailable. {scan_err}")
 
         # Conservative policy: only prune revisions that aren't the "current"
         # (refs) revision. Pinned models we use every day stay put; we just

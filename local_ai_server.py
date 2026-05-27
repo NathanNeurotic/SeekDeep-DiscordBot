@@ -159,10 +159,54 @@ def _seekdeep_install_file_logging() -> None:
     print(f"[SeekDeep Local AI] file logging on -> {log_path}", flush=True)
 
 _seekdeep_install_file_logging()
-MODEL_CACHE_DIR = Path(os.getenv("LOCAL_MODEL_CACHE_DIR", "./models/huggingface"))
-if not MODEL_CACHE_DIR.is_absolute():
-    MODEL_CACHE_DIR = ROOT / MODEL_CACHE_DIR
-MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _resolve_model_cache_dir() -> Path:
+    """Pick the HF cache dir. Order:
+      1. SEEKDEEP_MODEL_CACHE_DIR env override (absolute path)
+      2. LOCAL_MODEL_CACHE_DIR resolved against ROOT (legacy)
+      3. If #2 resolves to a path inside Tauri's runtime dir AND a
+         valid cache exists at ~/SeekDeep-DiscordBot/models/huggingface,
+         use that instead (Tauri install hits WinError 448 on its own
+         models/ symlinks; the user's repo cache is the safe one).
+
+    The third path matters because Tauri's runtime dir
+    %APPDATA%/SeekDeep/app/models/huggingface/ ends up with
+    OS-untrusted symlinks that crash huggingface_hub.scan_cache_dir.
+    """
+    override = (os.getenv("SEEKDEEP_MODEL_CACHE_DIR") or "").strip()
+    if override:
+        p = Path(override).expanduser().resolve()
+        try: p.mkdir(parents=True, exist_ok=True)
+        except OSError: pass
+        return p
+    raw = Path(os.getenv("LOCAL_MODEL_CACHE_DIR", "./models/huggingface"))
+    cfg = raw if raw.is_absolute() else (ROOT / raw)
+    cfg = cfg.resolve()
+    # Heuristic: configured path lives under an AppData/Roaming/.../app/ tree?
+    # If so, prefer the user's repo cache when it exists and has content.
+    cfg_str = str(cfg).replace("\\", "/").lower()
+    looks_tauri = ("appdata/roaming/" in cfg_str and "/app/" in cfg_str)
+    if looks_tauri:
+        candidate = (Path.home() / "SeekDeep-DiscordBot" / "models" / "huggingface").resolve()
+        try:
+            if candidate.is_dir() and any(candidate.iterdir()):
+                print(f"[SeekDeep Local AI] LOCAL_MODEL_CACHE_DIR -> auto-redirect to repo cache {candidate} "
+                      f"(Tauri runtime path {cfg} caused WinError 448 on HF symlinks)", flush=True)
+                return candidate
+        except OSError:
+            pass
+    try: cfg.mkdir(parents=True, exist_ok=True)
+    except OSError: pass
+    return cfg
+
+MODEL_CACHE_DIR = _resolve_model_cache_dir()
+# Reflect the resolved dir back into the env so huggingface_hub picks it up.
+os.environ["LOCAL_MODEL_CACHE_DIR"] = str(MODEL_CACHE_DIR)
+# HF_HOME points at the cache root; HF_HUB_CACHE is the same path with /hub
+# semantics. Setting both keeps every HF caller (transformers, diffusers,
+# huggingface_hub) on the same resolved cache.
+os.environ.setdefault("HF_HOME", str(MODEL_CACHE_DIR.parent))
+os.environ.setdefault("HF_HUB_CACHE", str(MODEL_CACHE_DIR))
 
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -2157,14 +2201,23 @@ def models_installed_endpoint():
             "note": "huggingface_hub not installed — hit /ml_deps and POST /deps/install first.",
         }
 
-    cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+    # Use gui_endpoints._safe_scan_hf_cache when available — it catches
+    # WinError 448 (untrusted mount point) + per-file OSErrors so a bad
+    # symlink doesn't kill the whole probe.
     try:
-        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
-        cached_repos = {r.repo_id for r in info.repos}
-    except CacheNotFound:
-        cached_repos = set()
+        from gui_endpoints import _safe_scan_hf_cache as _safe_scan
+        info, _scan_err = _safe_scan()
+        cached_repos = {r.repo_id for r in (info.repos if info else ())}
     except Exception:
-        cached_repos = set()
+        # Fallback path if gui_endpoints isn't importable for some reason.
+        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+        try:
+            info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+            cached_repos = {r.repo_id for r in info.repos}
+        except CacheNotFound:
+            cached_repos = set()
+        except Exception:
+            cached_repos = set()
 
     ollama_tags: set = set()
     try:
@@ -2377,25 +2430,25 @@ def models_available_endpoint():
                  },
                  "hf_token_set": bool((os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()),
                  "vram_total_mb": vram_total_mb() if cuda_available() else 0}
+    # Resilient HF scan — catches WinError 448 / OSError on bad symlinks and
+    # returns whatever portion of the cache was readable.
     try:
-        from huggingface_hub import scan_cache_dir
-        try:
-            from huggingface_hub.errors import CacheNotFound
-        except ImportError:
-            CacheNotFound = Exception
+        from gui_endpoints import _safe_scan_hf_cache as _safe_scan
+        info, scan_err = _safe_scan()
     except ImportError:
         out["ml_deps_missing"] = True
         return out
-    cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-    try:
-        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
-        out["hf"]["cache_dir"] = str(info.size_on_disk and (cache_dir or "") or "")
+    except Exception as exc:
+        out["hf"]["error"] = f"{type(exc).__name__}: {exc}"
+        info, scan_err = None, str(exc)
+    if info is not None:
+        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+        out["hf"]["cache_dir"] = cache_dir or ""
         out["hf"]["total_size_bytes"] = int(getattr(info, "size_on_disk", 0) or 0)
         repos_out = []
         for r in info.repos:
             try:
-                refs = sorted({rev.refs for rev in r.revisions for ref in (rev.refs or [])} if False else
-                              {ref for rev in (r.revisions or []) for ref in (rev.refs or [])})
+                refs = sorted({ref for rev in (getattr(r, "revisions", None) or ()) for ref in (rev.refs or [])})
             except Exception:
                 refs = []
             repos_out.append({
@@ -2406,13 +2459,10 @@ def models_available_endpoint():
                 "nb_files":      int(getattr(r, "nb_files", 0) or 0),
                 "refs":          list(refs),
             })
-        # Sort: biggest first (most likely the actively used chat models).
         repos_out.sort(key=lambda x: -x["size_bytes"])
         out["hf"]["repos"] = repos_out
-    except CacheNotFound:
-        pass
-    except Exception as exc:
-        out["hf"]["error"] = f"{type(exc).__name__}: {exc}"
+    if scan_err:
+        out["hf"]["scan_warning"] = scan_err
     # Ollama daemon tags. We hit /api/tags directly (not just the bool probe)
     # so the response includes size + modified_at when available.
     try:
