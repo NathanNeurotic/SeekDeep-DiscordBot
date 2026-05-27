@@ -1089,12 +1089,18 @@ def register_gui_endpoints(
                 f"GET /token rejected: untrusted Origin {origin!r}. "
                 f"Allowed: {list(TRUSTED_BROWSER_ORIGINS)}")
         # Sec-Fetch-Site is a Fetch Metadata header browsers attach since
-        # ~2020. If present and 'cross-site', the request came from an
-        # untrusted origin even when Origin is absent. Reject.
+        # ~2020. Only apply when Origin is ABSENT — the Origin allowlist
+        # above already covers the browser drive-by case where Origin is
+        # present. Without this Origin gate, the Tauri WebView (which runs
+        # on tauri.localhost and fetches 127.0.0.1:7865) gets rejected
+        # because browsers tag cross-host loopback fetches as
+        # Sec-Fetch-Site: cross-site even when both ends are local and
+        # the Origin is in the allowlist. That regression made every
+        # token-gated GUI button return 401 on real installs.
         sfs = (request.headers.get("sec-fetch-site") or "").lower()
-        if sfs == "cross-site":
+        if not origin and sfs == "cross-site":
             raise HTTPException(403,
-                "GET /token rejected: Sec-Fetch-Site: cross-site (browser drive-by blocked)")
+                "GET /token rejected: Sec-Fetch-Site: cross-site without Origin (browser drive-by blocked)")
         return {"token": _current_token(), "header": _TOKEN_HEADER, "disabled": _token_disabled}
 
     # ----- POST /config -----
