@@ -3598,7 +3598,29 @@ def register_gui_endpoints(
                     hint = ""
                     blob = tail_text.lower()
                     if "no matching distribution found" in blob or "could not find a version" in blob:
-                        hint = "pip can't find a wheel for this Python version. Most likely the running Python is too new (3.13+ have limited torch wheel coverage). Install Python 3.11 or 3.12 alongside, set SEEKDEEP_PYTHON in .env, and Reload .env."
+                        # Disambiguate: if pip printed a "(from versions: ...)"
+                        # list with cu-tagged builds available, the running
+                        # Python isn't the problem — the requirements file
+                        # pins a version that no longer exists on the index.
+                        # Otherwise, default to the "Python too new" hint.
+                        m = re.search(r"from versions:\s*([^)]+)\)", blob)
+                        if m and "+cu" in m.group(1):
+                            hint = (
+                                "The requirements file pins a torch+cu128 version "
+                                "that's no longer on the cu128 index. This is a "
+                                "stale pin, not a Python version problem. Update "
+                                "requirements-ml.txt to one of the available "
+                                "+cu128 versions, or run the wizard's 'reinstall "
+                                "torch with detected variant' fix."
+                            )
+                        else:
+                            hint = (
+                                "pip can't find a wheel for this Python version. "
+                                "Most likely the running Python is too new (3.13+ "
+                                "have limited torch wheel coverage). Install Python "
+                                "3.11 or 3.12 alongside, set SEEKDEEP_PYTHON in .env, "
+                                "and Reload .env."
+                            )
                     elif "microsoft visual c++" in blob and "required" in blob:
                         hint = "A package needs the Visual C++ build tools. Install 'Build Tools for Visual Studio 2022' (vs.microsoft.com → Tools for Visual Studio → Build Tools), reboot, and retry."
                     elif "permission denied" in blob or "access is denied" in blob:

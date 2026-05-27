@@ -25,9 +25,16 @@
 # pip_install_torch_variant() which handles cu118/cu121/cu124/cu126/cu128
 # at runtime — this file just sets the default for fresh installs.
 --extra-index-url https://download.pytorch.org/whl/cu128
-torch==2.5.1+cu128 ; platform_system == "Windows"
-torchvision==0.20.1+cu128 ; platform_system == "Windows"
-torchaudio==2.5.1+cu128 ; platform_system == "Windows"
+# Verified-available on https://download.pytorch.org/whl/cu128/ as of 2026-05:
+#   torch       2.11.0+cu128  (latest cu128 — cp310..cp314)
+#   torchvision 0.26.0+cu128  (matches torch 2.11)
+#   torchaudio  2.10.0+cu128  (audio lags one minor — that's normal)
+# Previously pinned 2.5.1+cu128 which was REMOVED from the cu128 index;
+# users on a fresh install hit "No matching distribution found for
+# torch==2.5.1+cu128" and the install loop dead-ended.
+torch==2.11.0+cu128 ; platform_system == "Windows"
+torchvision==0.26.0+cu128 ; platform_system == "Windows"
+torchaudio==2.10.0+cu128 ; platform_system == "Windows"
 torch ; platform_system != "Windows"
 torchvision ; platform_system != "Windows"
 torchaudio ; platform_system != "Windows"

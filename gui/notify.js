@@ -523,8 +523,27 @@
   // that resolves to true (primary clicked) or false (secondary / dismissed).
   // Use case: every `if (!confirm('...'))` in the codebase can become
   // `if (!await SeekDeepNotify.confirm('...'))`.
+  //
+  // Accepts EITHER calling convention:
+  //   confirm("Are you sure?", { tone: 'warn' })       // window.confirm style
+  //   confirm({ title: "...", body: "...", ... })       // options-only style
+  // Passing an object as `message` used to render "[object Object]" in the
+  // modal because the function `String()`'d it. Now we detect that case and
+  // treat the object as opts.
   function confirm(message, opts) {
+    // Options-only invocation: confirm({ title, body, ... })
+    if (message && typeof message === 'object' && !opts) {
+      opts = message;
+      message = undefined;
+    }
     opts = opts || {};
+    // Resolve label aliases: callers sometimes pass confirmLabel / cancelLabel
+    // (matching native dialog APIs) instead of okLabel.
+    const okLabel     = opts.okLabel     || opts.confirmLabel;
+    const cancelLabel = opts.cancelLabel || opts.dismissLabel;
+    // `destructive: true` is a convenience that flips tone to 'danger' so the
+    // primary button renders red — used by kill-all-bot-instances etc.
+    const tone = opts.tone || (opts.destructive ? 'danger' : 'info');
     // Split first line as title, rest as body. Mirrors window.confirm() ergonomics.
     let title = opts.title;
     let body  = opts.body;
@@ -534,15 +553,15 @@
       body  = lines.slice(1).join('\n').trim();
     } else if (!title) {
       title = String(message || 'Confirm');
-    } else if (!body) {
-      body = String(message || '');
+    } else if (!body && message) {
+      body = String(message);
     }
     return modal({
-      tone: opts.tone || 'info',
+      tone,
       title,
       body: body ? `<div style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.55;color:var(--hull-2);">${String(body).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>` : '',
-      primary:   opts.primary   || { label: opts.okLabel     || 'OK',     tone: opts.tone || 'info' },
-      secondary: opts.secondary || { label: opts.cancelLabel || 'Cancel', tone: 'neutral' },
+      primary:   opts.primary   || { label: okLabel     || 'OK',     tone },
+      secondary: opts.secondary || { label: cancelLabel || 'Cancel', tone: 'neutral' },
       dismissible: true,
     }).then(r => r === 'primary');
   }
