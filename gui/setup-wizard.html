@@ -45,6 +45,11 @@
   .step .action button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .step .action button.skip { background: transparent; color: var(--hull-3); border: 1px solid var(--stroke); }
   .step .action button.skip:hover { color: var(--hull-1); border-color: var(--hull-3); }
+  .step .prompt-row { grid-column: 2 / -1; margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+  .step .prompt-row input { flex: 1; background: rgba(0,0,0,0.4); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 7px 10px; color: var(--hull-1); font-family: var(--font-mono); font-size: 12px; }
+  .step .prompt-row input:focus { outline: none; border-color: var(--cyan-1); }
+  .step .prompt-row .field-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; min-width: 130px; }
+  .step .prompt-err { grid-column: 2 / -1; color: var(--bad); font-family: var(--font-mono); font-size: 10.5px; margin-top: 6px; padding-left: 0; line-height: 1.45; }
   .footer { margin-top: 22px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
   .footer .left { font-family: var(--font-mono); font-size: 10.5px; color: var(--hull-3); letter-spacing: 0.1em; }
   .footer .right { display: flex; gap: 8px; }
@@ -146,20 +151,49 @@
       li.className = 'step ' + (c.ok ? 'done' : (c.blocking ? 'bad' : ''));
       const mark = c.ok ? '✓' : (c.blocking ? '✕' : '⚠');
       const detail = c.ok ? '' : (c.fix ? `<div class="detail">${escapeHtml(c.fix)}</div>` : '');
-      const actionHtml = (!c.ok && c.fix_action)
-        ? `<button class="primary" data-act="fix">${escapeHtml(c.fix_action.label || '▸ FIX')}</button>` +
+      // Three flavors of fix_action:
+      //   prompt_for: render input(s), Save button POSTs /config etc
+      //   navigate:   render a button that location.href's to a page
+      //   plain:      render a button that POSTs the endpoint as-is
+      const fa = c.fix_action;
+      const hasPrompt   = fa && Array.isArray(fa.prompt_for) && fa.prompt_for.length;
+      const hasNavigate = fa && typeof fa.navigate === 'string';
+      const actionHtml = !c.ok && fa
+        ? `<button class="primary" data-act="${hasNavigate ? 'navigate' : 'fix'}">${escapeHtml(fa.label || '▸ FIX')}</button>` +
           (c.blocking ? '' : `<button class="skip" data-act="skip">Skip</button>`)
         : (!c.ok ? `<button class="skip" data-act="skip">Skip</button>` : '');
+
+      // Prompt rows: one per prompt_for entry, plus error slot.
+      let promptHtml = '';
+      if (hasPrompt) {
+        for (const p of fa.prompt_for) {
+          promptHtml += `
+            <div class="prompt-row" data-key="${escapeHtml(p.key)}">
+              <span class="field-label">${escapeHtml(p.label || p.key)}</span>
+              <input type="${p.secret ? 'password' : 'text'}"
+                     placeholder="${escapeHtml(p.placeholder || '')}"
+                     autocomplete="off" spellcheck="false" />
+            </div>`;
+        }
+        promptHtml += `<div class="prompt-err" style="display:none;"></div>`;
+      }
+
       li.innerHTML = `
         <span class="mark">${mark}</span>
         <div>
           <div class="label">${escapeHtml(c.label)}</div>
           ${detail}
         </div>
-        <div class="action">${actionHtml}</div>`;
+        <div class="action">${actionHtml}</div>
+        ${promptHtml}`;
       const fixBtn  = li.querySelector('button[data-act="fix"]');
+      const navBtn  = li.querySelector('button[data-act="navigate"]');
       const skipBtn = li.querySelector('button[data-act="skip"]');
       if (fixBtn)  fixBtn.addEventListener('click', () => runFix(li, c));
+      if (navBtn)  navBtn.addEventListener('click', () => {
+        sessionStorage.setItem('seekdeep:firstrun:wizard-skipped', '1');
+        location.href = fa.navigate;
+      });
       if (skipBtn) skipBtn.addEventListener('click', () => { setStepClass(li, 'skip'); li.querySelector('.mark').textContent = '–'; });
       stepListEl.appendChild(li);
     });
@@ -169,14 +203,54 @@
     const fa = c.fix_action;
     if (!fa) return;
     const btn = li.querySelector('button[data-act="fix"]');
+    const errEl = li.querySelector('.prompt-err');
     const origLabel = btn ? btn.textContent : 'FIX';
+
+    // Read prompt_for inputs (if any), validate, and merge into the
+    // request body. body_template is the base shape; for /config the
+    // server expects { updates: { KEY: value, ... } } so we deep-merge
+    // into body_template.updates. For other endpoints we shallow-merge
+    // at the top level.
+    let body = null;
+    if (fa.body) body = JSON.parse(JSON.stringify(fa.body));
+    if (Array.isArray(fa.prompt_for) && fa.prompt_for.length) {
+      body = fa.body_template ? JSON.parse(JSON.stringify(fa.body_template)) : (body || {});
+      const errors = [];
+      const collected = {};
+      for (const p of fa.prompt_for) {
+        const row = li.querySelector(`.prompt-row[data-key="${p.key}"] input`);
+        const val = row ? row.value.trim() : '';
+        if (!val) { errors.push(`${p.label || p.key} is required.`); continue; }
+        if (p.validate_regex) {
+          try {
+            if (!new RegExp(p.validate_regex).test(val)) {
+              errors.push(p.validate_error || `${p.label || p.key} format is invalid.`);
+              continue;
+            }
+          } catch (re) { /* invalid server-supplied regex — skip */ }
+        }
+        collected[p.key] = val;
+      }
+      if (errors.length) {
+        if (errEl) { errEl.style.display = ''; errEl.textContent = '✕ ' + errors.join(' '); }
+        return;
+      }
+      if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+      // For /config the updates go inside updates{}; otherwise shallow-merge.
+      if (body && typeof body === 'object' && body.updates && typeof body.updates === 'object') {
+        Object.assign(body.updates, collected);
+      } else {
+        body = Object.assign(body || {}, collected);
+      }
+    }
+
     if (btn) { btn.disabled = true; btn.textContent = '… running'; }
     setStepClass(li, 'busy');
     li.querySelector('.mark').textContent = '○';
     appendLog(`▸ ${fa.method || 'POST'} ${fa.endpoint} (${c.label})`);
     try {
       const init = { method: fa.method || 'POST', headers: { 'Content-Type': 'application/json' } };
-      if (fa.body) init.body = JSON.stringify(fa.body);
+      if (body) init.body = JSON.stringify(body);
       init.signal = AbortSignal.timeout(fa.long_running ? 600_000 : 60_000);
       const r = await fetch(BASE + fa.endpoint, init);
       const result = await r.json().catch(() => ({}));

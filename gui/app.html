@@ -4224,6 +4224,19 @@ const SEEKDEEP_BASE = (function() {
               const btn = mk('button', 'btn btn-primary', fa.label || '▸ FIX');
               btn.style.cssText = 'margin-top: 6px; padding: 5px 12px; font-size: 11px; letter-spacing: 0.1em;';
               btn.addEventListener('click', async () => {
+                // Prompts (DISCORD_TOKEN, CLIENT_ID, ADMIN_IDS) need an
+                // input field that doesn't fit cleanly into a 1-line
+                // banner row — route those to the full-screen wizard
+                // which has the input UI. Navigate actions
+                // (chat_model -> add-model.html) likewise just route.
+                if (Array.isArray(fa.prompt_for) && fa.prompt_for.length) {
+                  location.href = 'setup-wizard.html';
+                  return;
+                }
+                if (typeof fa.navigate === 'string') {
+                  location.href = fa.navigate;
+                  return;
+                }
                 const origLbl = btn.textContent;
                 btn.disabled = true;
                 btn.textContent = '… running';

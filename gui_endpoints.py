@@ -1003,7 +1003,18 @@ def register_gui_endpoints(
             "id": "discord_token",
             "label": "DISCORD_TOKEN set",
             "ok": bool(tok) and len(tok) >= 50,
-            "fix": "Paste your bot token in the Installer Discord row, or edit .env directly.",
+            "fix": "Paste your bot token below — saved to .env, bot restart needed for it to take effect.",
+            "fix_action": {
+                "endpoint": "/config", "method": "POST", "label": "Save token",
+                "body_template": {"updates": {}},
+                "prompt_for": [{
+                    "key": "DISCORD_TOKEN", "label": "Discord bot token",
+                    "placeholder": "MTIzNDU2…  (70+ chars, starts with MT)",
+                    "secret": True,
+                    "validate_regex": r"^[A-Za-z0-9_.\-]{50,}$",
+                    "validate_error": "Bot tokens are 70+ chars of letters/digits/_-. — check you copied the whole thing.",
+                }],
+            },
             "blocking": True,
         })
         # 3. DISCORD_CLIENT_ID set (for slash command registration)
@@ -1012,7 +1023,17 @@ def register_gui_endpoints(
             "id": "discord_client_id",
             "label": "DISCORD_CLIENT_ID set (for slash commands)",
             "ok": bool(cid) and cid.isdigit() and len(cid) >= 15,
-            "fix": "Copy the Application ID from the Discord developer portal -> General Information.",
+            "fix": "Paste your Discord Application ID below. Find it at discord.com/developers/applications -> your bot -> General Information -> Application ID.",
+            "fix_action": {
+                "endpoint": "/config", "method": "POST", "label": "Save ID",
+                "body_template": {"updates": {}},
+                "prompt_for": [{
+                    "key": "DISCORD_CLIENT_ID", "label": "Application ID",
+                    "placeholder": "1234567890123456789  (15-25 digits)",
+                    "validate_regex": r"^\d{15,25}$",
+                    "validate_error": "Application ID is a 15-25 digit snowflake.",
+                }],
+            },
             "blocking": False,
         })
         # 4. SEEKDEEP_ADMIN_IDS set (admin features will all 403 without this)
@@ -1021,7 +1042,17 @@ def register_gui_endpoints(
             "id": "admin_ids",
             "label": "SEEKDEEP_ADMIN_IDS set (admin features need it)",
             "ok": bool(admin),
-            "fix": "Add your Discord user ID(s) to SEEKDEEP_ADMIN_IDS in .env (comma-separated).",
+            "fix": "Paste your Discord user ID(s) below. In Discord with Developer Mode on, right-click your name -> Copy User ID. Comma-separate for multiple admins.",
+            "fix_action": {
+                "endpoint": "/config", "method": "POST", "label": "Save",
+                "body_template": {"updates": {}},
+                "prompt_for": [{
+                    "key": "SEEKDEEP_ADMIN_IDS", "label": "Discord user ID(s)",
+                    "placeholder": "123456789012345678  (or comma-separated for multiple)",
+                    "validate_regex": r"^[\d,\s]+$",
+                    "validate_error": "Numeric user IDs separated by commas (no other characters).",
+                }],
+            },
             "blocking": False,
         })
         # 5. ML deps installed (best-effort; full check is /ml_deps which lives on local_ai_server)
@@ -1091,7 +1122,15 @@ def register_gui_endpoints(
             "id": "chat_model",
             "label": "A chat model is reachable (HF cache or Ollama)",
             "ok": has_hf_cache or ollama_up,
-            "fix": "Open the Models pane and click Warm on a chat role, or install ollama + pull a model.",
+            "fix": "Pick a starter model from the wizard — opens add-model.html for HF / Ollama / remote provider selection.",
+            "fix_action": {
+                # navigate-only: wizard hands the user off to add-model.html
+                # rather than POSTing anywhere. Model install is a multi-step
+                # flow (backend picker, model id, optional API key) that
+                # belongs in the dedicated wizard, not inline.
+                "navigate": "add-model.html",
+                "label": "Pick model",
+            },
             "blocking": False,
         })
 
