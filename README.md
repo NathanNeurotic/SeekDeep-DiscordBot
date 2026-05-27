@@ -135,10 +135,15 @@ When you run the `.msi` or `.exe`, Windows will show:
 
 **This is expected and the app is safe.** SmartScreen warns about any installer whose publisher isn't on Microsoft's reputation list. Getting on that list requires a code-signing certificate that costs **~$300–$700/year** from a Microsoft-approved Certificate Authority (DigiCert, Sectigo, etc.), and even with a cert, you still need a few hundred installations before SmartScreen stops nagging. SeekDeep is a one-developer open-source project — paying that toll isn't viable, so the build ships unsigned.
 
-**To run it anyway:**
+**To run it anyway — exactly two clicks:**
 
-1. Click **More info** (the small underlined link below the body text).
-2. A new **Run anyway** button appears at the bottom-right. Click it.
+**Step 1.** Click the **More info** link below the body text:
+
+![SmartScreen step 1: click "More info"](docs/smartscreen-1-more-info.png)
+
+**Step 2.** A **Run anyway** button appears at the bottom-right. Click it:
+
+![SmartScreen step 2: click "Run anyway"](docs/smartscreen-2-run-anyway.png)
 
 That's it. SmartScreen remembers your choice for that file's hash — you won't be prompted again for the same installer.
 
