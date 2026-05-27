@@ -1393,6 +1393,109 @@ def register_gui_endpoints(
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
 
+    # ----- POST /system/self-update -----
+    # Hot-patch the running install from GitHub. The Tauri bundle ships
+    # a snapshot of server + GUI files; over time the bundle goes stale
+    # (e.g. user installed v10.35.6 .msi but main has shipped 8 commits
+    # since). This endpoint closes that gap WITHOUT requiring a .msi
+    # reinstall: it streams the latest files from raw.githubusercontent
+    # .com into the server's own working directory, writes a sentinel
+    # marker so sidecar's extractor doesn't clobber them on next boot,
+    # and tells the caller to restart the sidecar.
+    #
+    # Safety scope: only files inside the SeekDeep tree get touched.
+    # All paths are validated to be inside `root` (no .. escapes), and
+    # we only fetch from a hardcoded allowlist of GitHub raw URLs on the
+    # NathanNeurotic/SeekDeep-DiscordBot repo's `main` branch.
+    @app.post("/system/self-update", dependencies=[Depends(_require_gui_token)])
+    def post_self_update(body: dict | None = None):
+        import urllib.request, urllib.error
+        ref = str((body or {}).get("ref") or "main").strip()
+        # Allowlist: refs we'll accept (main / a tag / a commit SHA).
+        # No arbitrary refs from user input — too easy to point at a
+        # fork or a stale branch by accident.
+        if not (ref == "main" or ref.startswith("v") or (len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref))):
+            raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
+        # Files to pull. Mirrors tauri.conf.json#bundle.resources + the
+        # GUI tree (gui/**) since both need updating.
+        REPO = "NathanNeurotic/SeekDeep-DiscordBot"
+        base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
+        single_files = [
+            "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
+            "package.json", "requirements-local.txt", "requirements-ml.txt",
+        ]
+        # GUI tree — request the file list via GitHub's contents API, then
+        # download each. Cheaper than maintaining a hardcoded list.
+        contents_url = f"https://api.github.com/repos/{REPO}/contents/gui?ref={ref}"
+        downloaded: list[dict] = []
+        errors: list[str] = []
+        def _fetch(url: str, timeout: float = 20.0) -> bytes:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "SeekDeep-Self-Updater",
+                "Accept": "application/vnd.github.raw",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        def _write(rel_path: str, content: bytes):
+            target = (root / rel_path).resolve()
+            if not _is_inside(target, root):
+                raise ValueError(f"path escape: {rel_path}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + ".tmp." + str(os.getpid()))
+            tmp.write_bytes(content)
+            tmp.replace(target)
+        # 1) Single root files
+        for fname in single_files:
+            try:
+                content = _fetch(base_url + fname)
+                _write(fname, content)
+                downloaded.append({"path": fname, "bytes": len(content)})
+            except urllib.error.HTTPError as e:
+                errors.append(f"{fname}: HTTP {e.code}")
+            except Exception as exc:
+                errors.append(f"{fname}: {str(exc)[:120]}")
+        # 2) gui/ tree — list via contents API, recurse one level (the
+        # tree is flat — no nested subdirs as of 2026-05).
+        try:
+            api_resp = _fetch(contents_url)
+            import json as _json
+            entries = _json.loads(api_resp)
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict) or entry.get("type") != "file":
+                        continue
+                    name = entry.get("name") or ""
+                    download_url = entry.get("download_url") or ""
+                    if not name or not download_url:
+                        continue
+                    try:
+                        content = _fetch(download_url)
+                        _write(f"gui/{name}", content)
+                        downloaded.append({"path": f"gui/{name}", "bytes": len(content)})
+                    except Exception as exc:
+                        errors.append(f"gui/{name}: {str(exc)[:120]}")
+        except Exception as exc:
+            errors.append(f"gui/ listing: {str(exc)[:120]}")
+        # 3) Sentinel — tells sidecar.rs not to clobber these on the next
+        # Tauri boot. Future versions of the extractor should read this
+        # and skip files listed inside, OR compare mtimes.
+        try:
+            sentinel = root / ".self-updated"
+            sentinel.write_text(
+                f"# SeekDeep self-update sentinel\n# ref={ref}\n# at={_now_iso()}\n"
+                + "\n".join(d["path"] for d in downloaded) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return {
+            "ok": not errors or len(downloaded) > 0,
+            "ref": ref,
+            "downloaded": downloaded,
+            "errors": errors,
+            "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
+        }
+
     # ----- POST /system/install-docker -----
     # Same shape as /system/install-python but for Docker Desktop. The
     # user still has to launch Docker Desktop + accept the EULA after

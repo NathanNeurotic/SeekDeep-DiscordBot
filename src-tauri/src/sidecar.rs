@@ -232,6 +232,7 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
 
     let bundled_version = env!("CARGO_PKG_VERSION");
     let stamp = runtime.join(".bundled_version");
+    let self_updated = runtime.join(".self-updated");
     // Previously gated re-extraction on the stamp version. That broke
     // every bug fix to the bundled Python: as long as CARGO_PKG_VERSION
     // didn't bump, users running a newer .msi would skip extraction and
@@ -239,12 +240,22 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     // The CORS-middleware fix shipped with the bundle but every user
     // stuck on a pre-CORS extracted copy.
     //
-    // New policy: always re-extract on boot. The cost is a few MB of
-    // small-file copies (server.py + gui/ tree ~ 30 MB) which is fast
-    // enough on any SSD and trivial vs the ~15s Python cold start that
-    // dominates boot time anyway. The version stamp is still written
-    // for diagnostics + future re-introduction of caching if needed.
+    // Policy: always re-extract on boot, EXCEPT for files the server's
+    // /system/self-update endpoint has hot-patched (listed in
+    // .self-updated). Without this carve-out, a user who self-updates
+    // through the GUI loses the patch on every Tauri restart because
+    // the stale bundle clobbers it.
     let _ = installed_version_for_diagnostic(&stamp);
+    let skip_list: Vec<String> = match fs::read_to_string(&self_updated) {
+        Ok(s) => s.lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| l.trim().to_string())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let should_skip = |rel: &str| -> bool {
+        skip_list.iter().any(|p| p == rel)
+    };
 
     // Files to copy from resource_dir → runtime. Mirror tauri.conf.json's
     // bundle.resources list; if you bump that, bump this too.
@@ -264,7 +275,12 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         ".env.default",
     ];
     let mut copied: u32 = 0;
+    let mut skipped: u32 = 0;
     for f in files {
+        if should_skip(f) {
+            skipped += 1;
+            continue;
+        }
         // Try the Tauri-2-with-../-prefix layout first; fall back to flat.
         let candidates = [
             resource_root.join("_up_").join(f),
@@ -281,6 +297,9 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     }
 
     // gui/ directory — recursive copy. Same `_up_` fallback.
+    // copy_dir_skipping respects the skip_list so individual self-updated
+    // files (gui/setup-wizard.html, gui/chat.html, …) survive even when
+    // the rest of gui/ is re-extracted.
     let gui_candidates = [
         resource_root.join("_up_").join("gui"),
         resource_root.join("gui"),
@@ -288,11 +307,12 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     let gui_dst = runtime.join("gui");
     for gui_src in &gui_candidates {
         if gui_src.is_dir() {
-            copy_dir(gui_src, &gui_dst)?;
+            copy_dir_skipping(gui_src, &gui_dst, &skip_list, "gui")?;
             copied += 1;
             break;
         }
     }
+    let _ = (copied, skipped);  // silence unused-warning in release
 
     // If we found nothing, the bundle is malformed (or we're looking in the
     // wrong place). Surface the failure rather than silently writing the
@@ -322,14 +342,25 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+/// Recursive copy that respects a skip-list of paths (relative to the
+/// runtime dir, e.g. "gui/setup-wizard.html"). Used during boot-time
+/// resource extraction so files the user has hot-patched via the
+/// /system/self-update endpoint don't get clobbered by the .msi's
+/// stale bundle. `prefix` is the path segment we're inside (e.g.
+/// "gui") so per-file skips can be expressed as "gui/foo.html".
+fn copy_dir_skipping(src: &Path, dst: &Path, skip: &[String], prefix: &str) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("mkdir {dst:?}: {e}"))?;
     for entry in fs::read_dir(src).map_err(|e| format!("read_dir {src:?}: {e}"))? {
         let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
         let path = entry.path();
         let target = dst.join(entry.file_name());
+        let name = entry.file_name().to_string_lossy().to_string();
+        let rel = if prefix.is_empty() { name.clone() } else { format!("{}/{}", prefix, name) };
+        if skip.iter().any(|s| s == &rel) {
+            continue;  // hot-patched; leave the runtime copy alone
+        }
         if path.is_dir() {
-            copy_dir(&path, &target)?;
+            copy_dir_skipping(&path, &target, skip, &rel)?;
         } else {
             fs::copy(&path, &target)
                 .map_err(|e| format!("cp {path:?} -> {target:?}: {e}"))?;

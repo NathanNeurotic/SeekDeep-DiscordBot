@@ -80,6 +80,20 @@
     </div>
   </div>
   <div class="progress"><i id="progBar"></i></div>
+  <!-- Self-update banner. Shown when the running server is missing
+       endpoints we expect (detected by fix_action absence on checks
+       that should have one). One-click upgrade from GitHub `main`. -->
+  <div id="updateBanner" style="display:none; margin-top:14px; padding:10px 14px; border:1px solid color-mix(in oklab, var(--cyan-1) 40%, transparent); background: rgba(45,212,255,0.06); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+      <div>
+        <strong style="color: var(--cyan-1);">▸ UPDATE AVAILABLE</strong><br>
+        <span style="color: var(--hull-3); font-size: 10.5px; letter-spacing: 0.06em;" id="updateDetail">
+          The bundled SeekDeep server is missing features added since this build. One-click upgrade from GitHub <code>main</code>.
+        </span>
+      </div>
+      <button id="updateBtn" style="background: var(--cyan-2); color:#000; border:0; padding:8px 14px; border-radius: var(--r-sm); cursor:pointer; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em;">▸ UPDATE NOW</button>
+    </div>
+  </div>
   <ul class="step-list" id="stepList"></ul>
   <div class="log" id="installLog"></div>
   <div class="footer">
@@ -299,11 +313,98 @@
       const data = await r.json();
       lastChecks = Array.isArray(data.checks) ? data.checks : [];
       renderSteps(lastChecks);
+      detectStaleServer(lastChecks);
     } catch (err) {
       statusEl.textContent = 'server unreachable · ' + (err.message || err);
       openBtn.disabled = false;
     }
   }
+
+  // Stale-server detector. If checks come back WITHOUT fix_action on
+  // anything where we expect it (ml_deps, searxng, discord_*), the
+  // running server is older than this wizard's code. Show the
+  // "Update SeekDeep" banner that hits /system/self-update.
+  function detectStaleServer(checks) {
+    const banner = document.getElementById('updateBanner');
+    if (!banner) return;
+    // If none of the checks have fix_action AND some are failing,
+    // server is stale.
+    const failing = checks.filter(c => !c.ok);
+    const anyFixAction = checks.some(c => c.fix_action);
+    if (failing.length && !anyFixAction) {
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
+  // Self-update click handler. Hits POST /system/self-update on the
+  // running server which streams the latest files from GitHub raw and
+  // writes them to its own working directory. After it returns we
+  // tell the user to restart (their .bat launcher, or the system
+  // tray's Restart-AI-server item — we can't restart it from here
+  // without a Tauri command, and the bundle that lacks self-update
+  // also lacks any new Tauri commands).
+  document.getElementById('updateBtn')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const origLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '… updating';
+    appendLog('▸ POST /system/self-update');
+    try {
+      const r = await fetch(BASE + '/system/self-update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: 'main' }),
+        signal: AbortSignal.timeout(180_000),
+      });
+      const result = await r.json().catch(() => ({}));
+      if (r.ok && result.ok !== false) {
+        const n = (result.downloaded || []).length;
+        appendLog(`✓ updated ${n} file(s) from ${result.ref}`, 'ok');
+        for (const f of (result.downloaded || []).slice(0, 12)) {
+          appendLog(`  · ${f.path} (${f.bytes} bytes)`);
+        }
+        for (const err of (result.errors || []).slice(0, 6)) {
+          appendLog(`  ✗ ${err}`, 'err');
+        }
+        btn.textContent = '✓ UPDATED · RESTART';
+        btn.style.background = 'var(--good)';
+        // Try to restart via Tauri command first (newer bundles
+        // expose it). Falls back to telling the user.
+        const tauri = window.__TAURI__;
+        if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+          try {
+            await tauri.core.invoke('restart_sidecar');
+            appendLog('▸ Tauri sidecar restart requested · reload this page in ~10s', 'ok');
+            setTimeout(() => location.reload(), 10_000);
+            return;
+          } catch (_) { /* fall through to manual restart */ }
+        }
+        appendLog('▸ Restart the AI server (Quick Actions → Reload .env) so the new code is in-memory.', 'ok');
+      } else {
+        // /system/self-update doesn't exist on the running server — it's
+        // older than this wizard. We can't bootstrap the update from
+        // here without writing files via the server. Surface the
+        // honest path: either rebuild the .msi, or run the .bat
+        // launcher (which uses live repo code).
+        const errMsg = result.error || result.detail || ('HTTP ' + r.status);
+        appendLog(`✕ self-update failed · ${errMsg}`, 'err');
+        if (r.status === 404 || /Method Not Allowed|Not Found/i.test(errMsg)) {
+          appendLog('  the running server doesn\'t have /system/self-update yet — it\'s older than this wizard. Workarounds:', 'err');
+          appendLog('  1. quit Tauri, run seekdeep_launcher.bat option 4, relaunch Tauri (Tauri reuses the .bat server which has the latest code)', 'err');
+          appendLog('  2. or rebuild the Tauri .msi: cargo tauri build (inside src-tauri/)', 'err');
+        }
+        btn.textContent = '✕ FAILED · see log';
+        btn.style.background = 'var(--bad)';
+        setTimeout(() => { btn.textContent = origLabel; btn.style.background = ''; btn.disabled = false; }, 6000);
+      }
+    } catch (err) {
+      appendLog(`✕ network error · ${String(err.message || err)}`, 'err');
+      btn.textContent = '✕ ERROR';
+      btn.style.background = 'var(--bad)';
+      setTimeout(() => { btn.textContent = origLabel; btn.style.background = ''; btn.disabled = false; }, 4000);
+    }
+  });
 
   openBtn.addEventListener('click', () => {
     sessionStorage.setItem('seekdeep:firstrun:wizard-completed', '1');
