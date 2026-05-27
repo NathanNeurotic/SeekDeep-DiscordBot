@@ -1526,6 +1526,135 @@ def register_gui_endpoints(
             "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
         }
 
+    # ----- POST /system/doctor -----
+    # Runs `node scripts/doctor.mjs` and streams the output as
+    # `doctor.line` events on the WS bus so the Installer's Step 2
+    # (System check) panel can render real-time diagnostic output
+    # instead of asking the user to drop to PowerShell.
+    @app.post("/system/doctor", dependencies=[Depends(_require_gui_token)])
+    def post_doctor():
+        import threading
+        def run():
+            event_bus.publish_sync({"type": "doctor.started", "data": {}})
+            try:
+                proc = subprocess.Popen(
+                    ["node", "scripts/doctor.mjs"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, cwd=str(root),
+                    shell=(os.name == "nt"),
+                )
+                if proc.stdout:
+                    for line in proc.stdout:
+                        event_bus.publish_sync({"type": "doctor.line", "data": {"line": line.rstrip()}})
+                proc.wait()
+                event_bus.publish_sync({"type": "doctor.complete",
+                                        "data": {"exit_code": proc.returncode, "ok": proc.returncode == 0}})
+            except FileNotFoundError:
+                event_bus.publish_sync({"type": "doctor.failed",
+                                        "data": {"error": "node not on PATH — install Node 20+ from nodejs.org"}})
+            except Exception as exc:
+                event_bus.publish_sync({"type": "doctor.failed", "data": {"error": str(exc)[:240]}})
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True,
+                "note": "subscribe to doctor.line / doctor.complete / doctor.failed on /events"}
+
+    # ----- POST /system/warmup -----
+    # Runs warmup_local_cache.py against the server's own Python so the
+    # Installer's Step 7 can pull/verify HF weights without a terminal.
+    # Streams warmup.line events on the WS bus.
+    @app.post("/system/warmup", dependencies=[Depends(_require_gui_token)])
+    def post_warmup(body: dict | None = None):
+        import threading
+        roles = (body or {}).get("roles") or []
+        script = root / "warmup_local_cache.py"
+        if not script.is_file():
+            raise HTTPException(404, f"{script} not found")
+        def run():
+            event_bus.publish_sync({"type": "warmup.started", "data": {"roles": roles}})
+            try:
+                cmd = [sys.executable, str(script)]
+                if roles:
+                    for r in roles:
+                        cmd.extend(["--role", str(r)])
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, cwd=str(root),
+                )
+                if proc.stdout:
+                    for line in proc.stdout:
+                        event_bus.publish_sync({"type": "warmup.line", "data": {"line": line.rstrip()}})
+                proc.wait()
+                event_bus.publish_sync({"type": "warmup.complete",
+                                        "data": {"exit_code": proc.returncode, "ok": proc.returncode == 0}})
+            except Exception as exc:
+                event_bus.publish_sync({"type": "warmup.failed", "data": {"error": str(exc)[:240]}})
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True,
+                "note": "subscribe to warmup.line / warmup.complete / warmup.failed on /events"}
+
+    # ----- POST /system/lock-cache -----
+    # Flip HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 in .env so subsequent
+    # boots refuse to hit the HuggingFace hub. Installer Step 7's
+    # "Lock cache for offline" button. Idempotent — already-set values
+    # stay put. Caller is expected to restart the AI server for the new
+    # env to take effect (we surface that in the note).
+    @app.post("/system/lock-cache", dependencies=[Depends(_require_gui_token)])
+    def post_lock_cache(body: dict | None = None):
+        unlock = bool((body or {}).get("unlock"))
+        if unlock:
+            updates = {"HF_HUB_OFFLINE": "0", "TRANSFORMERS_OFFLINE": "0"}
+        else:
+            updates = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+        _merge_env(_env_path, updates)
+        return {"ok": True, "locked": not unlock, "updated": updates,
+                "note": "Restart the AI server (Quick Actions -> Reload .env) so the offline flag takes effect."}
+
+    # ----- POST /system/launch-all -----
+    # Sequenced bring-up: SearXNG -> AI server -> Discord bot. Mirrors
+    # `seekdeep_launcher.bat` option 8 (clean start of all three) so the
+    # Installer Step 8 can offer one button instead of a PowerShell
+    # snippet. Each sub-action reuses the existing /launcher/ + /docker/
+    # endpoints internally so a single function gates the whole sequence.
+    @app.post("/system/launch-all", dependencies=[Depends(_require_gui_token)])
+    def post_launch_all():
+        results: dict = {}
+        # 1. SearXNG — start the container if it's not already on :8080.
+        try:
+            with socket.create_connection(("127.0.0.1", 8080), timeout=1):
+                results["searxng"] = {"ok": True, "already_running": True}
+        except Exception:
+            try:
+                searxng_dir = (root / "searxng").resolve()
+                searxng_dir.mkdir(parents=True, exist_ok=True)
+                vol = f"{searxng_dir}:/etc/searxng:rw"
+                # Remove any prior container
+                subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+                               capture_output=True, text=True, timeout=10)
+                r = subprocess.run([
+                    "docker", "run", "-d", "--name", "seekdeep-searxng",
+                    "--restart", "unless-stopped", "-p", "8080:8080",
+                    "-e", "BASE_URL=http://localhost:8080/",
+                    "-e", "INSTANCE_NAME=SeekDeep",
+                    "-v", vol, "searxng/searxng:latest",
+                ], capture_output=True, text=True, timeout=60)
+                results["searxng"] = {"ok": r.returncode == 0,
+                                       "container_id": (r.stdout or "").strip()[:12],
+                                       "error": (r.stderr or "")[:200] if r.returncode != 0 else None}
+            except Exception as exc:
+                results["searxng"] = {"ok": False, "error": str(exc)[:200]}
+        # 2. AI server — already running (it's us), so this is informational.
+        results["ai_server"] = {"ok": True, "already_running": True,
+                                 "note": "this endpoint is served by the AI server, so it's necessarily up"}
+        # 3. Discord bot — start via the module-level _start_service
+        # helper (same function /launcher/bot/start delegates to).
+        try:
+            r = _start_service("bot", root, _log_dir)
+            results["bot"] = {"ok": bool(r and r.get("ok")), "detail": r}
+        except Exception as exc:
+            results["bot"] = {"ok": False, "error": str(exc)[:200]}
+        return {"ok": all(v.get("ok") for v in results.values()),
+                "services": results}
+
     # ----- GET /system/bootstrap-status -----
     # Quick probe of what setup_local.ps1 + `npm install` would do.
     # Returns flags + summary copy the Installer's Step-3 panel can

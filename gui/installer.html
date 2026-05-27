@@ -866,12 +866,62 @@
             Browser-only checks reach localhost services via <span class="mono" style="color: var(--cyan-1);">fetch()</span>. Node / Python / Docker / disk readings come from the AI server's <span class="mono" style="color: var(--cyan-1);">/health</span> when it's running. If it isn't running yet, that's fine — they go yellow ("install + come back"). The first run is always cold.
           </p>
 
-          <div class="codeblock" style="margin-top: 8px;">
-            <div class="cb-head"><span>POWERSHELL · <em>native diagnostic · all checks above + .env scan + dir creation</em></span><button class="copy-btn" data-copy="doctor-1">COPY</button></div>
-<pre id="doctor-1"><span class="pmt">PS&gt;</span> npm run doctor
-<span class="cmt"># Node version + npm + .env presence + DISCORD_TOKEN/CLIENT_ID + /health + /gpu + SearXNG + dir checks</span>
-<span class="cmt"># Exit code 0 only when every required check passes</span></pre>
+          <div style="margin-top: 14px; display: flex; gap: 10px; align-items: center;">
+            <button id="doctorRunBtn" class="btn btn-primary" style="padding: 8px 18px;">▸ RUN FULL DIAGNOSTIC</button>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">— equivalent to <code>npm run doctor</code> · streams live</span>
           </div>
+          <pre id="doctorLog" style="display:none; margin-top: 14px; max-height: 260px; overflow:auto; background: rgba(0,0,0,0.5); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 10px 14px; font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.55; white-space: pre-wrap;"></pre>
+          <script>
+          (function wireDoctor() {
+            const btn = document.getElementById('doctorRunBtn');
+            const log = document.getElementById('doctorLog');
+            if (!btn || !log) return;
+            function wireBus() {
+              if (!window.SeekDeepEvents) return false;
+              window.SeekDeepEvents.on('doctor.line', (d) => {
+                if (!d || !d.line) return;
+                log.style.display = 'block';
+                log.textContent += d.line + '\n';
+                log.scrollTop = log.scrollHeight;
+              });
+              window.SeekDeepEvents.on('doctor.complete', (d) => {
+                btn.disabled = false;
+                btn.textContent = d.ok ? '✓ ALL CHECKS PASSED · RE-RUN' : '✕ FAILED · RE-RUN';
+                btn.style.background = d.ok ? 'var(--good)' : 'var(--warn)';
+                log.textContent += '\n--- doctor finished with exit code ' + d.exit_code + ' ---\n';
+              });
+              window.SeekDeepEvents.on('doctor.failed', (d) => {
+                btn.disabled = false;
+                btn.textContent = '✕ ERROR · RE-RUN';
+                btn.style.background = 'var(--bad)';
+                log.textContent += '\n--- doctor failed: ' + (d && d.error || 'unknown') + ' ---\n';
+              });
+              return true;
+            }
+            if (!wireBus()) { let n = 0; const iv = setInterval(() => { if (wireBus() || ++n > 30) clearInterval(iv); }, 250); }
+            btn.addEventListener('click', async () => {
+              btn.disabled = true;
+              btn.textContent = '… RUNNING';
+              btn.style.background = '';
+              log.style.display = 'block';
+              log.textContent = '';
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/system/doctor', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: '{}', signal: AbortSignal.timeout(15_000),
+                });
+                if (!r.ok) {
+                  const b = await r.json().catch(() => ({}));
+                  log.textContent += '✕ ' + (b.detail || b.error || ('HTTP ' + r.status)) + '\n';
+                  btn.disabled = false; btn.textContent = '▸ RETRY';
+                }
+              } catch (err) {
+                log.textContent += '✕ ' + (err.message || err) + '\n';
+                btn.disabled = false; btn.textContent = '▸ RETRY';
+              }
+            });
+          })();
+          </script>
         </section>
 
         <!-- ============ STEP 3 — BOOTSTRAP ============ -->
@@ -1160,22 +1210,49 @@
         <section class="step-pane" data-step="searxng">
           <p class="lede">SearXNG is a privacy-respecting metasearch engine. SeekDeep uses it for <span class="mono" style="color:var(--cyan-1)">web:auto</span> and <span class="mono" style="color:var(--cyan-1)">web:always</span> routes. It runs in a single docker container on <span class="mono" style="color:var(--cyan-1)">127.0.0.1:8080</span>.</p>
 
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>start searxng</em></span><button class="copy-btn" data-copy="sx-1">COPY</button></div>
-<pre id="sx-1"><span class="pmt">PS&gt;</span> cd searxng
-<span class="pmt">PS&gt;</span> docker compose up -d
-<span class="pmt">PS&gt;</span> cd ..</pre>
+          <div style="margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button class="btn btn-primary" id="startSearxngBtn" style="padding: 8px 18px;">▸ START SEARXNG</button>
+            <button class="btn btn-ghost" id="probeSearxng" style="padding: 8px 14px;">↻ Re-probe :8080</button>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">— starts the docker container, no terminal</span>
           </div>
-
-          <div style="display: flex; gap: 10px; align-items: center;">
-            <button class="btn btn-primary" id="probeSearxng">▸ Probe :8080</button>
-            <div class="check-row" style="flex: 1; padding: 8px 14px;" data-check="sxLive">
-              <span class="status-dot"></span>
-              <div class="name">SearXNG live status<span class="hint">fetch http://127.0.0.1:8080</span></div>
-              <div class="read" data-read>not yet probed</div>
-              <span></span>
-            </div>
+          <div class="check-row" style="margin-top: 10px; padding: 8px 14px;" data-check="sxLive">
+            <span class="status-dot"></span>
+            <div class="name">SearXNG live status<span class="hint">fetch http://127.0.0.1:8080</span></div>
+            <div class="read" data-read>not yet probed</div>
+            <span></span>
           </div>
+          <script>
+          (function wireSearxngStart() {
+            const btn = document.getElementById('startSearxngBtn');
+            if (!btn) return;
+            btn.addEventListener('click', async () => {
+              const orig = btn.textContent;
+              btn.disabled = true;
+              btn.textContent = '… starting';
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/docker/start-searxng', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: '{}', signal: AbortSignal.timeout(60_000),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (r.ok && data.ok !== false) {
+                  btn.textContent = '✓ STARTED · WAIT 5-15s';
+                  btn.style.background = 'var(--good)';
+                  setTimeout(() => { document.getElementById('probeSearxng')?.click(); }, 8000);
+                } else {
+                  btn.textContent = '✕ FAILED · ' + ((data.error || '').slice(0, 60) || 'see console');
+                  btn.style.background = 'var(--bad)';
+                  console.warn('[SeekDeep installer] /docker/start-searxng:', data);
+                }
+              } catch (err) {
+                btn.textContent = '✕ ERROR';
+                btn.style.background = 'var(--bad)';
+                console.warn('[SeekDeep installer] /docker/start-searxng error:', err);
+              }
+              setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.background = ''; }, 8000);
+            });
+          })();
+          </script>
 
           <div class="toggle-row">
             <div class="kv">
@@ -1197,63 +1274,157 @@
         <section class="step-pane" data-step="warmup">
           <p class="lede">Pre-download the models you selected. This is the slowest step — about <strong style="color:var(--hull);" id="warmupSize">~ 15 GB</strong> for the defaults. After the first warmup, SeekDeep boots from the local cache without internet.</p>
 
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>unlock + warmup</em></span><button class="copy-btn" data-copy="wm-1">COPY</button></div>
-<pre id="wm-1"><span class="pmt">PS&gt;</span> .\unlock_seekdeep_model_cache_online.ps1
-<span class="pmt">PS&gt;</span> python warmup_local_cache.py</pre>
+          <div style="margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button class="btn btn-primary" id="warmupRunBtn" style="padding: 8px 18px;">▸ WARM MODEL CACHE</button>
+            <button class="btn btn-ghost" id="lockCacheBtn" style="padding: 8px 14px;">🔒 LOCK FOR OFFLINE</button>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--hull-3);">— pulls weights into <code>./models/huggingface</code> · streams live</span>
           </div>
-
-          <p class="lede" style="margin-top: 4px; max-width: 70ch;">
-            <span style="color:var(--cyan-1); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em;">▸ ADVANCED</span>&nbsp;
-            <span class="mono" style="color:var(--cyan-1);">--chat-only</span> downloads only chat models, <span class="mono" style="color:var(--cyan-1);">--skip-image</span> skips SDXL, <span class="mono" style="color:var(--cyan-1);">--include-optional</span> pulls all 5 chat roles. Re-run anytime to add models. The first run will take 10-20 minutes on a 100 Mbps connection.
+          <p class="lede" style="margin-top: 8px; max-width: 70ch; font-size: 11px; color: var(--hull-3);">
+            <strong style="color:var(--cyan-1);">▸ WARM</strong> downloads everything from <code>warmup_local_cache.py</code> — chat, image, vision models per <code>.env</code>. Slowest step (10-20 min on 100 Mbps). <strong style="color:var(--cyan-1);">▸ LOCK</strong> flips <code>HF_HUB_OFFLINE=1</code> in .env so subsequent boots refuse to hit the hub. Tap Lock only AFTER warm completes.
           </p>
 
-          <div class="log-pane" id="warmupLog" style="display:none;">
-            <div class="lh"><span>STREAMING · warmup_local_cache.py</span><span style="color:var(--cyan-1);" id="warmupPct">0%</span></div>
-            <div id="warmupLines"></div>
-          </div>
-
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>lock cache for offline runtime</em></span><button class="copy-btn" data-copy="wm-2">COPY</button></div>
-<pre id="wm-2"><span class="pmt">PS&gt;</span> .\lock_seekdeep_model_cache_offline.ps1   <span class="cmt"># after first successful chat/image/vision</span></pre>
-          </div>
+          <pre id="warmupLog" style="display:none; margin-top: 14px; max-height: 320px; overflow:auto; background: rgba(0,0,0,0.5); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 10px 14px; font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.55; white-space: pre-wrap;"></pre>
 
           <div class="toggle-row">
             <div class="kv">
               <div class="k">Warmup completed — chat / image / vision present in cache</div>
-              <div class="d">Toggle on after <span class="mono" style="color:var(--cyan-1);">warmup_local_cache.py</span> exits with code 0.</div>
+              <div class="d">Auto-toggles when warmup_local_cache.py exits with code 0.</div>
             </div>
             <div class="toggle" data-flag="warmup_done"></div>
           </div>
+
+          <script>
+          (function wireWarmup() {
+            const runBtn  = document.getElementById('warmupRunBtn');
+            const lockBtn = document.getElementById('lockCacheBtn');
+            const log     = document.getElementById('warmupLog');
+            const tg      = document.querySelector('[data-step="warmup"] .toggle[data-flag="warmup_done"]');
+            if (!runBtn || !log) return;
+            function wireBus() {
+              if (!window.SeekDeepEvents) return false;
+              window.SeekDeepEvents.on('warmup.line', (d) => {
+                if (!d || !d.line) return;
+                log.style.display = 'block';
+                log.textContent += d.line + '\n';
+                log.scrollTop = log.scrollHeight;
+              });
+              window.SeekDeepEvents.on('warmup.complete', (d) => {
+                runBtn.disabled = false;
+                runBtn.textContent = d.ok ? '✓ WARMUP DONE · RE-RUN' : '✕ FAILED · RE-RUN';
+                runBtn.style.background = d.ok ? 'var(--good)' : 'var(--warn)';
+                log.textContent += '\n--- warmup finished, exit ' + d.exit_code + ' ---\n';
+                if (d.ok && tg && !tg.classList.contains('on')) tg.classList.add('on');
+              });
+              window.SeekDeepEvents.on('warmup.failed', (d) => {
+                runBtn.disabled = false;
+                runBtn.textContent = '✕ ERROR · RE-RUN';
+                runBtn.style.background = 'var(--bad)';
+                log.textContent += '\n--- warmup failed: ' + (d && d.error || 'unknown') + ' ---\n';
+              });
+              return true;
+            }
+            if (!wireBus()) { let n = 0; const iv = setInterval(() => { if (wireBus() || ++n > 30) clearInterval(iv); }, 250); }
+            runBtn.addEventListener('click', async () => {
+              runBtn.disabled = true;
+              runBtn.textContent = '… DOWNLOADING';
+              runBtn.style.background = '';
+              log.style.display = 'block';
+              log.textContent = '';
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/system/warmup', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: '{}', signal: AbortSignal.timeout(15_000),
+                });
+                if (!r.ok) {
+                  const b = await r.json().catch(() => ({}));
+                  log.textContent += '✕ ' + (b.detail || b.error || ('HTTP ' + r.status)) + '\n';
+                  runBtn.disabled = false; runBtn.textContent = '▸ RETRY';
+                }
+              } catch (err) {
+                log.textContent += '✕ ' + (err.message || err) + '\n';
+                runBtn.disabled = false; runBtn.textContent = '▸ RETRY';
+              }
+            });
+            lockBtn.addEventListener('click', async () => {
+              const orig = lockBtn.textContent;
+              lockBtn.disabled = true;
+              lockBtn.textContent = '… LOCKING';
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/system/lock-cache', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: '{}', signal: AbortSignal.timeout(8_000),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (r.ok && data.ok !== false) {
+                  lockBtn.textContent = '✓ LOCKED · RESTART AI';
+                  lockBtn.style.background = 'var(--good)';
+                } else {
+                  lockBtn.textContent = '✕ FAILED';
+                  lockBtn.style.background = 'var(--bad)';
+                }
+              } catch (err) {
+                lockBtn.textContent = '✕ ERROR';
+                lockBtn.style.background = 'var(--bad)';
+              }
+              setTimeout(() => { lockBtn.disabled = false; lockBtn.textContent = orig; lockBtn.style.background = ''; }, 5000);
+            });
+          })();
+          </script>
         </section>
 
         <!-- ============ STEP 8 — LAUNCH & SMOKE TEST ============ -->
         <section class="step-pane" data-step="launch">
           <p class="lede">Bring the stack up and run the smoke test. <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8 starts SearXNG, the Python AI server, and the Node bot in dependency order.</p>
 
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>full stack</em></span><button class="copy-btn" data-copy="lc-1">COPY</button></div>
-<pre id="lc-1"><span class="pmt">PS&gt;</span> .\seekdeep_launcher.bat
-<span class="cmt"># menu → option 8 · clean start of all three services</span></pre>
+          <div style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+            <button class="btn btn-primary" id="launchAllBtn" style="padding: 10px 14px;">▸ LAUNCH FULL STACK</button>
+            <button class="btn btn-ghost" id="probeStack" style="padding: 10px 14px;">↻ Probe live stack</button>
+            <button class="btn btn-ghost" id="resetStack" style="padding: 10px 14px;">Reset checks</button>
           </div>
+          <p class="lede" style="margin-top: 8px; max-width: 70ch; font-size: 11px; color: var(--hull-3);">
+            <strong style="color:var(--cyan-1);">▸ LAUNCH FULL STACK</strong> sequences SearXNG → AI server → Discord bot just like <code>seekdeep_launcher.bat</code> option 8 used to. <strong style="color:var(--cyan-1);">↻ PROBE</strong> hits each check row below to verify reachability. All without a terminal.
+          </p>
+          <pre id="launchLog" style="display:none; margin-top: 14px; max-height: 220px; overflow:auto; background: rgba(0,0,0,0.5); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 10px 14px; font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); line-height: 1.55; white-space: pre-wrap;"></pre>
 
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>doctor · canonical setup check</em></span><button class="copy-btn" data-copy="lc-doctor">COPY</button></div>
-<pre id="lc-doctor"><span class="pmt">PS&gt;</span> npm run doctor
-<span class="cmt"># PASS/WARN/FAIL summary across Node version, .env, tokens, /health, /gpu, SearXNG, dirs</span>
-<span class="cmt"># exit 0 only when no FAILs</span></pre>
-          </div>
-
-          <div class="codeblock">
-            <div class="cb-head"><span>POWERSHELL · <em>preflight + smoke test</em></span><button class="copy-btn" data-copy="lc-2">COPY</button></div>
-<pre id="lc-2"><span class="pmt">PS&gt;</span> npm run preflight
-<span class="cmt"># node --check + py_compile + smoke test · ~1 second total · exit code 0 = clean</span></pre>
-          </div>
-
-          <div style="display: flex; gap: 10px;">
-            <button class="btn btn-primary" id="probeStack">▸ Probe live stack</button>
-            <button class="btn btn-ghost" id="resetStack">Reset</button>
-          </div>
+          <script>
+          (function wireLaunchAll() {
+            const btn = document.getElementById('launchAllBtn');
+            const log = document.getElementById('launchLog');
+            if (!btn || !log) return;
+            btn.addEventListener('click', async () => {
+              const orig = btn.textContent;
+              btn.disabled = true;
+              btn.textContent = '… launching';
+              log.style.display = 'block';
+              log.textContent = '▸ POST /system/launch-all (SearXNG → AI server → bot)\n';
+              try {
+                const r = await fetch(SEEKDEEP_BASE + '/system/launch-all', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: '{}', signal: AbortSignal.timeout(90_000),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (r.ok && data.ok !== false) {
+                  log.textContent += '✓ all services up:\n';
+                  for (const [svc, info] of Object.entries(data.services || {})) {
+                    log.textContent += '  · ' + svc + ' · ' + (info.already_running ? 'already running' : (info.ok ? 'started' : ('FAILED: ' + (info.error || '')))) + '\n';
+                  }
+                  btn.textContent = '✓ STACK UP · PROBE';
+                  btn.style.background = 'var(--good)';
+                  setTimeout(() => { document.getElementById('probeStack')?.click(); }, 1500);
+                } else {
+                  log.textContent += '✕ partial · see services:\n' + JSON.stringify(data.services || data, null, 2);
+                  btn.textContent = '✕ PARTIAL · RETRY';
+                  btn.style.background = 'var(--warn)';
+                }
+              } catch (err) {
+                log.textContent += '✕ ' + (err.message || err) + '\n';
+                btn.textContent = '✕ ERROR · RETRY';
+                btn.style.background = 'var(--bad)';
+              }
+              setTimeout(() => { btn.disabled = false; btn.textContent = orig; btn.style.background = ''; }, 8000);
+            });
+          })();
+          </script>
 
           <div class="check-list">
             <div class="check-row" data-check="aiHealth">

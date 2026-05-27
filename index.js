@@ -9702,6 +9702,16 @@ function seekdeepHasExplicitImageRequest(p = '') {
     if (hasVisualMedium) {
       return true;
     }
+    // "how to / how do / how can / how does" + general how-to / explainer
+    // phrases are textual requests, not image asks. Was: "show me how to
+    // bake a cake" routed to the SDXL pipeline because none of the
+    // exclusion words below matched it. Add a how-to short-circuit BEFORE
+    // the keyword list so the regex catches it whether the user says
+    // "show me how to ...", "how do I ...", "how does X work", "tips for ...",
+    // "ways to ...", "explain X", or "what's the difference between ...".
+    if (/\b(?:how\s+(?:to|do|does|can|should|would|might)|tips\s+(?:for|on)|ways?\s+to|explain|difference\s+between)\b/i.test(text)) {
+      return false;
+    }
     if (/\b(?:status|queue|help|commands|archive|cache|recent|prompt history|model status|list|ideas|suggestions|options|names|script|code|powershell|table|spreadsheet|summary|explanation|tutorial|guide|walkthrough|instruction|instructions|steps|procedure)\b/i.test(text) ||
         /\b(?:step\s+by\s+step|step-by-step|noob\s+friendly)\b/i.test(text)) {
       return false;
