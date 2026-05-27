@@ -101,6 +101,64 @@ def seekdeep_fit_upscale_input_to_output_cap(image, upscale_factor, max_output_p
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent
+
+# Mirror stdout+stderr to logs/seekdeep-YYYY-MM-DD.log so the Control Center
+# Logs viewer (which globs seekdeep-*.log) has something to read when the
+# Discord bot isn't running. Same filename pattern as index.js. Opt out via
+# SEEKDEEP_FILE_LOGGING=off.
+def _seekdeep_install_file_logging() -> None:
+    flag = (os.getenv("SEEKDEEP_FILE_LOGGING", "on") or "on").strip().lower()
+    if flag in {"off", "false", "0", "no"}:
+        return
+    import sys
+    logs_dir = ROOT / "logs"
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    day = time.strftime("%Y-%m-%d")
+    log_path = logs_dir / f"seekdeep-{day}.log"
+    try:
+        sink = open(log_path, "a", encoding="utf-8", buffering=1)
+    except Exception:
+        return
+    _re_token = re.compile(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}")
+    _re_bearer = re.compile(r"(authorization\s*[:=]\s*['\"]?bearer\s+)[^'\"\s]+", re.IGNORECASE)
+    _re_apikey = re.compile(r"\b(hf_|sk-|nvapi-)[A-Za-z0-9_-]{16,}\b")
+    def _redact(s: str) -> str:
+        s = _re_token.sub("[redacted-token]", s)
+        s = _re_bearer.sub(r"\1[redacted]", s)
+        s = _re_apikey.sub(r"\1[redacted]", s)
+        return s
+    class _Tee:
+        def __init__(self, real, level):
+            self.real = real
+            self.level = level
+        def write(self, data):
+            try:
+                self.real.write(data)
+            except Exception:
+                pass
+            try:
+                if data and data.strip():
+                    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    for line in str(data).splitlines():
+                        if line:
+                            sink.write(f"[{ts}] [{self.level}] {_redact(line)}\n")
+            except Exception:
+                pass
+        def flush(self):
+            try: self.real.flush()
+            except Exception: pass
+            try: sink.flush()
+            except Exception: pass
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+    sys.stdout = _Tee(sys.stdout, "INFO")
+    sys.stderr = _Tee(sys.stderr, "ERR")
+    print(f"[SeekDeep Local AI] file logging on -> {log_path}", flush=True)
+
+_seekdeep_install_file_logging()
 MODEL_CACHE_DIR = Path(os.getenv("LOCAL_MODEL_CACHE_DIR", "./models/huggingface"))
 if not MODEL_CACHE_DIR.is_absolute():
     MODEL_CACHE_DIR = ROOT / MODEL_CACHE_DIR
@@ -3379,10 +3437,24 @@ def chat(req: ChatRequest):
                          "click 'Flush model cache' in the Control Center (or POST /unload), "
                          "close other CUDA apps, or pick a smaller quantization in Config.")
         elif reason.startswith("chat-load-error:"):
-            clean_msg = f"Chat model failed to load ({reason.split(':',1)[1]}). See server.log via the Control Center → View logs."
+            clean_msg = f"Chat model failed to load ({reason.split(':',1)[1]}). Open Control Center → View logs for the full trace."
         else:
-            clean_msg = f"Chat model failed ({reason}). See server.log via the Control Center → View logs."
-        return JSONResponse(status_code=503, content={"error": clean_msg, "reason": reason})
+            clean_msg = f"Chat model failed ({reason}). Open Control Center → View logs for the full trace."
+        # Surface a short slice of the underlying exception so the user can see
+        # the actual cause (gated repo, missing cache file, 401, etc.) without
+        # opening the log file. Keep it short and redact obvious secrets.
+        try:
+            raw_detail = f"{type(exc).__name__}: {exc}"
+        except Exception:
+            raw_detail = type(exc).__name__
+        raw_detail = re.sub(r"\b(hf_|sk-|nvapi-)[A-Za-z0-9_-]{8,}", r"\1[redacted]", raw_detail)
+        if len(raw_detail) > 600:
+            raw_detail = raw_detail[:600] + "…"
+        return JSONResponse(status_code=503, content={
+            "error": clean_msg,
+            "reason": reason,
+            "detail": raw_detail,
+        })
 
 
 # ---------------------------------------------------------------------------

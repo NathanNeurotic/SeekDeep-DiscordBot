@@ -4472,7 +4472,17 @@ const SEEKDEEP_BASE = (function() {
           }),
           signal: sendCtl.signal,
         });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // For HTTP errors (e.g. 503 chat-load-failure), the body holds
+        // {error, reason, detail} — pull it out before throwing so the UI
+        // can render the real cause instead of "OFFLINE".
+        if (!r.ok) {
+          let payload = null;
+          try { payload = await r.json(); } catch {}
+          const err = new Error('HTTP ' + r.status);
+          err.httpStatus = r.status;
+          err.body = payload || {};
+          throw err;
+        }
         const data = await r.json();
         const ms = Math.round(performance.now() - t0);
         const reply = data.response || data.text || data.content || JSON.stringify(data);
@@ -4514,6 +4524,18 @@ const SEEKDEEP_BASE = (function() {
           pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · CANCELLED · ${ms}MS</span>▸ User cancelled the request.`;
           const el = document.getElementById('cpLastLatency');
           if (el) { el.textContent = 'cancelled · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
+        } else if (e && e.httpStatus && e.body && (e.body.error || e.body.detail)) {
+          // Server responded with a structured error (503 chat-load-failure etc.).
+          // Show error + reason + collapsible detail so the user sees the real cause.
+          const body = e.body || {};
+          const msg = escapeHtml(String(body.error || ('HTTP ' + e.httpStatus)));
+          const reason = body.reason ? `<span class="meta" style="color:var(--warn);">REASON · ${escapeHtml(String(body.reason).toUpperCase())}</span>` : '';
+          const detail = body.detail
+            ? `<details style="margin-top:8px;"><summary style="cursor:pointer; color:var(--hull-3);">show underlying error</summary><pre class="mono" style="white-space:pre-wrap; word-break:break-word; color:var(--hull-2); margin:6px 0 0;">${escapeHtml(String(body.detail))}</pre></details>`
+            : '';
+          pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · HTTP ${e.httpStatus} · ${ms}MS</span>${reason}▸ ${msg}${detail}`;
+          const el = document.getElementById('cpLastLatency');
+          if (el) { el.textContent = 'http ' + e.httpStatus + ' · ' + ms + ' ms'; el.style.color = 'var(--warn)'; }
         } else {
           pending.innerHTML = `<span class="meta" style="color:var(--warn);">${role.toUpperCase()} · OFFLINE · ${ms}MS</span>▸ Local AI server unreachable at <span class="mono" style="color:var(--cyan-1);">${SEEKDEEP_BASE}/chat</span>. ${e && e.message ? '<br/>Error: ' + escapeHtml(e.message) : 'Start the stack via the SeekDeep tray icon or <span class="mono" style="color:var(--cyan-1);">seekdeep_launcher.bat</span> option 8, then resend.'}`;
           // Diagnostics — show the error in the latency slot so the panel

@@ -386,11 +386,20 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
 # ====================================================================
 
 def _find_active_log(log_dir: Path) -> Path | None:
-    """Pick the newest seekdeep-*.log file."""
+    """Pick the newest seekdeep-*.log file, or fall back to server.log.
+
+    The Discord bot (index.js) writes daily seekdeep-YYYY-MM-DD.log files.
+    The Tauri sidecar redirects the AI server's stdout to server.log. In
+    standalone mode (no bot running) we still want the viewer to surface
+    server.log so users can see why the chat is failing.
+    """
     if not log_dir.is_dir():
         return None
     candidates = sorted(log_dir.glob("seekdeep-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
+    if candidates:
+        return candidates[0]
+    fallback = log_dir / "server.log"
+    return fallback if fallback.is_file() else None
 
 
 def _tail(path: Path, lines: int) -> list[str]:

@@ -188,7 +188,7 @@ pub fn kill_listener_on_7865() {
 /// app_data_dir + "/app" so the directory layout is:
 ///   %APPDATA%/SeekDeep/app/local_ai_server.py
 ///   %APPDATA%/SeekDeep/app/gui/...
-///   %APPDATA%/SeekDeep/logs/server.log
+///   %APPDATA%/SeekDeep/app/logs/server.log
 pub fn app_runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let data = app
         .path()
@@ -197,12 +197,13 @@ pub fn app_runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data.join("app"))
 }
 
+/// Logs live UNDER the runtime dir (not as a sibling of it) so that
+/// gui_endpoints' /logs/tail — which scans <repo_root>/logs/ where
+/// repo_root falls back to the directory containing gui_endpoints.py —
+/// finds them. Previously this was app_data_dir/logs/ which diverged
+/// from the viewer's scan dir, producing "no log file found" toasts.
 pub fn app_log_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
-    Ok(data.join("logs"))
+    Ok(app_runtime_dir(app)?.join("logs"))
 }
 
 /// Copy bundled resources to app_data_dir/app on first run or version mismatch.
@@ -864,13 +865,11 @@ pub fn pip_install_torch_variant(
     Ok(combined)
 }
 
-/// Best-effort: derive a log dir adjacent to the runtime dir. Used by
-/// pip_install which doesn't have the AppHandle in scope. Falls back
-/// gracefully so a write-failure here doesn't break the install flow.
+/// Best-effort: derive a log dir relative to the runtime dir. Used by
+/// pip_install which doesn't have the AppHandle in scope. Logs go UNDER
+/// the runtime dir (matching app_log_dir) so the viewer can read them.
 fn app_log_dir_from_runtime(runtime: &Path) -> Result<PathBuf, String> {
-    // Runtime is <app_data_dir>/app — so logs is <app_data_dir>/logs.
-    let parent = runtime.parent().ok_or("runtime has no parent")?;
-    Ok(parent.join("logs"))
+    Ok(runtime.join("logs"))
 }
 
 /// Status codes pushed to the loading page via the sidecar:status event.
@@ -1085,10 +1084,12 @@ pub fn boot_sequence(app: AppHandle) {
         return;
     }
 
-    let log_dir = match app_log_dir(&app) {
-        Ok(p) => p,
-        Err(_) => runtime.join("logs"),
-    };
+    // Write logs to <runtime>/logs/ (not %APPDATA%/SeekDeep/logs/) so they
+    // sit in the same directory gui_endpoints' /logs/tail scans. Previously
+    // these diverged: stdout went to %APPDATA%/SeekDeep/logs/server.log while
+    // the viewer read from %APPDATA%/SeekDeep/app/logs/, so the Control
+    // Center said "no log file found" even though stdout was being captured.
+    let log_dir = runtime.join("logs");
 
     match spawn_server(&python, &runtime, &log_dir) {
         Ok(child) => {
