@@ -5856,10 +5856,10 @@ root.render(<App />);
           <button id="cmClose" class="btn btn-ghost" style="padding:6px 14px;font-size:11px;">✕ Close</button>
         </div>
         <div style="padding:12px 22px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="cm-tab btn btn-${role==='chat'?'primary':'ghost'}" data-role="chat" style="padding:6px 12px;font-size:11px;">Chat · ${cat.chat.length}</button>
+          <button class="cm-tab btn btn-${role==='chat'?'primary':'ghost'}" data-role="chat" style="padding:6px 12px;font-size:11px;">Chat · ${cat.chat.length} (HF+Ollama)</button>
           <button class="cm-tab btn btn-${role==='vision'?'primary':'ghost'}" data-role="vision" style="padding:6px 12px;font-size:11px;">Vision · ${cat.vision.length}</button>
           <button class="cm-tab btn btn-${role==='image'?'primary':'ghost'}" data-role="image" style="padding:6px 12px;font-size:11px;">Image · ${cat.image.length}</button>
-          <button class="cm-tab btn btn-${role==='ollama'?'primary':'ghost'}" data-role="ollama" style="padding:6px 12px;font-size:11px;">Ollama tags · ${cat.ollama.length}</button>
+          <button class="cm-tab btn btn-${role==='ollama'?'primary':'ghost'}" data-role="ollama" style="padding:6px 12px;font-size:11px;">Ollama only · ${cat.ollama.length}</button>
         </div>
         <div id="cmList" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>
         <div style="padding:12px 22px;border-top:1px solid var(--stroke);font-family:var(--font-mono);font-size:11px;color:var(--hull-3);">
@@ -5885,10 +5885,19 @@ root.render(<App />);
         const gated = entry.gated === true;
         const card = document.createElement('div');
         card.style.cssText = 'border:1px solid var(--stroke);border-radius:var(--r-sm);padding:14px;margin-bottom:10px;background:rgba(2,6,15,0.4);display:grid;grid-template-columns:1fr 130px;gap:14px;align-items:center;';
+        // Backend badge: shows on the Chat tab so user can tell HF vs Ollama
+        // entries at a glance. Hidden on backend-specific tabs to avoid noise.
+        const showBackend = (activeRole === 'chat');
+        const backendBadge = showBackend
+          ? (entry.backend === 'ollama'
+              ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--cyan-2);border-radius:8px;font-family:var(--font-mono);color:var(--cyan-1);font-size:10px;letter-spacing:0.08em;background:rgba(45,212,255,0.08);">via OLLAMA</span>'
+              : '<span class="tiny" style="padding:1px 8px;border:1px solid var(--hull-3);border-radius:8px;font-family:var(--font-mono);color:var(--hull-2);font-size:10px;letter-spacing:0.08em;">via HF</span>')
+          : '';
         card.innerHTML = `
           <div>
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
               <span class="mono" style="color:var(--hull-1);font-size:13px;">${entry.repo_id.replace(/[<>"&]/g, '')}</span>
+              ${backendBadge}
               <span class="tiny" style="padding:1px 8px;border:1px solid var(--stroke);border-radius:8px;font-family:var(--font-mono);color:${tierColor(entry.tier)};font-size:10px;letter-spacing:0.08em;text-transform:uppercase;">${entry.tier} · ${entry.size_gb} GB</span>
               ${gated ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--warn);border-radius:8px;font-family:var(--font-mono);color:var(--warn);font-size:10px;letter-spacing:0.08em;">⚠ gated</span>' : ''}
               ${isCached ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--good);border-radius:8px;font-family:var(--font-mono);color:var(--good);font-size:10px;letter-spacing:0.08em;">✓ cached</span>' : ''}
@@ -6103,6 +6112,9 @@ root.render(<App />);
     }));
     $('mpBrowseRecommended')?.addEventListener('click', () => openCatalogModal('chat'));
     $('mpEmptyStarter')?.addEventListener('click', () => openCatalogModal('chat'));
+    // Expose for tray menu / external callers. Works even when hash is
+    // already set to #open-model-catalog (which would skip the hashchange).
+    window.SeekDeepOpenModelCatalog = (role) => openCatalogModal(role || 'chat');
     // Hash trigger: if app.html opens with #open-model-catalog (setup-wizard
     // navigates here when chat_model firstrun check fails), wait for the
     // first scan to complete then auto-open the catalog. Strips the hash

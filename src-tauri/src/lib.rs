@@ -18,9 +18,9 @@ mod sidecar;
 use std::thread;
 use std::time::Duration;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, WindowEvent,
+    Emitter, Manager, RunEvent, WindowEvent,
 };
 
 use sidecar::SidecarState;
@@ -319,11 +319,36 @@ pub fn run() {
             // keep serving the Discord bot in the background while the main
             // window is hidden. The tray menu is the ONLY way to actually
             // exit (sets quit_requested → window close handler kills child).
-            let show_item = MenuItem::with_id(app, "show", "Show SeekDeep", true, None::<&str>)?;
-            let hide_item = MenuItem::with_id(app, "hide", "Hide window", true, None::<&str>)?;
+            // Tray menu: flat list with separators for readability. Grouped
+            // by purpose (window control · navigation · services · external
+            // links · quit). Every nav item emits a `tray:nav` event the
+            // webview listens for (gui/nav.js); fallback to w.eval for the
+            // case where main isn't loaded yet.
+            let show_item    = MenuItem::with_id(app, "show",       "Show SeekDeep",         true, None::<&str>)?;
+            let hide_item    = MenuItem::with_id(app, "hide",       "Hide window",           true, None::<&str>)?;
+            let sep1         = PredefinedMenuItem::separator(app)?;
+            let nav_cc       = MenuItem::with_id(app, "nav_cc",     "Open Control Center",   true, None::<&str>)?;
+            let nav_chat     = MenuItem::with_id(app, "nav_chat",   "Open Chat playground",  true, None::<&str>)?;
+            let nav_models   = MenuItem::with_id(app, "nav_models", "Open Model picker",     true, None::<&str>)?;
+            let nav_logs     = MenuItem::with_id(app, "nav_logs",   "Open Logs viewer",      true, None::<&str>)?;
+            let nav_config   = MenuItem::with_id(app, "nav_config", "Open Bot config",       true, None::<&str>)?;
+            let sep2         = PredefinedMenuItem::separator(app)?;
             let restart_item = MenuItem::with_id(app, "restart_server", "Restart AI server", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit SeekDeep", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &hide_item, &restart_item, &quit_item])?;
+            let self_update  = MenuItem::with_id(app, "self_update",    "Self-update from GitHub", true, None::<&str>)?;
+            let open_logs    = MenuItem::with_id(app, "open_logs_dir",  "Open log folder",   true, None::<&str>)?;
+            let open_env     = MenuItem::with_id(app, "open_env",       "Open .env file",    true, None::<&str>)?;
+            let sep3         = PredefinedMenuItem::separator(app)?;
+            let nightly      = MenuItem::with_id(app, "open_nightly",   "Check for updates (nightly releases)", true, None::<&str>)?;
+            let about        = MenuItem::with_id(app, "open_about",     "About SeekDeep",    true, None::<&str>)?;
+            let sep4         = PredefinedMenuItem::separator(app)?;
+            let quit_item    = MenuItem::with_id(app, "quit",       "Quit SeekDeep",         true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[
+                &show_item, &hide_item, &sep1,
+                &nav_cc, &nav_chat, &nav_models, &nav_logs, &nav_config, &sep2,
+                &restart_item, &self_update, &open_logs, &open_env, &sep3,
+                &nightly, &about, &sep4,
+                &quit_item,
+            ])?;
 
             TrayIconBuilder::with_id("seekdeep-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -352,6 +377,93 @@ pub fn run() {
                             thread::sleep(Duration::from_millis(500));
                             sidecar::boot_sequence(handle);
                         });
+                    }
+                    // --- Navigation actions ---
+                    // Show window first (in case user has it hidden) then emit
+                    // a tray:nav event the webview listens for. nav.js routes
+                    // based on the `to` field. Fallback: w.eval if event
+                    // listener not yet attached on a freshly-shown window.
+                    "nav_cc" | "nav_chat" | "nav_models" | "nav_logs" | "nav_config" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus();
+                            let (page, hash) = match event.id.as_ref() {
+                                "nav_cc"     => ("app.html", "#launcher"),
+                                "nav_chat"   => ("chat.html", ""),
+                                "nav_models" => ("app.html", "#open-model-catalog"),
+                                "nav_logs"   => ("app.html", "#logs"),
+                                "nav_config" => ("app.html", "#config"),
+                                _ => ("app.html", ""),
+                            };
+                            let _ = app.emit("tray:nav", serde_json::json!({"page": page, "hash": hash}));
+                            // For the model picker specifically, if we're already on app.html,
+                            // call the window function directly so it opens even when the
+                            // hash is unchanged from a previous tray click.
+                            let eval_js = if event.id.as_ref() == "nav_models" {
+                                format!(
+                                    "if(!window.location.pathname.endsWith('/app.html'))location.href='app.html{0}';else if(typeof window.SeekDeepOpenModelCatalog==='function')window.SeekDeepOpenModelCatalog('chat');else location.hash='{0}';",
+                                    hash
+                                )
+                            } else {
+                                format!(
+                                    "if(!window.location.pathname.endsWith('/{0}'))location.href='{0}{1}';else if('{1}')location.hash='{1}';",
+                                    page, hash
+                                )
+                            };
+                            let _ = w.eval(&eval_js);
+                        }
+                    }
+                    "self_update" => {
+                        // Hit the local /system/self-update endpoint via the
+                        // webview's JS, which already has the GUI token. The
+                        // tray itself doesn't have token access without
+                        // duplicating that plumbing in Rust.
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus();
+                            let _ = w.eval(r#"
+                                (async () => {
+                                  try {
+                                    const r = await fetch('http://127.0.0.1:7865/system/self-update', {
+                                      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+                                    });
+                                    const j = await r.json();
+                                    const sdn = window.SeekDeepNotify;
+                                    if (r.ok && j.ok && sdn?.toast) sdn.toast({tone:'good', title:'Self-update OK', body:`Updated ${(j.updated||[]).length} file(s) -- restart AI server to apply.`, ttl:8000});
+                                    else if (sdn?.toast) sdn.toast({tone:'bad', title:'Self-update failed', body: (j.detail||j.error||('HTTP '+r.status)), ttl:8000});
+                                  } catch (e) {
+                                    if (window.SeekDeepNotify?.toast) window.SeekDeepNotify.toast({tone:'bad', title:'Self-update failed', body: String(e.message||e), ttl:8000});
+                                  }
+                                })();
+                            "#);
+                        }
+                    }
+                    "open_logs_dir" => {
+                        // Open <runtime>/logs/ in the OS file manager.
+                        if let Ok(log_dir) = sidecar::app_log_dir(app) {
+                            let _ = std::fs::create_dir_all(&log_dir);
+                            use tauri_plugin_opener::OpenerExt;
+                            let _ = app.opener().open_path(log_dir.to_string_lossy().to_string(), None::<&str>);
+                        }
+                    }
+                    "open_env" => {
+                        // Open <runtime>/.env in the user's default editor.
+                        if let Ok(runtime) = sidecar::app_runtime_dir(app) {
+                            let env_path = runtime.join(".env");
+                            use tauri_plugin_opener::OpenerExt;
+                            let _ = app.opener().open_path(env_path.to_string_lossy().to_string(), None::<&str>);
+                        }
+                    }
+                    "open_nightly" => {
+                        use tauri_plugin_opener::OpenerExt;
+                        let _ = app.opener().open_url(
+                            "https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases/tag/nightly",
+                            None::<&str>,
+                        );
+                    }
+                    "open_about" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus();
+                            let _ = w.eval("location.href='index.html';");
+                        }
                     }
                     "quit" => {
                         // Set the quit-requested flag so the next CloseRequested

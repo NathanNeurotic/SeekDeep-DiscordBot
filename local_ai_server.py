@@ -2301,7 +2301,20 @@ _MODEL_CATALOG_OLLAMA = [
     {"repo_id": "mistral:7b-instruct-q4_K_M", "backend": "ollama", "role": "chat",
      "tier": "small", "size_gb": 4, "gated": False,
      "why": "Mistral 7B via Ollama · int4 quantized"},
+    {"repo_id": "granite3.3:8b", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 5, "gated": False,
+     "why": "IBM Granite 3.3 8B via Ollama · int4 quantized · matches our HF default"},
+    {"repo_id": "gemma2:9b-instruct-q4_K_M", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 6, "gated": False,
+     "why": "Gemma 2 9B via Ollama · int4 · open license (unlike HF gated Gemma)"},
 ]
+
+# Chat tab is the union: Ollama tags + HF repos in one place so users see
+# every chat option regardless of backend. Each entry tags its backend so
+# the cached-badge check + install path stays correct. Ollama-tab still
+# shows just the Ollama subset for power users who want backend-filtered
+# browsing.
+_MODEL_CATALOG_CHAT_ALL = _MODEL_CATALOG_OLLAMA + _MODEL_CATALOG_CHAT
 
 
 @app.get("/models/catalog")
@@ -2316,7 +2329,7 @@ def models_catalog_endpoint():
         "ok": True,
         "hf_token_set": bool((os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()),
         "vram_total_mb": vram_total_mb() if cuda_available() else 0,
-        "chat":   _MODEL_CATALOG_CHAT,
+        "chat":   _MODEL_CATALOG_CHAT_ALL,   # HF + Ollama merged for Chat tab
         "vision": _MODEL_CATALOG_VISION,
         "image":  _MODEL_CATALOG_IMAGE,
         "ollama": _MODEL_CATALOG_OLLAMA,
@@ -2357,7 +2370,7 @@ def models_available_endpoint():
                  # in one round-trip. Fresh users see the catalog; experienced users
                  # see their cached repos first with the catalog as a secondary list.
                  "catalog": {
-                     "chat":   _MODEL_CATALOG_CHAT,
+                     "chat":   _MODEL_CATALOG_CHAT_ALL,
                      "vision": _MODEL_CATALOG_VISION,
                      "image":  _MODEL_CATALOG_IMAGE,
                      "ollama": _MODEL_CATALOG_OLLAMA,
