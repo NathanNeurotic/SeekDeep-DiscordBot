@@ -12,10 +12,25 @@
 # file — the /chat handler routes to HTTP for those backends without ever
 # importing torch / transformers / diffusers.
 
+# PyTorch's CUDA wheels live behind a separate index. We previously
+# used --extra-index-url which is permissive (pip can resolve from
+# EITHER PyPI or the extra URL) and the resolver kept preferring the
+# plain PyPI torch over torch+cu128 — users ended up with a CPU-only
+# wheel even though they explicitly asked for ML deps. Pin the local
+# version (+cu128) so pip MUST pull from pytorch.org. The trio is
+# version-locked together by PyTorch so we pin the same triple.
+#
+# When PyTorch ships a newer toolkit (cu130+), bump these three lines
+# and the cu128 URL. The wizard's "wrong wheel" FIX path uses
+# pip_install_torch_variant() which handles cu118/cu121/cu124/cu126/cu128
+# at runtime — this file just sets the default for fresh installs.
 --extra-index-url https://download.pytorch.org/whl/cu128
-torch
-torchvision
-torchaudio
+torch==2.5.1+cu128 ; platform_system == "Windows"
+torchvision==0.20.1+cu128 ; platform_system == "Windows"
+torchaudio==2.5.1+cu128 ; platform_system == "Windows"
+torch ; platform_system != "Windows"
+torchvision ; platform_system != "Windows"
+torchaudio ; platform_system != "Windows"
 accelerate>=1.2.0
 bitsandbytes>=0.45.0
 transformers>=4.51.0

@@ -42,21 +42,30 @@ fn install_python_deps(app: tauri::AppHandle) -> Result<String, String> {
 /// the install modal. The respawn happens asynchronously after the pip
 /// call returns; the page should reload itself once /health is back.
 #[tauri::command]
-fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
-    let runtime = sidecar::app_runtime_dir(&app)?;
-    let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
+async fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
+    // async so the Tauri main thread isn't blocked for 5-10 minutes
+    // while pip downloads ~2 GB. The window's message pump stays
+    // responsive, which means Windows stops painting "Not Responding"
+    // on the title bar and the renderer keeps animating the progress
+    // log as ml-install:line events stream in.
+    let app_inner = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let runtime = sidecar::app_runtime_dir(&app_inner)?;
+        let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
 
-    // 1. Kill the running sidecar (releases file handles on torch/etc.)
-    let state = app.state::<SidecarState>();
-    sidecar::kill_child(state.inner());
-    sidecar::emit_status(&app, "RESTARTING");
-    // Give Windows a moment to release the file handles. Python's
-    // process exit doesn't always release immediately on AV-scanned
-    // installs.
-    std::thread::sleep(Duration::from_millis(800));
+        // 1. Kill the running sidecar (releases file handles on torch/etc.)
+        let state = app_inner.state::<SidecarState>();
+        sidecar::kill_child(state.inner());
+        sidecar::emit_status(&app_inner, "RESTARTING");
+        // Give Windows a moment to release the file handles. Python's
+        // process exit doesn't always release immediately on AV-scanned
+        // installs.
+        std::thread::sleep(Duration::from_millis(800));
 
-    // 2. Run pip install (heavy; ~2 GB; 1-5 minutes on a decent connection)
-    let pip_result = sidecar::pip_install_ml(&python, &runtime);
+        // 2. Run pip install — streams ml-install:line events as it
+        //    downloads so the GUI modal updates in real time.
+        sidecar::pip_install_ml(&app_inner, &python, &runtime)
+    }).await.map_err(|e| format!("install task join: {e}"))?;
 
     // 3. Respawn the sidecar regardless of pip outcome — even if pip
     //    failed, the user wants their previously-working server back.
@@ -66,7 +75,7 @@ fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
         sidecar::boot_sequence(handle);
     });
 
-    pip_result
+    result
 }
 
 /// Reinstall torch + torchvision + torchaudio against a specific CUDA
@@ -78,16 +87,20 @@ fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
 /// `variant` is one of: cu118, cu121, cu124, cu126, cu128, cpu.
 /// (Validated in sidecar::pip_install_torch_variant.)
 #[tauri::command]
-fn install_torch_variant(app: tauri::AppHandle, variant: String) -> Result<String, String> {
-    let runtime = sidecar::app_runtime_dir(&app)?;
-    let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
+async fn install_torch_variant(app: tauri::AppHandle, variant: String) -> Result<String, String> {
+    let app_inner = app.clone();
+    let var = variant.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let runtime = sidecar::app_runtime_dir(&app_inner)?;
+        let python = sidecar::find_python(&runtime).ok_or("PYTHON_NOT_FOUND".to_string())?;
 
-    let state = app.state::<SidecarState>();
-    sidecar::kill_child(state.inner());
-    sidecar::emit_status(&app, "RESTARTING");
-    std::thread::sleep(Duration::from_millis(800));
+        let state = app_inner.state::<SidecarState>();
+        sidecar::kill_child(state.inner());
+        sidecar::emit_status(&app_inner, "RESTARTING");
+        std::thread::sleep(Duration::from_millis(800));
 
-    let pip_result = sidecar::pip_install_torch_variant(&python, &runtime, &variant);
+        sidecar::pip_install_torch_variant(&app_inner, &python, &runtime, &var)
+    }).await.map_err(|e| format!("install task join: {e}"))?;
 
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -95,7 +108,7 @@ fn install_torch_variant(app: tauri::AppHandle, variant: String) -> Result<Strin
         sidecar::boot_sequence(handle);
     });
 
-    pip_result
+    result
 }
 
 #[tauri::command]

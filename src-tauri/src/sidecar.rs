@@ -663,7 +663,9 @@ pub fn pip_install(python: &Path, runtime: &Path) -> Result<String, String> {
 ///
 /// So we kill the sidecar BEFORE pip runs, then signal the caller to
 /// restart it after — both via the SidecarState the lib.rs command holds.
-pub fn pip_install_ml(python: &Path, runtime: &Path) -> Result<String, String> {
+pub fn pip_install_ml(app: &AppHandle, python: &Path, runtime: &Path) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+
     let req = runtime.join("requirements-ml.txt");
     let py_str = python.to_string_lossy().to_lowercase();
     let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
@@ -674,30 +676,73 @@ pub fn pip_install_ml(python: &Path, runtime: &Path) -> Result<String, String> {
         args.insert(3, "--user");
     }
 
-    let out = quiet_command(python)
+    // Spawn pip as a long-lived child, stream stdout/stderr line-by-line
+    // and emit each line as a Tauri "ml-install:line" event so the GUI
+    // modal can render real-time progress instead of freezing on a
+    // 5-10 minute .output() wait. Previous .output() implementation
+    // caused the Tauri main window to show "Not Responding" and the
+    // user to wonder if the install had crashed.
+    let mut child = quiet_command(python)
         .args(&args)
         .arg(&req)
         .current_dir(runtime)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("invoke pip: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let cmdline = format!("$ {} {} {}\n", python.display(), args.join(" "), req.display());
+    let _ = app.emit("ml-install:line", serde_json::json!({"line": cmdline.trim_end()}));
+
+    // Reader threads — one each for stdout/stderr. Each line gets
+    // emitted to the GUI immediately and accumulated into a buffer
+    // we return at the end.
+    let stdout_handle = child.stdout.take().ok_or("no stdout pipe")?;
+    let stderr_handle = child.stderr.take().ok_or("no stderr pipe")?;
+
+    let app_out = app.clone();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut lines: Vec<String> = Vec::new();
+        let reader = BufReader::new(stdout_handle);
+        for line in reader.lines().map_while(Result::ok) {
+            let _ = app_out.emit("ml-install:line", serde_json::json!({"line": &line}));
+            lines.push(line);
+        }
+        lines.join("\n")
+    });
+    let app_err = app.clone();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut lines: Vec<String> = Vec::new();
+        let reader = BufReader::new(stderr_handle);
+        for line in reader.lines().map_while(Result::ok) {
+            let _ = app_err.emit("ml-install:line", serde_json::json!({"line": &line, "stream": "err"}));
+            lines.push(line);
+        }
+        lines.join("\n")
+    });
+
+    let status = child.wait().map_err(|e| format!("wait pip: {e}"))?;
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!(
-        "$ {} {} {}\n\n---STDOUT---\n{}\n---STDERR---\n{}\n",
-        python.display(),
-        args.join(" "),
-        req.display(),
-        stdout, stderr,
+        "{}\n---STDOUT---\n{}\n---STDERR---\n{}\n",
+        cmdline.trim_end(), stdout, stderr,
     );
 
-    // Write a separate pip-ml.log so the ML install's failure detail
-    // doesn't clobber the boot-deps pip.log if both happen in one session.
+    // Final exit notification so the GUI knows we're done before the
+    // tauri::command Promise resolves (gives a smoother UX than
+    // waiting for the await to return).
+    let _ = app.emit("ml-install:done", serde_json::json!({
+        "ok": status.success(),
+        "exit_code": status.code(),
+    }));
+
     if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
         let _ = fs::create_dir_all(&log_dir);
         let _ = fs::write(log_dir.join("pip-ml.log"), &combined);
     }
 
-    if !out.status.success() {
+    if !status.success() {
         return Err(combined);
     }
     Ok(combined)
@@ -723,10 +768,13 @@ pub fn pip_install_ml(python: &Path, runtime: &Path) -> Result<String, String> {
 /// down before pip runs. Caller (lib.rs install_torch_variant) handles
 /// that.
 pub fn pip_install_torch_variant(
+    app: &AppHandle,
     python: &Path,
     runtime: &Path,
     variant: &str,
 ) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+
     let v = variant.trim().to_lowercase();
     let allowed = ["cu118", "cu121", "cu124", "cu126", "cu128", "cpu"];
     if !allowed.contains(&v.as_str()) {
@@ -739,17 +787,20 @@ pub fn pip_install_torch_variant(
     let py_str = python.to_string_lossy().to_lowercase();
     let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
 
+    // Stream uninstall + install lines to the GUI via ml-install:line
+    // events, same channel as pip_install_ml. The user gets live
+    // feedback instead of a 5-minute "frozen" wait.
+    let _ = app.emit("ml-install:line", serde_json::json!({"line": format!("▸ Reinstalling torch with {} ...", v)}));
+
     // First: explicitly uninstall the existing torch trio so pip --upgrade
-    // doesn't get confused about which wheel arch to resolve against. The
-    // common failure mode without this: pip thinks the installed cu121
-    // wheel "already satisfies" the spec because the version matches, and
-    // skips the cu124 reinstall entirely.
+    // doesn't get confused about which wheel arch to resolve against.
     let _ = quiet_command(python)
         .args(["-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"])
         .current_dir(runtime)
         .output();
+    let _ = app.emit("ml-install:line", serde_json::json!({"line": "✓ uninstalled previous torch / torchvision / torchaudio"}));
 
-    // Second: install with the variant-specific index URL.
+    // Second: install with the variant-specific index URL, streamed.
     let mut args: Vec<&str> = vec![
         "-m", "pip", "install",
         "--upgrade", "--no-cache-dir", "--disable-pip-version-check",
@@ -760,26 +811,54 @@ pub fn pip_install_torch_variant(
         args.insert(3, "--user");
     }
 
-    let out = quiet_command(python)
+    let mut child = quiet_command(python)
         .args(&args)
         .current_dir(runtime)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("invoke pip: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let stdout_handle = child.stdout.take().ok_or("no stdout pipe")?;
+    let stderr_handle = child.stderr.take().ok_or("no stderr pipe")?;
+
+    let app_out = app.clone();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut lines: Vec<String> = Vec::new();
+        let reader = BufReader::new(stdout_handle);
+        for line in reader.lines().map_while(Result::ok) {
+            let _ = app_out.emit("ml-install:line", serde_json::json!({"line": &line}));
+            lines.push(line);
+        }
+        lines.join("\n")
+    });
+    let app_err = app.clone();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut lines: Vec<String> = Vec::new();
+        let reader = BufReader::new(stderr_handle);
+        for line in reader.lines().map_while(Result::ok) {
+            let _ = app_err.emit("ml-install:line", serde_json::json!({"line": &line, "stream": "err"}));
+            lines.push(line);
+        }
+        lines.join("\n")
+    });
+
+    let status = child.wait().map_err(|e| format!("wait pip: {e}"))?;
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!(
         "$ {} {}\n\n---STDOUT---\n{}\n---STDERR---\n{}\n",
-        python.display(),
-        args.join(" "),
-        stdout, stderr,
+        python.display(), args.join(" "), stdout, stderr,
     );
+    let _ = app.emit("ml-install:done", serde_json::json!({
+        "ok": status.success(), "exit_code": status.code(),
+    }));
 
     if let Ok(log_dir) = app_log_dir_from_runtime(runtime) {
         let _ = fs::create_dir_all(&log_dir);
         let _ = fs::write(log_dir.join("pip-torch.log"), &combined);
     }
-
-    if !out.status.success() {
+    if !status.success() {
         return Err(combined);
     }
     Ok(combined)

@@ -381,13 +381,20 @@
     font-family: var(--font-mono); font-size: 11px; color: var(--hull-2);
     display: grid; gap: 5px;
   }
+  /* Two-column grid so the value can wrap below the fixed-width
+     label instead of clipping. Previously the row was flex with
+     white-space:nowrap + ellipsis — "cpu wheel · NVIDIA GeForce
+     RTX 5090 Laptop GPU" got cut at "GeForce" mid-word and the
+     user had no way to read the full GPU name without inspecting
+     the title= tooltip. */
   .bot-card .stats .row {
-    display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+    display: grid; grid-template-columns: 72px 1fr; gap: 8px; align-items: start;
   }
   .bot-card .stats .row .k { color: var(--hull-3); }
   .bot-card .stats .row .v {
     color: var(--cyan-1); text-align: right;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+    word-break: break-word; overflow-wrap: anywhere; min-width: 0;
+    line-height: 1.4;
   }
 
   .quick-tips {

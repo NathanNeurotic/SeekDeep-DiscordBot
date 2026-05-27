@@ -214,14 +214,45 @@
         modalRefs.statusEl.textContent = 'STOPPING SERVER · then installing torch/transformers/diffusers';
       }
       appendLogLine('Stopping local AI server so pip can overwrite torch/diffusers without WinError 32 …');
+      // Subscribe to ml-install:line events that the Rust side now
+      // emits per pip stdout line. Previous version awaited the
+      // entire install_ml_deps invoke for 5-10 minutes with no
+      // intermediate UI updates — the modal looked frozen and Windows
+      // painted "Not Responding" on the title bar. Now each line
+      // arrives within ~50ms of pip writing it.
+      let bytesShown = 0;
+      let unlistenLine = null, unlistenDone = null;
+      if (tauri.event && typeof tauri.event.listen === 'function') {
+        try {
+          unlistenLine = await tauri.event.listen('ml-install:line', (e) => {
+            const payload = (e && e.payload) || {};
+            const line = String(payload.line || '');
+            if (line) {
+              appendLogLine(line);
+              bytesShown += line.length;
+              if (modalRefs && modalRefs.statusEl && /^(Downloading|Collecting|Installing|Successfully)/i.test(line)) {
+                // Surface the most recent meaningful phase in the
+                // status header so the user has a quick read-at-a-glance.
+                modalRefs.statusEl.textContent = line.slice(0, 120);
+              }
+            }
+          });
+          unlistenDone = await tauri.event.listen('ml-install:done', (e) => {
+            const payload = (e && e.payload) || {};
+            if (modalRefs && modalRefs.statusEl) {
+              if (payload.ok) {
+                modalRefs.statusEl.textContent = '✓ pip finished · respawning sidecar';
+                modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
+              } else {
+                modalRefs.statusEl.textContent = '⚠ pip exited with code ' + payload.exit_code;
+                modalRefs.statusEl.style.color = 'var(--bad, #ff6b6b)';
+              }
+            }
+          });
+        } catch (_) { /* event API mismatch — fall back to silent invoke */ }
+      }
       try {
-        const combined = await tauri.core.invoke('install_ml_deps');
-        appendLogLine('');
-        appendLogLine('--- pip install completed ---');
-        if (typeof combined === 'string' && combined.length) appendLogLine(combined);
-        // Rust shell auto-respawns the sidecar after pip; bus events should
-        // resume once /health is back. Reload the page so the chat surface
-        // picks up the freshly-loadable libraries.
+        await tauri.core.invoke('install_ml_deps');
         if (modalRefs && modalRefs.statusEl) {
           modalRefs.statusEl.textContent = '✓ INSTALL COMPLETE · restarting AI server';
           modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
@@ -230,13 +261,15 @@
         clearBanner();
         setTimeout(() => { location.reload(); }, 5000);
       } catch (err) {
-        // err is the pip output (combined stdout+stderr) from the Rust side
         appendLogLine('--- pip install failed ---');
         appendLogLine(String(err));
         if (modalRefs && modalRefs.statusEl) {
           modalRefs.statusEl.textContent = '⚠ INSTALL FAILED · see log above; server restarted regardless';
           modalRefs.statusEl.style.color = 'var(--bad, #ff6b6b)';
         }
+      } finally {
+        try { if (typeof unlistenLine === 'function') unlistenLine(); } catch {}
+        try { if (typeof unlistenDone === 'function') unlistenDone(); } catch {}
       }
       return;
     }
