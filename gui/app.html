@@ -1813,12 +1813,12 @@
             <div class="sub">Visual browse for user &amp; shared archive threads. <span id="archSnapshotMeta" class="tiny muted" style="font-family: var(--font-mono);">— snapshot pending</span></div>
           </div>
           <div class="actions">
-            <input id="archSearchInput" placeholder="Search prompts…" style="width: 240px;" title="Filter by prompt text, archive key, requester ID, or model" />
+            <input id="archSearchInput" placeholder="Search archive…" style="width: 240px;" title="Filter by prompt text, archive key, requester ID, or model" />
             <select id="archSortSelect" class="mono" style="width: 160px; padding: 8px 10px; font-size: 12px;">
               <option value="ts-desc">Sort: newest</option>
               <option value="ts-asc">Sort: oldest</option>
-              <option value="prompt-asc">Sort: prompt a→z</option>
-              <option value="prompt-desc">Sort: prompt z→a</option>
+              <option value="prompt-asc">Sort: title a→z</option>
+              <option value="prompt-desc">Sort: title z→a</option>
             </select>
             <button id="archRefreshBtn" class="btn btn-ghost" title="Re-fetch /data/archive-snapshot.json (the bot's cron writes it every 6h; ask an admin to run '@SeekDeep archive snapshot' for an immediate refresh)">⟳ Refresh</button>
           </div>
