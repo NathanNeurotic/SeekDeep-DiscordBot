@@ -2238,6 +2238,98 @@ def models_installed_endpoint():
     }
 
 
+@app.get("/models/available")
+def models_available_endpoint():
+    """Full inventory of models the user has on this machine right now —
+    HF cache + Ollama daemon tags. Powers the LOCAL_CHAT_MODEL_ID dropdown
+    in Bot config so the user picks from a real list instead of typing a
+    repo ID from memory.
+
+    Shape:
+      {
+        ok, ml_deps_missing,
+        hf: {
+          cache_dir, total_size_bytes,
+          repos: [{repo_id, repo_type, size_bytes, last_modified,
+                   nb_files, refs}, ...]
+        },
+        ollama: {
+          available, base_url,
+          tags: [{name, size_bytes?, modified_at?, family?}, ...]
+        },
+        current: { LOCAL_CHAT_MODEL_ID, LOCAL_IMAGE_MODEL_ID, LOCAL_VISION_MODEL_ID }
+      }
+    """
+    out: dict = {"ok": True, "ml_deps_missing": False,
+                 "hf": {"cache_dir": None, "total_size_bytes": 0, "repos": []},
+                 "ollama": {"available": False, "base_url": OLLAMA_BASE_URL, "tags": []},
+                 "current": {
+                     "LOCAL_CHAT_MODEL_ID":   os.getenv("LOCAL_CHAT_MODEL_ID", "") or "",
+                     "LOCAL_IMAGE_MODEL_ID":  os.getenv("LOCAL_IMAGE_MODEL_ID", "") or "",
+                     "LOCAL_VISION_MODEL_ID": os.getenv("LOCAL_VISION_MODEL_ID", "") or "",
+                 }}
+    try:
+        from huggingface_hub import scan_cache_dir
+        try:
+            from huggingface_hub.errors import CacheNotFound
+        except ImportError:
+            CacheNotFound = Exception
+    except ImportError:
+        out["ml_deps_missing"] = True
+        return out
+    cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+    try:
+        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+        out["hf"]["cache_dir"] = str(info.size_on_disk and (cache_dir or "") or "")
+        out["hf"]["total_size_bytes"] = int(getattr(info, "size_on_disk", 0) or 0)
+        repos_out = []
+        for r in info.repos:
+            try:
+                refs = sorted({rev.refs for rev in r.revisions for ref in (rev.refs or [])} if False else
+                              {ref for rev in (r.revisions or []) for ref in (rev.refs or [])})
+            except Exception:
+                refs = []
+            repos_out.append({
+                "repo_id":       r.repo_id,
+                "repo_type":     getattr(r, "repo_type", "model"),
+                "size_bytes":    int(getattr(r, "size_on_disk", 0) or 0),
+                "last_modified": getattr(r, "last_modified", None) and str(r.last_modified) or None,
+                "nb_files":      int(getattr(r, "nb_files", 0) or 0),
+                "refs":          list(refs),
+            })
+        # Sort: biggest first (most likely the actively used chat models).
+        repos_out.sort(key=lambda x: -x["size_bytes"])
+        out["hf"]["repos"] = repos_out
+    except CacheNotFound:
+        pass
+    except Exception as exc:
+        out["hf"]["error"] = f"{type(exc).__name__}: {exc}"
+    # Ollama daemon tags. We hit /api/tags directly (not just the bool probe)
+    # so the response includes size + modified_at when available.
+    try:
+        if ollama_available():
+            out["ollama"]["available"] = True
+            try:
+                data = _ollama_request("/api/tags", method="GET",
+                                       timeout=OLLAMA_PROBE_TIMEOUT_SECS + 2)
+                for m in (data.get("models") or []):
+                    if not m.get("name"):
+                        continue
+                    out["ollama"]["tags"].append({
+                        "name":        m.get("name"),
+                        "size_bytes":  int(m.get("size") or 0),
+                        "modified_at": m.get("modified_at"),
+                        "family":      ((m.get("details") or {}).get("family")),
+                    })
+            except Exception:
+                # Daemon reachable but /api/tags shape differs — at least
+                # return the bool so the GUI can still offer "Pull tag…"
+                pass
+    except Exception:
+        pass
+    return out
+
+
 @app.get("/vram")
 def vram_budget_endpoint():
     """Detailed VRAM budget breakdown for diagnostics."""

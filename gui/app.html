@@ -959,6 +959,47 @@
 
           <div>
 
+            <!-- MODEL PICKER (live · scans HF cache + Ollama daemon) -->
+            <!-- Was: 3 plain text inputs with hardcoded model_id defaults
+                 and no save wire. Now: live dropdowns populated from
+                 GET /models/available with "+ Add HF" / "+ Pull Ollama"
+                 entries that trigger POST /model/install. Save persists
+                 via POST /config and restarts the AI server so the new
+                 model_id is picked up without manual .env editing. -->
+            <details class="cfg-section" id="sec-model-picker" open style="margin-bottom: 18px;">
+              <summary style="display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding:14px 16px; background:var(--substrate-2); border:1px solid var(--cyan-2); border-radius:var(--r-md);">
+                <div>
+                  <div style="font-family:var(--font-mono); color:var(--cyan-1); letter-spacing:0.14em; text-transform:uppercase; font-size:11px;">▸ Quick model picker</div>
+                  <div class="tiny muted" style="font-family:var(--font-mono); margin-top:4px;">Live · cached HF repos + Ollama daemon tags · changes apply on Save + AI server restart</div>
+                </div>
+                <span id="mpScanStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:10px;">scanning…</span>
+              </summary>
+              <div style="padding: 16px; border: 1px solid var(--stroke); border-top: 0; border-radius: 0 0 var(--r-md) var(--r-md); background: rgba(2,6,15,0.4);">
+                <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--stroke);">
+                  <div style="font-family:var(--font-mono); color:var(--cyan-1); font-size:12px;">CHAT</div>
+                  <select id="mpChatSelect" class="mono" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;"><option value="">— scanning HF cache + Ollama daemon —</option></select>
+                  <button id="mpChatSave" class="btn btn-primary" style="padding:8px 12px; font-size:11px;">Save</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--stroke);">
+                  <div style="font-family:var(--font-mono); color:var(--cyan-1); font-size:12px;">IMAGE</div>
+                  <select id="mpImageSelect" class="mono" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;"><option value="">— scanning —</option></select>
+                  <button id="mpImageSave" class="btn btn-primary" style="padding:8px 12px; font-size:11px;">Save</button>
+                </div>
+                <div style="display: grid; grid-template-columns: 110px 1fr 110px; gap: 12px; align-items: center; padding: 10px 0;">
+                  <div style="font-family:var(--font-mono); color:var(--cyan-1); font-size:12px;">VISION</div>
+                  <select id="mpVisionSelect" class="mono" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;"><option value="">— scanning —</option></select>
+                  <button id="mpVisionSave" class="btn btn-primary" style="padding:8px 12px; font-size:11px;">Save</button>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:14px; padding-top:14px; border-top: 1px solid var(--stroke); align-items: center; flex-wrap: wrap;">
+                  <button id="mpAddHF" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">+ Add HuggingFace repo</button>
+                  <button id="mpAddOllama" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">+ Pull Ollama tag</button>
+                  <button id="mpRescan" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">↻ Rescan</button>
+                  <span id="mpStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-left:auto;"></span>
+                </div>
+                <div id="mpQueue" style="margin-top:12px;"></div>
+              </div>
+            </details>
+
             <!-- DISCORD & ROUTING -->
             <details class="cfg-section" id="sec-discord" open>
               <summary>
@@ -5571,6 +5612,224 @@ root.render(<App />);
     let n = 0; const iv = setInterval(() => { if (attachLogBus() || ++n > 30) clearInterval(iv); }, 250);
   }
   setInterval(pollOnce, 3000);
+})();
+
+// ===== Model picker: HF cache + Ollama tags · Bot config quick picker =====
+// Fills the dropdowns in the new #sec-model-picker card from GET /models
+// /available. Save buttons POST /config with the env update; the GUI then
+// hits /launcher/ai-server/restart (or Tauri restart_sidecar) so the new
+// model_id is picked up. + Add HF / + Pull Ollama buttons surface a modal
+// that calls POST /model/install and renders progress via the model.install
+// .* WS events the existing model-install.js publishes.
+(function () {
+  if (window.__seekdeepModelPickerLoaded) return;
+  window.__seekdeepModelPickerLoaded = true;
+  const BASE = (window.SEEKDEEP_BASE || '');
+  const $ = (id) => document.getElementById(id);
+
+  let lastScan = null;
+
+  function fmtSize(b) {
+    if (!b || b <= 0) return '';
+    const gb = b / 1e9;
+    if (gb >= 1) return gb.toFixed(1) + ' GB';
+    return (b / 1e6).toFixed(0) + ' MB';
+  }
+
+  function populateSelect(selectEl, scan, currentValue) {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    // 1. Current value first (even if not in either inventory — surfaces
+    //    "ghost" entries from .env so the user sees what's actually set).
+    const cur = (currentValue || '').trim();
+    if (cur) {
+      const o = document.createElement('option');
+      o.value = cur;
+      o.textContent = cur + ' · current';
+      o.selected = true;
+      selectEl.appendChild(o);
+    } else {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = '— not set · pick one below —';
+      o.selected = true;
+      selectEl.appendChild(o);
+    }
+    // 2. HF cached repos
+    const hfRepos = (scan && scan.hf && scan.hf.repos) || [];
+    if (hfRepos.length) {
+      const group = document.createElement('optgroup');
+      group.label = `HuggingFace · cached (${hfRepos.length})`;
+      hfRepos.forEach(r => {
+        if (r.repo_id === cur) return;
+        const o = document.createElement('option');
+        o.value = r.repo_id;
+        o.textContent = `${r.repo_id}${r.size_bytes ? ' · ' + fmtSize(r.size_bytes) : ''}`;
+        group.appendChild(o);
+      });
+      selectEl.appendChild(group);
+    }
+    // 3. Ollama tags
+    const olTags = (scan && scan.ollama && scan.ollama.tags) || [];
+    if (olTags.length) {
+      const group = document.createElement('optgroup');
+      group.label = `Ollama · local tags (${olTags.length})`;
+      olTags.forEach(t => {
+        const v = 'ollama:' + t.name;  // backend prefix the role-resolver understands
+        if (v === cur) return;
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = `${t.name}${t.size_bytes ? ' · ' + fmtSize(t.size_bytes) : ''}`;
+        group.appendChild(o);
+      });
+      selectEl.appendChild(group);
+    }
+    if (!hfRepos.length && !olTags.length) {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = '— nothing cached · use + Add HF / + Pull Ollama below —';
+      o.disabled = true;
+      selectEl.appendChild(o);
+    }
+  }
+
+  async function rescan() {
+    const ss = $('mpScanStatus');
+    if (ss) ss.textContent = 'scanning…';
+    try {
+      const r = await fetch(BASE + '/models/available', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      lastScan = data;
+      const hf = data.hf || { repos: [], total_size_bytes: 0 };
+      const ol = data.ollama || { available: false, tags: [] };
+      const cur = data.current || {};
+      populateSelect($('mpChatSelect'),   data, cur.LOCAL_CHAT_MODEL_ID);
+      populateSelect($('mpImageSelect'),  data, cur.LOCAL_IMAGE_MODEL_ID);
+      populateSelect($('mpVisionSelect'), data, cur.LOCAL_VISION_MODEL_ID);
+      if (ss) {
+        const olBit = ol.available ? `· Ollama ${ol.tags.length} tags` : '· Ollama daemon offline';
+        ss.textContent = `HF ${hf.repos.length} repos · ${(hf.total_size_bytes/1e9).toFixed(1)} GB ${olBit}`;
+      }
+    } catch (err) {
+      if (ss) { ss.style.color = 'var(--warn)'; ss.textContent = 'scan failed · ' + (err.message || err); }
+    }
+  }
+
+  async function saveOne(envKey, selectId, btnEl) {
+    const sel = $(selectId);
+    const val = sel ? sel.value : '';
+    if (!val) {
+      $('mpStatus').style.color = 'var(--warn)';
+      $('mpStatus').textContent = `pick a model for ${envKey} first`;
+      return;
+    }
+    btnEl.disabled = true;
+    const orig = btnEl.textContent;
+    btnEl.textContent = '⏳';
+    try {
+      const r = await fetch(BASE + '/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates: { [envKey]: val } }),
+      });
+      if (!r.ok) {
+        let msg = 'HTTP ' + r.status;
+        try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+        throw new Error(msg);
+      }
+      $('mpStatus').style.color = 'var(--cyan-1)';
+      $('mpStatus').textContent = `✓ ${envKey} = ${val} · restart AI server for the change to take effect`;
+      btnEl.textContent = '✓';
+      setTimeout(() => { btnEl.textContent = orig; }, 2000);
+    } catch (err) {
+      $('mpStatus').style.color = 'var(--warn)';
+      $('mpStatus').textContent = `${envKey} save failed · ${err.message || err}`;
+      btnEl.textContent = orig;
+    } finally {
+      btnEl.disabled = false;
+    }
+  }
+
+  function openInstallModal(opts) {
+    // opts: { backend: 'hf' | 'ollama', placeholder, title, hint }
+    const m = document.createElement('div');
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;font-family:var(--font-grotesk);';
+    m.innerHTML = `
+      <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;width:560px;max-width:90vw;color:var(--hull-2);">
+        <h3 style="margin:0 0 6px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">${opts.title}</h3>
+        <div class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-bottom:12px;">${opts.hint}</div>
+        <input id="mpModalInput" type="text" placeholder="${opts.placeholder}" style="width:100%; padding:10px 12px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:13px;" />
+        <div id="mpModalStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-top:10px; min-height:14px;"></div>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+          <button id="mpModalCancel" class="btn btn-ghost" style="padding:8px 14px;">Cancel</button>
+          <button id="mpModalGo" class="btn btn-primary" style="padding:8px 14px;">▸ Install</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+    const close = () => m.remove();
+    m.querySelector('#mpModalCancel').onclick = close;
+    m.onclick = (e) => { if (e.target === m) close(); };
+    const input = m.querySelector('#mpModalInput');
+    input.focus();
+    m.querySelector('#mpModalGo').onclick = async () => {
+      const val = input.value.trim();
+      const st = m.querySelector('#mpModalStatus');
+      if (!val) { st.style.color = 'var(--warn)'; st.textContent = '▸ enter a value first'; return; }
+      st.style.color = 'var(--hull-3)';
+      st.textContent = '▸ installing… (download progresses via WS · model.install.line)';
+      m.querySelector('#mpModalGo').disabled = true;
+      try {
+        const r = await fetch(BASE + '/model/install', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model_id: val, backend: opts.backend, auto_pull: true }),
+        });
+        if (!r.ok) {
+          let msg = 'HTTP ' + r.status;
+          try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+          throw new Error(msg);
+        }
+        const data = await r.json();
+        st.style.color = 'var(--cyan-1)';
+        st.textContent = `✓ install complete · ${val} · rescanning…`;
+        setTimeout(() => { rescan(); close(); }, 1200);
+      } catch (err) {
+        st.style.color = 'var(--warn)';
+        st.textContent = '▸ install failed · ' + (err.message || err);
+        m.querySelector('#mpModalGo').disabled = false;
+      }
+    };
+  }
+
+  function wire() {
+    if (!$('mpChatSelect')) return false;  // section not in DOM yet
+    rescan();
+    $('mpRescan')?.addEventListener('click', rescan);
+    $('mpChatSave')?.addEventListener('click',  (e) => saveOne('LOCAL_CHAT_MODEL_ID',   'mpChatSelect',   e.target));
+    $('mpImageSave')?.addEventListener('click', (e) => saveOne('LOCAL_IMAGE_MODEL_ID',  'mpImageSelect',  e.target));
+    $('mpVisionSave')?.addEventListener('click',(e) => saveOne('LOCAL_VISION_MODEL_ID', 'mpVisionSelect', e.target));
+    $('mpAddHF')?.addEventListener('click', () => openInstallModal({
+      backend: 'hf',
+      title: '+ Add HuggingFace repo',
+      hint: 'Paste any HF model repo ID — we run snapshot_download into your LOCAL_MODEL_CACHE_DIR. Gated repos use your HF_TOKEN.',
+      placeholder: 'e.g. meta-llama/Llama-3.1-8B-Instruct',
+    }));
+    $('mpAddOllama')?.addEventListener('click', () => openInstallModal({
+      backend: 'ollama',
+      title: '+ Pull Ollama tag',
+      hint: 'Pulls a tag via the local Ollama daemon (POST /api/pull). Daemon must be running. Cloud-only setups: set OLLAMA_API_KEY first.',
+      placeholder: 'e.g. llama3.1:8b-instruct-q4_K_M',
+    }));
+    // Auto-refresh when the user navigates into the Config pane.
+    document.querySelectorAll('.sidebar a[data-mod="config"]').forEach(a =>
+      a.addEventListener('click', () => setTimeout(rescan, 200))
+    );
+    return true;
+  }
+
+  if (!wire()) {
+    let n = 0;
+    const iv = setInterval(() => { if (wire() || ++n > 40) clearInterval(iv); }, 250);
+  }
 })();
 </script>
 
