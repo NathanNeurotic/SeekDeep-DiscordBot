@@ -2238,6 +2238,91 @@ def models_installed_endpoint():
     }
 
 
+# Curated model catalog — what fresh users see in the picker before they
+# have anything cached. Hand-picked to cover the common VRAM tiers without
+# overwhelming. `gated=true` repos need HF_TOKEN + license acceptance on HF;
+# `gated=false` repos install with no setup. Sizes are approximate disk
+# footprint at default precision (HF metadata isn't reliable). Pulls live
+# regardless of model_id status — install adds to cache, picker rescans.
+_MODEL_CATALOG_CHAT = [
+    # Open / no HF gating — these should "just work" on first install.
+    {"repo_id": "ibm-granite/granite-3.3-8b-instruct", "backend": "hf", "role": "chat",
+     "tier": "medium", "size_gb": 16, "gated": False,
+     "why": "IBM 8B · solid quality · int4-friendly · what we test against"},
+    {"repo_id": "microsoft/Phi-3.5-mini-instruct", "backend": "hf", "role": "chat",
+     "tier": "small", "size_gb": 7, "gated": False,
+     "why": "Microsoft 3.8B · runs on 8 GB VRAM · fast cold-load"},
+    {"repo_id": "Qwen/Qwen2.5-7B-Instruct", "backend": "hf", "role": "chat",
+     "tier": "medium", "size_gb": 15, "gated": False,
+     "why": "Qwen 7B · strong all-around · great multilingual"},
+    {"repo_id": "mistralai/Mistral-7B-Instruct-v0.3", "backend": "hf", "role": "chat",
+     "tier": "medium", "size_gb": 14, "gated": False,
+     "why": "Mistral 7B · well-known baseline · fast"},
+    {"repo_id": "microsoft/phi-4", "backend": "hf", "role": "chat",
+     "tier": "large", "size_gb": 29, "gated": False,
+     "why": "Microsoft 14B · strongest in this open list · needs 16+ GB VRAM"},
+    # Gated — flag clearly so user knows there's an extra step.
+    {"repo_id": "meta-llama/Llama-3.2-3B-Instruct", "backend": "hf", "role": "chat",
+     "tier": "small", "size_gb": 7, "gated": True,
+     "why": "Meta 3B · tiny Llama · accept license at huggingface.co/meta-llama"},
+    {"repo_id": "meta-llama/Llama-3.1-8B-Instruct", "backend": "hf", "role": "chat",
+     "tier": "medium", "size_gb": 16, "gated": True,
+     "why": "Meta 8B · the default · accept license at huggingface.co/meta-llama"},
+    {"repo_id": "google/gemma-2-9b-it", "backend": "hf", "role": "chat",
+     "tier": "medium", "size_gb": 18, "gated": True,
+     "why": "Google 9B · strong reasoning · accept license at huggingface.co/google"},
+]
+_MODEL_CATALOG_VISION = [
+    {"repo_id": "Qwen/Qwen2.5-VL-3B-Instruct", "backend": "hf", "role": "vision",
+     "tier": "small", "size_gb": 7, "gated": False,
+     "why": "Qwen vision 3B · OCR + describe · fits on 8 GB VRAM"},
+    {"repo_id": "Qwen/Qwen2.5-VL-7B-Instruct", "backend": "hf", "role": "vision",
+     "tier": "medium", "size_gb": 16, "gated": False,
+     "why": "Qwen vision 7B · sharper · more grounded answers"},
+]
+_MODEL_CATALOG_IMAGE = [
+    {"repo_id": "stabilityai/stable-diffusion-xl-base-1.0", "backend": "hf", "role": "image",
+     "tier": "small", "size_gb": 7, "gated": False,
+     "why": "SDXL base · canonical txt2img · works with all our img tooling"},
+    {"repo_id": "Lykon/dreamshaper-xl-1-0", "backend": "hf", "role": "image",
+     "tier": "small", "size_gb": 7, "gated": False,
+     "why": "DreamShaper XL · popular SDXL finetune · vivid + detailed"},
+]
+_MODEL_CATALOG_OLLAMA = [
+    {"repo_id": "llama3.1:8b-instruct-q4_K_M", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 5, "gated": False,
+     "why": "Llama 3.1 8B via Ollama · int4 quantized · ~5 GB"},
+    {"repo_id": "phi3:14b", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 8, "gated": False,
+     "why": "Phi-3 medium via Ollama · ~8 GB"},
+    {"repo_id": "qwen2.5:7b-instruct-q4_K_M", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 5, "gated": False,
+     "why": "Qwen 2.5 7B via Ollama · int4 quantized"},
+    {"repo_id": "mistral:7b-instruct-q4_K_M", "backend": "ollama", "role": "chat",
+     "tier": "small", "size_gb": 4, "gated": False,
+     "why": "Mistral 7B via Ollama · int4 quantized"},
+]
+
+
+@app.get("/models/catalog")
+def models_catalog_endpoint():
+    """Curated model catalog for fresh users with empty caches. Pure data
+    endpoint — the GUI renders these as 'Recommended (install)' rows when
+    LOCAL_CHAT_MODEL_ID is blank or the user clicks 'Browse recommended'.
+
+    Returns the catalog plus a hf_token_set flag so the GUI can dim gated
+    entries and prompt for HF_TOKEN before the user clicks Install."""
+    return {
+        "ok": True,
+        "hf_token_set": bool((os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()),
+        "vram_total_mb": vram_total_mb() if cuda_available() else 0,
+        "chat":   _MODEL_CATALOG_CHAT,
+        "vision": _MODEL_CATALOG_VISION,
+        "image":  _MODEL_CATALOG_IMAGE,
+        "ollama": _MODEL_CATALOG_OLLAMA,
+    }
+
+
 @app.get("/models/available")
 def models_available_endpoint():
     """Full inventory of models the user has on this machine right now —
@@ -2267,7 +2352,18 @@ def models_available_endpoint():
                      "LOCAL_CHAT_MODEL_ID":   os.getenv("LOCAL_CHAT_MODEL_ID", "") or "",
                      "LOCAL_IMAGE_MODEL_ID":  os.getenv("LOCAL_IMAGE_MODEL_ID", "") or "",
                      "LOCAL_VISION_MODEL_ID": os.getenv("LOCAL_VISION_MODEL_ID", "") or "",
-                 }}
+                 },
+                 # Curated catalog inlined so the GUI gets cache + daemon + suggestions
+                 # in one round-trip. Fresh users see the catalog; experienced users
+                 # see their cached repos first with the catalog as a secondary list.
+                 "catalog": {
+                     "chat":   _MODEL_CATALOG_CHAT,
+                     "vision": _MODEL_CATALOG_VISION,
+                     "image":  _MODEL_CATALOG_IMAGE,
+                     "ollama": _MODEL_CATALOG_OLLAMA,
+                 },
+                 "hf_token_set": bool((os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()),
+                 "vram_total_mb": vram_total_mb() if cuda_available() else 0}
     try:
         from huggingface_hub import scan_cache_dir
         try:

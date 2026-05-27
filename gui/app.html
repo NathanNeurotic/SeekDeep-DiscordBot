@@ -991,10 +991,25 @@
                   <button id="mpVisionSave" class="btn btn-primary" style="padding:8px 12px; font-size:11px;">Save</button>
                 </div>
                 <div style="display:flex; gap:8px; margin-top:14px; padding-top:14px; border-top: 1px solid var(--stroke); align-items: center; flex-wrap: wrap;">
-                  <button id="mpAddHF" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">+ Add HuggingFace repo</button>
+                  <button id="mpBrowseRecommended" class="btn btn-primary" style="padding:8px 12px; font-size:11px;">▸ Browse recommended models</button>
+                  <button id="mpAddHF" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">+ Add HF repo</button>
                   <button id="mpAddOllama" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">+ Pull Ollama tag</button>
                   <button id="mpRescan" class="btn btn-ghost" style="padding:8px 12px; font-size:11px;">↻ Rescan</button>
                   <span id="mpStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-left:auto;"></span>
+                </div>
+                <!-- Empty-state banner: shown when no chat model is configured.
+                     The picker auto-decides between three calls to action:
+                       a. HF cache empty + no current → "install starter" banner
+                          opens the catalog
+                       b. cache populated but current is blank → just prompt to
+                          pick from dropdown
+                       c. all set → banner is hidden -->
+                <div id="mpEmptyState" style="display:none; margin-top: 14px; padding: 14px; background: rgba(0, 200, 255, 0.06); border: 1px solid var(--cyan-2); border-radius: var(--r-md);">
+                  <div style="font-family:var(--font-mono); color:var(--cyan-1); font-size:12px; letter-spacing:0.08em; text-transform:uppercase;">▸ No chat model installed yet</div>
+                  <div class="tiny muted" id="mpEmptyHint" style="margin-top:6px; font-family:var(--font-mono); font-size:11px;">Pick a recommended starter — we'll download it and set it as your default chat model in one click.</div>
+                  <div style="margin-top:10px;">
+                    <button id="mpEmptyStarter" class="btn btn-primary" style="padding:8px 14px; font-size:12px;">▸ Browse recommended starters</button>
+                  </div>
                 </div>
                 <div id="mpQueue" style="margin-top:12px;"></div>
               </div>
@@ -5711,9 +5726,197 @@ root.render(<App />);
         const olBit = ol.available ? `· Ollama ${ol.tags.length} tags` : '· Ollama daemon offline';
         ss.textContent = `HF ${hf.repos.length} repos · ${(hf.total_size_bytes/1e9).toFixed(1)} GB ${olBit}`;
       }
+      // Empty-state banner logic: surface a prominent CTA when chat isn't set.
+      const empty = $('mpEmptyState');
+      const hint = $('mpEmptyHint');
+      if (empty) {
+        const noChat = !(cur.LOCAL_CHAT_MODEL_ID || '').trim();
+        const cacheEmpty = hf.repos.length === 0;
+        if (noChat) {
+          empty.style.display = 'block';
+          if (hint) {
+            if (cacheEmpty) {
+              hint.textContent = `No chat model is installed yet. Pick a recommended starter — we'll download it and set it as your default in one click. Your VRAM: ${(data.vram_total_mb/1024).toFixed(0)} GB.`;
+            } else {
+              hint.textContent = `${hf.repos.length} model(s) are already cached but none are set as default chat. Pick one from the dropdown above and click Save, or install another from the catalog.`;
+            }
+          }
+        } else {
+          empty.style.display = 'none';
+        }
+      }
     } catch (err) {
       if (ss) { ss.style.color = 'var(--warn)'; ss.textContent = 'scan failed · ' + (err.message || err); }
     }
+  }
+
+  function tierColor(tier) {
+    return tier === 'xl'     ? 'var(--bad)' :
+           tier === 'large'  ? 'var(--warn)' :
+           tier === 'medium' ? 'var(--cyan-1)' :
+           tier === 'small'  ? 'var(--good)' :
+                               'var(--hull-3)';
+  }
+
+  function openCatalogModal(focusRole) {
+    // focusRole: 'chat' | 'vision' | 'image' | 'ollama' | undefined (= chat default)
+    if (!lastScan || !lastScan.catalog) {
+      alert('Catalog not loaded yet — try again in a moment.');
+      return;
+    }
+    const cat = lastScan.catalog;
+    const hfCached = new Set((lastScan.hf?.repos || []).map(r => r.repo_id));
+    const ollamaTags = new Set((lastScan.ollama?.tags || []).map(t => t.name));
+    const hfTokenSet = lastScan.hf_token_set === true;
+    const vramGb = (lastScan.vram_total_mb || 0) / 1024;
+    const role = focusRole || 'chat';
+
+    const m = document.createElement('div');
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;display:grid;place-items:center;font-family:var(--font-grotesk);padding:24px;';
+    m.innerHTML = `
+      <div style="background:var(--substrate-2);border:1px solid var(--cyan-2);border-radius:var(--r-md);width:880px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;color:var(--hull-2);">
+        <div style="padding:18px 22px;border-bottom:1px solid var(--stroke);display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h3 style="margin:0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">▸ Recommended models</h3>
+            <div class="tiny muted" style="font-family:var(--font-mono);font-size:11px;margin-top:4px;">Curated · one-click install · auto-rescans when done · your VRAM: ${vramGb.toFixed(0)} GB${hfTokenSet ? '' : ' · ⚠ HF_TOKEN not set: gated models will fail'}</div>
+          </div>
+          <button id="cmClose" class="btn btn-ghost" style="padding:6px 14px;font-size:11px;">✕ Close</button>
+        </div>
+        <div style="padding:12px 22px;border-bottom:1px solid var(--stroke);display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="cm-tab btn btn-${role==='chat'?'primary':'ghost'}" data-role="chat" style="padding:6px 12px;font-size:11px;">Chat · ${cat.chat.length}</button>
+          <button class="cm-tab btn btn-${role==='vision'?'primary':'ghost'}" data-role="vision" style="padding:6px 12px;font-size:11px;">Vision · ${cat.vision.length}</button>
+          <button class="cm-tab btn btn-${role==='image'?'primary':'ghost'}" data-role="image" style="padding:6px 12px;font-size:11px;">Image · ${cat.image.length}</button>
+          <button class="cm-tab btn btn-${role==='ollama'?'primary':'ghost'}" data-role="ollama" style="padding:6px 12px;font-size:11px;">Ollama tags · ${cat.ollama.length}</button>
+        </div>
+        <div id="cmList" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>
+        <div style="padding:12px 22px;border-top:1px solid var(--stroke);font-family:var(--font-mono);font-size:11px;color:var(--hull-3);">
+          ✓ already cached  ·  ⚠ gated (needs HF license accept)  ·  size > VRAM = won't fit
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+    m.querySelector('#cmClose').onclick = () => m.remove();
+    m.onclick = (e) => { if (e.target === m) m.remove(); };
+
+    function renderList(activeRole) {
+      const entries = cat[activeRole] || [];
+      const list = m.querySelector('#cmList');
+      list.innerHTML = '';
+      entries.forEach(entry => {
+        const isCached = activeRole === 'ollama'
+          ? ollamaTags.has(entry.repo_id)
+          : hfCached.has(entry.repo_id);
+        const fits = !entry.size_gb || entry.size_gb <= vramGb;
+        const gated = entry.gated === true;
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid var(--stroke);border-radius:var(--r-sm);padding:14px;margin-bottom:10px;background:rgba(2,6,15,0.4);display:grid;grid-template-columns:1fr 130px;gap:14px;align-items:center;';
+        card.innerHTML = `
+          <div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+              <span class="mono" style="color:var(--hull-1);font-size:13px;">${entry.repo_id.replace(/[<>"&]/g, '')}</span>
+              <span class="tiny" style="padding:1px 8px;border:1px solid var(--stroke);border-radius:8px;font-family:var(--font-mono);color:${tierColor(entry.tier)};font-size:10px;letter-spacing:0.08em;text-transform:uppercase;">${entry.tier} · ${entry.size_gb} GB</span>
+              ${gated ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--warn);border-radius:8px;font-family:var(--font-mono);color:var(--warn);font-size:10px;letter-spacing:0.08em;">⚠ gated</span>' : ''}
+              ${isCached ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--good);border-radius:8px;font-family:var(--font-mono);color:var(--good);font-size:10px;letter-spacing:0.08em;">✓ cached</span>' : ''}
+              ${!fits ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--bad);border-radius:8px;font-family:var(--font-mono);color:var(--bad);font-size:10px;letter-spacing:0.08em;">won\'t fit</span>' : ''}
+            </div>
+            <div class="tiny muted" style="font-family:var(--font-grotesk);font-size:12px;line-height:1.5;">${entry.why.replace(/[<>"&]/g, '')}</div>
+          </div>
+          <div style="text-align:right;display:flex;flex-direction:column;gap:6px;">
+            ${isCached
+              ? `<button class="btn btn-primary cm-use" data-id="${entry.repo_id.replace(/"/g,'&quot;')}" data-backend="${entry.backend}" data-role-target="${entry.role}" style="padding:8px 12px;font-size:11px;">▸ Use as ${entry.role}</button>`
+              : `<button class="btn btn-${gated && !hfTokenSet ? 'ghost' : 'primary'} cm-install" data-id="${entry.repo_id.replace(/"/g,'&quot;')}" data-backend="${entry.backend}" data-role-target="${entry.role}" data-size="${entry.size_gb}" data-gated="${gated}" style="padding:8px 12px;font-size:11px;${gated && !hfTokenSet ? 'opacity:0.6;cursor:not-allowed;' : ''}" ${gated && !hfTokenSet ? 'disabled' : ''}>▸ Install</button>`
+            }
+            <div class="cm-progress tiny muted" style="font-family:var(--font-mono);font-size:10px;text-align:right;min-height:12px;"></div>
+          </div>`;
+        list.appendChild(card);
+      });
+      // Wire install buttons
+      list.querySelectorAll('.cm-install').forEach(btn => {
+        btn.addEventListener('click', () => installEntry(btn));
+      });
+      list.querySelectorAll('.cm-use').forEach(btn => {
+        btn.addEventListener('click', () => useEntry(btn));
+      });
+    }
+
+    async function installEntry(btn) {
+      const id = btn.dataset.id;
+      const backend = btn.dataset.backend;
+      const target = btn.dataset.roleTarget;
+      const sizeGb = parseFloat(btn.dataset.size || '0');
+      const prog = btn.parentElement.querySelector('.cm-progress');
+      btn.disabled = true;
+      btn.textContent = '⏳ downloading…';
+      prog.style.color = 'var(--cyan-1)';
+      prog.textContent = `~${sizeGb} GB · this may take several minutes`;
+      try {
+        const r = await fetch(BASE + '/model/install', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model_id: id, backend, auto_pull: true }),
+        });
+        if (!r.ok) {
+          let msg = 'HTTP ' + r.status;
+          try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+          throw new Error(msg);
+        }
+        prog.style.color = 'var(--good)';
+        prog.textContent = '✓ installed · setting as default…';
+        // Auto-set as default for whichever role this catalog entry targets
+        const envKey = target === 'chat'   ? 'LOCAL_CHAT_MODEL_ID' :
+                       target === 'vision' ? 'LOCAL_VISION_MODEL_ID' :
+                       target === 'image'  ? 'LOCAL_IMAGE_MODEL_ID' : null;
+        if (envKey) {
+          await fetch(BASE + '/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: { [envKey]: id } }),
+          });
+        }
+        btn.textContent = '✓ done';
+        prog.textContent = '✓ set as default · restart AI server';
+        setTimeout(() => { rescan(); }, 500);
+      } catch (err) {
+        prog.style.color = 'var(--warn)';
+        prog.textContent = '✗ ' + (err.message || err);
+        btn.disabled = false;
+        btn.textContent = '▸ Retry';
+      }
+    }
+
+    async function useEntry(btn) {
+      const id = btn.dataset.id;
+      const target = btn.dataset.roleTarget;
+      const prog = btn.parentElement.querySelector('.cm-progress');
+      const envKey = target === 'chat'   ? 'LOCAL_CHAT_MODEL_ID' :
+                     target === 'vision' ? 'LOCAL_VISION_MODEL_ID' :
+                     target === 'image'  ? 'LOCAL_IMAGE_MODEL_ID' : null;
+      if (!envKey) return;
+      btn.disabled = true;
+      btn.textContent = '⏳';
+      try {
+        const r = await fetch(BASE + '/config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: { [envKey]: id } }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        btn.textContent = '✓';
+        prog.style.color = 'var(--cyan-1)';
+        prog.textContent = '✓ set as default · restart AI server';
+        setTimeout(() => { rescan(); }, 600);
+      } catch (err) {
+        prog.style.color = 'var(--warn)';
+        prog.textContent = '✗ ' + (err.message || err);
+        btn.disabled = false;
+        btn.textContent = '▸ Use';
+      }
+    }
+
+    m.querySelectorAll('.cm-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        m.querySelectorAll('.cm-tab').forEach(o => { o.classList.remove('btn-primary'); o.classList.add('btn-ghost'); });
+        t.classList.remove('btn-ghost'); t.classList.add('btn-primary');
+        renderList(t.dataset.role);
+      });
+    });
+    renderList(role);
   }
 
   async function saveOne(envKey, selectId, btnEl) {
@@ -5819,6 +6022,27 @@ root.render(<App />);
       hint: 'Pulls a tag via the local Ollama daemon (POST /api/pull). Daemon must be running. Cloud-only setups: set OLLAMA_API_KEY first.',
       placeholder: 'e.g. llama3.1:8b-instruct-q4_K_M',
     }));
+    $('mpBrowseRecommended')?.addEventListener('click', () => openCatalogModal('chat'));
+    $('mpEmptyStarter')?.addEventListener('click', () => openCatalogModal('chat'));
+    // Hash trigger: if app.html opens with #open-model-catalog (setup-wizard
+    // navigates here when chat_model firstrun check fails), wait for the
+    // first scan to complete then auto-open the catalog. Strips the hash
+    // so refreshes don't re-trigger.
+    function maybeAutoOpenCatalog() {
+      if (location.hash === '#open-model-catalog') {
+        // Wait for first scan so lastScan is populated, then open.
+        const wait = setInterval(() => {
+          if (lastScan && lastScan.catalog) {
+            clearInterval(wait);
+            try { history.replaceState(null, '', location.pathname); } catch {}
+            openCatalogModal('chat');
+          }
+        }, 200);
+        setTimeout(() => clearInterval(wait), 12000);
+      }
+    }
+    maybeAutoOpenCatalog();
+    window.addEventListener('hashchange', maybeAutoOpenCatalog);
     // Auto-refresh when the user navigates into the Config pane.
     document.querySelectorAll('.sidebar a[data-mod="config"]').forEach(a =>
       a.addEventListener('click', () => setTimeout(rescan, 200))

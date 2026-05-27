@@ -1227,18 +1227,32 @@ def register_gui_endpoints(
                 ollama_up = True
         except Exception:
             ollama_up = False
+        # Check that LOCAL_CHAT_MODEL_ID is set AND its model is actually
+        # cached. Either condition failing is a real fresh-user blocker: a
+        # blank var fails the new no-model-configured guard at /chat time,
+        # and a configured-but-not-cached model triggers a 5-30 GB download
+        # mid-conversation. Surface both as the same fixable check.
+        chat_id = (env.get("LOCAL_CHAT_MODEL_ID") or "").strip()
+        chat_ready = bool(chat_id) and (has_hf_cache or ollama_up)
+        if not chat_id:
+            fix_copy = "No chat model is configured yet. Open the model picker — curated starter models are one click to install."
+        elif not (has_hf_cache or ollama_up):
+            fix_copy = f"LOCAL_CHAT_MODEL_ID is `{chat_id}` but no HF cache or Ollama daemon is reachable. Install it from the picker."
+        else:
+            fix_copy = ""
         checks.append({
             "id": "chat_model",
-            "label": "A chat model is reachable (HF cache or Ollama)",
-            "ok": has_hf_cache or ollama_up,
-            "fix": "Pick a starter model from the wizard — opens add-model.html for HF / Ollama / remote provider selection.",
+            "label": "Chat model installed and configured",
+            "ok": chat_ready,
+            "fix": fix_copy,
             "fix_action": {
-                # navigate-only: wizard hands the user off to add-model.html
-                # rather than POSTing anywhere. Model install is a multi-step
-                # flow (backend picker, model id, optional API key) that
-                # belongs in the dedicated wizard, not inline.
-                "navigate": "add-model.html",
-                "label": "Pick model",
+                # Route to Bot config's model-picker section with a hash
+                # trigger that auto-opens the curated catalog modal.
+                # Replaces the old standalone add-model.html flow because
+                # the picker now has everything: cached repos + Ollama
+                # tags + recommended catalog + one-click install.
+                "navigate": "app.html#open-model-catalog",
+                "label": "▸ Pick model",
             },
             "blocking": False,
         })
