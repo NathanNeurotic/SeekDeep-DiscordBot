@@ -285,7 +285,7 @@
       } catch (_) { /* network blip; keep polling */ }
     }, 30_000);
 
-    const finish = (ok, msg) => {
+    const finish = (ok, msg, payload) => {
       if (settled) return;
       settled = true;
       clearInterval(ticker);
@@ -303,6 +303,21 @@
         setTimeout(probe, 1500);
       } else {
         appendLog(`✕ ${msg || 'install failed'} (after ${elapsedSec}s)`, 'err');
+        // Surface server-supplied hint + tail of pip output. Without these
+        // the user sees 'exit_code 1' and has no idea why. Backend
+        // already classifies common Windows / Python pitfalls into a
+        // hint string (see gui_endpoints.py post_deps_install).
+        if (payload && typeof payload === 'object') {
+          if (payload.hint) appendLog(`  → ${payload.hint}`, 'err');
+          if (payload.cmd)  appendLog(`  $ ${payload.cmd}`);
+          if (payload.detail) {
+            const lines = String(payload.detail).split(/\r?\n/).filter(s => s.trim()).slice(-12);
+            if (lines.length) {
+              appendLog('  ─── last ' + lines.length + ' pip output line(s) ───');
+              for (const ln of lines) appendLog('  ' + ln);
+            }
+          }
+        }
         setStepClass(li, 'bad');
         li.querySelector('.mark').textContent = '✕';
         if (btn) {
@@ -314,8 +329,8 @@
       }
     };
 
-    const offComplete = window.SeekDeepEvents.on(completeType, (data) => finish(true,  data?.note  || data?.detail));
-    const offFailed   = window.SeekDeepEvents.on(failedType,   (data) => finish(false, data?.error || data?.detail));
+    const offComplete = window.SeekDeepEvents.on(completeType, (data) => finish(true,  data?.note  || data?.detail, data));
+    const offFailed   = window.SeekDeepEvents.on(failedType,   (data) => finish(false, data?.error || data?.exit_code ? `exit ${data.exit_code}` : 'install failed', data));
 
     // Hard timeout: 15 min covers the worst-case PyTorch download on a
     // slow connection. If no terminal event arrives by then, surface

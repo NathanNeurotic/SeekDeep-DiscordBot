@@ -3354,15 +3354,28 @@ def register_gui_endpoints(
         )
 
         def run_install():
+            # Keep a rolling tail of pip stdout/stderr so the failed event
+            # can include the last few lines as diagnostic context. Without
+            # this the user just sees 'exit_code: 1' and has no clue WHY —
+            # pip's actual error (often 'no wheels for Python 3.14' or
+            # 'Microsoft Visual C++ 14.0 is required') gets lost.
+            from collections import deque
+            tail = deque(maxlen=40)
+            pip_args = [sys.executable, "-m", "pip", "install", "--upgrade"]
+            if not in_venv:
+                pip_args.append("--user")
+            pip_args.extend(["-r", str(req_path)])
+            cmd_str = " ".join(pip_args)
             try:
                 event_bus.publish_sync({
                     "type": "deps.install.started",
-                    "data": {"requirements_file": req_name, "venv": in_venv},
+                    "data": {
+                        "requirements_file": req_name,
+                        "venv": in_venv,
+                        "python": sys.executable,
+                        "cmd": cmd_str,
+                    },
                 })
-                pip_args = [sys.executable, "-m", "pip", "install", "--upgrade"]
-                if not in_venv:
-                    pip_args.append("--user")
-                pip_args.extend(["-r", str(req_path)])
                 proc = subprocess.Popen(
                     pip_args,
                     cwd=str(root),
@@ -3376,9 +3389,11 @@ def register_gui_endpoints(
                 # lines that are useful to surface.
                 if proc.stdout is not None:
                     for line in proc.stdout:
+                        stripped = line.rstrip()
+                        tail.append(stripped)
                         event_bus.publish_sync({
                             "type": "deps.install.line",
-                            "data": {"line": line.rstrip()},
+                            "data": {"line": stripped},
                         })
                 proc.wait()
                 if proc.returncode == 0:
@@ -3387,17 +3402,59 @@ def register_gui_endpoints(
                         "data": {"requirements_file": req_name},
                     })
                 else:
+                    # Surface the last ~40 lines as a single 'detail' string so
+                    # the GUI can show the actual pip error in the failure
+                    # banner. Also classify common Windows / Python pitfalls
+                    # so the user gets a hint, not just a raw traceback.
+                    tail_text = "\n".join(tail).strip()
+                    hint = ""
+                    blob = tail_text.lower()
+                    if "no matching distribution found" in blob or "could not find a version" in blob:
+                        hint = "pip can't find a wheel for this Python version. Most likely the running Python is too new (3.13+ have limited torch wheel coverage). Install Python 3.11 or 3.12 alongside, set SEEKDEEP_PYTHON in .env, and Reload .env."
+                    elif "microsoft visual c++" in blob and "required" in blob:
+                        hint = "A package needs the Visual C++ build tools. Install 'Build Tools for Visual Studio 2022' (vs.microsoft.com → Tools for Visual Studio → Build Tools), reboot, and retry."
+                    elif "permission denied" in blob or "access is denied" in blob:
+                        hint = "pip can't write to the install location. Try running SeekDeep as administrator once, or set up a venv and point SEEKDEEP_PYTHON at its python.exe."
+                    elif "ssl" in blob and ("certificate" in blob or "verify failed" in blob):
+                        hint = "pip can't verify HTTPS to pypi. Check that your system time/date is correct and your network doesn't strip TLS certificates (corporate proxies sometimes do)."
+                    elif "no module named pip" in blob or "no module named 'pip'" in blob:
+                        hint = "pip isn't installed in this Python. Run `python -m ensurepip --upgrade` in a terminal, or reinstall Python with the 'pip' option checked."
                     event_bus.publish_sync({
                         "type": "deps.install.failed",
                         "data": {
                             "requirements_file": req_name,
                             "exit_code": proc.returncode,
+                            "cmd": cmd_str,
+                            "python": sys.executable,
+                            "detail": tail_text[-4000:],  # cap for ws payload
+                            "hint": hint,
                         },
                     })
+            except FileNotFoundError as exc:
+                # python -m pip can't even start — typically pip not bundled
+                # with the running Python (rare on Windows; possible after a
+                # broken Python uninstall).
+                event_bus.publish_sync({
+                    "type": "deps.install.failed",
+                    "data": {
+                        "requirements_file": req_name,
+                        "error": f"could not start pip: {exc}",
+                        "cmd": cmd_str,
+                        "python": sys.executable,
+                        "hint": "Python or pip is missing from the install. Reinstall Python from python.org with the 'pip' option checked.",
+                        "detail": "\n".join(tail).strip()[-4000:],
+                    },
+                })
             except Exception as exc:
                 event_bus.publish_sync({
                     "type": "deps.install.failed",
-                    "data": {"requirements_file": req_name, "error": str(exc)},
+                    "data": {
+                        "requirements_file": req_name,
+                        "error": str(exc)[:400],
+                        "cmd": cmd_str,
+                        "python": sys.executable,
+                        "detail": "\n".join(tail).strip()[-4000:],
+                    },
                 })
 
         threading.Thread(target=run_install, daemon=True).start()
