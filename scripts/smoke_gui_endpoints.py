@@ -249,6 +249,50 @@ def main() -> int:
         check("  ...returns {ok, ...} (dry_run; will fail on non-Windows / no-winget; ok=False is valid)",
               "ok" in body, f"body={body}")
 
+    # ---- GET /system/detect-venv (open; venv finder for the wizard) -------
+    r = c.get("/system/detect-venv")
+    check("GET /system/detect-venv -> 200 (no auth required)",
+          r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, candidates:[...], current:{executable,...}}",
+          body.get("ok") is True
+          and isinstance(body.get("candidates"), list)
+          and isinstance(body.get("current"), dict)
+          and "executable" in body.get("current", {}),
+          f"keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
+
+    # ---- POST /system/use-venv (token-gated; sets SEEKDEEP_PYTHON in .env) -
+    r = c.post("/system/use-venv", json={"executable": sys.executable})
+    check("POST /system/use-venv without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    if token:
+        # Use sys.executable so the file existence check passes.
+        # This MUTATES .env so we save + restore the original value.
+        env_file = Path(".env")
+        before = env_file.read_text(encoding="utf-8") if env_file.is_file() else None
+        try:
+            r = c.post("/system/use-venv", headers={_TOKEN_HEADER: token},
+                       json={"executable": sys.executable})
+            check("POST /system/use-venv with token -> 200",
+                  r.status_code == 200, f"got {r.status_code}")
+            body = r.json() if r.status_code == 200 else {}
+            check("  ...returns {ok, executable, note}",
+                  body.get("ok") is True
+                  and isinstance(body.get("executable"), str)
+                  and "note" in body,
+                  f"body={body}")
+            # Bogus path -> 400
+            r = c.post("/system/use-venv", headers={_TOKEN_HEADER: token},
+                       json={"executable": "/definitely/not/a/file"})
+            check("POST /system/use-venv missing file -> 400",
+                  r.status_code == 400, f"got {r.status_code}")
+            r = c.post("/system/use-venv", headers={_TOKEN_HEADER: token}, json={})
+            check("POST /system/use-venv empty -> 400",
+                  r.status_code == 400, f"got {r.status_code}")
+        finally:
+            if before is not None:
+                env_file.write_text(before, encoding="utf-8")
+
     # ---- GET /system/runtime (open; installer page Node/Python/Git/Disk probe) ----
     r = c.get("/system/runtime")
     check("GET /system/runtime -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

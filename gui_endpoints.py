@@ -1064,16 +1064,46 @@ def register_gui_endpoints(
             except Exception:
                 ml_ok = False
                 break
-        checks.append({
-            "id": "ml_deps",
-            "label": "ML dependencies installed (torch / transformers / diffusers)",
-            "ok": ml_ok,
-            "fix": "Click \"Install ML libraries\" — runs `pip install -r requirements-ml.txt` against the running Python.",
-            "fix_action": {"endpoint": "/deps/install", "method": "POST",
-                           "label": "Install ML libraries", "body": {"requirements_file": "requirements-ml.txt"},
-                           "long_running": True, "watch_events": ["deps.install.complete", "deps.install.failed"]},
-            "blocking": False,
-        })
+        # If ml_deps is missing in the running Python, BUT we can detect
+        # a venv on disk that already has torch + CUDA, the better fix
+        # is to point SEEKDEEP_PYTHON at that venv (instant, no 2 GB
+        # download) instead of pip-installing torch into the running
+        # Python. The wizard's "Use detected .venv" button does this
+        # by POSTing /system/use-venv. We only suggest it when the
+        # current interpreter is NOT already the candidate.
+        better_python = None
+        if not ml_ok:
+            # Quick scan of repo-local .venv only (fast — the heavier
+            # multi-root scan lives at /system/detect-venv for the
+            # full wizard). This is the 95% case for users who ran
+            # setup_local.ps1 in the repo.
+            for sub in (".venv/Scripts/python.exe", ".venv/bin/python", ".venv/bin/python3"):
+                p = root / sub
+                if p.is_file() and str(p.resolve()) != sys.executable:
+                    better_python = str(p.resolve())
+                    break
+        if better_python:
+            checks.append({
+                "id": "ml_deps",
+                "label": "ML dependencies installed (torch / transformers / diffusers)",
+                "ok": ml_ok,
+                "fix": f"A .venv with ML libraries is sitting in your repo at {better_python}. Point the server at it (no re-download) — saves ~2 GB and is instant.",
+                "fix_action": {"endpoint": "/system/use-venv", "method": "POST",
+                               "label": "Use detected .venv",
+                               "body": {"executable": better_python}},
+                "blocking": False,
+            })
+        else:
+            checks.append({
+                "id": "ml_deps",
+                "label": "ML dependencies installed (torch / transformers / diffusers)",
+                "ok": ml_ok,
+                "fix": "Click \"Install ML libraries\" — runs `pip install -r requirements-ml.txt` against the running Python.",
+                "fix_action": {"endpoint": "/deps/install", "method": "POST",
+                               "label": "Install ML libraries", "body": {"requirements_file": "requirements-ml.txt"},
+                               "long_running": True, "watch_events": ["deps.install.complete", "deps.install.failed"]},
+                "blocking": False,
+            })
         # 6. nvidia-smi reachable (GPU detected)
         try:
             r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=2)
@@ -1495,6 +1525,164 @@ def register_gui_endpoints(
             "errors": errors,
             "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
         }
+
+    # ----- GET /system/detect-venv -----
+    # Scan filesystem locations the user is likely to have a venv with
+    # working torch + CUDA. The Tauri sidecar's find_python() walks
+    # py-launcher entries by default and picks a torch-supported one,
+    # but it doesn't know about a venv that lives in the user's repo
+    # checkout (e.g. C:\…\SeekDeep-DiscordBot\.venv\Scripts\python.exe).
+    # That venv often has the RIGHT wheel for the user's GPU because
+    # they ran setup_local.ps1 there. We surface it here so the wizard
+    # can auto-set SEEKDEEP_PYTHON and skip the "Install ML libraries"
+    # download entirely.
+    @app.get("/system/detect-venv")
+    def get_detect_venv():
+        import subprocess
+        candidates: list[dict] = []
+        seen: set[str] = set()
+        # Search roots, ordered most-likely-to-be-the-repo first.
+        # Repo CWD comes first because the server is usually launched
+        # from there (.bat or Tauri's runtime dir).
+        roots: list[Path] = []
+        roots.append(root)
+        # User's home + common subdirs people park projects in.
+        home = Path(os.path.expanduser("~"))
+        for sub in ("", "Documents", "Desktop", "Downloads", "github", "GitHub",
+                    "Source", "src", "Projects", "code", "OneDrive\\Documents"):
+            roots.append(home / sub if sub else home)
+        # The repo dir if SEEKDEEP_REPO_DIR is set in env (uncommon but cheap).
+        env_repo = os.environ.get("SEEKDEEP_REPO_DIR")
+        if env_repo:
+            roots.append(Path(env_repo))
+
+        def probe_python(exe: Path) -> dict | None:
+            if not exe.is_file():
+                return None
+            key = str(exe.resolve())
+            if key in seen:
+                return None
+            seen.add(key)
+            try:
+                code = (
+                    "import sys, json;"
+                    "v = sys.version_info;"
+                    "out = {'python':f'{v.major}.{v.minor}.{v.micro}',"
+                    " 'executable':sys.executable,"
+                    " 'torch':None, 'cuda_runtime':None, 'cuda_built':None, 'gpu_name':None};"
+                    "try:\n"
+                    " import torch;"
+                    " out['torch']=getattr(torch,'__version__',None);"
+                    " out['cuda_built']=getattr(getattr(torch,'version',None),'cuda',None);"
+                    " out['cuda_runtime']=bool(torch.cuda.is_available());"
+                    " out['gpu_name']=(torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)\n"
+                    "except Exception:\n"
+                    " pass\n"
+                    "print(json.dumps(out))"
+                )
+                r = subprocess.run([str(exe), "-c", code],
+                                   capture_output=True, text=True, timeout=8)
+                if r.returncode != 0:
+                    return {"executable": key, "error": (r.stderr or "")[-200:]}
+                import json as _json
+                data = _json.loads((r.stdout or "").strip().splitlines()[-1])
+                data["executable"] = key
+                return data
+            except Exception as exc:
+                return {"executable": key, "error": str(exc)[:200]}
+
+        # Search depth: 1 level deep from each root (so we catch
+        # `~/Documents/MyRepo/.venv` without recursing forever).
+        # The .venv itself is detected by the presence of
+        # Scripts/python.exe (Windows) or bin/python (Unix).
+        def find_venvs_under(d: Path) -> list[Path]:
+            found: list[Path] = []
+            if not d.is_dir():
+                return found
+            # Direct
+            for sub in (".venv", "venv", "env"):
+                exe = d / sub / "Scripts" / "python.exe"
+                if exe.is_file(): found.append(exe)
+                exe2 = d / sub / "bin" / "python"
+                if exe2.is_file(): found.append(exe2)
+                exe3 = d / sub / "bin" / "python3"
+                if exe3.is_file(): found.append(exe3)
+            # One level deeper (~/Documents/<project>/.venv/...)
+            try:
+                for entry in d.iterdir():
+                    if not entry.is_dir(): continue
+                    # Skip dotted dirs at this level except known venv names
+                    if entry.name.startswith(".") and entry.name not in (".venv",):
+                        continue
+                    for sub in (".venv", "venv", "env"):
+                        exe = entry / sub / "Scripts" / "python.exe"
+                        if exe.is_file(): found.append(exe)
+                        exe2 = entry / sub / "bin" / "python"
+                        if exe2.is_file(): found.append(exe2)
+                        exe3 = entry / sub / "bin" / "python3"
+                        if exe3.is_file(): found.append(exe3)
+            except Exception:
+                pass
+            return found
+
+        for r_root in roots:
+            try:
+                for exe in find_venvs_under(r_root):
+                    info = probe_python(exe)
+                    if info: candidates.append(info)
+            except Exception:
+                pass
+
+        # Rank: cuda_runtime=True first, then torch present, then by Python version.
+        def rank_key(c: dict) -> tuple:
+            return (
+                -1 if c.get("cuda_runtime") else 0,
+                -1 if c.get("torch") else 0,
+                -float(("".join(c.get("python", "0.0.0").split(".")[:2])) or 0),
+            )
+        candidates.sort(key=rank_key)
+        return {
+            "ok": True,
+            "candidates": candidates,
+            "current": _current_python_status(),
+        }
+
+    def _current_python_status() -> dict:
+        # Inline because gui_endpoints lives in a tight import scope.
+        out = {"executable": sys.executable, "torch": None, "cuda_runtime": None, "cuda_built": None}
+        try:
+            import torch as _t
+            out["torch"] = getattr(_t, "__version__", None)
+            out["cuda_built"] = getattr(getattr(_t, "version", None), "cuda", None)
+            try: out["cuda_runtime"] = bool(_t.cuda.is_available())
+            except Exception: out["cuda_runtime"] = False
+        except Exception:
+            pass
+        return out
+
+    # ----- POST /system/use-venv -----
+    # One-click apply: write SEEKDEEP_PYTHON=<path> to .env so the next
+    # Tauri sidecar boot uses the user's existing venv. After this fires
+    # the user has to restart the AI server (the running process can't
+    # swap its own interpreter); we surface the restart hint in the
+    # response.
+    @app.post("/system/use-venv", dependencies=[Depends(_require_gui_token)])
+    def post_use_venv(body: dict):
+        exe = str((body or {}).get("executable") or "").strip()
+        if not exe:
+            raise HTTPException(400, "executable is required")
+        exe_path = Path(exe)
+        if not exe_path.is_file():
+            raise HTTPException(400, f"{exe!r} is not a file")
+        # Use the same atomic + comment-preserving merger /config POST
+        # uses. SEEKDEEP_PYTHON is read by src-tauri/src/sidecar.rs's
+        # find_python() on the next sidecar boot.
+        try:
+            _merge_env(_env_path, {"SEEKDEEP_PYTHON": str(exe_path.resolve())})
+            return {"ok": True, "executable": str(exe_path.resolve()),
+                    "note": "Restart the AI server so SEEKDEEP_PYTHON takes effect (Quick Actions -> Reload .env, or tray -> Restart AI server)."}
+        except Exception as exc:
+            raise HTTPException(500, f"failed to write .env: {exc}")
 
     # ----- POST /system/install-docker -----
     # Same shape as /system/install-python but for Docker Desktop. The
