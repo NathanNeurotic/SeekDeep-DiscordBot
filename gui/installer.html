@@ -1629,7 +1629,12 @@
           <div class="finale">
             <div>
               <h2>Setup complete.</h2>
-              <p class="lede">Your configuration is ready. Click <strong style="color:var(--cyan-1);">APPLY TO .env</strong> below to write it directly via the local AI server — no copy-paste required. Re-run this wizard any time to change models or flags.</p>
+              <p class="lede">Your configuration is ready. Two ways to apply it:</p>
+              <ul class="lede" style="margin-top: 8px; padding-left: 22px; line-height: 1.7;">
+                <li><strong style="color:var(--cyan-1);">APPLY TO .env</strong> — writes it directly via the local AI server. Fastest, no copy-paste.</li>
+                <li><strong style="color:var(--cyan-1);">SHOW PREVIEW</strong> — see the raw .env block and copy-paste it yourself.</li>
+              </ul>
+              <p class="lede" style="margin-top: 8px;">Either way, the wizard is re-runnable any time. Hit <strong style="color:var(--cyan-1);">Finished</strong> at the bottom to open the Control Center.</p>
 
               <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
                 <button class="copy-btn" id="applyEnvBtn" style="cursor:pointer; background:var(--cyan-1); color:#000; font-weight:600; padding:8px 18px;" title="POST /config — writes the values below straight into your .env file">▸ APPLY TO .env</button>
@@ -1825,14 +1830,27 @@ const SEEKDEEP_BASE = (function() {
 
     document.getElementById('backBtn').style.visibility = i === 0 ? 'hidden' : 'visible';
     const nextBtn = document.getElementById('nextBtn');
-    nextBtn.textContent = i === STEPS.length-1 ? '✓ Finished' : 'Next →';
-    nextBtn.disabled = i === STEPS.length-1;
-    document.getElementById('skipBtn').style.display = i === STEPS.length-1 ? 'none' : 'inline-flex';
+    const onLastStep = i === STEPS.length - 1;
+    nextBtn.textContent = onLastStep ? '✓ Finished — Open Control Center →' : 'Next →';
+    // Don't disable on the last step — Finished should DO something:
+    // navigate to the Control Center so the user lands somewhere useful.
+    // Previously this was disabled (dead click), which is exactly the
+    // 'nothing feels shipment ready' complaint.
+    nextBtn.disabled = false;
+    document.getElementById('skipBtn').style.display = onLastStep ? 'none' : 'inline-flex';
   }
 
   document.getElementById('nextBtn').addEventListener('click', () => {
     state.stepsDone[STEPS[state.currentStep].id] = true;
     saveState();
+    if (state.currentStep === STEPS.length - 1) {
+      // On the last step: Finished navigates to the Control Center. If
+      // the user hasn't applied .env yet, that's fine — they can still
+      // come back here. The wizard is fundamentally optional past this
+      // point.
+      window.location.href = 'app.html';
+      return;
+    }
     goTo(state.currentStep + 1);
   });
   document.getElementById('backBtn').addEventListener('click', () => goTo(state.currentStep - 1));
