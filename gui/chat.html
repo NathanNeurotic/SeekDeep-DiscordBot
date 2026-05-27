@@ -748,21 +748,43 @@
         const nv = g.nvidia_smi || {};
         if (nv.detected) {
           const gpuName = nv.name || 'NVIDIA GPU';
-          const wheel = g.torch_cuda_built || (g.torch_present === false ? 'no torch' : 'cpu-only');
+          // gpu_stats() now ships torch_cuda_built so we can tell the
+          // four distinct failure modes apart instead of always blaming
+          // the wheel. Saves users from a 2 GB re-download when the
+          // real fix is "update your driver" or "this is a different
+          // server than your .venv was".
+          const builtArch = g.torch_cuda_built;   // e.g. "12.8" or null
+          const torchVer  = g.torch_version || 'torch';
           if (g.torch_present === false) {
             setVramCell('no torch · ' + gpuName,
               `${gpuName} detected by driver but PyTorch isn't installed. Open the Installer or click Install ML libraries in Control Center.`);
-          } else {
-            // Suggested variant: cu124 covers Ampere/Ada/Hopper/Blackwell.
-            // Blackwell (RTX 50-series) is the case that REQUIRES it; older
-            // cards work fine on cu124 too.
-            const suggested = 'cu124';
+          } else if (!builtArch) {
+            // Wheel is CPU-only (no torch.version.cuda). Reinstall fixes it.
             setVramCellClickableFix(
-              `wrong wheel · ${gpuName}`,
-              `${gpuName} detected by driver, but torch.cuda.is_available()=False — the loaded torch wheel (${wheel}) doesn't match this GPU. RTX 50-series (Blackwell) needs cu124+. Click to reinstall torch with ${suggested} (~2 GB download, sidecar restarts when done).`,
-              gpuName,
-              suggested,
-            );
+              `cpu wheel · ${gpuName}`,
+              `${gpuName} detected by driver, but the loaded torch (${torchVer}) is the CPU-only wheel. Click to reinstall with cu124 (~2 GB).`,
+              gpuName, 'cu124');
+          } else {
+            // Wheel HAS a CUDA build (cu121 / cu124 / cu128 / etc.) but
+            // torch.cuda.is_available() is still false. Three subcases:
+            //   a) wheel too old for the GPU (cu121 + Blackwell)
+            //   b) wheel newer than the driver (cu128 + an old driver)
+            //   c) something else (DLLs missing, MIG mode, etc.)
+            const looksBlackwell = /\bRTX\s*5\d{3}\b/i.test(gpuName);
+            const major = Number(String(builtArch).split('.')[0]);
+            const minor = Number(String(builtArch).split('.')[1] || 0);
+            const cu = `cu${(major||12)*10 + (minor||0)}`;  // "12.8" -> "cu128"
+            // Heuristic: if cu121 + Blackwell → wheel is too old (reinstall helps).
+            // If wheel is already cu124+ → driver is more likely culprit.
+            if (looksBlackwell && cu === 'cu121') {
+              setVramCellClickableFix(
+                `wrong wheel · ${gpuName}`,
+                `${gpuName} (Blackwell) detected, but the loaded torch wheel is cu121 — cu121 doesn't support sm_120. Click to reinstall with cu124 (~2 GB).`,
+                gpuName, 'cu124');
+            } else {
+              setVramCell(`driver mismatch · ${cu} loaded`,
+                `${gpuName} detected by driver, torch ${torchVer} (${cu}) loaded, but torch.cuda.is_available()=False. The wheel IS CUDA-capable — most likely cause is a driver too old for ${cu}, or this AI server is running on a different Python than your .venv. Verify with: .venv\\Scripts\\python -c "import torch; print(torch.cuda.is_available())"`);
+            }
           }
         } else {
           setVramCell('cpu only · no gpu',

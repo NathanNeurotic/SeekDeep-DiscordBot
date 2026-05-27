@@ -863,6 +863,16 @@ def gpu_stats() -> dict:
     }
     try:
         import torch
+        # Always surface the wheel arch + torch version so the GUI's
+        # "wrong wheel" diagnostic can be honest. Previously we only
+        # exposed `available` + `cuda_visible_to_torch`; chat.html and
+        # installer.html had no way to tell whether the loaded wheel
+        # was cu121 (probably wrong for Blackwell) or cu128 (fine).
+        # /system/runtime already exposes these but only under
+        # .python.* — /health.gpu.* needs them too so the chat.html
+        # cell doesn't have to make a second request.
+        stats["torch_version"]    = getattr(torch, "__version__", None)
+        stats["torch_cuda_built"] = getattr(getattr(torch, "version", None), "cuda", None)
         if not torch.cuda.is_available():
             # torch present but no CUDA. Carry over the nvidia_smi result
             # so the GUI can still show the actual hardware.

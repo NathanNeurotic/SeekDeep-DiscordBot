@@ -1578,6 +1578,12 @@ const SEEKDEEP_BASE = (function() {
       //   4. nvidia-smi finds nothing → yellow "no GPU · CPU mode"
       // Was: always (2)/(3)/(4) collapsed to "no GPU · CPU mode" — fresh
       // installs with a 4090 saw the same red dot as users without a GPU.
+      // Hoist `rt` BEFORE the GPU branches so the cross-reference reads
+      // below don't trip ReferenceError ('Cannot access rt before
+      // initialization'). The temporal-dead-zone bug surfaced as the
+      // entire installer's RUN ALL CHECKS being stuck on "probing…"
+      // because the GPU branch threw before any setCheckState fired.
+      const rt = (runtime && runtime.runtime) || {};
       if (gpu && gpu.total_mb) {
         const usedPct = Math.round((gpu.used_mb / gpu.total_mb) * 100);
         const name = (gpu.nvidia_smi && gpu.nvidia_smi.name) ? gpu.nvidia_smi.name : (gpu.device_name || 'CUDA device');
@@ -1602,21 +1608,39 @@ const SEEKDEEP_BASE = (function() {
         } else if (gpu.torch_present === false) {
           setCheckState('gpu', 'bad', `${name}${totalTag} detected by driver, but PyTorch isn't installed yet. Click "Install ML libraries" in the Control Center (or run "pip install -r requirements-ml.txt") to unlock local chat/image/vision.`);
         } else {
-          // torch loaded but no CUDA. Could be CPU-only wheel OR wrong arch.
-          // Both are fixable with a torch reinstall pointed at the right
-          // index URL. cu124 covers Ampere/Ada/Hopper/Blackwell so it's a
-          // safe default; Blackwell REQUIRES it.
+          // torch loaded but CUDA isn't available. Use the wheel-arch
+          // info from /health.gpu (newly added) and /system/runtime
+          // .python.torch_cuda_built (existing) to give an honest
+          // diagnosis instead of always saying "wrong wheel · cu124".
+          //   • CPU-only wheel  -> reinstall helps
+          //   • cu121 + Blackwell -> reinstall helps
+          //   • cu124+ wheel    -> wheel is fine; driver / mismatch
           const looksBlackwell = /\bRTX\s*5\d{3}\b/i.test(name);
-          const wheelBuilt = rt.python?.torch_cuda_built;
-          const wheelTag = wheelBuilt ? ` (current wheel built for ${wheelBuilt})` : ' (current wheel appears CPU-only)';
-          const hint = looksBlackwell
-            ? `cu121 can't see your ${name} — Blackwell needs cu124+.`
-            : `The loaded wheel doesn't expose CUDA to torch.`;
-          const variant = 'cu124';  // safe default for current cards
-          setCheckState('gpu', 'bad',
-            `${name}${totalTag} detected by driver, but torch.cuda.is_available() is False${wheelTag}. ${hint} Click FIX to reinstall torch with ${variant}.`,
-            { label: '▸ FIX', title: `Reinstall torch with ${variant} (~2 GB; sidecar restarts when done)`,
-              onClick: () => runInstallerTorchReinstall(name, variant) });
+          const wheelBuilt = gpu.torch_cuda_built || rt.python?.torch_cuda_built;
+          if (!wheelBuilt) {
+            setCheckState('gpu', 'bad',
+              `${name}${totalTag} detected by driver, but the loaded torch is a CPU-only wheel (no torch.version.cuda). Click FIX to reinstall with cu124.`,
+              { label: '▸ FIX', title: 'Reinstall torch with cu124 (~2 GB; sidecar restarts when done)',
+                onClick: () => runInstallerTorchReinstall(name, 'cu124') });
+          } else {
+            const major = Number(String(wheelBuilt).split('.')[0]);
+            const minor = Number(String(wheelBuilt).split('.')[1] || 0);
+            const cu = `cu${(major || 12) * 10 + (minor || 0)}`;
+            const tooOldForBlackwell = looksBlackwell && cu === 'cu121';
+            if (tooOldForBlackwell) {
+              setCheckState('gpu', 'bad',
+                `${name}${totalTag} detected (Blackwell), but the loaded torch wheel is cu121 — cu121 doesn't support sm_120. Click FIX to reinstall with cu124.`,
+                { label: '▸ FIX', title: 'Reinstall torch with cu124 (~2 GB; sidecar restarts when done)',
+                  onClick: () => runInstallerTorchReinstall(name, 'cu124') });
+            } else {
+              // Wheel is already CUDA-capable. Don't offer a reinstall —
+              // the user would just be downloading the same arch again.
+              // Most likely: driver < CUDA build, or this AI server is
+              // running on a different Python than the user's .venv.
+              setCheckState('gpu', 'bad',
+                `${name}${totalTag} detected by driver, torch wheel is ${cu} (CUDA-capable), but torch.cuda.is_available() is False. Most likely the NVIDIA driver is older than the wheel needs, OR the AI server is running on a different Python than your .venv. Verify with .venv\\Scripts\\python -c "import torch; print(torch.cuda.is_available())".`);
+            }
+          }
         }
       } else if (gpu && gpu.available === false) {
         // No GPU at all (nvidia-smi didn't find one). Use warn (amber):
@@ -1629,8 +1653,9 @@ const SEEKDEEP_BASE = (function() {
       }
 
       // node / python / git / disk: real probes via /system/runtime
-      // instead of "server up implies node ok" placeholders.
-      const rt = (runtime && runtime.runtime) || {};
+      // instead of "server up implies node ok" placeholders. `rt` was
+      // already declared above (hoisted so the GPU branch could read
+      // rt.python.torch_supported_by_version without TDZ-erroring).
       // Node
       if (rt.node?.installed) {
         if (rt.node.meets_min) setCheckState('node', 'ok',  `v${rt.node.version} (≥ ${rt.node.min_required} required)`);
