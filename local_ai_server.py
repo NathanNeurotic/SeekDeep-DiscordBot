@@ -130,10 +130,13 @@ def _seekdeep_install_file_logging() -> None:
         s = _re_bearer.sub(r"\1[redacted]", s)
         s = _re_apikey.sub(r"\1[redacted]", s)
         return s
+    _re_py_warning = re.compile(r":\s*\d+:\s*\w+Warning\b")  # 'file.py:765: DeprecationWarning'
     class _Tee:
         def __init__(self, real, level):
             self.real = real
             self.level = level  # default severity if no inline marker
+            self._sticky = None  # carries severity across continuation lines
+            self._sticky_until_blank = False
         def write(self, data):
             try:
                 self.real.write(data)
@@ -144,21 +147,41 @@ def _seekdeep_install_file_logging() -> None:
                     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
                     for line in str(data).splitlines():
                         if not line:
+                            # Blank line terminates a sticky multi-line warning.
+                            if self._sticky_until_blank:
+                                self._sticky = None
+                                self._sticky_until_blank = False
                             continue
-                        # Sniff per-line severity: uvicorn + Python logging
-                        # write INFO and WARNING to stderr too, so blindly
-                        # tagging everything from stderr as [ERR] makes the
-                        # logs viewer look like a fire when nothing's wrong.
+                        # Sniff per-line severity. Uvicorn + Python warnings
+                        # write to stderr too; blindly tagging everything from
+                        # stderr as [ERR] made the logs viewer look like a fire
+                        # when nothing's wrong.
                         lvl = self.level
                         stripped = line.lstrip()
+                        new_sticky = None
                         if stripped.startswith("INFO:") or stripped.startswith("INFO "):
                             lvl = "INFO"
-                        elif stripped.startswith("WARNING:") or stripped.startswith("WARN:") or stripped.startswith("UserWarning"):
+                        elif (stripped.startswith("WARNING:")
+                              or stripped.startswith("WARN:")
+                              or stripped.startswith("UserWarning")
+                              or _re_py_warning.search(line)):
                             lvl = "WARN"
+                            new_sticky = "WARN"  # tag continuation lines too
                         elif stripped.startswith("DEBUG:"):
                             lvl = "DEBUG"
                         elif stripped.startswith("ERROR:") or stripped.startswith("CRITICAL:"):
                             lvl = "ERR"
+                        elif stripped.startswith("Traceback ") or stripped.startswith("  File "):
+                            lvl = "ERR"
+                            new_sticky = "ERR"
+                        else:
+                            # Continuation line — if we're inside a sticky
+                            # multi-line warning/traceback, inherit its level.
+                            if self._sticky:
+                                lvl = self._sticky
+                        if new_sticky is not None:
+                            self._sticky = new_sticky
+                            self._sticky_until_blank = True
                         sink.write(f"[{ts}] [{lvl}] {_redact(line)}\n")
             except Exception:
                 pass

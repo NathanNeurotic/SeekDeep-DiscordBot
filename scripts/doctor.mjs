@@ -2,7 +2,37 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import dotenv from 'dotenv';
+
+// Standalone .env loader — was `import dotenv from 'dotenv'` which broke
+// when the Installer spawned doctor.mjs from %APPDATA%/SeekDeep/app/
+// where there's no node_modules. The doctor's whole job is to diagnose
+// before you have any deps, so it can't depend on npm packages itself.
+// Minimal parser: KEY=VALUE per line, optional quotes, ignore # comments.
+const dotenv = {
+  config({ path: envPath } = {}) {
+    try {
+      const raw = fs.readFileSync(envPath, 'utf-8');
+      for (const rawLine of raw.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const eq = line.indexOf('=');
+        if (eq < 0) continue;
+        const key = line.slice(0, eq).trim();
+        let val = line.slice(eq + 1).trim();
+        // Strip surrounding quotes if balanced.
+        if ((val.startsWith('"') && val.endsWith('"')) ||
+            (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        // Don't overwrite values already in process.env (matches dotenv default).
+        if (!(key in process.env)) process.env[key] = val;
+      }
+      return { parsed: true };
+    } catch (err) {
+      return { error: err };
+    }
+  },
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
