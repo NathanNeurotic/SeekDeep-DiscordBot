@@ -2096,7 +2096,56 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+// Circuit breaker for the AI server. When the bot is online but the AI
+// server is down (Tauri sidecar crashed, port :7865 unbound, .env token
+// mismatch, etc), every Discord message routed to /chat would spam the
+// channel with 'SeekDeep request failed · fetch failed' replies. This is
+// the 2026-05-27 incident where the Discord guild filled with public
+// error toasts because the GUI couldn't restart the bot.
+//
+// Behavior: after SEEKDEEP_CIRCUIT_THRESHOLD consecutive postLocal()
+// failures, the circuit opens for SEEKDEEP_CIRCUIT_COOLDOWN_MS. While
+// open, postLocal throws a typed AICircuitOpenError immediately without
+// hitting the network. The chat-error catch block detects this error
+// class and silently skips the reply (one warning was already surfaced
+// when the circuit first opened, via the boolean transition flag).
+class AICircuitOpenError extends Error {
+  constructor() {
+    super('AI server circuit breaker is open');
+    this.name = 'AICircuitOpenError';
+    this.code = 'AI_CIRCUIT_OPEN';
+  }
+}
+const SEEKDEEP_CIRCUIT_THRESHOLD = 3;
+const SEEKDEEP_CIRCUIT_COOLDOWN_MS = 60_000;
+let _seekdeepAiFailStreak = 0;
+let _seekdeepAiCircuitOpenUntil = 0;
+let _seekdeepAiCircuitWarnedAt = 0;
+function seekdeepAiCircuitIsOpen() {
+  return Date.now() < _seekdeepAiCircuitOpenUntil;
+}
+function seekdeepAiCircuitNoteSuccess() {
+  if (_seekdeepAiFailStreak > 0 || _seekdeepAiCircuitOpenUntil > 0) {
+    console.log('[SeekDeep] AI server reachable again — circuit closed.');
+  }
+  _seekdeepAiFailStreak = 0;
+  _seekdeepAiCircuitOpenUntil = 0;
+}
+function seekdeepAiCircuitNoteFailure(err) {
+  _seekdeepAiFailStreak += 1;
+  if (_seekdeepAiFailStreak >= SEEKDEEP_CIRCUIT_THRESHOLD && _seekdeepAiCircuitOpenUntil === 0) {
+    _seekdeepAiCircuitOpenUntil = Date.now() + SEEKDEEP_CIRCUIT_COOLDOWN_MS;
+    _seekdeepAiCircuitWarnedAt = Date.now();
+    console.warn(`[SeekDeep] AI server unreachable after ${_seekdeepAiFailStreak} fails — circuit open for ${SEEKDEEP_CIRCUIT_COOLDOWN_MS}ms. Last error: ${String(err?.message || err).slice(0, 200)}`);
+  }
+}
+
 async function postLocal(pathname, body, options = {}) {
+  // Circuit-breaker gate: bail fast when the server is known-down so we
+  // don't spam Discord with failure replies for every queued message.
+  if (seekdeepAiCircuitIsOpen()) {
+    throw new AICircuitOpenError();
+  }
   const timeoutMs = Number(options?.timeoutMs || 0);
   const controller = timeoutMs > 0 ? new AbortController() : null;
   let timeout = null;
@@ -2119,9 +2168,10 @@ async function postLocal(pathname, body, options = {}) {
 
   const url = `${LOCAL_AI_BASE_URL}${pathname}`;
   const payload = seekdeepJsonStringifySafe(body);
+  let result;
   try {
     try {
-      return await fetchJson(url, {
+      result = await fetchJson(url, {
         method: 'POST',
         headers,
         body: payload,
@@ -2140,14 +2190,17 @@ async function postLocal(pathname, body, options = {}) {
       process.env.SEEKDEEP_GUI_TOKEN = fresh;
       console.warn(`[SeekDeep] ${pathname} got 401; .env had a newer token — retrying once.`);
       headers['X-SeekDeep-Token'] = fresh;
-      return await fetchJson(url, {
+      result = await fetchJson(url, {
         method: 'POST',
         headers,
         body: payload,
         signal: controller?.signal,
       });
     }
+    seekdeepAiCircuitNoteSuccess();
+    return result;
   } catch (err) {
+    seekdeepAiCircuitNoteFailure(err);
     if (err?.name === 'AbortError') {
       throw new Error(`Local AI request timed out after ${(timeoutMs / 1000).toFixed(1)} seconds.`);
     }
@@ -19351,7 +19404,17 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     console.error(err);
     stopSeekDeepTypingLoopForMessage(message);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-    await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
+    // Circuit-open: AI server has failed N times in a row. Don't spam the
+    // channel — the bot already logged the outage when the circuit opened.
+    // Replace the noisy 'SeekDeep request failed · fetch failed' wall with
+    // a single ephemeral-style reaction so the user knows their message
+    // was seen but the server is down. (Prevents the 2026-05-27 incident
+    // where dozens of fetch-failed messages flooded a public channel.)
+    if (err && err.code === 'AI_CIRCUIT_OPEN') {
+      try { await message.react('🔌'); } catch (_) {}
+    } else {
+      await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
+    }
   } finally {
     // Clean up any unconsumed loading-GIF placeholder (e.g. route went to
     // image gen which sends its own messages, not via sendLongMessageReply).
