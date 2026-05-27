@@ -360,15 +360,19 @@ def main() -> int:
         check("GET /data/server-stats.json -> 200 (or empty fallback)",
               False, f"got {r.status_code}; expected 200 if file exists or empty fallback")
 
-    # auto-reactions.json: file may not exist on a fresh repo; normalizer
-    # should still return empty {rules:[]} not 404.
-    r = c.get("/data/auto-reactions.json")
-    check("GET /data/auto-reactions.json -> 200 (empty-fallback for missing file)",
-          r.status_code == 200, f"got {r.status_code}")
-    if r.status_code == 200:
-        body = r.json()
-        check("  ...returns {rules: []} when file missing",
-              isinstance(body.get("data", {}).get("rules"), list))
+    # auto-reactions.json: now token-gated (contains guild + creator IDs).
+    # With token: empty-fallback. Without: 401.
+    if token:
+        r = c.get("/data/auto-reactions.json", headers={"X-SeekDeep-Token": token})
+        check("GET /data/auto-reactions.json (with token) -> 200 (empty-fallback for missing file)",
+              r.status_code == 200, f"got {r.status_code}")
+        if r.status_code == 200:
+            body = r.json()
+            check("  ...returns {rules: []} when file missing",
+                  isinstance(body.get("data", {}).get("rules"), list))
+        r = c.get("/data/auto-reactions.json")
+        check("GET /data/auto-reactions.json (no token) -> 401 (token-gated, contains guild + creator IDs)",
+              r.status_code == 401, f"got {r.status_code}")
 
     # archive-snapshot.json: token-gated + normalized. With our token header,
     # we should get the empty-snapshot fallback when the bot hasn't written

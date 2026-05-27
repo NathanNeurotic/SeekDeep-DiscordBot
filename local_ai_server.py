@@ -554,15 +554,30 @@ app = FastAPI(title="SeekDeep Local AI Server", version=SEEKDEEP_VERSION)
 # delivered but JS can't read it, so the loading overlay sees no answer and
 # never redirects to chat.html.
 #
-# We allow_origins=["*"] because this server only ever listens on 127.0.0.1
-# (no public exposure), AND every write endpoint already requires
-# X-SeekDeep-Token via require_gui_token — so opening CORS doesn't change the
-# auth posture. The token can't be exfiltrated by a hostile webpage because
-# GET /token is loopback-only (see gui_endpoints.py).
+# CORS: allowlist-only. The old `allow_origins=["*"]` was unsafe because a
+# malicious webpage in the user's browser can fetch http://127.0.0.1:7865/...
+# — the TCP connection IS loopback (the browser is the local peer), so any
+# loopback-host check passes. With `*`, the browser then lets the malicious
+# page read the response body, exfiltrating tokens / logs / prompts.
+# Allowlist below covers the FastAPI-served GUI (127.0.0.1:7865 + localhost
+# variant) and the Tauri 2 shells (tauri.localhost on Windows,
+# tauri://localhost on macOS/Linux). Server-to-server callers (the bot, curl)
+# don't send Origin headers so CORS doesn't apply to them.
 from fastapi.middleware.cors import CORSMiddleware
+try:
+    from gui_endpoints import TRUSTED_BROWSER_ORIGINS as _TRUSTED_ORIGINS
+except Exception:
+    # Fallback if gui_endpoints fails to import. Mirror of the canonical list.
+    _TRUSTED_ORIGINS = (
+        "http://127.0.0.1:7865",
+        "http://localhost:7865",
+        "http://tauri.localhost",
+        "tauri://localhost",
+        "https://tauri.localhost",
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(_TRUSTED_ORIGINS),
     allow_credentials=False,  # we use a header token, not cookies
     allow_methods=["*"],
     allow_headers=["*"],
@@ -3709,7 +3724,7 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     return answer, resolved_role, model_id
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(require_gui_token)])
 def chat(req: ChatRequest):
     requested_role = (req.role or "default_chat").strip().lower() or "default_chat"
     n_msgs = len(req.messages) if req.messages else 0
@@ -3930,7 +3945,7 @@ def generate_vision_answer(prompt: str, frames: list[Image.Image], media_kind: s
     return (output_text[0].strip() if output_text else "").strip() or "(empty vision response)"
 
 
-@app.post("/vision")
+@app.post("/vision", dependencies=[Depends(require_gui_token)])
 def vision(req: VisionRequest):
     media_bytes = b64_to_bytes(req.media_b64)
     frames, actual_kind = load_media_frames(media_bytes, req.filename, req.media_kind)
@@ -4076,7 +4091,7 @@ def _apply_sdxl_prompt_cap(args: dict, pipe) -> None:
             args[key] = capped
 
 
-@app.post("/image")
+@app.post("/image", dependencies=[Depends(require_gui_token)])
 def image(req: ImageRequest):
     load_image_pipe()
 
@@ -4150,7 +4165,7 @@ def image(req: ImageRequest):
     }
 
 
-@app.post("/img2img")
+@app.post("/img2img", dependencies=[Depends(require_gui_token)])
 def img2img(req: Img2ImgRequest):
     load_image_pipe()
 
@@ -4256,7 +4271,7 @@ def select_upscale_method(requested_method: str) -> tuple[str, bool, str]:
     return "lanczos", True, ""
 
 
-@app.post("/upscale")
+@app.post("/upscale", dependencies=[Depends(require_gui_token)])
 def upscale(req: UpscaleRequest):
     """Upscale an image. 'lanczos' is a zero-model PIL fallback that works
     immediately. 'realesrgan' requires the model to be downloaded separately."""
@@ -4569,7 +4584,7 @@ def load_instruct_pix2pix() -> None:
     print("[SeekDeep] InstructPix2Pix model loaded", flush=True)
 
 
-@app.post("/instruct-pix2pix")
+@app.post("/instruct-pix2pix", dependencies=[Depends(require_gui_token)])
 def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
     load_instruct_pix2pix()
 
@@ -4669,7 +4684,7 @@ def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
     return mask_img
 
 
-@app.post("/inpaint")
+@app.post("/inpaint", dependencies=[Depends(require_gui_token)])
 def inpaint_endpoint(req: InpaintRequest):
     load_image_pipe()
 
@@ -4733,7 +4748,7 @@ def inpaint_endpoint(req: InpaintRequest):
     }
 
 
-@app.post("/inpaint_mask_preview")
+@app.post("/inpaint_mask_preview", dependencies=[Depends(require_gui_token)])
 def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
     """
     Generate and return only the CLIPSeg mask preview.
@@ -4788,7 +4803,7 @@ class ChartRequest(BaseModel):
     guild_name: str = Field("", description="Optional server name for subtitle")
 
 
-@app.post("/chart")
+@app.post("/chart", dependencies=[Depends(require_gui_token)])
 def chart(req: ChartRequest):
     """Render a line chart of daily images / chats / vision counts."""
     try:

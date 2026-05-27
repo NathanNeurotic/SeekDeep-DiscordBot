@@ -222,6 +222,18 @@ _PID_FILE_NAMES = {
 
 # Loopback IPs that may fetch GET /token. Anything else gets 403.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# Origins we'll accept from browser callers. Loopback variants for the FastAPI-
+# served GUI; tauri.localhost (Windows) + tauri://localhost (macOS/Linux) for
+# the Tauri 2 shell. A drive-by malicious site at https://evil.com sends
+# Origin: https://evil.com, fails this check, gets 403 — even though its TCP
+# connection still appears as 127.0.0.1 (the browser is the loopback peer).
+TRUSTED_BROWSER_ORIGINS = (
+    "http://127.0.0.1:7865",
+    "http://localhost:7865",
+    "http://tauri.localhost",
+    "tauri://localhost",
+    "https://tauri.localhost",
+)
 
 
 # ====================================================================
@@ -332,10 +344,30 @@ def _ensure_gui_token(env_path: Path) -> tuple[str, bool]:
 _ENV_LINE_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)\s*=")
 
 
+_ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
 def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
-    """Merge `updates` into the on-disk .env file, preserving comments and order."""
+    """Merge `updates` into the on-disk .env file, preserving comments and order.
+
+    Security (antigravity AUD-004 + Codex):
+    - Reject keys that don't match POSIX env-var format (rejects e.g. injection
+      via punctuation or non-uppercase keys).
+    - Reject values containing \\r or \\n — those would let an attacker write
+      additional env lines like `FOO=x\\nSEEKDEEP_GUI_TOKEN_DISABLED=1` that
+      get parsed on next server boot, disabling auth.
+    Caller must already be token-gated (Depends(_require_gui_token) on /config).
+    These checks are defense-in-depth if a token ever leaks.
+    """
     if not env_path.is_file():
         raise HTTPException(404, f".env not found at {env_path}")
+
+    for k, v in updates.items():
+        if not isinstance(k, str) or not _ENV_KEY_RE.match(k):
+            raise HTTPException(400, f"invalid env key {k!r}: must match {_ENV_KEY_RE.pattern}")
+        sv = str(v)
+        if "\n" in sv or "\r" in sv:
+            raise HTTPException(400, f"env value for {k!r} contains newline; refusing to write")
 
     with env_path.open("r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -1046,6 +1078,23 @@ def register_gui_endpoints(
         host = (request.client.host if request.client else "") or ""
         if host not in _LOOPBACK_HOSTS:
             raise HTTPException(403, f"GET /token is loopback-only; refused for client {host!r}")
+        # Defense against browser drive-by exfiltration: even though the TCP
+        # connection appears as loopback (the browser IS local), the Origin
+        # header reveals the page that initiated the fetch. Reject anything
+        # outside the trusted GUI shells. Server-to-server callers (bot, curl)
+        # don't send Origin, so this still allows them through.
+        origin = request.headers.get("origin") or ""
+        if origin and origin not in TRUSTED_BROWSER_ORIGINS:
+            raise HTTPException(403,
+                f"GET /token rejected: untrusted Origin {origin!r}. "
+                f"Allowed: {list(TRUSTED_BROWSER_ORIGINS)}")
+        # Sec-Fetch-Site is a Fetch Metadata header browsers attach since
+        # ~2020. If present and 'cross-site', the request came from an
+        # untrusted origin even when Origin is absent. Reject.
+        sfs = (request.headers.get("sec-fetch-site") or "").lower()
+        if sfs == "cross-site":
+            raise HTTPException(403,
+                "GET /token rejected: Sec-Fetch-Site: cross-site (browser drive-by blocked)")
         return {"token": _current_token(), "header": _TOKEN_HEADER, "disabled": _token_disabled}
 
     # ----- POST /config -----
@@ -1056,7 +1105,9 @@ def register_gui_endpoints(
         return _merge_env(_env_path, patch.updates)
 
     # ----- GET /logs/tail -----
-    @app.get("/logs/tail")
+    # Token-gated: log bodies leak prompts, file paths, model state, errors.
+    # Browser drive-by would read these without auth before this gate.
+    @app.get("/logs/tail", dependencies=[Depends(_require_gui_token)])
     async def get_logs_tail(lines: int = 200, file: str | None = None):
         path = (_log_dir / file).resolve() if file else _find_active_log(_log_dir)
         if path is None:
@@ -1072,7 +1123,8 @@ def register_gui_endpoints(
         }
 
     # ----- GET /logs/stream -----
-    @app.get("/logs/stream")
+    # Token-gated for the same reason as /logs/tail.
+    @app.get("/logs/stream", dependencies=[Depends(_require_gui_token)])
     async def get_logs_stream():
         path = _find_active_log(_log_dir)
         if path is None:
@@ -2587,6 +2639,7 @@ def register_gui_endpoints(
         "archive-guild-config.json",  # guild/channel routing IDs
         "archive-snapshot.json",   # per-thread entry metadata + prompts + thumbnails
         "prompt-templates.json",   # discord user IDs + saved prompt bodies
+        "auto-reactions.json",     # guild IDs, channel IDs, creator IDs, patterns
     }
 
     # ----- GET /data/{file} -----

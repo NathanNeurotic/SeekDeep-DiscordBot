@@ -31,7 +31,9 @@ def call(method, path, body=None, timeout=60, expect=None):
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    if TOKEN and method in ("POST", "PATCH", "DELETE"):
+    # Always attach token when we have one: /logs/tail, /data/auto-reactions.json,
+    # and other GET endpoints are now token-gated too (P0 security fix).
+    if TOKEN:
         req.add_header("X-SeekDeep-Token", TOKEN)
     t0 = time.time()
     status = "?"

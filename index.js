@@ -2060,10 +2060,19 @@ async function postLocal(pathname, body, options = {}) {
     timeout = setTimeout(() => controller.abort(), timeoutMs);
   }
 
+  // Auth: the AI server now token-gates /chat /vision /image /img2img /upscale
+  // /instruct-pix2pix /inpaint /inpaint_mask_preview /chart (P0 security fix,
+  // see commit message). Bot + server share .env so we read SEEKDEEP_GUI_TOKEN
+  // from process.env. Header is omitted when empty so the server's 401 message
+  // explains how to set it instead of silently looking unauthed.
+  const headers = { 'content-type': 'application/json' };
+  const tok = (process.env.SEEKDEEP_GUI_TOKEN || '').trim();
+  if (tok) headers['X-SeekDeep-Token'] = tok;
+
   try {
     return await fetchJson(`${LOCAL_AI_BASE_URL}${pathname}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: seekdeepJsonStringifySafe(body),
       signal: controller?.signal,
     });

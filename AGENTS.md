@@ -7,7 +7,7 @@
 >
 > This file is the **architecture canonical**: what each subsystem does and where the key entry points live. Update this in the same change as the code edit.
 
-SeekDeep is a single-file Node bot (`index.js`, ~16k+ lines after v10.0–v10.29) plus a Python FastAPI local AI server (`local_ai_server.py`). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
+SeekDeep is a single-file Node bot (`index.js`, ~22.5k lines as of v10.35.6) plus a Python FastAPI local AI server (`local_ai_server.py`, ~4.9k lines). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
 
 Function names are stable enough to grep for. If you find a stale reference here while reading the code, please update this file in the same change.
 
