@@ -4225,18 +4225,44 @@ const SEEKDEEP_BASE = (function() {
     const wrap = document.getElementById('logs-wrap');
     if (!wrap) return;
 
-    const LOG_LINE_RE = /^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*\[?(INFO|WARN|ERR|ERROR|DBG|DEBUG)?\]?\s*\[?(\w+[-\w]*)?\]?\s*[:|]?\s*(.*)$/i;
+    // File-logger format (most common today): [YYYY-MM-DDTHH:MM:SS(.fff)?] [LEVEL] msg
+    // Legacy / SSE format: HH:MM:SS [LEVEL] [src] msg
+    // The old single regex only handled HH:MM:SS and treated the ISO date as
+    // a "source" — so the timestamp column showed "2026-05-27T05" and the
+    // level was lost. Split into two patterns + fall back to plain text.
+    const FILE_LOG_RE   = /^\s*\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]\s*\[(INFO|WARN|ERR|ERROR|DBG|DEBUG)\]\s*(.*)$/i;
+    const LEGACY_LOG_RE = /^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*\[?(INFO|WARN|ERR|ERROR|DBG|DEBUG)?\]?\s*\[?([A-Za-z][\w-]*)?\]?\s*[:|]?\s*(.*)$/i;
 
     function renderLine(raw) {
-      const m = LOG_LINE_RE.exec(raw) || [null,'','','',raw];
-      const lvl = (m[2] || '').toLowerCase().replace('error','err').replace('debug','dbg');
+      let ts = '', lvl = '', src = '', msg = raw;
+      const fm = FILE_LOG_RE.exec(raw);
+      if (fm) {
+        ts  = fm[1] || '';
+        lvl = (fm[2] || '').toLowerCase();
+        msg = fm[3] || '';
+        src = 'file';
+      } else {
+        const sm = LEGACY_LOG_RE.exec(raw) || [null,'','','',raw];
+        ts  = sm[1] || '';
+        lvl = (sm[2] || '').toLowerCase();
+        src = sm[3] || '';
+        msg = sm[4] || raw;
+      }
+      // Auto-correct stale-bundle mis-tags: an older Tee tagged uvicorn's
+      // `INFO: Started server process` as [ERR] because stderr defaulted to
+      // ERR. The current Tee fixes this at the source (commit 3ef9fae), but
+      // until the user rebuilds the installer they're stuck with the old
+      // server. Re-detect level from message content so the viewer at least
+      // displays it correctly.
+      if ((lvl === 'err' || lvl === 'error') && /^\s*INFO[:\s]/i.test(msg)) {
+        lvl = 'info';
+      }
+      lvl = lvl.replace('error','err').replace('debug','dbg');
       const lvlCls = ['info','warn','err','dbg'].includes(lvl) ? lvl : 'info';
-      const ts  = m[1] || '';
-      const src = m[3] || '';
-      const msg = (m[4] || raw).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const safeMsg = msg.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const el = document.createElement('div');
       el.className = 'log-line';
-      el.innerHTML = `<span class="ts">${ts}</span><span class="lvl ${lvlCls}">${(lvl||'log').toUpperCase()}</span><span class="src">${src}</span><span class="msg">${msg}</span>`;
+      el.innerHTML = `<span class="ts">${ts}</span><span class="lvl ${lvlCls}">${(lvl||'log').toUpperCase()}</span><span class="src">${src}</span><span class="msg">${safeMsg}</span>`;
       return el;
     }
     function clear() { wrap.innerHTML = ''; }
