@@ -282,13 +282,18 @@
 
   <main class="splash" role="status" aria-live="polite">
     <div class="splash-mark-wrap">
-      <!-- Real brand mark, base64-embedded. Survives offline / file:// /
-           service-worker-cold-start contexts because no asset fetch is
-           required to paint the splash. -->
+      <!-- Real brand mark from gui/assets/. Tauri bundles the assets/
+           directory so it's always available. The base64 placeholder
+           that lived here before was a ~2 KB design-time stub that
+           never got swapped for the real 484 KB webp — the orb
+           rendered as an empty blue blur because the WebP decoded
+           but contained no visible payload. onerror falls back to
+           the PNG (also bundled). -->
       <img
         class="splash-mark"
         alt="SeekDeep"
-        src="data:image/webp;base64,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"
+        src="assets/seekdeep-mark.webp"
+        onerror="this.onerror=null;this.src='assets/seekdeep-mark.png';"
       />
     </div>
 
