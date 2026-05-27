@@ -128,6 +128,37 @@ if isinstance(chat_resp, dict) and "reason" in chat_resp:
         results.append({"method": "CONTRACT", "path": "/chat detail field", "status": "MISSING",
                         "ms": 0, "ok": False, "err": None, "preview": "expected detail field on 503"})
 
+# ---- Chart (bot stats command renders this; must produce a PNG) -----------
+chart_resp = call("POST", "/chart", body={
+    "day_buckets": {
+        "2026-05-25": {"images": 2, "chats": 5, "vision": 1},
+        "2026-05-26": {"images": 3, "chats": 8, "vision": 0},
+        "2026-05-27": {"images": 1, "chats": 12, "vision": 2},
+    },
+    "title": "verify_e2e smoke",
+}, timeout=30, expect=[200, 501])
+# 501 = matplotlib not installed (requirements-local.txt regression).
+# 200 = PNG bytes returned as image_b64.
+if isinstance(chart_resp, dict):
+    if chart_resp.get("error", "").startswith("matplotlib"):
+        print("\n  [contract check] /chart 501 -> matplotlib missing from requirements-local.txt")
+        results.append({"method": "CONTRACT", "path": "/chart matplotlib dep",
+                        "status": "MISSING", "ms": 0, "ok": False, "err": None,
+                        "preview": "add matplotlib to requirements-local.txt"})
+    elif chart_resp.get("image_b64"):
+        # Decode to verify it's a real PNG (89504e470d0a1a0a magic)
+        import base64 as _b64
+        try:
+            raw = _b64.b64decode(chart_resp["image_b64"])
+            is_png = raw[:8] == b"\x89PNG\r\n\x1a\n"
+            print(f"  [contract check] /chart returned {len(raw)} bytes; PNG magic ok={is_png}")
+            if not is_png:
+                results.append({"method": "CONTRACT", "path": "/chart PNG magic",
+                                "status": "BAD", "ms": 0, "ok": False, "err": None,
+                                "preview": f"got {raw[:8]!r}"})
+        except Exception as e:
+            print(f"  [contract check] /chart base64 decode failed: {e}")
+
 # ---- Logs tail (re-check after writes to confirm sink active) --------------
 call("GET", "/logs/tail?lines=10", expect=200)
 

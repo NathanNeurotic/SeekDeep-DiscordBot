@@ -18,3 +18,4 @@ python-dotenv>=1.0.1
 pillow>=11.0.0
 requests>=2.32.0
 huggingface_hub>=0.30.0
+matplotlib>=3.9.0
