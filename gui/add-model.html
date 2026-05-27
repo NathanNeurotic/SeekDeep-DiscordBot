@@ -983,9 +983,20 @@
     if (!$('#apiUrl').value) $('#apiUrl').value = urlDefaults[b] || '';
     $('#anthropicVerWrap').style.display = b === 'anthropic' ? 'block' : 'none';
   }
-  ['#apiUrl', '#apiKey'].forEach(sel => {
-    $(sel).addEventListener('input', refreshNextEnabled);
+  // Anthropic-specific: apiVersion has its own input but used to lack
+  // a listener, so typing a fresh version after jumping back from
+  // Step 4 Review (via the Edit link) sent the stale state value to
+  // /model/install. Including it in the same input gate fixes that.
+  ['#apiUrl', '#apiKey', '#apiVersion'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener('input', refreshNextEnabled);
   });
+  // Mirror live edits into state so a user typing a new version then
+  // clicking Install directly (skipping the Next button) sends the
+  // freshly-typed value, not the previous Step-3-advance snapshot.
+  $('#apiUrl')?.addEventListener('input', (e) => { state.api_url = e.target.value.trim(); });
+  $('#apiKey')?.addEventListener('input', (e) => { state.api_key = e.target.value.trim(); });
+  $('#apiVersion')?.addEventListener('input', (e) => { state.api_version = e.target.value.trim(); });
 
   // ============================================================
   // Step 4 · review
@@ -1200,8 +1211,25 @@
     } else if (prefill && autostart) {
       paintStep4();
       setStep(4);
-      // Give the user a beat to bail before kicking the install.
-      setTimeout(() => { if (state.step === 4) runInstall(); }, 600);
+      // Give the user a beat to bail AND wait for the events bus to
+      // come up before kicking install. On a cold Tauri boot, 600ms
+      // is too tight — the sidecar is still binding the port and
+      // setting up CORS, so the POST /model/install would fail with
+      // "couldn't reach" on a perfectly healthy system. Wait for
+      // SeekDeepEvents.connected with a 12s ceiling.
+      (async () => {
+        const t0 = performance.now();
+        while (performance.now() - t0 < 12_000) {
+          if (state.step !== 4) return;  // user navigated away
+          if (window.SeekDeepEvents && window.SeekDeepEvents.connected) break;
+          await new Promise(r => setTimeout(r, 200));
+        }
+        // Final guard: even if events bus never connected (no auth
+        // token, server actually down), still try the install — the
+        // user explicitly autostart-requested it, so giving up
+        // silently is worse than a clear HTTP error.
+        if (state.step === 4) runInstall();
+      })();
     } else if (prefill) {
       paintStep4();
       setStep(4);

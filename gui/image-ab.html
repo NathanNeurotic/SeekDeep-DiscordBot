@@ -346,6 +346,34 @@
   }
   $('#srcUrl').addEventListener('input', refreshSrcPreview);
 
+  // Convert a source URL (http(s):// OR data: OR blob:) into a raw
+  // base64 string the backend's image_b64 field expects. The img2img /
+  // pix2pix / inpaint backends previously received `image_url` from
+  // this GUI but their pydantic models declare image_b64 only — every
+  // POST 422'd on the wire. This helper bridges the gap.
+  async function srcToB64(url) {
+    if (!url) throw new Error('empty source URL');
+    // data: URLs already carry their own base64 payload — slice it out.
+    if (url.startsWith('data:')) {
+      const comma = url.indexOf(',');
+      if (comma < 0) throw new Error('malformed data: URL');
+      return url.slice(comma + 1);
+    }
+    const r = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    if (!r.ok) throw new Error(`fetch source ${r.status}`);
+    const blob = await r.blob();
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const s = String(fr.result || '');
+        const comma = s.indexOf(',');
+        resolve(comma >= 0 ? s.slice(comma + 1) : s);
+      };
+      fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+      fr.readAsDataURL(blob);
+    });
+  }
+
   // Run all enabled pipelines
   const PIPES = {
     txt2img:  { path: '/image',              needsSrc: false },
@@ -385,9 +413,24 @@
     };
     const [w, h] = $('#res').value.split('×').map(Number);
     body.width = w; body.height = h;
-    if (spec.needsSrc) body.image_url = src;
+    // Backend pydantic models (Img2ImgRequest, InpaintRequest,
+    // InstructPix2PixRequest) require image_b64 — a base64 string of
+    // the raw image bytes. The GUI used to send `image_url` here,
+    // which produced silent 422s for every non-txt2img pipeline.
+    if (spec.needsSrc) {
+      try {
+        body.image_b64 = await srcToB64(src);
+      } catch (err) {
+        out.innerHTML = `<span style="color:var(--bad);">▸ couldn't fetch source · ${String(err.message || err).slice(0, 120)}</span>`;
+        setStatus(panel, 'NO SOURCE', 'bad');
+        return;
+      }
+    }
     if (spec.needsInstruction) body.instruction = $('#instruction').value;
-    if (spec.needsMask) body.mask_prompt = $('#mask').value;
+    // /inpaint and /inpaint_mask_preview both expect `remove_target`
+    // (not `mask_prompt`). Pydantic v2 has no aliasing, so the wire
+    // name must match the field name exactly.
+    if (spec.needsMask) body.remove_target = $('#mask').value;
 
     const t0 = performance.now();
     try {
@@ -485,11 +528,19 @@
     };
     setStatus('MASKING', 'cyan');
     out.innerHTML = '<span style="color:var(--cyan-1);">▸ POST /inpaint_mask_preview</span>';
+    let image_b64;
+    try {
+      image_b64 = await srcToB64(src);
+    } catch (err) {
+      out.innerHTML = `<span style="color:var(--bad);">▸ couldn't fetch source · ${String(err.message || err).slice(0, 120)}</span>`;
+      setStatus('NO SOURCE', 'bad');
+      return;
+    }
     try {
       const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : 'http://127.0.0.1:7865';
       const r = await fetch(base + '/inpaint_mask_preview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: src, mask_prompt: maskPrompt }),
+        body: JSON.stringify({ image_b64, remove_target: maskPrompt }),
         signal: AbortSignal.timeout(60_000),
       });
       const ct = r.headers.get('Content-Type') || '';

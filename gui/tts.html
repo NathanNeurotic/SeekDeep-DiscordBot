@@ -207,6 +207,11 @@
 </nav>
 
 <div class="app-wrap"><div class="win">
+  <!-- Whole page is a design-time mock (banner below). Lock interactivity
+       so buttons / toggles / textareas don't pretend to work — they
+       generated tiny visual flickers + zero side-effect before. Matches
+       the mobile.html pattern. The topbar nav above stays clickable. -->
+  <style>.body, .body * { pointer-events: none !important; }</style>
   <div class="body">
 
     <!-- ===== LEFT · VOICE CHANNELS ===== -->

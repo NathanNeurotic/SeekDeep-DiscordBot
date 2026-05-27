@@ -620,9 +620,9 @@ const ENDPOINTS = [
     group: 'EDIT',
     id: 'inpaint', method: 'POST', path: '/inpaint',
     title: 'Inpaint · CLIPSeg + SDXL',
-    desc: 'CLIPSeg builds an auto-mask from <span class="mono">remove</span>, then SDXL fills it. Gated behind <span class="mono">SEEKDEEP_FEATURE_INPAINT=on</span>.',
+    desc: 'CLIPSeg builds an auto-mask from <span class="mono">remove_target</span>, then SDXL fills it. Gated behind <span class="mono">SEEKDEEP_FEATURE_INPAINT=on</span>.',
     fields: [
-      { key: 'remove', label: 'Target to remove', type: 'text', required: true, default: 'the wizard' },
+      { key: 'remove_target', label: 'Target to remove', type: 'text', required: true, default: 'the wizard' },
       { key: 'prompt', label: 'Replacement context', type: 'textarea', default: 'forest clearing, soft light' },
       { key: 'image_b64', label: 'Image (base64)', type: 'textarea', default: '' },
       { key: 'guidance_scale', label: 'Guidance scale', type: 'number', default: 5.0, step: 0.5 },
@@ -651,8 +651,15 @@ const ENDPOINTS = [
     title: 'Stats Chart',
     desc: 'Renders 30-day activity as a matplotlib line chart (Discord dark theme). Powers <span class="mono">@SeekDeep stats chart</span>.',
     fields: [
-      { key: 'day_buckets', label: 'Day buckets (JSON)', type: 'textarea', default: '{"images":[2,4,3,8,12,6,9,11,7,10],"chats":[5,3,8,12,6,9,11,7,10,14],"vision":[1,0,2,1,3,2,1,4,2,1]}', desc: '3 arrays of equal length: <span class="mono">images</span>, <span class="mono">chats</span>, <span class="mono">vision</span>.' },
+      // Backend ChartRequest.day_buckets is a date-keyed DICT, not
+      // metric-keyed arrays. Previous default crashed the endpoint
+      // with `'str' object has no attribute 'get'` because the
+      // server iterated keys expecting per-day {images, chats, vision}.
+      { key: 'day_buckets', label: 'Day buckets (JSON)', type: 'textarea',
+        default: '{"2026-05-19":{"images":2,"chats":5,"vision":1},"2026-05-20":{"images":4,"chats":3,"vision":0},"2026-05-21":{"images":3,"chats":8,"vision":2},"2026-05-22":{"images":8,"chats":12,"vision":1},"2026-05-23":{"images":12,"chats":6,"vision":3},"2026-05-24":{"images":6,"chats":9,"vision":2},"2026-05-25":{"images":9,"chats":11,"vision":1},"2026-05-26":{"images":11,"chats":7,"vision":4}}',
+        desc: 'Date-keyed dict: <span class="mono">{ "YYYY-MM-DD": { images, chats, vision } }</span>.' },
       { key: 'title', label: 'Chart title', type: 'text', default: 'SeekDeep · last 30 days' },
+      { key: 'guild_name', label: 'Guild name (optional subtitle)', type: 'text', default: '' },
     ],
   },
 
