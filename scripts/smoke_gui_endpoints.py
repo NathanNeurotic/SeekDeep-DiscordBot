@@ -200,6 +200,54 @@ def main() -> int:
               isinstance(sample, dict)
               and all(k in sample for k in ("id", "label", "ok", "fix", "blocking")),
               f"sample={sample}")
+        # At least one check should now ship fix_action metadata so the
+        # setup wizard can render a one-click fix button. ml_deps and
+        # searxng both have it.
+        any_action = any(isinstance(ch, dict) and isinstance(ch.get("fix_action"), dict)
+                         for ch in body["checks"])
+        check("  ...at least one check exposes fix_action (wizard one-click fix)",
+              any_action, "no check had fix_action")
+
+    # ---- POST /docker/start-searxng (token-gated; zero-terminal start) ----
+    # The wizard's "Start SearXNG" button hits this. Skipped when token is
+    # disabled (no real auth to assert against). We assert the 401 shape
+    # without the token, then verify a token-authed call gets a parseable
+    # JSON body — docker may legitimately fail in CI (no daemon).
+    r = c.post("/docker/start-searxng", json={})
+    check("POST /docker/start-searxng without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    if token:
+        r = c.post("/docker/start-searxng", headers={_TOKEN_HEADER: token}, json={})
+        check("POST /docker/start-searxng with token -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, ...} (docker may legitimately fail in CI)",
+              "ok" in body, f"body={body}")
+
+    # ---- POST /system/install-python (token-gated; winget on Windows) -----
+    r = c.post("/system/install-python", json={})
+    check("POST /system/install-python without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    if token:
+        # dry_run avoids actually invoking `winget install` during tests.
+        r = c.post("/system/install-python", headers={_TOKEN_HEADER: token}, json={"dry_run": True})
+        check("POST /system/install-python with token -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, ...} (dry_run; will fail on non-Windows / no-winget; ok=False is valid)",
+              "ok" in body, f"body={body}")
+
+    # ---- POST /system/install-docker (token-gated; winget on Windows) -----
+    r = c.post("/system/install-docker", json={})
+    check("POST /system/install-docker without token -> 401",
+          r.status_code == 401, f"got {r.status_code}")
+    if token:
+        r = c.post("/system/install-docker", headers={_TOKEN_HEADER: token}, json={"dry_run": True})
+        check("POST /system/install-docker with token -> 200",
+              r.status_code == 200, f"got {r.status_code}")
+        body = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, ...} (dry_run; will fail on non-Windows / no-winget; ok=False is valid)",
+              "ok" in body, f"body={body}")
 
     # ---- GET /system/runtime (open; installer page Node/Python/Git/Disk probe) ----
     r = c.get("/system/runtime")

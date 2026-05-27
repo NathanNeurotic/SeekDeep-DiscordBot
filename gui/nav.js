@@ -388,6 +388,7 @@
     { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '17 · phone mocks' },
     { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '18 · splash' },
     { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '19 · wizard · POST /model/install' },
+    { id: 'setup_wizard', title: 'Setup Wizard',        path: 'setup-wizard.html', glyph: '◇', meta: '20 · zero-terminal first-run · auto-detect + auto-fix' },
   ];
 
   // Detect current page from URL filename

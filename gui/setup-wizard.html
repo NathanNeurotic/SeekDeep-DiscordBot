@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Setup Wizard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { margin: 0; min-height: 100vh; background: var(--substrate); display: grid; place-items: center; padding: 32px; }
+  .wiz {
+    width: 100%; max-width: 720px; min-height: 600px;
+    background: linear-gradient(180deg, var(--substrate-2), var(--substrate));
+    border: 1px solid var(--stroke); border-radius: var(--r-md);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(45,212,255,0.05);
+    padding: 36px 36px 28px; display: flex; flex-direction: column;
+  }
+  .wiz-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  .wiz-head img { width: 44px; height: 44px; border-radius: 50%; box-shadow: 0 0 24px rgba(45,212,255,0.4); }
+  .wiz-head h1 { margin: 0; font-size: 22px; letter-spacing: 0.02em; }
+  .wiz-head .sub { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; margin-top: 4px; }
+  .progress {
+    margin-top: 18px; height: 3px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden;
+  }
+  .progress > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--cyan-2), var(--cyan-0)); transition: width 0.4s ease-out; }
+  .step-list { margin: 24px 0 0; padding: 0; list-style: none; flex: 1; }
+  .step {
+    display: grid; grid-template-columns: 28px 1fr auto;
+    gap: 14px; align-items: start; padding: 12px 0;
+    border-bottom: 1px dashed color-mix(in oklab, var(--cyan-1) 8%, transparent);
+  }
+  .step.done .mark { color: var(--good); }
+  .step.busy .mark { color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+  .step.bad  .mark { color: var(--bad); }
+  .step.skip .mark { color: var(--hull-3); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .step .mark { font-family: var(--font-mono); font-size: 16px; padding-top: 2px; }
+  .step .label { font-weight: 500; color: var(--hull-1); }
+  .step .detail { font-size: 12px; color: var(--hull-3); margin-top: 3px; line-height: 1.5; }
+  .step .action { display: flex; gap: 6px; align-items: center; }
+  .step .action button { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; }
+  .step .action button.primary { background: var(--cyan-2); color: #000; border: 0; }
+  .step .action button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .step .action button.skip { background: transparent; color: var(--hull-3); border: 1px solid var(--stroke); }
+  .step .action button.skip:hover { color: var(--hull-1); border-color: var(--hull-3); }
+  .footer { margin-top: 22px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+  .footer .left { font-family: var(--font-mono); font-size: 10.5px; color: var(--hull-3); letter-spacing: 0.1em; }
+  .footer .right { display: flex; gap: 8px; }
+  .footer button { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; padding: 8px 14px; border-radius: var(--r-sm); cursor: pointer; }
+  .footer .skip-all { background: transparent; color: var(--hull-3); border: 1px solid var(--stroke); }
+  .footer .skip-all:hover { color: var(--hull-1); border-color: var(--hull-3); }
+  .footer .open-app { background: var(--cyan-2); color: #000; border: 0; }
+  .footer .open-app:disabled { opacity: 0.5; cursor: not-allowed; }
+  .log {
+    margin-top: 14px; max-height: 140px; overflow: auto;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--hull-3);
+    background: rgba(0,0,0,0.4); border: 1px solid var(--stroke); border-radius: var(--r-sm);
+    padding: 8px 12px; display: none; line-height: 1.55;
+  }
+  .log.active { display: block; }
+  .log .line { white-space: pre-wrap; padding: 2px 0; }
+  .log .line.err { color: var(--bad); }
+  .log .line.ok  { color: var(--good); }
+</style>
+</head>
+<body>
+<div class="wiz" id="wiz">
+  <div class="wiz-head">
+    <img src="assets/seekdeep-mark.webp" alt="" />
+    <div>
+      <h1>SeekDeep Setup</h1>
+      <div class="sub">▸ first-run wizard · zero terminal required</div>
+    </div>
+  </div>
+  <div class="progress"><i id="progBar"></i></div>
+  <ul class="step-list" id="stepList"></ul>
+  <div class="log" id="installLog"></div>
+  <div class="footer">
+    <div class="left" id="ftStatus">probing…</div>
+    <div class="right">
+      <button class="skip-all" id="ftSkipAll" title="Use SeekDeep with whatever's currently set up. You can return to the wizard later from Control Center.">Skip to app</button>
+      <button class="open-app" id="ftOpenApp" disabled>Open SeekDeep ▸</button>
+    </div>
+  </div>
+</div>
+<script src="nav.js" defer></script>
+<script>
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const BASE = (function () {
+    if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
+  const stepListEl = $('#stepList');
+  const progBar    = $('#progBar');
+  const logEl      = $('#installLog');
+  const statusEl   = $('#ftStatus');
+  const openBtn    = $('#ftOpenApp');
+  const skipAllBtn = $('#ftSkipAll');
+  let lastChecks = [];
+
+  function appendLog(text, cls) {
+    if (!logEl) return;
+    logEl.classList.add('active');
+    const line = document.createElement('div');
+    line.className = 'line' + (cls ? ' ' + cls : '');
+    line.textContent = text;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setStepClass(li, cls) {
+    li.classList.remove('done', 'busy', 'bad', 'skip');
+    if (cls) li.classList.add(cls);
+  }
+
+  function renderSteps(checks) {
+    stepListEl.innerHTML = '';
+    const failing = checks.filter(c => !c.ok);
+    const passed  = checks.filter(c => c.ok).length;
+    progBar.style.width = Math.round((passed / Math.max(checks.length, 1)) * 100) + '%';
+
+    if (!failing.length) {
+      statusEl.textContent = 'All set · everything is configured';
+      openBtn.disabled = false;
+      // Render passed steps for a feel-good summary
+      checks.forEach(c => {
+        const li = document.createElement('li');
+        li.className = 'step done';
+        li.innerHTML = `<span class="mark">✓</span><div><div class="label">${escapeHtml(c.label)}</div></div><div class="action"></div>`;
+        stepListEl.appendChild(li);
+      });
+      return;
+    }
+
+    statusEl.textContent = failing.length + ' to set up · ' + passed + ' / ' + checks.length + ' ready';
+    // Render only failing steps in order. Hide passed ones — the user
+    // doesn't need to read what already works.
+    checks.forEach(c => {
+      const li = document.createElement('li');
+      li.className = 'step ' + (c.ok ? 'done' : (c.blocking ? 'bad' : ''));
+      const mark = c.ok ? '✓' : (c.blocking ? '✕' : '⚠');
+      const detail = c.ok ? '' : (c.fix ? `<div class="detail">${escapeHtml(c.fix)}</div>` : '');
+      const actionHtml = (!c.ok && c.fix_action)
+        ? `<button class="primary" data-act="fix">${escapeHtml(c.fix_action.label || '▸ FIX')}</button>` +
+          (c.blocking ? '' : `<button class="skip" data-act="skip">Skip</button>`)
+        : (!c.ok ? `<button class="skip" data-act="skip">Skip</button>` : '');
+      li.innerHTML = `
+        <span class="mark">${mark}</span>
+        <div>
+          <div class="label">${escapeHtml(c.label)}</div>
+          ${detail}
+        </div>
+        <div class="action">${actionHtml}</div>`;
+      const fixBtn  = li.querySelector('button[data-act="fix"]');
+      const skipBtn = li.querySelector('button[data-act="skip"]');
+      if (fixBtn)  fixBtn.addEventListener('click', () => runFix(li, c));
+      if (skipBtn) skipBtn.addEventListener('click', () => { setStepClass(li, 'skip'); li.querySelector('.mark').textContent = '–'; });
+      stepListEl.appendChild(li);
+    });
+  }
+
+  async function runFix(li, c) {
+    const fa = c.fix_action;
+    if (!fa) return;
+    const btn = li.querySelector('button[data-act="fix"]');
+    const origLabel = btn ? btn.textContent : 'FIX';
+    if (btn) { btn.disabled = true; btn.textContent = '… running'; }
+    setStepClass(li, 'busy');
+    li.querySelector('.mark').textContent = '○';
+    appendLog(`▸ ${fa.method || 'POST'} ${fa.endpoint} (${c.label})`);
+    try {
+      const init = { method: fa.method || 'POST', headers: { 'Content-Type': 'application/json' } };
+      if (fa.body) init.body = JSON.stringify(fa.body);
+      init.signal = AbortSignal.timeout(fa.long_running ? 600_000 : 60_000);
+      const r = await fetch(BASE + fa.endpoint, init);
+      const result = await r.json().catch(() => ({}));
+      if (r.ok && result.ok !== false) {
+        appendLog('✓ ' + (result.note || 'fix complete'), 'ok');
+        setStepClass(li, 'done');
+        li.querySelector('.mark').textContent = '✓';
+        if (btn) { btn.textContent = '✓ DONE'; btn.style.background = 'var(--good)'; }
+        // Re-poll firstrun after a brief delay so neighboring checks
+        // also update (e.g. fixing ml_deps may turn the chat_model
+        // check green if the user already has an HF cache).
+        setTimeout(probe, fa.long_running ? 5000 : 2500);
+      } else {
+        const err = result.error || result.detail || ('HTTP ' + r.status);
+        appendLog('✕ ' + err, 'err');
+        setStepClass(li, 'bad');
+        li.querySelector('.mark').textContent = '✕';
+        if (btn) {
+          btn.textContent = '✕ FAILED · retry';
+          btn.style.background = 'var(--bad)';
+          btn.disabled = false;
+          btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+        }
+      }
+    } catch (err) {
+      appendLog('✕ ' + String(err.message || err), 'err');
+      setStepClass(li, 'bad');
+      li.querySelector('.mark').textContent = '✕';
+      if (btn) {
+        btn.textContent = '✕ ERROR · retry';
+        btn.style.background = 'var(--bad)';
+        btn.disabled = false;
+        btn.addEventListener('click', () => { btn.textContent = origLabel; btn.style.background = ''; runFix(li, c); }, { once: true });
+      }
+    }
+  }
+
+  async function probe() {
+    try {
+      const r = await fetch(BASE + '/system/firstrun', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      if (!r.ok) {
+        statusEl.textContent = 'server unreachable · open app to retry';
+        openBtn.disabled = false;
+        return;
+      }
+      const data = await r.json();
+      lastChecks = Array.isArray(data.checks) ? data.checks : [];
+      renderSteps(lastChecks);
+    } catch (err) {
+      statusEl.textContent = 'server unreachable · ' + (err.message || err);
+      openBtn.disabled = false;
+    }
+  }
+
+  openBtn.addEventListener('click', () => {
+    sessionStorage.setItem('seekdeep:firstrun:wizard-completed', '1');
+    location.href = 'app.html';
+  });
+  skipAllBtn.addEventListener('click', () => {
+    if (!confirm('Skip remaining setup and open SeekDeep?\n\nYou can return to the wizard later from Control Center.')) return;
+    sessionStorage.setItem('seekdeep:firstrun:wizard-skipped', '1');
+    location.href = 'app.html';
+  });
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  probe();
+})();
+</script>
+</body>
+</html>

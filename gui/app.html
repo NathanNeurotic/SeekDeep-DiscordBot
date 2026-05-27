@@ -694,7 +694,10 @@
             <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em; color: var(--warn); text-transform: uppercase; margin-bottom: 4px;">▸ FIRST-RUN SETUP</div>
             <div id="firstRunSummary" style="font-size: 13px; color: var(--hull-2); line-height: 1.5;">probing…</div>
           </div>
-          <button id="firstRunDismiss" class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px;" title="Hide until next reload">Dismiss</button>
+          <div style="display:flex; gap:6px;">
+            <a href="setup-wizard.html" class="btn btn-primary" style="padding: 4px 10px; font-size: 11px; text-decoration:none;" title="Open the zero-terminal setup wizard">▸ Open wizard</a>
+            <button id="firstRunDismiss" class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px;" title="Hide until next reload">Dismiss</button>
+          </div>
         </div>
         <ul id="firstRunChecks" style="margin: 10px 0 0; padding-left: 0; list-style: none; font-family: var(--font-mono); font-size: 12px;"></ul>
       </div>
@@ -4210,6 +4213,51 @@ const SEEKDEEP_BASE = (function() {
               const fix = mk('div', '', String(c.fix));
               fix.style.cssText = 'font-size: 10.5px; color: var(--hull-3); margin-top: 2px; line-height: 1.45;';
               right.appendChild(fix);
+            }
+            // Inline FIX button — if the server attached a fix_action,
+            // render a one-click button that hits the endpoint and
+            // re-polls firstrun on completion. Zero-terminal flow:
+            // user sees "⚠ SearXNG container running" with a [▸ FIX]
+            // button next to it; one click and it's started.
+            if (!c.ok && c.fix_action) {
+              const fa = c.fix_action;
+              const btn = mk('button', 'btn btn-primary', fa.label || '▸ FIX');
+              btn.style.cssText = 'margin-top: 6px; padding: 5px 12px; font-size: 11px; letter-spacing: 0.1em;';
+              btn.addEventListener('click', async () => {
+                const origLbl = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = '… running';
+                const sdn = window.SeekDeepNotify;
+                try {
+                  const init = { method: fa.method || 'POST', headers: { 'Content-Type': 'application/json' } };
+                  if (fa.body) init.body = JSON.stringify(fa.body);
+                  // Long-running fixes (ML deps install) need a generous
+                  // timeout — 10 min covers torch+transformers+diffusers.
+                  init.signal = AbortSignal.timeout(fa.long_running ? 600_000 : 60_000);
+                  const r = await fetch(SEEKDEEP_BASE + fa.endpoint, init);
+                  const result = await r.json().catch(() => ({}));
+                  if (r.ok && result.ok !== false) {
+                    btn.textContent = '✓ DONE';
+                    btn.style.background = 'var(--good)';
+                    if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label, body: result.note || 'Fix complete · re-checking…', ttl: 5000 });
+                    // Re-poll firstrun after a short delay so the user
+                    // sees the row turn green if the fix succeeded.
+                    setTimeout(load, fa.long_running ? 4000 : 2000);
+                  } else {
+                    btn.textContent = '✕ FAILED';
+                    btn.style.background = 'var(--bad)';
+                    const err = result.error || result.detail || 'HTTP ' + r.status;
+                    if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · fix failed', body: String(err).slice(0, 240), ttl: 8000 });
+                    setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
+                  }
+                } catch (err) {
+                  btn.textContent = '✕ ERROR';
+                  btn.style.background = 'var(--bad)';
+                  if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · network error', body: String(err.message || err).slice(0, 240), ttl: 8000 });
+                  setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
+                }
+              });
+              right.appendChild(btn);
             }
             li.appendChild(right);
             list.appendChild(li);

@@ -1037,7 +1037,10 @@ def register_gui_endpoints(
             "id": "ml_deps",
             "label": "ML dependencies installed (torch / transformers / diffusers)",
             "ok": ml_ok,
-            "fix": "Click \"Install ML libraries\" in the Control Center, or run `pip install -r requirements-ml.txt`.",
+            "fix": "Click \"Install ML libraries\" — runs `pip install -r requirements-ml.txt` against the running Python.",
+            "fix_action": {"endpoint": "/deps/install", "method": "POST",
+                           "label": "Install ML libraries", "body": {"requirements_file": "requirements-ml.txt"},
+                           "long_running": True, "watch_events": ["deps.install.complete", "deps.install.failed"]},
             "blocking": False,
         })
         # 6. nvidia-smi reachable (GPU detected)
@@ -1070,7 +1073,8 @@ def register_gui_endpoints(
             "id": "searxng",
             "label": "SearXNG container running (web search)",
             "ok": searxng_up,
-            "fix": "`docker compose up -d searxng` from the repo, or skip if you don't need web-routed chat.",
+            "fix": "Click 'Start SearXNG' in the first-run wizard, or POST /docker/start-searxng. The previous 'docker compose up' hint was wrong (no compose file in the repo).",
+            "fix_action": {"endpoint": "/docker/start-searxng", "method": "POST", "label": "Start SearXNG"},
             "blocking": False,
         })
         # 8. At least one chat model can be loaded — HF cache or Ollama tag.
@@ -1262,6 +1266,131 @@ def register_gui_endpoints(
                     "client_version": (r2.stdout or "").strip()[:80] or None}
         return {"ok": True, "state": "not_installed",
                 "detail": "`docker --version` exited non-zero"}
+
+    # ----- POST /docker/start-searxng -----
+    # Start the SearXNG container with the same flags seekdeep_launcher.bat
+    # uses, so the GUI can offer a "Start SearXNG" button instead of asking
+    # the user to drop to a terminal. The firstrun checklist previously
+    # said `docker compose up -d searxng` but there's no compose file in
+    # the repo — this is the real command.
+    #
+    # Token-gated because it spawns a long-running container with bound
+    # ports + volumes. Idempotent: if the container already exists it's
+    # removed first so the new flags take effect (matches the .bat).
+    @app.post("/docker/start-searxng", dependencies=[Depends(_require_gui_token)])
+    def post_docker_start_searxng():
+        try:
+            # Best-effort cleanup of any prior container with the same name.
+            subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+                           capture_output=True, text=True, timeout=10)
+        except Exception:
+            pass
+        try:
+            # Mirror the .bat's startSearxngQuiet flags exactly.
+            searxng_dir = (root / "searxng").resolve()
+            searxng_dir.mkdir(parents=True, exist_ok=True)
+            vol = f"{searxng_dir}:/etc/searxng:rw"
+            r = subprocess.run(
+                [
+                    "docker", "run", "-d",
+                    "--name", "seekdeep-searxng",
+                    "--restart", "unless-stopped",
+                    "-p", "8080:8080",
+                    "-e", "BASE_URL=http://localhost:8080/",
+                    "-e", "INSTANCE_NAME=SeekDeep",
+                    "-v", vol,
+                    "searxng/searxng:latest",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode != 0:
+                return {"ok": False, "error": (r.stderr or r.stdout or "docker run failed").strip()[:600]}
+            return {"ok": True, "container_id": (r.stdout or "").strip()[:12],
+                    "note": "SearXNG started. /healthz takes 5-15s to respond as the image initializes."}
+        except FileNotFoundError:
+            return {"ok": False, "error": "`docker` not on PATH. Install Docker Desktop and re-try."}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "docker run timed out after 60s. Check Docker Desktop is running."}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:600]}
+
+    # ----- POST /system/install-python -----
+    # Auto-install a Python the Tauri sidecar's find_python() can pick up.
+    # Windows: winget install Python.Python.3.12 (the highest version with
+    # current PyTorch wheel coverage). After install the user MUST restart
+    # the Tauri shell so the sidecar re-runs find_python; we just kick the
+    # install and return.
+    @app.post("/system/install-python", dependencies=[Depends(_require_gui_token)])
+    def post_install_python(body: dict | None = None):
+        # dry_run=true lets smoke tests verify the auth gate without
+        # actually invoking winget install (which takes 10+ minutes).
+        dry_run = bool((body or {}).get("dry_run"))
+        # Probe winget — Windows 10/11 ship it by default since 2021.
+        try:
+            probe = subprocess.run(["winget", "--version"], capture_output=True, text=True, timeout=5)
+            if probe.returncode != 0:
+                return {"ok": False, "error": "winget not available — install Python 3.12 manually from python.org"}
+        except FileNotFoundError:
+            return {"ok": False, "error": "winget not on PATH — only Windows 10/11 1809+ have it. Install Python 3.12 manually from python.org"}
+        except Exception as exc:
+            return {"ok": False, "error": f"winget probe failed: {exc}"}
+        if dry_run:
+            return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Python.Python.3.12 -e --silent"}
+        try:
+            r = subprocess.run(
+                ["winget", "install", "--id", "Python.Python.3.12", "-e",
+                 "--silent", "--accept-package-agreements", "--accept-source-agreements"],
+                capture_output=True, text=True, timeout=600,
+            )
+            return {
+                "ok": r.returncode == 0,
+                "exit_code": r.returncode,
+                "stdout": (r.stdout or "")[-2000:],
+                "stderr": (r.stderr or "")[-1200:],
+                "note": "Restart the Tauri shell to pick up the new interpreter.",
+            }
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "winget install timed out after 10 minutes"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:600]}
+
+    # ----- POST /system/install-docker -----
+    # Same shape as /system/install-python but for Docker Desktop. The
+    # user still has to launch Docker Desktop + accept the EULA after
+    # install — we can't automate that bit.
+    @app.post("/system/install-docker", dependencies=[Depends(_require_gui_token)])
+    def post_install_docker(body: dict | None = None):
+        # dry_run=true: probe winget but don't actually install. Used by
+        # smoke tests; also useful for the wizard to check "would this
+        # work?" before committing to a multi-GB download.
+        dry_run = bool((body or {}).get("dry_run"))
+        try:
+            probe = subprocess.run(["winget", "--version"], capture_output=True, text=True, timeout=5)
+            if probe.returncode != 0:
+                return {"ok": False, "error": "winget not available — install Docker Desktop manually from docker.com"}
+        except FileNotFoundError:
+            return {"ok": False, "error": "winget not on PATH — only Windows 10/11 1809+ have it. Install Docker Desktop manually from docker.com"}
+        except Exception as exc:
+            return {"ok": False, "error": f"winget probe failed: {exc}"}
+        if dry_run:
+            return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Docker.DockerDesktop -e --silent"}
+        try:
+            r = subprocess.run(
+                ["winget", "install", "--id", "Docker.DockerDesktop", "-e",
+                 "--silent", "--accept-package-agreements", "--accept-source-agreements"],
+                capture_output=True, text=True, timeout=900,
+            )
+            return {
+                "ok": r.returncode == 0,
+                "exit_code": r.returncode,
+                "stdout": (r.stdout or "")[-2000:],
+                "stderr": (r.stderr or "")[-1200:],
+                "note": "Launch Docker Desktop once installed so the daemon starts; then return to SeekDeep.",
+            }
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "winget install timed out after 15 minutes"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:600]}
 
     # AUD-003: which data files contain user-identifying info and should be
     # token-gated. Stats / built-in stacks stay public so the dashboard pane

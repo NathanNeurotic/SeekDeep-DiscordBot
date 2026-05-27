@@ -485,8 +485,28 @@
           setActive('ws');    setDone('ws');    refreshBar();
           $status.classList.add('is-ready');
           $label.textContent = 'READY';
-          setStage('opening ' + NEXT + '…');
-          setTimeout(() => { location.href = NEXT; }, 300);
+          // Probe firstrun. If anything is missing AND the user hasn't
+          // explicitly dismissed the wizard this session, route to the
+          // setup wizard instead of straight into chat.html — that's
+          // the zero-terminal flow. The wizard's "Open SeekDeep" button
+          // sets the same flag so a second probe doesn't loop.
+          let nextHref = NEXT;
+          const wizardDismissed = sessionStorage.getItem('seekdeep:firstrun:wizard-completed') === '1' ||
+                                  sessionStorage.getItem('seekdeep:firstrun:wizard-skipped') === '1';
+          if (!wizardDismissed && new URLSearchParams(location.search).get('next') == null) {
+            try {
+              const fr = await fetch(BASE + '/system/firstrun', {
+                signal: AbortSignal.timeout(3000), cache: 'no-store',
+              });
+              if (fr.ok) {
+                const fd = await fr.json();
+                const failing = (fd.checks || []).filter(c => !c.ok);
+                if (failing.length) nextHref = 'setup-wizard.html';
+              }
+            } catch { /* if firstrun probe fails, fall through to NEXT */ }
+          }
+          setStage('opening ' + nextHref + '…');
+          setTimeout(() => { location.href = nextHref; }, 300);
           return;
         }
 
