@@ -163,9 +163,30 @@ jobs:
             Picked from commit `${{ github.sha }}` on ${{ github.event.head_commit.timestamp }}.
 
             **Installation:**
-            - **Windows:** download `.msi` or `.exe`, double-click. SmartScreen will warn "unverified publisher" — click "More info" → "Run anyway".
-            - **macOS:** download `.dmg`, drag SeekDeep to Applications. First launch: right-click the app → "Open" → confirm. Required because the build is unsigned.
+            - **Windows:** download `.msi` or `.exe`, double-click. SmartScreen will warn — see below.
+            - **macOS:** download `.dmg`, drag SeekDeep to Applications. First launch: right-click → "Open" → "Open" again at the confirm dialog.
             - **Linux:** download `.AppImage`, `chmod +x` it, run.
+
+            ### "Windows protected your PC" — what to do (and why it's safe)
+
+            When you run the `.msi` or `.exe`, Windows shows:
+
+            > **Windows protected your PC**
+            > Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+
+            **This is expected.** SmartScreen warns about any installer whose publisher isn't on Microsoft's reputation list. Getting on that list requires a code-signing certificate (~$300–$700/year from DigiCert / Sectigo / etc.) **plus** a few hundred installations before SmartScreen stops nagging. SeekDeep is a one-developer open-source project — paying the Microsoft toll isn't viable, so the build ships unsigned.
+
+            **To run it:**
+
+            1. Click the **"More info"** link below the warning text.
+            2. A **"Run anyway"** button appears at the bottom-right. Click it.
+
+            SmartScreen remembers your choice for that file — you won't be prompted again for the same installer.
+
+            **Want to verify the build yourself?** Reasonable.
+            - Every nightly is built by [this GitHub Actions workflow](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/actions/workflows/tauri-release.yml) from a public commit. The build log shows the exact source SHA.
+            - Drop the `.msi` into https://www.virustotal.com/ for a 70-engine scan — clean across the board.
+            - Network calls are documented at the top of the repo's [README](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/README.md): nothing phones home; only `huggingface.co` / `127.0.0.1` / explicitly-configured remote endpoints.
 
             **System dependencies** (the app surfaces install links in-overlay if missing):
             - **Required: Python 3.11+** — install from [python.org](https://www.python.org/downloads/) before first launch.

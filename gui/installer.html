@@ -798,6 +798,24 @@
             <span style="color:var(--cyan-1); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em;">▸ ETA</span>&nbsp;
             About 15-20 minutes including downloads. Most of that is the first model pull (~80 GB across 6 models). You can re-run this wizard later to add models or change configuration.
           </p>
+
+          <!-- "Windows protected your PC" explainer. If they got here, they
+               already clicked Run anyway — but reassure them about why the
+               warning fires + how to verify the build. Matches the same
+               section in README.md and the GitHub release-notes body. -->
+          <details style="margin-top: 22px; padding: 14px 16px; background: rgba(45,212,255,0.04); border: 1px solid var(--stroke); border-radius: var(--r-md);">
+            <summary style="cursor: pointer; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.12em; color: var(--cyan-1); text-transform: uppercase;">▸ "Windows protected your PC" warning · what it means</summary>
+            <div style="margin-top: 12px; font-size: 13px; color: var(--hull-2); line-height: 1.6;">
+              <p>If Windows showed you the blue <strong>"Microsoft Defender SmartScreen prevented an unrecognized app from starting"</strong> warning when you launched SeekDeep, that's expected. The build is unsigned — getting a Microsoft-recognized code-signing certificate costs <strong>$300–$700 a year</strong>, and even then SmartScreen needs to see a few hundred installs before it stops nagging. SeekDeep is a one-developer open-source project; paying that toll isn't viable.</p>
+              <p style="margin-top: 10px;"><strong style="color:var(--hull-1);">To run it past SmartScreen:</strong> click <span class="mono" style="color:var(--cyan-1);">More info</span> → then the <span class="mono" style="color:var(--cyan-1);">Run anyway</span> button that appears. SmartScreen remembers your choice — you won't be asked again for the same installer.</p>
+              <p style="margin-top: 10px;"><strong style="color:var(--hull-1);">Want to verify the app yourself?</strong> Reasonable.</p>
+              <ul style="margin: 6px 0 0 18px; padding: 0;">
+                <li style="margin: 4px 0;">Every nightly is built by <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/actions/workflows/tauri-release.yml" target="_blank" style="color:var(--cyan-1);">a public GitHub Actions workflow</a> from a public commit. The build log shows the exact source.</li>
+                <li style="margin: 4px 0;">Drop the <code>.msi</code> into <a href="https://www.virustotal.com/" target="_blank" style="color:var(--cyan-1);">VirusTotal</a> for a 70-engine scan — typically clean across the board.</li>
+                <li style="margin: 4px 0;">Network calls are documented at the top of the <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/README.md" target="_blank" style="color:var(--cyan-1);">README</a>: nothing phones home; only <code>huggingface.co</code> for model downloads (opt-in), <code>127.0.0.1</code> for your own SearXNG/Ollama, and any remote chat endpoint you explicitly configure.</li>
+              </ul>
+            </div>
+          </details>
         </section>
 
         <!-- ============ STEP 2 — SYSTEM CHECK ============ -->

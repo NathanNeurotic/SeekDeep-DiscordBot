@@ -115,6 +115,43 @@ The local AI server exposes:
 - `POST /chart` — matplotlib stats chart rendering
 - `POST /unload` — force-unload current model
 
+## Downloading the Desktop App
+
+The easiest way to run SeekDeep is the prebuilt Tauri installer from the [rolling nightly release](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases/tag/nightly):
+
+| OS | File |
+|---|---|
+| Windows | `SeekDeep_<version>_x64_en-US.msi` (or `_x64-setup.exe`) |
+| macOS   | `SeekDeep_<version>_universal.dmg` |
+| Linux   | `SeekDeep_<version>_amd64.AppImage` / `.deb` / `.rpm` |
+
+### "Windows protected your PC" — what to do
+
+When you run the `.msi` or `.exe`, Windows will show:
+
+> **Windows protected your PC**
+> Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+> Running this app might put your PC at risk.
+
+**This is expected and the app is safe.** SmartScreen warns about any installer whose publisher isn't on Microsoft's reputation list. Getting on that list requires a code-signing certificate that costs **~$300–$700/year** from a Microsoft-approved Certificate Authority (DigiCert, Sectigo, etc.), and even with a cert, you still need a few hundred installations before SmartScreen stops nagging. SeekDeep is a one-developer open-source project — paying that toll isn't viable, so the build ships unsigned.
+
+**To run it anyway:**
+
+1. Click **More info** (the small underlined link below the body text).
+2. A new **Run anyway** button appears at the bottom-right. Click it.
+
+That's it. SmartScreen remembers your choice for that file's hash — you won't be prompted again for the same installer.
+
+**How to verify the app is safe yourself** (recommended for the paranoid):
+
+- The full source for every release is at https://github.com/NathanNeurotic/SeekDeep-DiscordBot — every `.msi` is built by GitHub Actions from a public commit. The build log on the [nightly release](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/actions/workflows/tauri-release.yml) shows exactly which sources went in.
+- The Tauri sidecar's only network calls go to: `huggingface.co` (model downloads, opt-in), `127.0.0.1` (your own SearXNG / Ollama daemon), `raw.githubusercontent.com` (the Self-update button), and whatever remote chat provider you explicitly configure in `.env`. Nothing else phones home. See the privacy note at the top of this README.
+- Run the installer through https://www.virustotal.com/ if you want a third-party scan. Unsigned Tauri builds typically come back clean across all engines.
+
+### macOS Gatekeeper
+
+Same story on macOS — the build is unsigned, so first launch you'll get *"Apple cannot verify this developer."* Right-click the SeekDeep app in Applications → **Open** → **Open** again at the confirm dialog. Same one-time approval.
+
 ## Quick Start
 
 1. Install dependencies:
