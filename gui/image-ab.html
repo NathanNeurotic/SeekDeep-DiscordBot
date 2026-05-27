@@ -144,9 +144,15 @@
   </div>
 </nav>
 
-<div class="mock-banner">
-  <strong>⚠ Design-time mock</strong> · The four pipelines (<code>/image</code>, <code>/img2img</code>, <code>/instruct-pix2pix</code>, <code>/inpaint</code>) all work against the live bot — but the side-by-side comparator UI below is static. None of the controls dispatch yet; this is a target shape for the A/B harness.
-</div>
+<!-- Banner removed 2026-05-27: the page is no longer a mock. The four
+     pipelines (/image, /img2img, /instruct-pix2pix, /inpaint) dispatch
+     against the live AI server at line 438 with real image_b64 conversion
+     and a 180s timeout; mask preview hits /inpaint_mask_preview at line
+     541. The "Design-time mock" warning was outdated since task #83
+     (Image playground: wire img2img/pix2pix/inpaint/upscale modes)
+     landed. Keeping a placeholder comment so anyone searching for
+     "mock-banner" finds the history rather than a missing file. -->
+<div class="mock-banner" style="display:none;" aria-hidden="true"></div>
 
 <div class="app-wrap"><div class="win">
   <div class="body">
