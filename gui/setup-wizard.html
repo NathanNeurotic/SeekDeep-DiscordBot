@@ -260,10 +260,36 @@
     const completeType = fa.watch_events.find(t => /\.complete$/.test(t)) || 'deps.install.complete';
     const failedType   = fa.watch_events.find(t => /\.failed$/.test(t))   || 'deps.install.failed';
 
+    // Backup completion poll: every 30s re-query /system/firstrun and
+    // check if THIS row's check has flipped to ok:true. Covers three
+    // failure modes the event-bus path can't:
+    //   (1) terminal event fired before our subscriber registered
+    //       (microsecond race after POST returns)
+    //   (2) WebSocket wasn't connected when user clicked the button
+    //       so subscribers existed but no events were delivered
+    //   (3) WS disconnect mid-install drops the terminal event entirely
+    // The firstrun probe is authoritative — if the check goes green
+    // there, the underlying fix succeeded regardless of event reception.
+    const checkId = c.id;
+    const firstrunPoll = setInterval(async () => {
+      if (settled) { clearInterval(firstrunPoll); return; }
+      try {
+        const r = await fetch(BASE + '/system/firstrun', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return;
+        const data = await r.json();
+        const checks = (data && Array.isArray(data.checks)) ? data.checks : [];
+        const match = checks.find(x => x && x.id === checkId);
+        if (match && match.ok === true) {
+          finish(true, 'fix complete (detected via /system/firstrun re-probe)');
+        }
+      } catch (_) { /* network blip; keep polling */ }
+    }, 30_000);
+
     const finish = (ok, msg) => {
       if (settled) return;
       settled = true;
       clearInterval(ticker);
+      clearInterval(firstrunPoll);
       try { offLine(); } catch {}
       try { offComplete(); } catch {}
       try { offFailed(); } catch {}
