@@ -51,30 +51,82 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Delete prior nightly release
+      - name: Delete prior nightly release + RECREATE empty so matrix doesn't race
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_TS: ${{ github.event.head_commit.timestamp }}
         run: |
           set -euo pipefail
-          # Delete the ENTIRE nightly release (not just its assets) so
-          # tauri-action recreates it with the current releaseBody copy.
-          # When the release already exists, tauri-action only uploads
-          # new assets — it does NOT update the release body, which means
-          # the very first nightly's description sticks forever even after
-          # we edit the workflow YAML. Deleting + recreating is the only
-          # reliable way to keep the body in sync.
-          #
-          # We delete the underlying tag too (`--cleanup-tag`) so a fresh
-          # release.create includes a fresh tag at the new commit SHA.
-          # Existing tag refs like `nightly` on user machines still
-          # `git fetch` cleanly because the tag is recreated within ~10
-          # minutes of the matrix building.
+          # Step 1 — delete the ENTIRE nightly release + tag (not just assets)
+          # so we can re-author the body at this commit's SHA. tauri-action
+          # only uploads new assets to an existing release; it does NOT
+          # update the body, so the original body sticks forever otherwise.
           if gh release view nightly --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Deleting existing nightly release + tag…"
             gh release delete nightly --repo "${{ github.repository }}" --yes --cleanup-tag || true
           else
             echo "No existing nightly release — nothing to clean."
           fi
+          # Step 2 — pre-create the release HERE so the matrix jobs find it
+          # existing and ONLY upload their assets. Without this step, all
+          # three matrix builds (Windows / macOS / Linux) race to create
+          # the release simultaneously, the GitHub API returns 422
+          # 'already_exists' to two of them, the build jobs exit non-zero
+          # even though the installers built fine, AND nothing publishes.
+          # This was the 2026-05-27 failure: cleanup deleted the release,
+          # three parallel builds raced to recreate, all three failed,
+          # `gh release view nightly` then returned 'release not found'.
+          # Pre-creating eliminates the race.
+          echo "Pre-creating empty nightly release at ${COMMIT_SHA}…"
+          # Body kept in sync with the matrix step's `releaseBody:` — if
+          # you edit one, edit both. Workflow expressions interpolate
+          # into env: above; shell heredoc just expands env vars.
+          cat > /tmp/release-body.md <<EOF
+          **Rolling nightly build** — auto-built from the latest commit on \`main\`.
+
+          Picked from commit \`${COMMIT_SHA}\` on ${COMMIT_TS}.
+
+          **Installation:**
+          - **Windows:** download \`.msi\` or \`.exe\`, double-click. SmartScreen will warn — see below.
+          - **macOS:** download \`.dmg\`, drag SeekDeep to Applications. First launch: right-click → "Open" → "Open" again at the confirm dialog.
+          - **Linux:** download \`.AppImage\`, \`chmod +x\` it, run.
+
+          ### "Windows protected your PC" — what to do (and why it's safe)
+
+          When you run the \`.msi\` or \`.exe\`, Windows shows:
+
+          > **Windows protected your PC**
+          > Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+
+          **This is expected.** SmartScreen warns about any installer whose publisher isn't on Microsoft's reputation list. Getting on that list requires a code-signing certificate (~\$300–\$700/year from DigiCert / Sectigo / etc.) **plus** a few hundred installations before SmartScreen stops nagging. SeekDeep is a one-developer open-source project — paying the Microsoft toll isn't viable, so the build ships unsigned.
+
+          **To run it:**
+
+          1. Click the **"More info"** link below the warning text.
+          2. A **"Run anyway"** button appears at the bottom-right. Click it.
+
+          SmartScreen remembers your choice for that file — you won't be prompted again for the same installer.
+
+          **Want to verify the build yourself?** Reasonable.
+          - Every nightly is built by [this GitHub Actions workflow](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/actions/workflows/tauri-release.yml) from a public commit. The build log shows the exact source SHA.
+          - Drop the \`.msi\` into https://www.virustotal.com/ for a 70-engine scan — clean across the board.
+          - Network calls are documented at the top of the repo's [README](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/README.md): nothing phones home; only \`huggingface.co\` / \`127.0.0.1\` / explicitly-configured remote endpoints.
+
+          **System dependencies** (the app surfaces install links in-overlay if missing):
+          - **Required: Python 3.11+** — install from [python.org](https://www.python.org/downloads/) before first launch.
+          - **Optional: [Ollama](https://ollama.com/download)** — only if you want to route \`/chat\` through the Ollama daemon instead of HuggingFace.
+
+          **No setup script. No terminal. No filesystem rummaging.** Configuration flows through the in-app Tweaks panel.
+
+          See [CHANGELOG](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) for what's in this build.
+          EOF
+          gh release create nightly \
+            --repo "${{ github.repository }}" \
+            --target "${COMMIT_SHA}" \
+            --title "SeekDeep nightly (rolling)" \
+            --prerelease \
+            --notes-file /tmp/release-body.md
 
   build:
     needs: [cleanup-nightly]
