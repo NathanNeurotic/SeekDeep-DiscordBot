@@ -495,7 +495,7 @@
     const panel = e.target.closest('.pipe-panel');
     const img = panel?.querySelector('[data-out] img');
     if (!img || !img.src) {
-      alert('Nothing to save yet — click GENERATE first.');
+      (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:'Nothing to save yet', body:'Click GENERATE first.'});
       return;
     }
     const pipe = panel.dataset.pipe || 'image';
@@ -518,7 +518,7 @@
     const src = $('#srcUrl').value.trim();
     const maskPrompt = $('#mask').value.trim();
     if (!src || !maskPrompt) {
-      alert('Need both a source image URL and a mask target phrase.');
+      (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:'Missing input', body:'Need both a source image URL and a mask target phrase.'});
       return;
     }
     const out = panel.querySelector('[data-out]');

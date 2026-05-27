@@ -84,6 +84,9 @@ SeekDeep-publish-audit-*.txt
 # extractor knows not to clobber hot-patched files on next boot. Per-install
 # state, never commit.
 .self-updated
+# Self-update staging dirs (transient). Wiped at start of every run, but
+# if a process dies mid-update the orphan stays until next run.
+.self-update-staging-*
 
 # Local Discord/server state. These are user/server-specific runtime files,
 # not distributable defaults.

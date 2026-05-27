@@ -1745,23 +1745,29 @@ def register_gui_endpoints(
     def post_self_update(body: dict | None = None):
         import urllib.request, urllib.error
         ref = str((body or {}).get("ref") or "main").strip()
-        # Allowlist: refs we'll accept (main / a tag / a commit SHA).
-        # No arbitrary refs from user input — too easy to point at a
-        # fork or a stale branch by accident.
+        # Allowlist: main / a tag / a commit SHA. No arbitrary refs.
         if not (ref == "main" or ref.startswith("v") or (len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref))):
             raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
-        # Files to pull. Mirrors tauri.conf.json#bundle.resources + the
-        # GUI tree (gui/**) since both need updating.
         REPO = "NathanNeurotic/SeekDeep-DiscordBot"
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
         single_files = [
             "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
             "package.json", "requirements-local.txt", "requirements-ml.txt",
         ]
-        # GUI tree — request the file list via GitHub's contents API, then
-        # download each. Cheaper than maintaining a hardcoded list.
-        contents_url = f"https://api.github.com/repos/{REPO}/contents/gui?ref={ref}"
-        downloaded: list[dict] = []
+        # Wipe abandoned staging dirs from prior crashed runs before we make our own.
+        for stale in root.glob(".self-update-staging-*"):
+            try: shutil.rmtree(stale, ignore_errors=True)
+            except Exception: pass
+        # Two-phase atomic update: stage everything in a sibling dir first,
+        # then move-replace into the live tree only after the batch lands.
+        # Mid-batch network failure leaves the live tree untouched instead
+        # of half-patched.
+        staging = root / f".self-update-staging-{os.getpid()}"
+        try:
+            staging.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise HTTPException(500, f"could not create staging dir: {exc}")
+        staged: list[dict] = []
         errors: list[str] = []
         def _fetch(url: str, timeout: float = 20.0) -> bytes:
             req = urllib.request.Request(url, headers={
@@ -1770,28 +1776,25 @@ def register_gui_endpoints(
             })
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read()
-        def _write(rel_path: str, content: bytes):
-            target = (root / rel_path).resolve()
-            if not _is_inside(target, root):
+        def _stage(rel_path: str, content: bytes):
+            staged_target = (staging / rel_path).resolve()
+            if not _is_inside(staged_target, staging):
                 raise ValueError(f"path escape: {rel_path}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(target.suffix + ".tmp." + str(os.getpid()))
-            tmp.write_bytes(content)
-            tmp.replace(target)
-        # 1) Single root files
+            staged_target.parent.mkdir(parents=True, exist_ok=True)
+            staged_target.write_bytes(content)
+        # Phase 1: download every file into staging.
         for fname in single_files:
             try:
                 content = _fetch(base_url + fname)
-                _write(fname, content)
-                downloaded.append({"path": fname, "bytes": len(content)})
+                _stage(fname, content)
+                staged.append({"path": fname, "bytes": len(content)})
             except urllib.error.HTTPError as e:
                 errors.append(f"{fname}: HTTP {e.code}")
             except Exception as exc:
                 errors.append(f"{fname}: {str(exc)[:120]}")
-        # 2) gui/ tree — list via contents API, recurse one level (the
-        # tree is flat — no nested subdirs as of 2026-05).
-        # Plus scripts/ tree — same pattern. The Installer's System
-        # check step runs node scripts/doctor.mjs which has to exist.
+        # gui/ + scripts/ trees — list via contents API, then fetch each
+        # file. scripts/doctor.mjs has to exist for the Installer's System
+        # check step.
         for sub in ("gui", "scripts"):
             sub_contents_url = f"https://api.github.com/repos/{REPO}/contents/{sub}?ref={ref}"
             try:
@@ -1808,28 +1811,60 @@ def register_gui_endpoints(
                             continue
                         try:
                             content = _fetch(download_url)
-                            _write(f"{sub}/{name}", content)
-                            downloaded.append({"path": f"{sub}/{name}", "bytes": len(content)})
+                            _stage(f"{sub}/{name}", content)
+                            staged.append({"path": f"{sub}/{name}", "bytes": len(content)})
                         except Exception as exc:
                             errors.append(f"{sub}/{name}: {str(exc)[:120]}")
             except Exception as exc:
                 errors.append(f"{sub}/ listing: {str(exc)[:120]}")
-        # 3) Sentinel — tells sidecar.rs not to clobber these on the next
-        # Tauri boot. Future versions of the extractor should read this
-        # and skip files listed inside, OR compare mtimes.
+        # Nothing landed → abort + wipe. Don't pretend success.
+        if not staged:
+            try: shutil.rmtree(staging, ignore_errors=True)
+            except Exception: pass
+            return {
+                "ok": False,
+                "ref": ref,
+                "downloaded": [],
+                "errors": errors or ["no files were downloaded"],
+                "note": "Self-update failed before any file was applied. The live tree is untouched.",
+            }
+        # Phase 2: commit. Each src.replace(target) is atomic on the same
+        # volume (staging is a sibling so always same vol). Live tree only
+        # transitions consistent old → consistent new per file.
+        committed: list[dict] = []
+        commit_errors: list[str] = []
+        for item in staged:
+            rel_path = item["path"]
+            src = staging / rel_path
+            target = (root / rel_path).resolve()
+            if not _is_inside(target, root):
+                commit_errors.append(f"{rel_path}: path escape on commit")
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                src.replace(target)
+                committed.append(item)
+            except Exception as exc:
+                commit_errors.append(f"{rel_path}: commit failed: {str(exc)[:120]}")
+        # Wipe the (now mostly empty) staging dir.
+        try: shutil.rmtree(staging, ignore_errors=True)
+        except Exception: pass
+        errors.extend(commit_errors)
+        # Sentinel lists only committed paths — sidecar.rs reads this on
+        # next Tauri boot and skips re-extracting files we just patched.
         try:
             sentinel = root / ".self-updated"
             sentinel.write_text(
                 f"# SeekDeep self-update sentinel\n# ref={ref}\n# at={_now_iso()}\n"
-                + "\n".join(d["path"] for d in downloaded) + "\n",
+                + "\n".join(d["path"] for d in committed) + "\n",
                 encoding="utf-8",
             )
         except Exception:
             pass
         return {
-            "ok": not errors or len(downloaded) > 0,
+            "ok": bool(committed) and not commit_errors,
             "ref": ref,
-            "downloaded": downloaded,
+            "downloaded": committed,
             "errors": errors,
             "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
         }

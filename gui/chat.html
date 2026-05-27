@@ -821,7 +821,7 @@
     const sdn = window.SeekDeepNotify;
     const inTauri = !!(window.__TAURI__ && window.__TAURI__.core);
     if (inTauri) {
-      const ok = window.confirm(
+      const ok = await (window.SeekDeepConfirm || window.confirm)(
         `Reinstall torch with ${variant} for ${gpuName}?\n\n`
         + `This will:\n`
         + `  • Stop the AI server\n`

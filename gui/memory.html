@@ -511,7 +511,7 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     saveBtn.addEventListener('click', async () => {
       const newText = textEl.textContent.trim();
       if (!newText || newText === originalText) { cancelBtn.click(); return; }
-      if (newText.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars (${newText.length})`); return; }
+      if (newText.length > MAX_FACT_CHARS) { (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:`Fact exceeds ${MAX_FACT_CHARS} chars (${newText.length})`}); return; }
       state.facts[idx].text = newText;
       state.facts[idx].at   = Date.now();
       // CRITICAL: server expects 1-based fact index (PATCH/DELETE
@@ -524,7 +524,7 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
       if (ok === false) {
         // Roll back the optimistic UI change since the write failed.
         state.facts[idx].text = originalText;
-        alert(`✕ Could not save fact #${idx + 1}. The server may be down or the token may have rotated. Try Reload.`);
+        (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'bad', title:`Could not save fact #${idx + 1}`, body:'Server may be down or the token may have rotated. Try Reload.'});
         return;
       }
       textEl.removeAttribute('contenteditable');
@@ -540,7 +540,7 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
         // the wire). Roll back on failure.
         const ok = await deleteFact(state.activeId, idx + 1);
         if (ok === false) {
-          alert(`✕ Could not forget fact #${idx + 1}. The server may be down or the token may have rotated.`);
+          (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'bad', title:`Could not forget fact #${idx + 1}`, body:'Server may be down or the token may have rotated.'});
           return;
         }
         state.facts.splice(idx, 1);
@@ -594,7 +594,7 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
         if (ok === false) {
           state.presets = before;
           el.classList.toggle('on');
-          alert('✕ Could not save preset selection. Server may be down.');
+          (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'bad', title:'Could not save preset selection', body:'Server may be down.'});
           return;
         }
         if (state.isMock && MOCK_USERS[state.activeId]) MOCK_USERS[state.activeId].presets = state.presets.slice();
@@ -677,15 +677,15 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
   $('#addFactBtn').addEventListener('click', async () => {
     const text = newFactInput.value.trim();
     if (!text) return;
-    if (text.length > MAX_FACT_CHARS) { alert(`Fact exceeds ${MAX_FACT_CHARS} chars`); return; }
-    if (state.facts.length >= MAX_FACTS) { alert(`Already at the ${MAX_FACTS}-fact cap. Forget one first.`); return; }
-    if (!state.activeId) { alert('Pick a user first.'); return; }
+    if (text.length > MAX_FACT_CHARS) { (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:`Fact exceeds ${MAX_FACT_CHARS} chars`}); return; }
+    if (state.facts.length >= MAX_FACTS) { (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:`Already at the ${MAX_FACTS}-fact cap`, body:'Forget one first.'}); return; }
+    if (!state.activeId) { (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'warn', title:'Pick a user first.'}); return; }
     // Server write first; UI commit only on success. Previously the
     // optimistic unshift stayed visible even when the POST failed,
     // so users thought a fact was saved when it wasn't.
     const ok = await writeFact(state.activeId, text);
     if (ok === false) {
-      alert('✕ Could not save fact. Server may be down or token rotated.');
+      (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'bad', title:'Could not save fact', body:'Server may be down or token rotated.'});
       return;
     }
     state.facts.unshift({ text, at: Date.now() });
@@ -699,11 +699,11 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
   // --- danger zone --------------------------------------------------
   $('#clearBtn').addEventListener('click', () => {
     if (!state.activeId) return;
-    if (!state.facts.length) { alert('Already empty.'); return; }
+    if (!state.facts.length) { (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'info', title:'Already empty.'}); return; }
     confirmModal('Wipe all facts?', `This will DELETE all ${state.facts.length} fact${state.facts.length===1?'':'s'} for ${$('#hUserName').textContent}. Atomic write · no soft-delete · cannot be undone.`, async () => {
       const ok = await clearUser(state.activeId);
       if (ok === false) {
-        alert('✕ Could not clear facts. Server may be down or token rotated. Nothing was deleted.');
+        (window.SeekDeepNotify?.toast || ((o)=>alert(o.title)))({tone:'bad', title:'Could not clear facts', body:'Server may be down or token rotated. Nothing was deleted.'});
         return;
       }
       state.facts = []; state.updatedAt = Date.now();

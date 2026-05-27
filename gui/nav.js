@@ -1302,4 +1302,104 @@
     // GET /launchers/status every 5s. Self-gates to app.html.
     inject('launcher.js', null);
   })();
+
+  // ===== Custom contextmenu: SeekDeep-styled, no generic browser menu =====
+  // Default Chromium right-click made the app feel like a webpage (Save As,
+  // View Source, etc.). Replace with a tight branded menu: Reload always;
+  // Copy when text is selected; Paste in editable fields. Anything else
+  // intentionally omitted — escape hatch for devtools is F12 / Ctrl+Shift+I.
+  (function installContextMenu() {
+    if (document.getElementById('sd-ctx-style')) return;
+    const st = document.createElement('style');
+    st.id = 'sd-ctx-style';
+    st.textContent = `
+      .sd-ctx-menu{position:fixed;z-index:999999;min-width:180px;background:#0f1115;border:1px solid #2a2f3a;border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.5);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e6e9ef;user-select:none}
+      .sd-ctx-item{padding:6px 12px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px}
+      .sd-ctx-item:hover{background:#1d2330}
+      .sd-ctx-item.disabled{color:#5a6170;cursor:default}
+      .sd-ctx-item.disabled:hover{background:transparent}
+      .sd-ctx-sep{height:1px;background:#2a2f3a;margin:4px 0}
+      .sd-ctx-kbd{margin-left:auto;font-size:11px;color:#8a92a3;padding:1px 5px;border:1px solid #2a2f3a;border-radius:3px}
+    `;
+    document.head.appendChild(st);
+    let menu = null;
+    function closeMenu() {
+      if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
+      menu = null;
+    }
+    function build(items, x, y) {
+      closeMenu();
+      menu = document.createElement('div');
+      menu.className = 'sd-ctx-menu';
+      items.forEach(it => {
+        if (it === '-') {
+          const sep = document.createElement('div');
+          sep.className = 'sd-ctx-sep';
+          menu.appendChild(sep);
+          return;
+        }
+        const el = document.createElement('div');
+        el.className = 'sd-ctx-item' + (it.disabled ? ' disabled' : '');
+        const label = document.createElement('span');
+        label.textContent = it.label;
+        el.appendChild(label);
+        if (it.kbd) {
+          const k = document.createElement('span');
+          k.className = 'sd-ctx-kbd';
+          k.textContent = it.kbd;
+          el.appendChild(k);
+        }
+        if (!it.disabled) {
+          el.addEventListener('click', () => { closeMenu(); try { it.action(); } catch (e) {} });
+        }
+        menu.appendChild(el);
+      });
+      document.body.appendChild(menu);
+      const r = menu.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+      menu.style.left = Math.max(4, Math.min(x, vw - r.width - 4)) + 'px';
+      menu.style.top  = Math.max(4, Math.min(y, vh - r.height - 4)) + 'px';
+    }
+    document.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const sel = (window.getSelection && window.getSelection().toString()) || '';
+      const target = e.target;
+      const tag = target && target.tagName;
+      const isEditable = !!(target && (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable));
+      const items = [];
+      if (sel) {
+        items.push({ label: 'Copy', kbd: 'Ctrl+C', action: () => {
+          try { navigator.clipboard.writeText(sel); } catch (_) {
+            try { document.execCommand('copy'); } catch (__) {}
+          }
+        }});
+      }
+      if (isEditable) {
+        items.push({ label: 'Paste', kbd: 'Ctrl+V', action: async () => {
+          try {
+            const t = await navigator.clipboard.readText();
+            if (target.setRangeText) {
+              const start = target.selectionStart || 0;
+              const end = target.selectionEnd || 0;
+              target.setRangeText(t, start, end, 'end');
+              target.dispatchEvent(new Event('input', { bubbles: true }));
+            } else if (target.isContentEditable) {
+              document.execCommand('insertText', false, t);
+            }
+          } catch (_) {}
+        }});
+      }
+      if (items.length) items.push('-');
+      items.push({ label: 'Reload', kbd: 'F5', action: () => location.reload() });
+      build(items, e.clientX, e.clientY);
+    }, true);
+    document.addEventListener('mousedown', (e) => {
+      if (menu && !menu.contains(e.target)) closeMenu();
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      if (menu && e.key === 'Escape') { closeMenu(); e.stopPropagation(); }
+    }, true);
+    window.addEventListener('blur', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+  })();
 })();

@@ -228,10 +228,13 @@
       <div class="tpl-list" id="tplList"></div>
 
       <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--stroke);">
+        <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.1em; margin-bottom: 6px; text-transform: uppercase;">▸ Storage scope</div>
+        <input type="text" id="tplGuildId" placeholder="guild ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 4px;" />
+        <input type="text" id="tplOwnerId" placeholder="your Discord user ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 8px;" />
         <button class="btn btn-ghost" style="width: 100%;" id="newBtn">+ New template</button>
-        <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.1em; margin-top: 8px; line-height: 1.55;">
-          ▸ <span style="color:var(--cyan-1)">@SeekDeep template share</span> &lt;name&gt;<br>
-          ▸ <span style="color:var(--cyan-1)">@SeekDeep template import</span> (use the channel button)
+        <div id="tplScopeHint" style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.1em; margin-top: 8px; line-height: 1.55;">
+          ▸ Set guild + user ID above to unlock save / delete from GUI<br>
+          ▸ <span style="color:var(--cyan-1)">@SeekDeep template share</span> still required to post to <span class="mono" style="color:var(--cyan-1)">#prompts</span>
         </div>
       </div>
     </aside>
@@ -246,6 +249,7 @@
         <div class="actions">
           <button class="btn btn-ghost" id="vEdit">✎ Edit</button>
           <button class="btn btn-ghost" id="vDup">Duplicate</button>
+          <button class="btn btn-ghost" id="vDelete" style="color:var(--bad);">✕ Delete</button>
           <button class="btn btn-ghost" id="vExport">⇩ Export JSON</button>
           <button class="btn btn-primary" id="vShare">▸ Share</button>
         </div>
@@ -733,12 +737,96 @@ The user wants information density, not company.`,
     e.currentTarget.style.color = '#1e1f22';
   });
 
-  $('#vDup').addEventListener('click', () => {
-    showPromptDiscordHint(
-      'Duplicate template',
-      `@SeekDeep template save ${active.name}-copy: ${(active.body || '').slice(0, 240)}`,
-      'GUI duplication is read-only. Run this in Discord — SeekDeep will save the duplicate as a new template under your user.',
-    );
+  // === Storage scope (guild_id + owner_user_id), sticky via localStorage ===
+  const SCOPE_LS_KEY = 'seekdeep:prompts:scope';
+  function getScope() {
+    return {
+      guild_id: ($('#tplGuildId')?.value || '').trim(),
+      owner_user_id: ($('#tplOwnerId')?.value || '').trim(),
+    };
+  }
+  (function loadScope() {
+    try {
+      const raw = localStorage.getItem(SCOPE_LS_KEY);
+      if (!raw) return;
+      const j = JSON.parse(raw);
+      if ($('#tplGuildId') && j.guild_id) $('#tplGuildId').value = j.guild_id;
+      if ($('#tplOwnerId') && j.owner_user_id) $('#tplOwnerId').value = j.owner_user_id;
+    } catch {}
+  })();
+  ['#tplGuildId', '#tplOwnerId'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener('input', () => {
+      try { localStorage.setItem(SCOPE_LS_KEY, JSON.stringify(getScope())); } catch {}
+    });
+  });
+  function scopeReady(action) {
+    const s = getScope();
+    if (s.guild_id && s.owner_user_id) return s;
+    window.SeekDeepNotify?.toast?.({
+      tone: 'warn', title: `${action} needs storage scope`,
+      body: 'Set guild ID + your Discord user ID in the left rail first.',
+      ttl: 6000,
+    });
+    return null;
+  }
+  function templateBase() {
+    return (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function')
+      ? window.SeekDeepResolveBase()
+      : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')
+          ? 'http://127.0.0.1:7865'
+          : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
+  }
+  async function postTemplate(name, body) {
+    const s = getScope();
+    const r = await fetch(templateBase() + '/prompts/template', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guild_id: s.guild_id, owner_user_id: s.owner_user_id, name, prompt: body }),
+    });
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+  async function deleteTemplate(name) {
+    const s = getScope();
+    const id = `${s.guild_id}:${s.owner_user_id}:${name}`;
+    const r = await fetch(templateBase() + '/prompts/template/' + encodeURIComponent(id), {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+
+  $('#vDup').addEventListener('click', async () => {
+    if (!scopeReady('Duplicate') || !active) return;
+    const copyName = `${active.name}-copy`;
+    try {
+      await postTemplate(copyName, active.body || '');
+      window.SeekDeepNotify?.toast?.({ tone: 'good', title: `✓ Duplicated as ${copyName}`, ttl: 4000 });
+      if (typeof hydrateFromBackend === 'function') hydrateFromBackend();
+    } catch (err) {
+      window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Duplicate failed', body: err.message || String(err), ttl: 6000 });
+    }
+  });
+
+  $('#vDelete').addEventListener('click', async () => {
+    if (!active || !scopeReady('Delete')) return;
+    const ok = await (window.SeekDeepConfirm || window.confirm)(`Delete template "${active.name}"?\nThis is permanent.`);
+    if (!ok) return;
+    try {
+      await deleteTemplate(active.name);
+      window.SeekDeepNotify?.toast?.({ tone: 'good', title: `✓ Deleted ${active.name}`, ttl: 4000 });
+      if (typeof hydrateFromBackend === 'function') hydrateFromBackend();
+    } catch (err) {
+      window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Delete failed', body: err.message || String(err), ttl: 6000 });
+    }
   });
   $('#vExport').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(active, null, 2)], { type: 'application/json' });
@@ -754,11 +842,21 @@ The user wants information density, not company.`,
       'No deep-link integration with the Discord desktop client yet. Switch to Discord and find the #prompts channel manually.',
     );
   });
-  $('#newBtn').addEventListener('click', () => showPromptDiscordHint(
-    'New template',
-    '@SeekDeep template save <name>: <body with {{variables}}>',
-    'GUI editor for new templates isn\'t wired yet. Use the Discord slash command — SeekDeep parses {{variables}} automatically.',
-  ));
+  $('#newBtn').addEventListener('click', () => {
+    if (!scopeReady('Create new')) return;
+    active = {
+      id: 'draft-' + Date.now(),
+      name: 'new-template',
+      body: 'Replace this with your prompt. Use {{variables}} for placeholders.',
+      vars: ['variables'],
+      author: getScope().owner_user_id || 'you',
+      source: 'own',
+      shared: null,
+    };
+    if (Array.isArray(window.TEMPLATES)) window.TEMPLATES.push(active);
+    if (typeof select === 'function') select(active.id);
+    if (typeof openEdit === 'function') openEdit();
+  });
 
   // ===== Edit-in-place flow (v2 follow-up — prompts marketplace) =====
   // Mirrors the bot side: when a previously-shared template is edited, the
@@ -817,11 +915,19 @@ The user wants information density, not company.`,
     active.vars = [...tokens];
   }
 
-  $('#edSaveLocal').addEventListener('click', () => {
+  $('#edSaveLocal').addEventListener('click', async () => {
+    if (!scopeReady('Save local')) return;
     commitLocal();
-    closeEdit();
-    select(active.id);
-    flashChannelState('✓ SAVED LOCALLY · #prompts embed unchanged');
+    try {
+      const r = await postTemplate(active.name, active.body);
+      closeEdit();
+      select(active.id);
+      flashChannelState(`✓ SAVED · ${r.char_count || active.body.length} chars · ${(r.vars||[]).length} vars`);
+      window.SeekDeepNotify?.toast?.({ tone: 'good', title: `✓ Saved ${active.name}`, body: r.created ? 'New template created' : 'Updated existing', ttl: 4000 });
+      if (typeof hydrateFromBackend === 'function') hydrateFromBackend();
+    } catch (err) {
+      window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Save failed', body: err.message || String(err), ttl: 6000 });
+    }
   });
 
   $('#edSaveReshare').addEventListener('click', () => {
