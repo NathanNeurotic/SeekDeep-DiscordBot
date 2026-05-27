@@ -7169,13 +7169,16 @@ async function seekdeepFetchGpuStats() {
 async function seekdeepBuildGpuStatusText({ live = false, tick = 0 } = {}) {
   const result = await seekdeepFetchGpuStats();
   if (!result.ok) {
+    // Strip loopback URLs / IPs / ports from the error before publishing to
+    // Discord — even though 127.0.0.1 is unreachable from outside the host,
+    // exposing the bot operator's internal address + port to a public guild
+    // is needless info disclosure (and fingerprintable).
     return [
       '**GPU**',
-      asTextBlock([
+      asTextBlock(seekdeepRedactStatusConnectionInfo([
         'Local AI server: OFFLINE or /gpu endpoint missing',
-        `Endpoint: ${LOCAL_AI_BASE_URL}/gpu`,
         `Error: ${result.error}`,
-      ].join('\n')),
+      ].join('\n'))),
     ].join('\n');
   }
   const { summary, detail } = seekdeepFormatGpuStats(result.data);
