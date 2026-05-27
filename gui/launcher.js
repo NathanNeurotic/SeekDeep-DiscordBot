@@ -529,14 +529,30 @@
     // ML deps install, etc.). One quiet retry after 400ms is enough — if the
     // server's coming back it'll be back by then; if it's not, we surface
     // the real error on the second attempt.
+    // Restart action sets the global flag itself so subsequent polls + sibling
+    // launcherCalls during the bounce don't surface "server unreachable" red
+    // toasts. The user already saw "restarting" — we don't need 4 follow-ups.
+    if (action === 'restart' || action === 'start') {
+      window.__seekdeepRestartingUntil = Date.now() + 12000;
+    }
     let result = await tryOnce();
     if (result === null) {
       await new Promise(r => setTimeout(r, 400));
       result = await tryOnce();
     }
     const sdn = notify();
+    const inRestartWindow = window.__seekdeepRestartingUntil && Date.now() < window.__seekdeepRestartingUntil;
     if (result === null) {
-      if (sdn) sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' · server unreachable', body: 'Both attempts failed. The local AI server may be restarting — try again in a few seconds.', ttl: 6000 });
+      // During a known restart window, downgrade to info-tone (or skip
+      // entirely) so the user isn't bombarded with 4 red toasts saying the
+      // same "may be restarting" thing.
+      if (sdn) {
+        if (inRestartWindow) {
+          // Skip — the action that started the restart already toasted.
+        } else {
+          sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' · server unreachable', body: 'Both attempts failed. The local AI server may be restarting — try again in a few seconds.', ttl: 6000 });
+        }
+      }
     } else if (sdn) {
       if (result.ok) sdn.toast({ tone: 'good', title: svc + ' ' + action + ' OK', ttl: 3000 });
       else sdn.toast({ tone: 'bad', title: svc + ' ' + action + ' failed', body: 'HTTP ' + result.status + (result.body.detail ? ' · ' + result.body.detail : ''), ttl: 6000 });
@@ -876,6 +892,26 @@
     pumpGpuBadge();
     setInterval(pumpGpuBadge, 10000);
   }
+
+  // Tauri sidecar restart listener: any code path that bounces the Python
+  // server (tray menu, splash recovery, lib.rs restart_sidecar command) emits
+  // a sidecar:status event with code=RESTARTING / SPAWNING. Set the global
+  // restart-window flag so launcherCall + nav.js error surfacing both stay
+  // quiet during the bounce.
+  (function wireSidecarRestartFlag() {
+    const tauri = window.__TAURI__;
+    if (!tauri || !tauri.event || typeof tauri.event.listen !== 'function') return;
+    tauri.event.listen('sidecar:status', (e) => {
+      const code = e?.payload?.code || '';
+      if (code === 'RESTARTING' || code === 'SPAWNING' || code === 'DEPS_INSTALLING') {
+        window.__seekdeepRestartingUntil = Date.now() + 15000;
+      } else if (code === 'READY' || code === 'HEALTHY') {
+        // Sidecar is back up — clear the suppression immediately so real
+        // errors after this point aren't swallowed.
+        window.__seekdeepRestartingUntil = 0;
+      }
+    }).catch(() => { /* event plugin not loaded — fall back to per-button flag */ });
+  })();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
