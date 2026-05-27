@@ -2708,7 +2708,7 @@
     document.querySelector('.main').scrollTop = 0;
   }
   document.querySelectorAll('.sidebar a[data-mod]').forEach(a => {
-    a.addEventListener('click', (e) => {
+    a.addEventListener('click', async (e) => {
       e.preventDefault();
       // Dirty-guard: if the user is leaving the Bot config pane with
       // unsaved DIRTY rows, prompt before letting them switch. Was:
@@ -4517,40 +4517,52 @@ const SEEKDEEP_BASE = (function() {
                   const r = await fetch(SEEKDEEP_BASE + fa.endpoint, init);
                   const result = await r.json().catch(() => ({}));
                   if (r.ok && result.ok !== false) {
-                    // If the endpoint exposes watch_events (e.g. /system/
-                    // reinstall-torch returns immediately and runs in a
-                    // background thread), we MUST wait for the matching
-                    // event before showing DONE. Otherwise users see green
-                    // while pip is still downloading 2 GB of torch wheels.
-                    if (Array.isArray(fa.watch_events) && fa.watch_events.length && window.SeekDeepEvents?.subscribe) {
+                    // If the endpoint exposes watch_events (e.g. /deps/install
+                    // and /system/reinstall-torch both return immediately and
+                    // run in a background thread), we MUST wait for the
+                    // matching event before showing DONE. Otherwise users see
+                    // green while pip is still downloading 2 GB of torch wheels.
+                    //
+                    // SeekDeepEvents exposes .on(type, handler) — NOT
+                    // .subscribe(). The earlier code probed .subscribe and
+                    // always fell through to the synchronous DONE path, which
+                    // is why the button flashed green then reverted as soon
+                    // as the firstrun re-poll saw torch was still missing.
+                    if (Array.isArray(fa.watch_events) && fa.watch_events.length && window.SeekDeepEvents?.on) {
                       btn.textContent = '⏳ running…';
                       if (sdn?.toast) sdn.toast({ tone: 'info', title: c.label, body: result.note || 'Background work started · waiting for completion event…', ttl: 5000 });
                       let resolved = false;
-                      const unsub = window.SeekDeepEvents.subscribe((evt) => {
+                      const unsubs = [];
+                      const settle = (evType, data) => {
                         if (resolved) return;
-                        const evType = evt?.type || '';
-                        if (!fa.watch_events.includes(evType)) return;
                         resolved = true;
-                        try { unsub && unsub(); } catch {}
+                        unsubs.forEach(u => { try { u && u(); } catch {} });
                         const failed = /\.(failed|error)$/.test(evType);
                         if (!failed) {
                           btn.textContent = '✓ DONE';
                           btn.style.background = 'var(--good)';
-                          if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label + ' · complete', body: evt?.data?.note || 'Fix applied · re-checking…', ttl: 5000 });
+                          if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label + ' · complete', body: data?.note || 'Fix applied · re-checking…', ttl: 5000 });
                           setTimeout(load, 1500);
                         } else {
                           btn.textContent = '✕ FAILED';
                           btn.style.background = 'var(--bad)';
-                          const err = evt?.data?.error || evt?.data?.note || 'event reported failure';
+                          const err = data?.error || data?.hint || data?.note
+                                   || (data?.exit_code != null ? `pip exit ${data.exit_code}` : 'event reported failure');
                           if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · fix failed', body: String(err).slice(0, 240), ttl: 8000 });
                           setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
                         }
-                      });
+                      };
+                      // Register one handler per watched event type. .on()
+                      // returns the unsubscriber so we can clean up after
+                      // the first terminal event fires.
+                      for (const evType of fa.watch_events) {
+                        unsubs.push(window.SeekDeepEvents.on(evType, (data) => settle(evType, data)));
+                      }
                       // Hard cap: if no event arrives in 15 min, surface the timeout.
                       setTimeout(() => {
                         if (resolved) return;
                         resolved = true;
-                        try { unsub && unsub(); } catch {}
+                        unsubs.forEach(u => { try { u && u(); } catch {} });
                         btn.textContent = '⚠ TIMED OUT';
                         btn.style.background = 'var(--warn)';
                         if (sdn?.toast) sdn.toast({ tone: 'warn', title: c.label + ' · timeout', body: 'No completion event arrived in 15 min. Check the Logs viewer.', ttl: 10000 });

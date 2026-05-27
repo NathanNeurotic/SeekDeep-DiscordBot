@@ -375,11 +375,12 @@
   .resp-image img { max-width: 100%; max-height: 100%; }
 </style>
 <style>
-/* Task 10 · quiet ambient motion on text-dense pages */
+/* Task 10 · quiet ambient motion on text-dense pages.
+   The .bubbles tone-down is now global in styles.css (default 0.22/0.18).
+   These overrides further quiet the HUD rings + god rays for the API
+   reference where the wall of text needs maximum legibility. */
 .abyss::before { opacity: 0.45; }
 .abyss::after  { opacity: 0.55; }
-.bubbles span { opacity: 0.20 !important; }
-.bubbles span.cube { opacity: 0.18 !important; }
 .rays::before, .rays::after { opacity: 0.55; }
 
 /* Task 13 · Route Inspector visualization */

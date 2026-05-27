@@ -156,7 +156,11 @@ body {
      We use the existing element only — the streaks come from .bubbles. */
 }
 
-/* drifting particles layer — cubes + bubbles */
+/* drifting particles layer — cubes + bubbles.
+   Default opacity is intentionally subtle (~0.2) so pages without a
+   .win frame don't look "noisy" with old-design particles. Pages that
+   want them bolder can override per-page, but the global default is
+   tuned to match the look chat.html / index.html (About) ship today. */
 .bubbles {
   position: fixed; inset: 0; z-index: -1; pointer-events: none;
   overflow: hidden;
@@ -169,7 +173,7 @@ body {
   background:
     radial-gradient(circle at 30% 30%, rgba(255,255,255,0.85), rgba(109,240,255,0.4) 40%, rgba(45,212,255,0.1) 70%, transparent 100%);
   box-shadow: 0 0 10px rgba(109,240,255,0.6);
-  opacity: 0.55;
+  opacity: 0.22;
   animation: drift linear infinite;
 }
 /* cube variants — declared via a class so we can mix bubbles + cubes */
@@ -188,8 +192,14 @@ body {
     inset 2px 2px 0 rgba(255,255,255,0.12),
     0 0 12px rgba(45,212,255,0.35);
   animation: tumble linear infinite;
-  opacity: 0.45;
+  opacity: 0.18;
 }
+/* no-motion toggle (set by app.html's theme config when ambientMotion=false) */
+body.no-motion .bubbles span,
+body.no-motion .rays::before,
+body.no-motion .rays::after,
+body.no-motion .abyss::before,
+body.no-motion .abyss::after { animation: none; }
 .bubbles span.cube.big { width: 22px; height: 22px; }
 .bubbles span.cube.sm  { width: 9px;  height: 9px; }
 
