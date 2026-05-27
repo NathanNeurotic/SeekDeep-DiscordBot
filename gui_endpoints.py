@@ -1242,60 +1242,80 @@ def register_gui_endpoints(
             "fix": f"Copy `.env.default` -> `.env` in the repo root (or run setup_local.ps1).",
             "blocking": True,
         })
-        # 2. DISCORD_TOKEN looks plausible
+        # 2. DISCORD_TOKEN looks plausible — format check, not just length.
+        # Real Discord bot tokens are three base64url segments separated by
+        # dots: `<base64 user_id>.<base64 timestamp>.<HMAC>`, typically
+        # ~70 chars total. The previous check (len >= 50) passed any
+        # 50-char garbage string. The regex below rejects placeholder
+        # text, partial pastes, and pure-whitespace values while still
+        # not requiring a network call to Discord (full validity needs
+        # the bot to actually connect — that's what /clientReady proves).
         tok = (env.get("DISCORD_TOKEN") or "").strip()
+        _BOT_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,10}\.[A-Za-z0-9_-]{20,}$")
+        tok_ok = bool(tok) and bool(_BOT_TOKEN_RE.match(tok))
         checks.append({
             "id": "discord_token",
             "label": "DISCORD_TOKEN set",
-            "ok": bool(tok) and len(tok) >= 50,
+            "ok": tok_ok,
             "fix": "Paste your bot token below — saved to .env, bot restart needed for it to take effect.",
             "fix_action": {
                 "endpoint": "/config", "method": "POST", "label": "Save token",
                 "body_template": {"updates": {}},
                 "prompt_for": [{
                     "key": "DISCORD_TOKEN", "label": "Discord bot token",
-                    "placeholder": "MTIzNDU2…  (70+ chars, starts with MT)",
+                    "placeholder": "MTIzNDU2…  (3 dot-separated base64 segments)",
                     "secret": True,
-                    "validate_regex": r"^[A-Za-z0-9_.\-]{50,}$",
-                    "validate_error": "Bot tokens are 70+ chars of letters/digits/_-. — check you copied the whole thing.",
+                    "validate_regex": r"^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,10}\.[A-Za-z0-9_-]{20,}$",
+                    "validate_error": "Bot tokens have three dot-separated parts: <bot-id>.<timestamp>.<HMAC>. Looks like a partial paste or wrong field.",
                 }],
             },
             "blocking": True,
         })
-        # 3. DISCORD_CLIENT_ID set (for slash command registration)
+        # 3. DISCORD_CLIENT_ID set (for slash command registration).
+        # Discord snowflakes are 17-20 digit integers (will widen to 21
+        # by 2090 per the snowflake epoch). Reject anything outside that
+        # range so a user pasting their bot's display name or a partial
+        # ID fails the check instead of silently passing.
         cid = (env.get("DISCORD_CLIENT_ID") or "").strip()
         checks.append({
             "id": "discord_client_id",
             "label": "DISCORD_CLIENT_ID set (for slash commands)",
-            "ok": bool(cid) and cid.isdigit() and len(cid) >= 15,
+            "ok": bool(cid) and cid.isdigit() and 17 <= len(cid) <= 20,
             "fix": "Paste your Discord Application ID below. Find it at discord.com/developers/applications -> your bot -> General Information -> Application ID.",
             "fix_action": {
                 "endpoint": "/config", "method": "POST", "label": "Save ID",
                 "body_template": {"updates": {}},
                 "prompt_for": [{
                     "key": "DISCORD_CLIENT_ID", "label": "Application ID",
-                    "placeholder": "1234567890123456789  (15-25 digits)",
-                    "validate_regex": r"^\d{15,25}$",
-                    "validate_error": "Application ID is a 15-25 digit snowflake.",
+                    "placeholder": "1234567890123456789  (17-20 digit snowflake)",
+                    "validate_regex": r"^\d{17,20}$",
+                    "validate_error": "Application ID is a 17-20 digit Discord snowflake — copy it from discord.com/developers/applications.",
                 }],
             },
             "blocking": False,
         })
-        # 4. SEEKDEEP_ADMIN_IDS set (admin features will all 403 without this)
+        # 4. SEEKDEEP_ADMIN_IDS set (admin features will all 403 without this).
+        # Parse the comma-separated list and validate each ID is a Discord
+        # snowflake (17-20 digits). Previously `bool(admin)` passed any
+        # non-empty value — "abc" or "your_id_here" both registered as ok.
         admin = (env.get("SEEKDEEP_ADMIN_IDS") or env.get("ADMIN_USER_IDS") or "").strip()
+        admin_ok = False
+        if admin:
+            parts = [p.strip() for p in admin.split(",") if p.strip()]
+            admin_ok = bool(parts) and all(p.isdigit() and 17 <= len(p) <= 20 for p in parts)
         checks.append({
             "id": "admin_ids",
             "label": "SEEKDEEP_ADMIN_IDS set (admin features need it)",
-            "ok": bool(admin),
+            "ok": admin_ok,
             "fix": "Paste your Discord user ID(s) below. In Discord with Developer Mode on, right-click your name -> Copy User ID. Comma-separate for multiple admins.",
             "fix_action": {
                 "endpoint": "/config", "method": "POST", "label": "Save",
                 "body_template": {"updates": {}},
                 "prompt_for": [{
                     "key": "SEEKDEEP_ADMIN_IDS", "label": "Discord user ID(s)",
-                    "placeholder": "123456789012345678  (or comma-separated for multiple)",
-                    "validate_regex": r"^[\d,\s]+$",
-                    "validate_error": "Numeric user IDs separated by commas (no other characters).",
+                    "placeholder": "123456789012345678  (17-20 digits per ID, comma-separated)",
+                    "validate_regex": r"^\d{17,20}(?:\s*,\s*\d{17,20})*$",
+                    "validate_error": "Each user ID is a 17-20 digit Discord snowflake. With multiple IDs, separate by commas only — no spaces inside an ID.",
                 }],
             },
             "blocking": False,
