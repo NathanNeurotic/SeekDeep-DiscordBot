@@ -1227,6 +1227,64 @@ def register_gui_endpoints(
                 ollama_up = True
         except Exception:
             ollama_up = False
+        # Ollama parity with HF: detect installed-ness, daemon state, auth.
+        # Each failure gets a one-click fix button so the user doesn't have
+        # to remember where Ollama lives or how to start it.
+        ollama_exe_found = False
+        ollama_paths = []
+        for p in [
+            os.path.expandvars("%LOCALAPPDATA%/Programs/Ollama/ollama.exe"),
+            os.path.expandvars("%ProgramFiles%/Ollama/ollama.exe"),
+        ]:
+            if os.path.isfile(p):
+                ollama_exe_found = True
+                ollama_paths.append(p)
+                break
+        if not ollama_exe_found:
+            try:
+                r = subprocess.run(["where", "ollama"], capture_output=True, text=True, timeout=3)
+                if r.returncode == 0 and r.stdout.strip():
+                    ollama_exe_found = True
+                    ollama_paths.append(r.stdout.strip().splitlines()[0])
+            except Exception:
+                pass
+        checks.append({
+            "id": "ollama_installed",
+            "label": "Ollama installed (optional · alternative to HuggingFace)",
+            "ok": ollama_exe_found,
+            "fix": "Install Ollama via winget — one click. Lets you pull quantized chat models that load faster than HF and run alongside the HF backend.",
+            "fix_action": {"endpoint": "/system/install-ollama", "method": "POST",
+                           "label": "Install Ollama", "body": {}, "long_running": True},
+            "blocking": False,
+        })
+        # Daemon check is only meaningful if ollama is installed OR a role is wired to ollama.
+        # Otherwise skip — no point telling a user "your Ollama daemon is down" if they don't use Ollama.
+        ollama_in_env = bool((env.get("OLLAMA_BASE_URL") or "").strip()) or bool((env.get("OLLAMA_API_KEY") or "").strip())
+        if ollama_exe_found or ollama_in_env:
+            try:
+                with socket.create_connection(("127.0.0.1", 11434), timeout=1):
+                    daemon_up = True
+            except Exception:
+                daemon_up = False
+            checks.append({
+                "id": "ollama_daemon",
+                "label": "Ollama daemon running (port 11434)",
+                "ok": daemon_up,
+                "fix": "Start the local Ollama daemon — runs `ollama serve` in the background. Required for any Ollama backend role to work.",
+                "fix_action": {"endpoint": "/system/start-ollama", "method": "POST",
+                               "label": "Start daemon", "body": {}},
+                "blocking": False,
+            })
+        # Cloud auth check — only if user set OLLAMA_API_KEY or has signed in via device key.
+        if (env.get("OLLAMA_API_KEY") or "").strip():
+            checks.append({
+                "id": "ollama_cloud_auth",
+                "label": "Ollama Cloud API key set",
+                "ok": True,
+                "fix": "",
+                "blocking": False,
+            })
+
         # Check that LOCAL_CHAT_MODEL_ID is set AND its model is actually
         # cached. Either condition failing is a real fresh-user blocker: a
         # blank var fails the new no-model-configured guard at /chat time,
@@ -2165,6 +2223,110 @@ def register_gui_endpoints(
             return {"ok": False, "error": "winget install timed out after 15 minutes"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
+
+    # ----- POST /system/install-ollama -----
+    # Same winget pattern as Docker. After install, the user can either run
+    # `ollama serve` manually OR the launcher's start-ollama endpoint will
+    # spawn it in the background.
+    @app.post("/system/install-ollama", dependencies=[Depends(_require_gui_token)])
+    def post_install_ollama(body: dict | None = None):
+        dry_run = bool((body or {}).get("dry_run"))
+        try:
+            probe = subprocess.run(["winget", "--version"], capture_output=True, text=True, timeout=5)
+            if probe.returncode != 0:
+                return {"ok": False, "error": "winget not available — install Ollama manually from ollama.com"}
+        except FileNotFoundError:
+            return {"ok": False, "error": "winget not on PATH — install Ollama manually from ollama.com"}
+        except Exception as exc:
+            return {"ok": False, "error": f"winget probe failed: {exc}"}
+        if dry_run:
+            return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Ollama.Ollama -e --silent"}
+        try:
+            r = subprocess.run(
+                ["winget", "install", "--id", "Ollama.Ollama", "-e",
+                 "--silent", "--accept-package-agreements", "--accept-source-agreements"],
+                capture_output=True, text=True, timeout=600,
+            )
+            return {
+                "ok": r.returncode == 0,
+                "exit_code": r.returncode,
+                "stdout": (r.stdout or "")[-2000:],
+                "stderr": (r.stderr or "")[-1200:],
+                "note": "Installed. Click 'Start Ollama daemon' next, or open Ollama from Start menu.",
+            }
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "winget install timed out after 10 minutes"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:600]}
+
+    # ----- POST /system/start-ollama -----
+    # Spawn the local Ollama daemon (`ollama serve`) in the background.
+    # Idempotent: if the daemon is already up (probed via OLLAMA_BASE_URL),
+    # returns ok=True immediately.
+    @app.post("/system/start-ollama", dependencies=[Depends(_require_gui_token)])
+    def post_start_ollama(body: dict | None = None):
+        base = (os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+        # Quick probe — daemon already running?
+        try:
+            with socket.create_connection(("127.0.0.1", 11434), timeout=1.5):
+                return {"ok": True, "state": "already-running", "base_url": base}
+        except Exception:
+            pass
+        # Find ollama executable. Common Windows install path: %LOCALAPPDATA%/Programs/Ollama/ollama.exe
+        exe = None
+        candidates = []
+        try:
+            r = subprocess.run(["where", "ollama"], capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                candidates.extend([line.strip() for line in r.stdout.strip().splitlines() if line.strip()])
+        except Exception:
+            pass
+        local_app = os.path.expandvars("%LOCALAPPDATA%/Programs/Ollama/ollama.exe")
+        if os.path.isfile(local_app):
+            candidates.append(local_app)
+        program_files = os.path.expandvars("%ProgramFiles%/Ollama/ollama.exe")
+        if os.path.isfile(program_files):
+            candidates.append(program_files)
+        for c in candidates:
+            if os.path.isfile(c):
+                exe = c
+                break
+        if not exe:
+            return {"ok": False, "error": "ollama.exe not found · install via POST /system/install-ollama or from ollama.com"}
+        try:
+            # Spawn detached so it survives the AI server's lifetime.
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            out_log = _log_dir / f"ollama-{stamp}.gui.out.log"
+            err_log = _log_dir / f"ollama-{stamp}.gui.err.log"
+            out_f = out_log.open("ab")
+            err_f = err_log.open("ab")
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            if os.name == "nt":
+                # Hide the daemon's console window.
+                flags |= subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            proc = subprocess.Popen(
+                [exe, "serve"],
+                stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
+                creationflags=flags,
+            )
+            # Give it 2s to bind the port.
+            time.sleep(2.0)
+            try:
+                with socket.create_connection(("127.0.0.1", 11434), timeout=2):
+                    return {"ok": True, "state": "started", "pid": proc.pid, "exe": exe, "log": out_log.name, "base_url": base}
+            except Exception:
+                return {
+                    "ok": False,
+                    "error": "started ollama serve but port 11434 isn't accepting connections yet — check the err log.",
+                    "pid": proc.pid, "exe": exe, "log": err_log.name,
+                }
+        except Exception as exc:
+            return {"ok": False, "error": f"spawn failed: {exc}"}
+
+    # ----- GET /system/ollama-status -----
+    # Already exists below; kept for cross-reference. Probes daemon
+    # reachability + device-key presence + OLLAMA_API_KEY presence.
 
     # AUD-003: which data files contain user-identifying info and should be
     # token-gated. Stats / built-in stacks stay public so the dashboard pane

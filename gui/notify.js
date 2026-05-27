@@ -519,9 +519,39 @@
     return { close: () => el.remove(), el };
   }
 
+  // Brand-styled drop-in replacement for window.confirm(). Returns a Promise
+  // that resolves to true (primary clicked) or false (secondary / dismissed).
+  // Use case: every `if (!confirm('...'))` in the codebase can become
+  // `if (!await SeekDeepNotify.confirm('...'))`.
+  function confirm(message, opts) {
+    opts = opts || {};
+    // Split first line as title, rest as body. Mirrors window.confirm() ergonomics.
+    let title = opts.title;
+    let body  = opts.body;
+    if (!title && !body) {
+      const lines = String(message || '').split('\n');
+      title = lines[0] || 'Confirm';
+      body  = lines.slice(1).join('\n').trim();
+    } else if (!title) {
+      title = String(message || 'Confirm');
+    } else if (!body) {
+      body = String(message || '');
+    }
+    return modal({
+      tone: opts.tone || 'info',
+      title,
+      body: body ? `<div style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.55;color:var(--hull-2);">${String(body).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>` : '',
+      primary:   opts.primary   || { label: opts.okLabel     || 'OK',     tone: opts.tone || 'info' },
+      secondary: opts.secondary || { label: opts.cancelLabel || 'Cancel', tone: 'neutral' },
+      dismissible: true,
+    }).then(r => r === 'primary');
+  }
+
   window.SeekDeepNotify = {
-    banner, dismiss, modal, toast,
+    banner, dismiss, modal, toast, confirm,
     // Allow tests / hosts to nudge the offset after layout shifts.
     _syncOffset: syncBannerOffset,
   };
+  // Also expose a top-level alias so `await SeekDeepConfirm(...)` works.
+  window.SeekDeepConfirm = confirm;
 })();

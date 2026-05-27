@@ -84,6 +84,12 @@
       data = await r.json();
       _launchStatusMisses = 0;
     } catch {
+      // During a known restart window, suppress the UNKNOWN flip — the
+      // sidecar is intentionally down for ~5-10s and the user already
+      // got a "restarting" toast. Don't double-up with "OFFLINE" panic.
+      if (window.__seekdeepRestartingUntil && Date.now() < window.__seekdeepRestartingUntil) {
+        return;
+      }
       _launchStatusMisses++;
       if (_launchStatusMisses >= 3) {
         // Mark every card UNKNOWN so the user knows the launcher backend
@@ -596,7 +602,7 @@
       const label = (btn.textContent || '').toLowerCase().trim();
       if (label.startsWith('prune cache')) {
         btn.addEventListener('click', async () => {
-          if (!confirm('Delete all unreferenced HF cache revisions? This frees disk but redownloads are needed if you switch back to a deleted model rev.')) return;
+          if (!await (window.SeekDeepConfirm || window.confirm)('Prune HF cache?\nDeletes all unreferenced revisions. Frees disk but you\'ll have to re-download if you switch back to a removed model.')) return;
           try {
             const r = await fetch(BASE + '/cache/prune', { method: 'POST' });
             const sdn = notify();
@@ -666,7 +672,7 @@
       } else if (label === '↯ force kill all') {
         btn.addEventListener('click', async () => {
           if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple('Force kill bot + ai-server + searxng')) return;
-          if (!confirm('Force-kill bot + ai-server + searxng? Models in VRAM will drop.')) return;
+          if (!await (window.SeekDeepConfirm || window.confirm)('Force-kill all services?\nbot + ai-server + searxng will all be terminated. Models in VRAM drop. In-flight requests fail.')) return;
           for (const svc of ['bot', 'ai-server', 'searxng']) await launcherCall(svc, 'stop');
         });
       } else if (label === '⟳ smoke test') {
@@ -714,7 +720,7 @@
         const desired = lockState === true ? '0' : '1';
         const action = lockState === true ? 'Unlock' : 'Lock';
         if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple(`${action} HF cache (writes .env + restarts sidecar)`)) return;
-        if (!confirm(`${action} HF cache?\n\nThis will:\n  1. Write HF_HUB_OFFLINE=${desired} + TRANSFORMERS_OFFLINE=${desired} to .env\n  2. Restart the AI server so it picks up the new env\n\nIn-flight requests will be dropped.`)) return;
+        if (!await (window.SeekDeepConfirm || window.confirm)(`${action} HF cache?\nThis will:\n  1. Write HF_HUB_OFFLINE=${desired} + TRANSFORMERS_OFFLINE=${desired} to .env\n  2. Restart the AI server so it picks up the new env\n\nIn-flight requests will be dropped.`)) return;
         lockBusy = true;
         paintLock();
         const sdn = notify();
@@ -733,6 +739,9 @@
           // as Reload .env above: Tauri → restart_sidecar, else → /launcher/
           // ai-server/restart (which 409s for self-hosted ai-server, in which
           // case the user has to restart manually).
+          // Set the global restart-window flag so other pumps don't toast
+          // "Failed to fetch" during the bounce.
+          window.__seekdeepRestartingUntil = Date.now() + 12000;
           const tauri = window.__TAURI__;
           if (tauri && tauri.core) {
             try { await tauri.core.invoke('restart_sidecar'); }
@@ -760,7 +769,7 @@
     const suBtn = document.getElementById('qaSelfUpdateBtn');
     if (suBtn) {
       suBtn.addEventListener('click', async () => {
-        if (!confirm('Self-update?\n\nFetches latest local_ai_server.py + gui_endpoints.py + gui/ from main on GitHub, writes them to the runtime dir, and marks them as user-patched so Tauri won\'t clobber them on next boot.\n\nYou will need to restart the AI server for the changes to take effect.')) return;
+        if (!await (window.SeekDeepConfirm || window.confirm)('Self-update from GitHub?\nFetches latest local_ai_server.py + gui_endpoints.py + gui/ + scripts/ from main, writes them to the runtime dir, and marks them as user-patched so Tauri won\'t clobber them on next boot.\n\nThe AI server will auto-restart once the update completes.')) return;
         const sdn = notify();
         const orig = suBtn.textContent;
         suBtn.disabled = true;
@@ -778,9 +787,26 @@
             throw new Error(msg);
           }
           const j = await r.json();
-          const updated = (j.updated && j.updated.length) || 0;
-          if (sdn) sdn.toast({ tone: 'good', title: 'Self-update OK', body: `Updated ${updated} file(s). Restart the AI server to apply.`, ttl: 8000 });
-          suBtn.textContent = '✓ Updated · restart server';
+          const updated = (j.downloaded && j.downloaded.length) || (j.updated && j.updated.length) || 0;
+          if (sdn) sdn.toast({ tone: 'good', title: 'Self-update OK', body: `Updated ${updated} file(s) · restarting AI server now…`, ttl: 5000 });
+          suBtn.textContent = '⏳ restarting…';
+          // Auto-restart so the patched code actually takes effect. Set the
+          // global restart-window flag so /logs/tail + /launchers/status
+          // polling doesn't toast errors during the ~10s sidecar bounce.
+          window.__seekdeepRestartingUntil = Date.now() + 12000;
+          try {
+            const tauri = window.__TAURI__;
+            if (tauri && tauri.core) {
+              await tauri.core.invoke('restart_sidecar');
+            } else {
+              await fetch(BASE + '/launcher/ai-server/restart', { method: 'POST' });
+            }
+            suBtn.textContent = '✓ updated + restarted';
+            setTimeout(() => { suBtn.textContent = orig; }, 4000);
+          } catch (re) {
+            if (sdn) sdn.toast({ tone: 'warn', title: 'Restart failed', body: 'Update applied but restart didn\'t fire — restart manually. ' + (re.message || re), ttl: 8000 });
+            suBtn.textContent = '✓ updated · please restart manually';
+          }
         } catch (err) {
           if (sdn) sdn.toast({ tone: 'bad', title: 'Self-update failed', body: String(err.message || err), ttl: 8000 });
           suBtn.textContent = orig;

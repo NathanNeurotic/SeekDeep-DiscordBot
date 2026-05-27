@@ -204,7 +204,15 @@
       const name = detail.name || '';
       if (name === 'AbortError' || name === 'TimeoutError') return true;
       const msg = String(detail.message || detail || '');
-      return /timed out|aborted|signal timed out/i.test(msg);
+      if (/timed out|aborted|signal timed out/i.test(msg)) return true;
+      // During a known AI server restart window (Self-update, Lock cache,
+      // manual Restart), TypeError: Failed to fetch is expected and spammy
+      // to toast. The restarting flag is set by the action that triggered
+      // the restart; expires ~10s later when the sidecar is back up.
+      if (window.__seekdeepRestartingUntil && Date.now() < window.__seekdeepRestartingUntil) {
+        if (/failed to fetch|networkerror|load failed/i.test(msg) || name === 'TypeError') return true;
+      }
+      return false;
     }
     function surface(label, detail) {
       try {
