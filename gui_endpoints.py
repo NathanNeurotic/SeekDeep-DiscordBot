@@ -1609,6 +1609,74 @@ def register_gui_endpoints(
         return {"ok": True, "locked": not unlock, "updated": updates,
                 "note": "Restart the AI server (Quick Actions -> Reload .env) so the offline flag takes effect."}
 
+    # ----- POST /system/ollama-signin -----
+    # Runs `ollama signin` — Ollama's CLI command that generates / uploads
+    # a device ed25519 keypair to the user's ollama.com account so the
+    # local Ollama daemon can push/pull from the account's cloud models.
+    # Opens a browser tab for the auth handshake. Idempotent — running
+    # twice on the same machine is a no-op (Ollama detects existing
+    # keypair at ~/.ollama/id_ed25519).
+    #
+    # User-facing equivalent of the "Device Keys" section in the Ollama
+    # account portal. After this completes successfully, /system/ollama-
+    # status reports `signed_in: true` and the user can use any cloud
+    # model from their account in SeekDeep.
+    @app.post("/system/ollama-signin", dependencies=[Depends(_require_gui_token)])
+    def post_ollama_signin():
+        import threading
+        def run():
+            event_bus.publish_sync({"type": "ollama.signin.started", "data": {}})
+            try:
+                # Use Popen so we can stream the URL+code that ollama
+                # prints during browser handshake. The CLI exits with 0
+                # when the user has completed sign-in in the browser.
+                proc = subprocess.Popen(
+                    ["ollama", "signin"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                    shell=(os.name == "nt"),
+                )
+                if proc.stdout:
+                    for line in proc.stdout:
+                        event_bus.publish_sync({"type": "ollama.signin.line",
+                                                "data": {"line": line.rstrip()}})
+                proc.wait()
+                event_bus.publish_sync({"type": "ollama.signin.complete",
+                                        "data": {"ok": proc.returncode == 0,
+                                                 "exit_code": proc.returncode}})
+            except FileNotFoundError:
+                event_bus.publish_sync({"type": "ollama.signin.failed",
+                                        "data": {"error": "ollama not on PATH — install Ollama from ollama.com/download first"}})
+            except Exception as exc:
+                event_bus.publish_sync({"type": "ollama.signin.failed",
+                                        "data": {"error": str(exc)[:240]}})
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True,
+                "note": "subscribe to ollama.signin.line / ollama.signin.complete / ollama.signin.failed on /events. A browser tab opens for the auth handshake."}
+
+    # ----- GET /system/ollama-status -----
+    # Quick probe so the GUI can show the user where they stand re Ollama:
+    # daemon reachable, signed in to cloud, available cloud models.
+    @app.get("/system/ollama-status")
+    def get_ollama_status():
+        out: dict = {"ok": True, "base_url": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")}
+        # Daemon reachability
+        try:
+            with socket.create_connection(("127.0.0.1", 11434), timeout=1):
+                out["daemon_reachable"] = True
+        except Exception:
+            out["daemon_reachable"] = False
+        # Has device keypair? Ollama generates ~/.ollama/id_ed25519 on first
+        # `ollama signin`. Presence is the cleanest "signed in" signal we
+        # can get without invoking ollama itself.
+        ollama_dir = Path(os.path.expanduser("~")) / ".ollama"
+        out["device_key_present"] = (ollama_dir / "id_ed25519").is_file()
+        out["device_pubkey_present"] = (ollama_dir / "id_ed25519.pub").is_file()
+        # API key configured?
+        out["api_key_set"] = bool((os.getenv("OLLAMA_API_KEY") or "").strip())
+        out["signed_in"] = out["device_key_present"] or out["api_key_set"]
+        return out
+
     # ----- POST /system/launch-all -----
     # Sequenced bring-up: SearXNG -> AI server -> Discord bot. Mirrors
     # `seekdeep_launcher.bat` option 8 (clean start of all three) so the

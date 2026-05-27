@@ -966,6 +966,12 @@ import urllib.request as _seekdeep_urllib_req
 import urllib.error as _seekdeep_urllib_err
 
 OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "").rstrip("/")
+# Optional bearer for Ollama Cloud (https://ollama.com -> Account -> Keys).
+# When set, every _ollama_request below sends Authorization: Bearer <key>.
+# Leave empty for the local daemon path (default), which doesn't require auth.
+# Maps to the user's account-portal "API keys" entries (e.g. MSI / OpenCode
+# slots in the user's Ollama account view).
+OLLAMA_API_KEY = (os.getenv("OLLAMA_API_KEY", "") or "").strip()
 OLLAMA_TIMEOUT_SECS = float(os.getenv("OLLAMA_TIMEOUT_SECS", "180"))
 OLLAMA_PROBE_TIMEOUT_SECS = float(os.getenv("OLLAMA_PROBE_TIMEOUT_SECS", "2"))
 OLLAMA_PULL_TIMEOUT_SECS = float(os.getenv("OLLAMA_PULL_TIMEOUT_SECS", "1800"))
@@ -1010,6 +1016,9 @@ def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
     req = _seekdeep_urllib_req.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
+    # Attach Ollama Cloud bearer if configured. Local daemon ignores it.
+    if OLLAMA_API_KEY:
+        req.add_header("Authorization", f"Bearer {OLLAMA_API_KEY}")
     t = timeout if timeout is not None else OLLAMA_TIMEOUT_SECS
     with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
