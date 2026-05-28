@@ -1,4 +1,4 @@
-<img width="1672" height="941" src="https://github.com/user-attachments/assets/41d77e75-59db-437a-b45f-c28905ff6abc" />
+<a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/tree/nightly" target="_blank"><img width="1672" height="941" src="https://github.com/user-attachments/assets/41d77e75-59db-437a-b45f-c28905ff6abc" /></a>
 
 
 # SeekDeep Discord Bot
