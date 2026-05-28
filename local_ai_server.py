@@ -1363,13 +1363,26 @@ def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
             return {}
 
 
+_OLLAMA_PROBE_CACHE: dict[str, float | bool] = {"value": False, "checked_at": 0.0}
+_OLLAMA_PROBE_TTL_SECS = 8.0
+
 def ollama_available() -> bool:
-    """Cheap probe of the Ollama daemon. True if /api/tags responds within OLLAMA_PROBE_TIMEOUT_SECS."""
+    """Cached probe of the Ollama daemon. Hot-path /health was paying the full
+    OLLAMA_PROBE_TIMEOUT_SECS (~2s) on every call, which combined with image
+    generation holding the GIL pushed /health over the bot's 2.5s timeout.
+    Cache the result for OLLAMA_PROBE_TTL_SECS so repeated /health calls reuse
+    the last probe."""
+    import time as _t
+    now = _t.time()
+    if (now - float(_OLLAMA_PROBE_CACHE["checked_at"])) < _OLLAMA_PROBE_TTL_SECS:
+        return bool(_OLLAMA_PROBE_CACHE["value"])
     try:
         _ollama_request("/api/tags", method="GET", timeout=OLLAMA_PROBE_TIMEOUT_SECS)
-        return True
+        _OLLAMA_PROBE_CACHE["value"] = True
     except Exception:
-        return False
+        _OLLAMA_PROBE_CACHE["value"] = False
+    _OLLAMA_PROBE_CACHE["checked_at"] = now
+    return bool(_OLLAMA_PROBE_CACHE["value"])
 
 
 def ollama_list_tags() -> list[str]:
@@ -2274,10 +2287,11 @@ async def seekdeep_singleflight_middleware(request, call_next):
 
 
 @app.get("/health")
-def health():
-    # Snapshot Ollama state so the GUI can show daemon status + per-role
-    # backend badges. Probe is cheap (~2s timeout) but cached at request
-    # time -- /health isn't hit often enough to need finer caching.
+async def health():
+    # async def so /health runs on the asyncio event loop instead of the sync
+    # thread pool. When /image is mid-generation it holds the CUDA pipeline +
+    # GIL; sync /health would queue behind it. async /health stays responsive.
+    # Ollama probe is cached (see ollama_available) so we don't pay 2s per call.
     _ollama_up = ollama_available()
     _chat_backends = {role: _resolve_chat_backend(role) for role in chat_role_map().keys()}
     # Surface remote-chat endpoints WITHOUT leaking API keys. The GUI uses

@@ -7454,7 +7454,11 @@ async function statusText(verbose = false) {
 
   try {
     const controller = new AbortController();
-    const timeoutMs = Math.max(500, Number(process.env.SEEKDEEP_STATUS_HEALTH_TIMEOUT_MS || 2500));
+    // Default 8s. Was 2500ms — too tight when the AI server's main thread
+    // pool is busy with image generation (which holds the GIL during CUDA
+    // calls). With the server-side async /health + Ollama probe cache, this
+    // could probably drop back to 4-5s, but 8s is a safe headroom.
+    const timeoutMs = Math.max(500, Number(process.env.SEEKDEEP_STATUS_HEALTH_TIMEOUT_MS || 8000));
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       health = await fetchJson(`${LOCAL_AI_BASE_URL}/health`, { signal: controller.signal });
@@ -7463,7 +7467,7 @@ async function statusText(verbose = false) {
     }
   } catch (err) {
     healthError = err?.name === 'AbortError'
-      ? `health check timed out after ${process.env.SEEKDEEP_STATUS_HEALTH_TIMEOUT_MS || 2500}ms`
+      ? `health check timed out after ${process.env.SEEKDEEP_STATUS_HEALTH_TIMEOUT_MS || 8000}ms`
       : String(err?.message || err || 'unknown error');
   }
 
