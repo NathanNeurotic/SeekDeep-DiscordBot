@@ -9317,6 +9317,58 @@ client.once('clientReady', async () => {
       });
     }
   }, 30000).unref?.();
+
+  // AI-server-gone self-exit watchdog. When Tauri quits, it kills the AI
+  // server child but historically left the Discord bot running as an
+  // orphan (the bot was spawned with detach-from-parent flags). That
+  // orphan keeps reporting "Local AI server: OFFLINE / unreachable" to
+  // any Discord user pinging it until the next Tauri launch reaps it.
+  //
+  // The proper fix is on the Rust side (lib.rs RunEvent::Exit also
+  // killing the bot, committed 22aba96), but Rust changes only ship
+  // via MSI rebuild — they can't be self-update'd. This watchdog is
+  // the Python/Node-side fallback that works on EXISTING MSI builds:
+  // if the AI server is unreachable for ~60s, the bot self-exits.
+  //
+  // Opt out via SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER=1 in .env (e.g.
+  // for users whose bot is configured with a remote chat backend that
+  // doesn't actually need the local AI server — they pay the OFFLINE
+  // status report but want the bot running 24/7).
+  if (!['1', 'true', 'yes', 'on'].includes(
+        String(process.env.SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER || '').trim().toLowerCase())) {
+    let aiServerMisses = 0;
+    const MAX_MISSES = 4;  // 4 misses × 15s = 60s grace before self-exit
+    setInterval(async () => {
+      try {
+        const controller = new AbortController();
+        const tm = setTimeout(() => controller.abort(), 3000);
+        try {
+          const r = await fetch(`${LOCAL_AI_BASE_URL}/health`, { signal: controller.signal });
+          if (r.ok) {
+            aiServerMisses = 0;
+            return;
+          }
+        } finally {
+          clearTimeout(tm);
+        }
+      } catch (_) {
+        // Unreachable — count as a miss
+      }
+      aiServerMisses++;
+      if (aiServerMisses >= MAX_MISSES) {
+        console.warn(`[SeekDeep] AI server unreachable for ${aiServerMisses * 15}s — self-exiting so the next Tauri launch finds a clean machine. Override with SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER=1.`);
+        try {
+          seekdeepWriteBotStatus({
+            ready: false,
+            exited: true,
+            exit_at: new Date().toISOString(),
+            exit_reason: 'ai-server-unreachable',
+          });
+        } catch (_) {}
+        process.exit(0);
+      }
+    }, 15000).unref?.();
+  }
 });
 
 // Discord WebSocket lost / reconnecting. shardDisconnect fires with a
