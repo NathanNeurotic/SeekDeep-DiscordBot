@@ -33,9 +33,34 @@ import time
 import secrets
 import asyncio
 import socket
-import subprocess
+import subprocess as _real_subprocess
 import shutil
 import threading
+
+# Subprocess shim: shadows `subprocess` so every run/Popen in this file gets
+# creationflags=CREATE_NO_WINDOW on Windows — no terminal flashes per probe.
+class _SubprocessShim:
+    _NW = getattr(_real_subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    PIPE = _real_subprocess.PIPE
+    STDOUT = _real_subprocess.STDOUT
+    DEVNULL = _real_subprocess.DEVNULL
+    TimeoutExpired = _real_subprocess.TimeoutExpired
+    CalledProcessError = _real_subprocess.CalledProcessError
+    SubprocessError = _real_subprocess.SubprocessError
+    CREATE_NEW_PROCESS_GROUP = getattr(_real_subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    CREATE_NO_WINDOW = _NW
+    Popen = staticmethod(_real_subprocess.Popen)  # rebound below to wrap
+    @staticmethod
+    def run(*args, **kwargs):
+        if os.name == "nt" and "creationflags" not in kwargs:
+            kwargs["creationflags"] = _SubprocessShim._NW
+        return _real_subprocess.run(*args, **kwargs)
+def _Popen_hidden(*args, **kwargs):
+    if os.name == "nt" and "creationflags" not in kwargs:
+        kwargs["creationflags"] = _SubprocessShim._NW
+    return _real_subprocess.Popen(*args, **kwargs)
+_SubprocessShim.Popen = staticmethod(_Popen_hidden)
+subprocess = _SubprocessShim()  # module-local rebinding — only THIS file uses the shim
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -891,10 +916,15 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     try:
         out_f = out_log.open("ab")
         err_f = err_log.open("ab")
+        # OR in CREATE_NO_WINDOW with CREATE_NEW_PROCESS_GROUP so the spawned
+        # bot daemon doesn't pop its own console window on Windows.
+        _flags = 0
+        if os.name == "nt":
+            _flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(
             cmd, cwd=str(cwd),
             stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=_flags,
         )
         _PROCESSES[service] = proc
         return {"ok": True, "service": service, "state": "starting",

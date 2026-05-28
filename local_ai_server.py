@@ -951,6 +951,8 @@ def _seekdeep_nvidia_smi_probe() -> dict:
     stall /gpu.
     """
     import subprocess
+    # Hide the console window on Windows so /gpu polls don't flash a terminal.
+    _nw = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     out: dict = {"detected": False}
     try:
         r = subprocess.run(
@@ -958,6 +960,7 @@ def _seekdeep_nvidia_smi_probe() -> dict:
              "--query-gpu=name,memory.total,driver_version,utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=2,
+            creationflags=_nw,
         )
     except FileNotFoundError:
         out["error"] = "nvidia-smi not on PATH"
