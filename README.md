@@ -139,11 +139,11 @@ When you run the `.msi` or `.exe`, Windows will show:
 
 **Step 1.** Click the **More info** link below the body text:
 
-![SmartScreen step 1: click "More info"](docs/smartscreen-1-more-info.png)
+![SmartScreen step 1: click "More info"](docs/assets/moreinforun.png)
 
 **Step 2.** A **Run anyway** button appears at the bottom-right. Click it:
 
-![SmartScreen step 2: click "Run anyway"](docs/smartscreen-2-run-anyway.png)
+![SmartScreen step 2: click "Run anyway"](docs/assets/anyway.png)
 
 That's it. SmartScreen remembers your choice for that file's hash — you won't be prompted again for the same installer.
 

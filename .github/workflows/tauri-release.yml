@@ -105,11 +105,11 @@ jobs:
 
           **Step 1.** Click the **"More info"** link below the body text:
 
-          ![SmartScreen step 1: click "More info"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/smartscreen-1-more-info.png)
+          ![SmartScreen step 1: click "More info"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/assets/moreinforun.png)
 
           **Step 2.** A **"Run anyway"** button appears at the bottom-right. Click it:
 
-          ![SmartScreen step 2: click "Run anyway"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/smartscreen-2-run-anyway.png)
+          ![SmartScreen step 2: click "Run anyway"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/assets/anyway.png)
 
           SmartScreen remembers your choice for that file — you won't be prompted again for the same installer.
 
@@ -237,11 +237,11 @@ jobs:
 
             **Step 1.** Click the **"More info"** link below the body text:
 
-            ![SmartScreen step 1: click "More info"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/smartscreen-1-more-info.png)
+            ![SmartScreen step 1: click "More info"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/assets/moreinforun.png)
 
             **Step 2.** A **"Run anyway"** button appears at the bottom-right. Click it:
 
-            ![SmartScreen step 2: click "Run anyway"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/smartscreen-2-run-anyway.png)
+            ![SmartScreen step 2: click "Run anyway"](https://raw.githubusercontent.com/NathanNeurotic/SeekDeep-DiscordBot/main/docs/assets/anyway.png)
 
             SmartScreen remembers your choice for that file — you won't be prompted again for the same installer.
 
