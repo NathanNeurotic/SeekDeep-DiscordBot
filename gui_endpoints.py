@@ -4855,7 +4855,20 @@ def register_gui_endpoints(
             stale = (time.time() - mtime) > 90.0
         except OSError:
             stale = True
-        ready = bool(raw.get("ready")) and not stale and not raw.get("exited")
+        # `exited` is from the file. A bot can self-exit, then auto-restart and
+        # write a fresh ready=true; older bot builds didn't clear exit_at so the
+        # file ends up self-contradictory. Treat exited as ignored when heartbeat
+        # is fresher than exit_at (heartbeat wins — we know the bot is alive now).
+        exited_flag = bool(raw.get("exited"))
+        if exited_flag:
+            try:
+                hb = raw.get("heartbeat_at")
+                ea = raw.get("exit_at")
+                if hb and ea and str(hb) > str(ea):  # ISO 8601 sorts lexically
+                    exited_flag = False
+            except Exception:
+                pass
+        ready = bool(raw.get("ready")) and not stale and not exited_flag
         return {
             "ready": ready,
             "stale": stale,
@@ -4866,8 +4879,8 @@ def register_gui_endpoints(
             "ready_at":  raw.get("ready_at"),
             "disconnect_at": raw.get("disconnect_at"),
             "last_disconnect_reason": raw.get("last_disconnect_reason"),
-            "exited": bool(raw.get("exited")),
-            "exit_reason": raw.get("exit_reason"),
+            "exited": exited_flag,
+            "exit_reason": raw.get("exit_reason") if exited_flag else None,
             "heartbeat_at": raw.get("heartbeat_at"),
         }
 

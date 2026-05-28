@@ -380,6 +380,14 @@ function seekdeepWriteBotStatus(patch) {
       pid: process.pid,
       heartbeat_at: new Date().toISOString(),
     });
+    // If this write asserts the bot is ready, clear stale exit markers from a
+    // previous self-exit — otherwise the launcher pill reads exited=true forever
+    // even though we're back up and heartbeating.
+    if (merged.ready === true) {
+      merged.exited = false;
+      merged.exit_at = null;
+      merged.exit_reason = null;
+    }
     writeJsonAtomic(SEEKDEEP_BOT_STATUS_PATH, merged);
   } catch (err) {
     // Best-effort — status writes never block the bot's real work.
