@@ -10,6 +10,33 @@
   'use strict';
   if (document.getElementById('sd-nav-root')) return;
 
+  // Warm Webview2's text-input subsystem (TSF + spellcheck COM) ASAP so the
+  // user's first real input-focus isn't a 5s cold-start freeze on Windows.
+  // Hidden offscreen textarea, focused+blurred once after idle, then removed.
+  (function warmTextInput() {
+    if (window.__seekdeepTextWarmed) return;
+    window.__seekdeepTextWarmed = true;
+    const run = () => {
+      try {
+        const t = document.createElement('textarea');
+        t.setAttribute('aria-hidden', 'true');
+        t.tabIndex = -1;
+        t.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+        document.body.appendChild(t);
+        t.focus();
+        // Yield, blur, remove — gives the OS a beat to spin up TSF/spellcheck.
+        setTimeout(() => { try { t.blur(); t.remove(); } catch {} }, 50);
+      } catch {}
+    };
+    if (document.body) {
+      (window.requestIdleCallback || setTimeout)(run, 200);
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        (window.requestIdleCallback || setTimeout)(run, 200);
+      }, { once: true });
+    }
+  })();
+
   // ===== Token auth: auto-inject X-SeekDeep-Token on POSTs to our server =====
   // Done as a fetch monkey-patch so designer-shipped HTMLs (app.html, chat.html
   // etc) don't need to know about auth — they just call fetch() and the header
