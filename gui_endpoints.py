@@ -754,10 +754,22 @@ def _service_state(service: str, log_dir: Path) -> dict:
                 port = int(port_str)
             except ValueError:
                 port = 8080
+            # Bump timeout 0.5s → 1.5s. The 500ms probe was flapping to
+            # UNKNOWN on busy systems (e.g. during fresh-boot when docker
+            # cleanup + bot spawn are in flight). 1.5s is still well
+            # under the launcher's 5s status poll budget and matches
+            # what curl-based probes elsewhere in this file use.
+            #
+            # Also collapse socket.timeout (TimeoutError) into the
+            # "not-running" branch so a slow/overloaded SearXNG that
+            # eventually responds shows as "not-running" → user clicks
+            # Restart → fresh container fixes it. Previously it showed
+            # as "unknown" which is a meaningless state for an HTTP
+            # service either listening or not.
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                with socket.create_connection(("127.0.0.1", port), timeout=1.5):
                     state, source = "running", "port-probe"
-            except ConnectionRefusedError:
+            except (ConnectionRefusedError, TimeoutError, socket.timeout):
                 state, source = "not-running", "port-probe"
             except OSError:
                 state, source = "unknown", "port-probe-error"

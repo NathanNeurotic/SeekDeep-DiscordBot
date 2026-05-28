@@ -1159,6 +1159,16 @@
       // already faster than any tick — handle it the same way so the UI
       // doesn't lag the actual transition.
       window.SeekDeepEvents.on('service.state.changed', () => pumpStatus());
+      // Bus dropped means the AI server is gone or unreachable. Don't
+      // sit on the last-known HEALTHY tick payload for 30s waiting for
+      // the safety poll to flip cards — kick an immediate poll which
+      // will fail and increment _launchStatusMisses. Three quick misses
+      // flip every card to UNKNOWN within ~6s instead of ~90s. Once the
+      // bus reconnects ('_open'), pull a fresh launchers.tick.
+      window.SeekDeepEvents.on('_close',   () => { pumpStatus(); pumpGpuBadge(); });
+      window.SeekDeepEvents.on('_probing', () => { pumpStatus(); pumpGpuBadge(); });
+      window.SeekDeepEvents.on('_error',   () => { pumpStatus(); pumpGpuBadge(); });
+      window.SeekDeepEvents.on('_open',    () => { pumpStatus(); pumpGpuBadge(); });
       setInterval(pumpStatus,        30000);
       setInterval(pumpGpuBadge,      30000);
     } else {
