@@ -2374,6 +2374,48 @@ def register_gui_endpoints(
     # current PyTorch wheel coverage). After install the user MUST restart
     # the Tauri shell so the sidecar re-runs find_python; we just kick the
     # install and return.
+    def _run_winget_streamed(prefix: str, cmd: list[str], timeout_s: int) -> dict:
+        # Spawn `cmd` via Popen, publish <prefix>.started/line/progress/complete/failed
+        # on the event bus, return a dict with the same shape the old subprocess.run
+        # path returned. The HTTP request thread still blocks until completion so
+        # the API contract is preserved; the bus just lets a watching UI render live.
+        event_bus.publish_sync({"type": f"{prefix}.started",
+                                "data": {"cmd": " ".join(cmd[:6])}})
+        stdout_buf: list[str] = []
+        line_count = 0
+        proc = None
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1, errors="replace")
+            deadline = time.time() + timeout_s
+            for line in iter(proc.stdout.readline, ""):
+                line = line.rstrip()
+                if line:
+                    line_count += 1
+                    stdout_buf.append(line)
+                    event_bus.publish_sync({"type": f"{prefix}.line", "data": {"line": line}})
+                    event_bus.publish_sync({"type": f"{prefix}.progress",
+                                            "data": {"current": line_count, "label": line[:80]}})
+                if time.time() > deadline:
+                    try: proc.kill()
+                    except Exception: pass
+                    raise subprocess.TimeoutExpired(cmd, timeout_s)
+            rc = proc.wait()
+            ok = rc == 0
+            topic = f"{prefix}.complete" if ok else f"{prefix}.failed"
+            event_bus.publish_sync({"type": topic, "data": {"exit_code": rc}})
+            return {"ok": ok, "exit_code": rc,
+                    "stdout": "\n".join(stdout_buf)[-2000:], "stderr": ""}
+        except subprocess.TimeoutExpired:
+            event_bus.publish_sync({"type": f"{prefix}.failed",
+                                    "data": {"error": f"timeout after {timeout_s}s"}})
+            return {"ok": False, "error": f"{prefix} timed out after {timeout_s}s",
+                    "stdout": "\n".join(stdout_buf)[-2000:]}
+        except Exception as exc:
+            event_bus.publish_sync({"type": f"{prefix}.failed",
+                                    "data": {"error": str(exc)[:240]}})
+            raise
+
     @app.post("/system/install-python", dependencies=[Depends(_require_gui_token)])
     def post_install_python(body: dict | None = None):
         # dry_run=true lets smoke tests verify the auth gate without
@@ -2391,20 +2433,12 @@ def register_gui_endpoints(
         if dry_run:
             return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Python.Python.3.12 -e --silent"}
         try:
-            r = subprocess.run(
+            r = _run_winget_streamed("install-python",
                 ["winget", "install", "--id", "Python.Python.3.12", "-e",
                  "--silent", "--accept-package-agreements", "--accept-source-agreements"],
-                capture_output=True, text=True, timeout=600,
-            )
-            return {
-                "ok": r.returncode == 0,
-                "exit_code": r.returncode,
-                "stdout": (r.stdout or "")[-2000:],
-                "stderr": (r.stderr or "")[-1200:],
-                "note": "Restart the Tauri shell to pick up the new interpreter.",
-            }
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "winget install timed out after 10 minutes"}
+                600)
+            r.setdefault("note", "Restart the Tauri shell to pick up the new interpreter.")
+            return r
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
 
@@ -2428,6 +2462,8 @@ def register_gui_endpoints(
         ref = str((body or {}).get("ref") or "main").strip()
         # Allowlist: main / a tag / a commit SHA. No arbitrary refs.
         if not (ref == "main" or ref.startswith("v") or (len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref))):
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "ref must be main|v*|<sha>"}})
             raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
         REPO = "NathanNeurotic/SeekDeep-DiscordBot"
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
@@ -2435,6 +2471,8 @@ def register_gui_endpoints(
             "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
             "package.json", "requirements-local.txt", "requirements-ml.txt",
         ]
+        event_bus.publish_sync({"type": "self-update.started",
+                                "data": {"ref": ref, "phase": "stage"}})
         # Wipe abandoned staging dirs from prior crashed runs before we make our own.
         for stale in root.glob(".self-update-staging-*"):
             try: shutil.rmtree(stale, ignore_errors=True)
@@ -2469,10 +2507,18 @@ def register_gui_endpoints(
                 content = _fetch(base_url + fname)
                 _stage(fname, content)
                 staged.append({"path": fname, "bytes": len(content)})
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"staged {fname} ({len(content)} B)"}})
             except urllib.error.HTTPError as e:
                 errors.append(f"{fname}: HTTP {e.code}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"FAIL {fname}: HTTP {e.code}"}})
             except Exception as exc:
                 errors.append(f"{fname}: {str(exc)[:120]}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"FAIL {fname}: {str(exc)[:120]}"}})
+            event_bus.publish_sync({"type": "self-update.progress",
+                                    "data": {"current": len(staged), "label": fname}})
         # gui/ + scripts/ trees — list via contents API, then fetch each
         # file. scripts/doctor.mjs has to exist for the Installer's System
         # check step.
@@ -2483,9 +2529,10 @@ def register_gui_endpoints(
                 import json as _json
                 entries = _json.loads(api_resp)
                 if isinstance(entries, list):
-                    for entry in entries:
-                        if not isinstance(entry, dict) or entry.get("type") != "file":
-                            continue
+                    sub_files = [e for e in entries if isinstance(e, dict) and e.get("type") == "file"]
+                    event_bus.publish_sync({"type": "self-update.line",
+                                            "data": {"line": f"{sub}/ has {len(sub_files)} files to fetch"}})
+                    for entry in sub_files:
                         name = entry.get("name") or ""
                         download_url = entry.get("download_url") or ""
                         if not name or not download_url:
@@ -2494,14 +2541,24 @@ def register_gui_endpoints(
                             content = _fetch(download_url)
                             _stage(f"{sub}/{name}", content)
                             staged.append({"path": f"{sub}/{name}", "bytes": len(content)})
+                            event_bus.publish_sync({"type": "self-update.line",
+                                                    "data": {"line": f"staged {sub}/{name} ({len(content)} B)"}})
                         except Exception as exc:
                             errors.append(f"{sub}/{name}: {str(exc)[:120]}")
+                            event_bus.publish_sync({"type": "self-update.line",
+                                                    "data": {"line": f"FAIL {sub}/{name}: {str(exc)[:120]}"}})
+                        event_bus.publish_sync({"type": "self-update.progress",
+                                                "data": {"current": len(staged), "label": f"{sub}/{name}"}})
             except Exception as exc:
                 errors.append(f"{sub}/ listing: {str(exc)[:120]}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"FAIL {sub}/ listing: {str(exc)[:120]}"}})
         # Nothing landed → abort + wipe. Don't pretend success.
         if not staged:
             try: shutil.rmtree(staging, ignore_errors=True)
             except Exception: pass
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"errors": errors or ["no files were downloaded"]}})
             return {
                 "ok": False,
                 "ref": ref,
@@ -2512,8 +2569,11 @@ def register_gui_endpoints(
         # Phase 2: commit. Each src.replace(target) is atomic on the same
         # volume (staging is a sibling so always same vol). Live tree only
         # transitions consistent old → consistent new per file.
+        event_bus.publish_sync({"type": "self-update.line",
+                                "data": {"line": f"phase 2: committing {len(staged)} file(s)"}})
         committed: list[dict] = []
         commit_errors: list[str] = []
+        total_staged = len(staged)
         for item in staged:
             rel_path = item["path"]
             src = staging / rel_path
@@ -2525,8 +2585,14 @@ def register_gui_endpoints(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 src.replace(target)
                 committed.append(item)
+                event_bus.publish_sync({"type": "self-update.progress",
+                                        "data": {"current": len(committed),
+                                                 "total": total_staged,
+                                                 "label": f"commit {rel_path}"}})
             except Exception as exc:
                 commit_errors.append(f"{rel_path}: commit failed: {str(exc)[:120]}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"FAIL commit {rel_path}: {str(exc)[:120]}"}})
         # Wipe the (now mostly empty) staging dir.
         try: shutil.rmtree(staging, ignore_errors=True)
         except Exception: pass
@@ -2542,8 +2608,14 @@ def register_gui_endpoints(
             )
         except Exception:
             pass
+        ok = bool(committed) and not commit_errors
+        topic = "self-update.complete" if ok else "self-update.failed"
+        event_bus.publish_sync({"type": topic,
+                                "data": {"ref": ref,
+                                         "committed": len(committed),
+                                         "errors": errors[:6]}})
         return {
-            "ok": bool(committed) and not commit_errors,
+            "ok": ok,
             "ref": ref,
             "downloaded": committed,
             "errors": errors,
@@ -3076,20 +3148,12 @@ def register_gui_endpoints(
         if dry_run:
             return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Docker.DockerDesktop -e --silent"}
         try:
-            r = subprocess.run(
+            r = _run_winget_streamed("install-docker",
                 ["winget", "install", "--id", "Docker.DockerDesktop", "-e",
                  "--silent", "--accept-package-agreements", "--accept-source-agreements"],
-                capture_output=True, text=True, timeout=900,
-            )
-            return {
-                "ok": r.returncode == 0,
-                "exit_code": r.returncode,
-                "stdout": (r.stdout or "")[-2000:],
-                "stderr": (r.stderr or "")[-1200:],
-                "note": "Launch Docker Desktop once installed so the daemon starts; then return to SeekDeep.",
-            }
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "winget install timed out after 15 minutes"}
+                900)
+            r.setdefault("note", "Launch Docker Desktop once installed so the daemon starts; then return to SeekDeep.")
+            return r
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
 
@@ -3175,20 +3239,12 @@ def register_gui_endpoints(
         if dry_run:
             return {"ok": True, "dry_run": True, "note": "Would run: winget install --id Ollama.Ollama -e --silent"}
         try:
-            r = subprocess.run(
+            r = _run_winget_streamed("install-ollama",
                 ["winget", "install", "--id", "Ollama.Ollama", "-e",
                  "--silent", "--accept-package-agreements", "--accept-source-agreements"],
-                capture_output=True, text=True, timeout=600,
-            )
-            return {
-                "ok": r.returncode == 0,
-                "exit_code": r.returncode,
-                "stdout": (r.stdout or "")[-2000:],
-                "stderr": (r.stderr or "")[-1200:],
-                "note": "Installed. Click 'Start Ollama daemon' next, or open Ollama from Start menu.",
-            }
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "winget install timed out after 10 minutes"}
+                600)
+            r.setdefault("note", "Installed. Click 'Start Ollama daemon' next, or open Ollama from Start menu.")
+            return r
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:600]}
 

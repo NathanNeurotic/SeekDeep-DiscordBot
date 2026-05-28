@@ -49,6 +49,12 @@
       hint: 'first-run setup · Python venv + ML deps' },
     { prefix: 'ollama.signin', label: 'Signing in to Ollama',
       hint: 'authenticating Ollama daemon for remote pulls' },
+    { prefix: 'install-python', label: 'Installing Python 3.12',
+      hint: 'winget · ~10 min · downloads python.org installer' },
+    { prefix: 'install-docker', label: 'Installing Docker Desktop',
+      hint: 'winget · ~15 min · WSL2 backend + Hyper-V' },
+    { prefix: 'install-ollama', label: 'Installing Ollama',
+      hint: 'winget · ~10 min · ollama.com installer' },
   ];
 
   function notify() { return window.SeekDeepNotify || null; }

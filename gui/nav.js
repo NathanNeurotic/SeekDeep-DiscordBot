@@ -1106,12 +1106,10 @@
   // banner is the right CTA, and claiming "no CUDA device detected" when
   // we literally cannot import torch is just lying — the user may well
   // have a 5090 sitting right there. Gate on h.gpu.torch_present === true.
-  async function checkGpuMode() {
-    const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
+  // Apply the CPU-only banner state from a /health-shaped payload.
+  // Called from both the event-driven health.tick path and the safety-net poll.
+  function applyGpuMode(h) {
     try {
-      const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
-      if (!r.ok) return;
-      const h = await r.json();
       const torchPresent = (h && h.gpu && h.gpu.torch_present === true);
       const noCuda = (h.cuda_available === false) && torchPresent;
       let banner = document.querySelector('.sd-cpu-banner');
@@ -1135,6 +1133,22 @@
       }
     } catch {}
   }
+  async function checkGpuMode() {
+    const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
+    try {
+      const r = await fetch(base + '/health', { signal: AbortSignal.timeout(2000), cache: 'no-store' });
+      if (!r.ok) return;
+      applyGpuMode(await r.json());
+    } catch {}
+  }
+  // Live path: health.tick streams the same payload every 5s when WS is up.
+  // The setInterval below stays as a safety net (relaxed to 5min) for when
+  // the bus is down — bumped from 60s now that the live event covers freshness.
+  try {
+    if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
+      window.SeekDeepEvents.on('health.tick', (data) => { if (data) applyGpuMode(data); });
+    }
+  } catch {}
   // Auto-trigger missing-required-keys modal on first load if config/status flags it
   async function checkConfigStatus() {
     const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
@@ -1156,7 +1170,7 @@
     } catch {}
   }
   setTimeout(() => { checkGpuMode(); checkConfigStatus(); }, 400);
-  setInterval(checkGpuMode, 60_000);
+  setInterval(checkGpuMode, 300_000);  // 5min safety net; live updates via health.tick above.
 
   // ====================================================================
   // Title-bar LIVE / OFFLINE pill — Task 6.
