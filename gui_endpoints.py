@@ -4776,8 +4776,25 @@ def register_gui_endpoints(
         free rendering. `stale` is true when the file exists but heartbeat
         is > 90s old (means the bot process is alive — process state would
         have flipped otherwise — but the bot is wedged inside the Node loop
-        and not writing heartbeats. Surface that as DEGRADED, not READY)."""
+        and not writing heartbeats. Surface that as DEGRADED, not READY).
+
+        Path-divergence guard: the bot writes to its OWN __dirname/data/
+        which, under Tauri with SEEKDEEP_BOT_CWD pointing at the user's
+        repo, is NOT the same path as the AI server's _data_dir. If the
+        primary _data_dir copy doesn't exist, fall back to
+        ${bot_cwd}/data/bot-status.json. Without this, the watchdog
+        false-positives 'Discord not ready', restarts the bot every
+        ~45s in an infinite kill-loop even though the bot is logged in
+        and happy."""
         path = _data_dir / "bot-status.json"
+        if not path.is_file():
+            try:
+                bot_cwd = _resolve_bot_cwd(root)
+                fallback = (bot_cwd / "data" / "bot-status.json").resolve()
+                if _is_inside(fallback, bot_cwd) and fallback.is_file():
+                    path = fallback
+            except Exception:
+                pass
         if not path.is_file():
             return {"ready": False, "stale": False, "present": False}
         try:
