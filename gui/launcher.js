@@ -357,13 +357,18 @@
   // renders something. The 5s status pump above handles the up/down state;
   // this pump only handles content updates.
 
-  async function pumpStatsSnapshot() {
+  async function pumpStatsSnapshot(externalData) {
     let snap;
-    try {
-      const r = await fetch(BASE + '/stats/snapshot', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-      if (!r.ok) return;
-      snap = await r.json();
-    } catch { return; }
+    if (externalData && typeof externalData === 'object' && externalData.ok) {
+      // WS stats.tick path — server already computed the snapshot for us.
+      snap = externalData;
+    } else {
+      try {
+        const r = await fetch(BASE + '/stats/snapshot', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (!r.ok) return;
+        snap = await r.json();
+      } catch { return; }
+    }
     if (!snap || !snap.ok) return;
 
     // ---- launcher tile cells (Reqs, Latency, Guilds) --------------------
@@ -1155,6 +1160,9 @@
     if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
       window.SeekDeepEvents.on('launchers.tick', (data) => pumpStatus(data));
       window.SeekDeepEvents.on('gpu.tick',       (data) => pumpGpuBadge(data));
+      // stats.tick — server publishes the full /stats/snapshot every 10s
+      // when at least one subscriber is connected. UI re-renders in place.
+      window.SeekDeepEvents.on('stats.tick',     (data) => pumpStatsSnapshot(data));
       // service.state.changed is point-in-time (start/stop/exit). It's
       // already faster than any tick — handle it the same way so the UI
       // doesn't lag the actual transition.
@@ -1168,18 +1176,17 @@
       window.SeekDeepEvents.on('_close',   () => { pumpStatus(); pumpGpuBadge(); });
       window.SeekDeepEvents.on('_probing', () => { pumpStatus(); pumpGpuBadge(); });
       window.SeekDeepEvents.on('_error',   () => { pumpStatus(); pumpGpuBadge(); });
-      window.SeekDeepEvents.on('_open',    () => { pumpStatus(); pumpGpuBadge(); });
+      window.SeekDeepEvents.on('_open',    () => { pumpStatus(); pumpGpuBadge(); pumpStatsSnapshot(); });
+      // Safety nets: relaxed because the WS ticks above carry the live path.
       setInterval(pumpStatus,        30000);
       setInterval(pumpGpuBadge,      30000);
+      setInterval(pumpStatsSnapshot, 60000);
     } else {
       // Legacy poll cadence — used only when events.js / WS isn't available.
       setInterval(pumpStatus,        5000);
       setInterval(pumpGpuBadge,      10000);
+      setInterval(pumpStatsSnapshot, 30000);
     }
-    // Stats snapshot pump: less frequent (30s) because it does more work
-    // backend-side (HF cache scan, bot-stats file read, day-bucket sums).
-    // Not yet wired to a tick event — stays poll-based.
-    setInterval(pumpStatsSnapshot, 30000);
   }
 
   // Tauri sidecar restart listener: any code path that bounces the Python

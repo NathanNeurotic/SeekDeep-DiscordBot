@@ -460,10 +460,17 @@ def main() -> int:
                 check("  ...returns {ok, delivered>=1, subscribers>=1}",
                       emit_body.get("ok") is True and emit_body.get("delivered", 0) >= 1,
                       f"body={emit_body}")
-                # The WS should receive the event
-                msg = ws.receive_json()
+                # The WS should receive the event. Filter by type so unrelated
+                # frames already on the bus (gpu.tick, smoke.line from a
+                # wrapped runner, etc.) don't race the assertion.
+                msg = None
+                for _ in range(50):
+                    candidate = ws.receive_json()
+                    if candidate.get("type") == "smoke.test":
+                        msg = candidate
+                        break
                 check("WS subscriber receives the emitted event",
-                      msg.get("type") == "smoke.test" and msg.get("data", {}).get("k") == "v",
+                      msg is not None and msg.get("data", {}).get("k") == "v",
                       f"got {msg}")
         except Exception as e:
             check("WS /events round-trip", False, str(e))

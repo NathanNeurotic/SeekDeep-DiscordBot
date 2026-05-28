@@ -3736,8 +3736,7 @@ def register_gui_endpoints(
     # memory). Bot stats come from data/server-stats.json which the bot
     # writes on every chat/image/vision via index.js's seekdeepBumpServerStats.
     # Cache size is huggingface_hub.scan_cache_dir().
-    @app.get("/stats/snapshot")
-    def get_stats_snapshot():
+    def _compute_stats_snapshot() -> dict:
         out: dict = {"ok": True, "generated_at": _now_iso()}
 
         # AI server live counters — pinned via the stats_provider callback
@@ -3897,20 +3896,36 @@ def register_gui_endpoints(
 
         return out
 
+    @app.get("/stats/snapshot")
+    def get_stats_snapshot():
+        return _compute_stats_snapshot()
+
+    # Auto-wire stats.tick provider so the WS bus broadcasts a fresh snapshot
+    # every TICK_CADENCE_SEC["stats"] without callers having to pass it.
+    if tick_providers is not None and "stats" not in tick_providers:
+        tick_providers["stats"] = _compute_stats_snapshot
+
     # ----- POST /cache/prune -----
     # Frees disk space by deleting HF snapshots older than --keep-recent (oldest
     # repos first, by last_accessed). Backs the app.html "Prune cache (4.2 GB)"
     # button. Token-required because it's destructive.
     @app.post("/cache/prune", dependencies=[Depends(_require_gui_token)])
     def post_cache_prune():
+        event_bus.publish_sync({"type": "cache.prune.started", "data": {}})
         info, scan_err = _safe_scan_hf_cache()
         if info is None:
+            event_bus.publish_sync({"type": "cache.prune.failed",
+                                    "data": {"error": scan_err or "huggingface_hub not installed"}})
             raise HTTPException(503, scan_err or "huggingface_hub not installed (install ML deps first)")
         if not info.repos:
+            event_bus.publish_sync({"type": "cache.prune.complete",
+                                    "data": {"freed_bytes": 0, "revisions_deleted": 0,
+                                             "note": scan_err or "HF cache directory not found"}})
             return {"ok": True, "freed_bytes": 0,
                     "note": scan_err or "HF cache directory not found"}
         if scan_err and not hasattr(info, "delete_revisions"):
             # Partial-scan fallback can't call delete_revisions — surface honestly.
+            event_bus.publish_sync({"type": "cache.prune.failed", "data": {"error": scan_err}})
             raise HTTPException(503, f"cache scan only completed partially; prune unavailable. {scan_err}")
 
         # Conservative policy: only prune revisions that aren't the "current"
@@ -3921,13 +3936,24 @@ def register_gui_endpoints(
             for rev in repo.revisions:
                 if not rev.refs:  # not referenced by any ref → unreachable
                     revisions_to_delete.append(rev.commit_hash)
+                    event_bus.publish_sync({"type": "cache.prune.line",
+                                            "data": {"line": f"queued: {repo.repo_id}@{rev.commit_hash[:8]}"}})
+                    event_bus.publish_sync({"type": "cache.prune.progress",
+                                            "data": {"current": len(revisions_to_delete),
+                                                     "label": repo.repo_id}})
         if not revisions_to_delete:
+            event_bus.publish_sync({"type": "cache.prune.complete",
+                                    "data": {"freed_bytes": 0, "revisions_deleted": 0,
+                                             "note": "nothing to prune (all revisions still referenced)"}})
             return {"ok": True, "freed_bytes": 0, "note": "nothing to prune (all revisions still referenced)"}
 
         try:
             delete_strategy = info.delete_revisions(*revisions_to_delete)
             freed = int(delete_strategy.expected_freed_size)
             delete_strategy.execute()
+            event_bus.publish_sync({"type": "cache.prune.complete",
+                                    "data": {"freed_bytes": freed,
+                                             "revisions_deleted": len(revisions_to_delete)}})
             return {
                 "ok": True,
                 "freed_bytes": freed,
@@ -3935,6 +3961,7 @@ def register_gui_endpoints(
                 "note": f"deleted {len(revisions_to_delete)} unreferenced revision(s)",
             }
         except Exception as e:
+            event_bus.publish_sync({"type": "cache.prune.failed", "data": {"error": str(e)[:240]}})
             raise HTTPException(500, f"prune failed: {e}")
 
     # ----- POST /deps/install -----
@@ -4768,23 +4795,40 @@ def register_gui_endpoints(
         import importlib.util
         smoke_path = root / "scripts" / "smoke_gui_endpoints.py"
         if not smoke_path.is_file():
+            event_bus.publish_sync({"type": "smoke.failed",
+                                    "data": {"error": "smoke script not found"}})
             return {"ok": False, "error": f"smoke script not found at {smoke_path}"}
         import io, contextlib
         buf = io.StringIO()
         spec = importlib.util.spec_from_file_location("seekdeep_smoke_runtime", smoke_path)
         if spec is None or spec.loader is None:
+            event_bus.publish_sync({"type": "smoke.failed",
+                                    "data": {"error": "could not load smoke script"}})
             return {"ok": False, "error": "could not load smoke script"}
         mod = importlib.util.module_from_spec(spec)
         rc: int | None = None
+        event_bus.publish_sync({"type": "smoke.started", "data": {"path": str(smoke_path)}})
         try:
-            # The script structures its checks inside a `main()` function that
-            # only fires when run as __main__. Importing it via exec_module
-            # leaves the checks unexecuted — we have to call main() ourselves
-            # AND capture its stdout so the GUI log preview has the check
-            # lines, not a blank string.
-            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-                spec.loader.exec_module(mod)
-                if hasattr(mod, "main") and callable(mod.main):
+            spec.loader.exec_module(mod)
+            # Wrap the smoke script's `check()` so every check emits a
+            # smoke.line + smoke.progress event while the suite runs.
+            # We don't know `total` until main() is partway through, so
+            # progress emits current only when we don't know total yet.
+            orig_check = getattr(mod, "check", None)
+            seen = {"count": 0}
+            def _wrapped_check(name, ok, detail=""):
+                ret = orig_check(name, ok, detail) if orig_check else None
+                seen["count"] += 1
+                marker = "ok" if ok else "FAIL"
+                line = f"{marker} {name}" + (f" -> {detail}" if detail else "")
+                event_bus.publish_sync({"type": "smoke.line", "data": {"line": line, "ok": bool(ok)}})
+                event_bus.publish_sync({"type": "smoke.progress",
+                                        "data": {"current": seen["count"], "label": name}})
+                return ret
+            if orig_check is not None:
+                mod.check = _wrapped_check
+            if hasattr(mod, "main") and callable(mod.main):
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
                     try:
                         rc = mod.main()
                     except SystemExit as se:
@@ -4792,13 +4836,19 @@ def register_gui_endpoints(
         except SystemExit as se:
             rc = int(se.code) if isinstance(se.code, int) else 1
         except Exception as exc:
+            event_bus.publish_sync({"type": "smoke.failed", "data": {"error": str(exc)[:240]}})
             return {"ok": False, "error": str(exc)[:400],
                     "output": buf.getvalue()[-4000:]}
         results = getattr(mod, "_results", []) or []
         passed = sum(1 for r in results if r and r[0])
         failed = sum(1 for r in results if r and not r[0])
+        ok = failed == 0 and (rc in (None, 0))
+        topic = "smoke.complete" if ok else "smoke.failed"
+        event_bus.publish_sync({"type": topic,
+                                "data": {"total": len(results), "passed": passed,
+                                         "failed": failed, "exit_code": rc}})
         return {
-            "ok": failed == 0 and (rc in (None, 0)),
+            "ok": ok,
             "total": len(results),
             "passed": passed,
             "failed": failed,
@@ -4811,7 +4861,7 @@ def register_gui_endpoints(
     # Cadence per topic. Picked to be roughly twice as frequent as the
     # old setIntervals so the UI feels fresher. Zero-cost when nobody's
     # subscribed (publish() fast-paths to no-op).
-    TICK_CADENCE_SEC = {"gpu": 3.0, "health": 5.0, "launchers": 5.0}
+    TICK_CADENCE_SEC = {"gpu": 3.0, "health": 5.0, "launchers": 5.0, "stats": 10.0}
 
     def _read_bot_discord_status() -> dict:
         """Read data/bot-status.json — the bot writes this on every ready /
@@ -5060,6 +5110,14 @@ def register_gui_endpoints(
                                                   "data": _build_launchers_tick_payload()})
                     except Exception:
                         pass
+                if now >= next_due["stats"]:
+                    next_due["stats"] = now + TICK_CADENCE_SEC["stats"]
+                    if tick_providers and tick_providers.get("stats"):
+                        try:
+                            data = tick_providers["stats"]() or {}
+                            await event_bus.publish({"type": "stats.tick", "data": data})
+                        except Exception:
+                            pass
             except asyncio.CancelledError:
                 break
             except Exception:

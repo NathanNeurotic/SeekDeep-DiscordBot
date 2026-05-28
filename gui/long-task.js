@@ -39,6 +39,16 @@
       hint: 'preflight checks · Node/Python/Git/Docker/HF probes' },
     { prefix: 'self-update',  label: 'Self-updating from GitHub',
       hint: 'pulling latest local_ai_server.py + gui/ + scripts/ from main' },
+    { prefix: 'smoke',        label: 'Running smoke test',
+      hint: 'exercising every Control Center endpoint in-process' },
+    { prefix: 'cache.prune',  label: 'Pruning HF cache',
+      hint: 'deleting unreferenced revisions to free disk' },
+    { prefix: 'warmup',       label: 'Warming model cache',
+      hint: 'loading default chat/vision/image models into VRAM' },
+    { prefix: 'bootstrap',    label: 'Bootstrapping environment',
+      hint: 'first-run setup · Python venv + ML deps' },
+    { prefix: 'ollama.signin', label: 'Signing in to Ollama',
+      hint: 'authenticating Ollama daemon for remote pulls' },
   ];
 
   function notify() { return window.SeekDeepNotify || null; }
@@ -64,6 +74,26 @@
     return s;
   }
 
+  function renderProgressBar(st) {
+    if (st.terminal) return '';
+    // Determinate when we have total; indeterminate when we only have current.
+    if (st.progressTotal && st.progressTotal > 0) {
+      const pct = Math.min(100, Math.round((st.progressCurrent / st.progressTotal) * 100));
+      const label = st.progressLabel ? ` <span style="opacity:0.7">· ${st.progressLabel.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span>` : '';
+      return `<div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+        <div style="flex:1;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:var(--accent,#5eead4);transition:width 200ms ease-out;"></div>
+        </div>
+        <span style="font-family:var(--font-mono);font-size:11px;opacity:0.85;">${st.progressCurrent}/${st.progressTotal}${label}</span>
+      </div>`;
+    }
+    if (st.progressCurrent > 0) {
+      const label = st.progressLabel ? ` <span style="opacity:0.7">· ${st.progressLabel.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span>` : '';
+      return `<div style="margin-top:6px;font-family:var(--font-mono);font-size:11px;opacity:0.85;">${st.progressCurrent} done${label}</div>`;
+    }
+    return '';
+  }
+
   function renderBanner(def, st) {
     const sdn = notify();
     if (!sdn) return;
@@ -72,6 +102,7 @@
     const linesBit = st.lineCount > 0 ? ` · ${st.lineCount} log line${st.lineCount === 1 ? '' : 's'}` : '';
     const lastBit  = st.lastLine ? `<br><span style="opacity:0.75;font-family:var(--font-mono);font-size:11px;">…${st.lastLine.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span>` : '';
     const hint     = st.terminal ? '' : `<br><span style="opacity:0.55;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;">${def.hint}</span>`;
+    const progressBar = renderProgressBar(st);
     let tone = 'info', title = def.label, primary, secondary;
     if (st.terminal === 'complete') {
       tone = 'good'; title = '✓ ' + def.label + ' · complete';
@@ -86,7 +117,7 @@
     }
     sdn.banner({
       id, tone, title,
-      body: `<span style="font-family:var(--font-mono);font-size:12px;">${elapsed}${linesBit}</span>${lastBit}${hint}`,
+      body: `<span style="font-family:var(--font-mono);font-size:12px;">${elapsed}${linesBit}</span>${lastBit}${progressBar}${hint}`,
       primary, secondary,
       dismissible: !!st.terminal,
       sticky: !st.terminal,
@@ -100,7 +131,8 @@
   function ensureState(prefix) {
     let st = STATE.get(prefix);
     if (!st) {
-      st = { startedAt: Date.now(), lineCount: 0, lastLine: '', terminal: null, autoDismissTimer: null };
+      st = { startedAt: Date.now(), lineCount: 0, lastLine: '', terminal: null, autoDismissTimer: null,
+             progressCurrent: 0, progressTotal: 0, progressLabel: '' };
       STATE.set(prefix, st);
     }
     return st;
@@ -122,6 +154,9 @@
         st.lineCount = 0;
         st.lastLine = trimLine((data && (data.note || data.cmd || data.variant)) || '');
         st.terminal = null;
+        st.progressCurrent = 0;
+        st.progressTotal = (data && typeof data.total === 'number') ? data.total : 0;
+        st.progressLabel = '';
         if (st.autoDismissTimer) { clearTimeout(st.autoDismissTimer); st.autoDismissTimer = null; }
         renderBanner(def, st);
       });
@@ -154,6 +189,17 @@
       };
       window.SeekDeepEvents.on(def.prefix + '.failed', failedHandler);
       window.SeekDeepEvents.on(def.prefix + '.error',  failedHandler);
+      // .progress — determinate bar. Backend emits {current, total?, label?}
+      // per step. `total` is optional (some tasks only know the count, not
+      // the denominator); the banner falls back to "<current> done" then.
+      window.SeekDeepEvents.on(def.prefix + '.progress', (data) => {
+        const st = ensureState(def.prefix);
+        if (st.terminal) return;
+        if (data && typeof data.current === 'number') st.progressCurrent = data.current;
+        if (data && typeof data.total === 'number')   st.progressTotal   = data.total;
+        if (data && typeof data.label === 'string')   st.progressLabel   = data.label;
+        renderBanner(def, st);
+      });
     }
     // Elapsed-time ticker: re-render any non-terminal banner once per second
     // so the "42s · …" counter advances even with no incoming lines.
