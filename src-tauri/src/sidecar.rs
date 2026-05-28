@@ -192,6 +192,52 @@ pub fn kill_listener_on_7865() {
     }
 }
 
+/// Kill every node.exe whose command line names index.js. Called from the
+/// RunEvent::Exit handler in lib.rs so closing SeekDeep doesn't leave the
+/// Discord bot running as an orphan — without this, the bot keeps polling
+/// the now-dead AI server's /health and reports "OFFLINE / unreachable"
+/// to anyone using @SeekDeep until the user relaunches the app.
+///
+/// Scope: any node.exe whose cmdline contains "index.js". On a SeekDeep
+/// dev box where the user happens to also be running an unrelated Node
+/// project under index.js, the unrelated one would also get killed — but
+/// the same trade-off ships in seekdeep_launcher.bat's :cleanStaleBotOnly,
+/// and the symmetry is intentional (we want one boot-time mechanism on
+/// the Python side and one shutdown-time mechanism on the Rust side, both
+/// using the same matching rule). Power users can opt out by setting
+/// SEEKDEEP_TAURI_KEEP_BOT_ON_EXIT=1 in .env.
+pub fn kill_orphan_bots() {
+    // Opt-out hatch for users who run a remote-backend bot that doesn't
+    // depend on the local AI server and want it to keep serving Discord
+    // when Tauri is minimized-to-tray and later quit.
+    if std::env::var("SEEKDEEP_TAURI_KEEP_BOT_ON_EXIT")
+        .ok()
+        .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        // Enumerate node.exe via WMI, kill any whose command line contains
+        // index.js. Single powershell shell-out — no console flash thanks
+        // to quiet_command_str's CREATE_NO_WINDOW.
+        let ps = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" \
+                  | Where-Object { $_.CommandLine -like '*index.js*' } \
+                  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        let _ = quiet_command_str("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("pgrep -f 'node.*index.js' | xargs -r kill -9")
+            .status();
+    }
+}
+
 /// Resolve where extracted-on-first-run files live. We use Tauri's
 /// app_data_dir + "/app" so the directory layout is:
 ///   %APPDATA%/SeekDeep/app/local_ai_server.py

@@ -557,13 +557,22 @@ pub fn run() {
                         let _ = w.hide();
                     }
                 } else {
+                    // Kill the bot FIRST (while we still know it's there),
+                    // then the AI server. Reverse order would leave the bot
+                    // running as an orphan — it would survive past Tauri
+                    // since it was spawned with CREATE_NEW_PROCESS_GROUP, and
+                    // any Discord user would then see "OFFLINE / unreachable"
+                    // status reports for as long as the orphan lives.
+                    sidecar::kill_orphan_bots();
                     sidecar::kill_child(state.inner());
                 }
             }
             RunEvent::Exit => {
                 // Belt-and-suspenders kill on full app exit. kill_child is
-                // idempotent; the inner Option clears on first call.
+                // idempotent; the inner Option clears on first call. Same
+                // bot-then-sidecar ordering as the explicit-quit path above.
                 let state = app.state::<SidecarState>();
+                sidecar::kill_orphan_bots();
                 sidecar::kill_child(state.inner());
             }
             _ => {}
