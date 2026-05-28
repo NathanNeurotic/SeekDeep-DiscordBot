@@ -1093,6 +1093,43 @@
       });
     }
 
+    // ---- Verify everything button -------------------------------------
+    // Hits POST /system/verify which drives chat + image + vision + health
+    // + launchers and returns one pass/fail. The button color flips green on
+    // PASS and red on FAIL with per-check timings in the toast.
+    const verifyBtn = document.getElementById('qaVerifyBtn');
+    if (verifyBtn) {
+      verifyBtn.addEventListener('click', async () => {
+        const sdn = notify();
+        const orig = verifyBtn.textContent;
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = '⟳ verifying (~30s)…';
+        try {
+          const r = await fetch(BASE + '/system/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: '{}', signal: AbortSignal.timeout(180000),
+          });
+          if (!r.ok) {
+            const txt = await r.text();
+            throw new Error('HTTP ' + r.status + ' ' + txt.slice(0, 200));
+          }
+          const j = await r.json();
+          const lines = (j.checks || []).map(c =>
+            (c.ok ? '✓' : '✕') + ' ' + c.name + ' · ' + c.ms + 'ms' +
+            (c.sample ? ' · ' + JSON.stringify(c.sample).slice(0, 60) : '')
+          );
+          const tone = j.ok ? 'good' : 'bad';
+          if (sdn) sdn.toast({ tone, title: j.summary, body: lines.join('<br>'), ttl: 12000 });
+          verifyBtn.textContent = (j.ok ? '✓ all ' : '✕ ') + j.passed + '/' + j.total;
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Verify failed', body: String(err.message || err), ttl: 8000 });
+          verifyBtn.textContent = '✕ error';
+        } finally {
+          setTimeout(() => { verifyBtn.disabled = false; verifyBtn.textContent = orig; }, 6000);
+        }
+      });
+    }
+
     // ---- Force kill all button ----------------------------------------
     // Nuclear button: kills bot + SearXNG container. Does NOT touch the
     // AI server (use Tauri tray to restart that — we'd kill our own

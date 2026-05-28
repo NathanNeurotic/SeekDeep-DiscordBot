@@ -785,6 +785,7 @@
               <button id="qaLockCacheBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Toggle HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE. Forces HF + Transformers to local cache only — no network calls for model loads. Restarts the sidecar so the env change takes effect.">⛚ Lock cache (offline)</button>
               <button id="qaSelfUpdateBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Pull the latest local_ai_server.py + gui_endpoints.py + gui/ from main on GitHub. Use this when the bundled MSI is stale (chat errors still mention old copy, fixes haven't landed, etc.).">⤴ Self-update (pull latest from GitHub)</button>
               <button id="qaSmokeTestBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Run the in-process GUI endpoint smoke suite (scripts/smoke_gui_endpoints.py). ~5s; results inline.">⟳ Smoke test</button>
+              <button id="qaVerifyBtn" class="btn btn-ghost" style="justify-content: flex-start;" title="Run chat + image + vision + health + launchers in one go. ~30s. One pass/fail summary tells you if the whole stack is actually working right now.">✓ Verify everything works</button>
               <button id="qaForceKillBtn" class="btn btn-ghost" style="justify-content: flex-start; color: var(--bad);" title="Force-kills the bot + SearXNG container. Does NOT kill the AI server (use Tauri tray to restart it).">↯ Force kill all</button>
             </div>
             <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--stroke);">

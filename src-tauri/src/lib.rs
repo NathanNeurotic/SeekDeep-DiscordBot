@@ -544,25 +544,29 @@ pub fn run() {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } => {
-                // Close-to-tray vs actually-quit. If the tray "Quit" item set
-                // quit_requested, fall through to the default close (which
-                // then triggers RunEvent::Exit + kill_child below). Otherwise
-                // intercept the close and hide the window so the AI server
-                // keeps serving the Discord bot in the background.
+                // Default: X-button quits (kills bot + AI server). The user
+                // has repeatedly said they want "every launch into a clean
+                // environment" — the previous hide-to-tray default left bots
+                // orphaned which read to them as "Bots still online when the
+                // program is closed." Opt back into tray behavior via
+                // SEEKDEEP_CLOSE_HIDES_TO_TRAY=1 in .env for users who want
+                // the bot serving Discord while Tauri is closed.
                 let state = app.state::<SidecarState>();
                 let quitting = state.quit_requested.lock().map(|g| *g).unwrap_or(false);
-                if !quitting {
+                let close_hides_to_tray = std::env::var("SEEKDEEP_CLOSE_HIDES_TO_TRAY")
+                    .ok()
+                    .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                    .unwrap_or(false);
+                if !quitting && close_hides_to_tray {
                     api.prevent_close();
                     if let Some(w) = app.get_webview_window("main") {
                         let _ = w.hide();
                     }
                 } else {
-                    // Kill the bot FIRST (while we still know it's there),
-                    // then the AI server. Reverse order would leave the bot
-                    // running as an orphan — it would survive past Tauri
-                    // since it was spawned with CREATE_NEW_PROCESS_GROUP, and
-                    // any Discord user would then see "OFFLINE / unreachable"
-                    // status reports for as long as the orphan lives.
+                    // Kill bot first, then AI server. Reverse order would
+                    // leave the bot as an orphan since it was spawned with
+                    // CREATE_NEW_PROCESS_GROUP and survives Tauri without
+                    // the explicit kill.
                     sidecar::kill_orphan_bots();
                     sidecar::kill_child(state.inner());
                 }

@@ -2622,6 +2622,93 @@ def register_gui_endpoints(
             "note": "Self-update applied. Restart the AI server (Reload .env in Quick Actions, or restart from the system tray) so the new code is in-memory.",
         }
 
+    # ----- POST /system/verify -----
+    # Single-call answer to "is everything actually working right now?"
+    # Drives a chat completion, an image generation, a vision describe,
+    # /health, and /launchers/status; reports one pass/fail per pipeline.
+    # The Quick Action button that calls this gives the user a yes/no
+    # without making them poke five different endpoints by hand.
+    @app.post("/system/verify", dependencies=[Depends(_require_gui_token)])
+    def post_system_verify():
+        import urllib.request, urllib.error, ssl, socket as _sock
+        results: list[dict] = []
+        token = _current_token()
+        base = "http://127.0.0.1:7865"
+        hdr = {"X-SeekDeep-Token": token, "Content-Type": "application/json"} if token else {"Content-Type": "application/json"}
+
+        def call(label: str, method: str, path: str, body=None, timeout=90):
+            t0 = time.time()
+            req = urllib.request.Request(base + path, method=method, headers=hdr,
+                                          data=json.dumps(body or {}).encode("utf-8") if body is not None else None)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    raw = r.read()
+                    ms = int((time.time() - t0) * 1000)
+                    return {"label": label, "ok": True, "status": r.status, "ms": ms, "body": raw}
+            except urllib.error.HTTPError as e:
+                ms = int((time.time() - t0) * 1000)
+                return {"label": label, "ok": False, "status": e.code, "ms": ms,
+                        "body": e.read()[:400]}
+            except Exception as e:
+                ms = int((time.time() - t0) * 1000)
+                return {"label": label, "ok": False, "status": 0, "ms": ms,
+                        "body": f"{type(e).__name__}: {str(e)[:200]}".encode()}
+
+        # 1. health
+        r = call("health", "GET", "/health", timeout=15)
+        results.append({"name": "health", "ok": r["ok"], "ms": r["ms"]})
+        # 2. launchers status
+        r = call("launchers", "GET", "/launchers/status", timeout=10)
+        results.append({"name": "launchers", "ok": r["ok"], "ms": r["ms"]})
+        # 3. chat (default_chat) — verifies tokenizer + model load + generation
+        r = call("chat", "POST", "/chat",
+                 body={"role": "default_chat", "prompt": "reply: ok"}, timeout=120)
+        chat_text = None
+        if r["ok"]:
+            try:
+                chat_text = (json.loads(r["body"]).get("text") or "").strip()
+            except Exception:
+                pass
+        results.append({"name": "chat", "ok": r["ok"] and bool(chat_text),
+                        "ms": r["ms"], "sample": (chat_text or "")[:80]})
+        # 4. image (1 step so it's quick) — verifies diffusers + cache + cuda
+        r = call("image", "POST", "/image",
+                 body={"prompt": "test", "width": 512, "height": 512,
+                       "steps": 1, "guidance_scale": 1.0, "seed": 1},
+                 timeout=60)
+        image_ok = r["ok"]
+        image_b64 = None
+        if image_ok:
+            try:
+                image_b64 = json.loads(r["body"]).get("image_b64")
+                image_ok = bool(image_b64)
+            except Exception:
+                image_ok = False
+        results.append({"name": "image", "ok": image_ok, "ms": r["ms"]})
+        # 5. vision — feed the image from step 4 (if we got one) or a tiny stock
+        # PNG. The vision schema needs media_b64, not image_url; the previous
+        # version of this endpoint used image_url and 422'd in 18ms.
+        if not image_b64:
+            # 1x1 transparent PNG — enough to drive the load path even if image
+            # step failed for unrelated reasons (e.g. VRAM).
+            image_b64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIA"
+                         "AAUAAarVyFEAAAAASUVORK5CYII=")
+        r = call("vision", "POST", "/vision",
+                 body={"prompt": "what is this", "media_b64": image_b64,
+                       "filename": "verify.png", "media_kind": "image"},
+                 timeout=180)
+        results.append({"name": "vision", "ok": r["ok"], "ms": r["ms"]})
+
+        passed = sum(1 for r in results if r["ok"])
+        total = len(results)
+        return {
+            "ok": passed == total,
+            "passed": passed, "total": total,
+            "checks": results,
+            "summary": f"{passed}/{total} pipelines verified" if passed == total
+                       else f"{passed}/{total} pipelines verified — {total-passed} failed",
+        }
+
     # ----- POST /system/doctor -----
     # Runs `node scripts/doctor.mjs` and streams the output as
     # `doctor.line` events on the WS bus so the Installer's Step 2
