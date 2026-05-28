@@ -3532,12 +3532,58 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
-    # Cache-first attempt order. Steady state for this bot is "model is
-    # already on disk" — every load was preceded by a download at install
-    # time. Calling the HF Hub on every load is what kept poisoning the
-    # long-running process (stale httpx → OSError, then ValueError, then
-    # whatever next). When the cache has the file, we never call out at
-    # all. Network attempts are last-resort for genuine first-downloads.
+    # Direct tokenizer load: bypass AutoTokenizer routing entirely. The
+    # cache has tokenizer.json on disk; the `tokenizers` library loads it
+    # natively without going through transformers' auto-class lookup —
+    # which is the part that keeps breaking in the long-running process.
+    # We then wrap in PreTrainedTokenizerFast so downstream code (chat
+    # template, encode/decode, special tokens) sees the same API it had
+    # from AutoTokenizer.from_pretrained.
+    def _try_load_tokenizer_direct():
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            from tokenizers import Tokenizer as _RawTokenizer
+            from transformers import PreTrainedTokenizerFast
+        except Exception as exc:
+            print(f"[SeekDeep Local AI] direct tokenizer path unavailable: {exc!r}", flush=True)
+            return None
+        cache_dir = str(MODEL_CACHE_DIR)
+        try:
+            tj = try_to_load_from_cache(model_id, "tokenizer.json", cache_dir=cache_dir)
+        except Exception:
+            tj = None
+        if not tj or not os.path.isfile(str(tj)):
+            return None  # no tokenizer.json in cache → fall through
+        try:
+            backend = _RawTokenizer.from_file(str(tj))
+        except Exception as exc:
+            print(f"[SeekDeep Local AI] tokenizer.json on disk but unreadable: {exc!r}", flush=True)
+            return None
+        tok = PreTrainedTokenizerFast(tokenizer_object=backend)
+        # Hydrate chat_template + special tokens from tokenizer_config.json.
+        try:
+            tc = try_to_load_from_cache(model_id, "tokenizer_config.json", cache_dir=cache_dir)
+        except Exception:
+            tc = None
+        if tc and os.path.isfile(str(tc)):
+            try:
+                with open(str(tc), encoding="utf-8") as _f:
+                    cfg = json.load(_f)
+                if isinstance(cfg.get("chat_template"), str):
+                    tok.chat_template = cfg["chat_template"]
+                for k in ("bos_token", "eos_token", "pad_token", "unk_token"):
+                    v = cfg.get(k)
+                    if isinstance(v, str):
+                        setattr(tok, k, v)
+                    elif isinstance(v, dict) and isinstance(v.get("content"), str):
+                        setattr(tok, k, v["content"])
+            except Exception as exc:
+                print(f"[SeekDeep Local AI] tokenizer_config hydration partial: {exc!r}", flush=True)
+        print(f"[SeekDeep Local AI] tokenizer loaded via direct cache (model={model_id})", flush=True)
+        return tok
+
+    # Cache-first AutoTokenizer fallback chain (for models without
+    # tokenizer.json or when the direct path fails for some reason).
     def _try_load(cls, *, what: str):
         attempts = [
             ("cache-fast", {**tokenizer_kwargs, "local_files_only": True}),
@@ -3545,8 +3591,6 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
             ("hub-fast",   dict(tokenizer_kwargs)),
             ("hub-slow",   {**tokenizer_kwargs, "use_fast": False}),
         ]
-        # Model loads share the kwargs base but layer on quant_config /
-        # device_map / dtype. Re-apply those to each model attempt.
         extra: dict = {}
         if what == "model":
             if quant_config is not None and cuda_available():
@@ -3555,7 +3599,6 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                 extra = {"torch_dtype": model_dtype(), "device_map": None, "low_cpu_mem_usage": True}
         last_exc: BaseException | None = None
         for label, kw in attempts:
-            # AutoModel doesn't accept use_fast — strip it before calling.
             kw_clean = {k: v for k, v in kw.items() if k != "use_fast"} if what == "model" else kw
             try:
                 obj = cls.from_pretrained(model_id, **kw_clean, **extra)
@@ -3565,8 +3608,8 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                 return obj
             except (ValueError, OSError) as e:
                 last_exc = e
-        raise last_exc  # every attempt failed — surface the last one
-    chat_tokenizer = _try_load(AutoTokenizer, what="tokenizer")
+        raise last_exc
+    chat_tokenizer = _try_load_tokenizer_direct() or _try_load(AutoTokenizer, what="tokenizer")
     chat_model = _try_load(AutoModelForCausalLM, what="model")
 
     # Only move manually when NOT using bnb quant — bnb already placed the weights.
