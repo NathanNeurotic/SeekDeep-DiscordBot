@@ -896,7 +896,17 @@
       hr.textContent = `${backend.toUpperCase()} ROUTED · ${model} · web ${web}`;
     } catch { /* keep last good label */ }
   }
-  setInterval(refreshRoute, 8000);
+  // Live-event path: backend emits route.changed on /config + /persona
+  // writes, and a periodic health.tick for keep-alive. Subscribe to both;
+  // each one re-pulls /route/debug. Falls back to a 30s safety poll so a
+  // dropped WS still keeps the badge fresh.
+  if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
+    window.SeekDeepEvents.on('route.changed', () => refreshRoute());
+    window.SeekDeepEvents.on('_open',         () => refreshRoute());
+    setInterval(refreshRoute, 30000);
+  } else {
+    setInterval(refreshRoute, 8000);
+  }
   setTimeout(refreshRoute, 800);
 
   // ===== Auto-grow textarea =====

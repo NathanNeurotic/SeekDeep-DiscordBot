@@ -748,6 +748,12 @@ try:
         # the dashboard show "0 requests" forever. The closure here keeps
         # us reading _seekdeep_req_stats from the running process.
         stats_provider=_seekdeep_req_stats,
+        # Live-tick snapshot providers — feed the WS event bus so the GUI
+        # can drop its setInterval polls on /gpu, /health, /route/debug.
+        tick_providers={
+            "gpu":    lambda: _build_gpu_tick_payload(),
+            "health": lambda: _build_health_tick_payload(),
+        },
     )
 except Exception as _gui_err:
     print(f"[SeekDeep] gui_endpoints not registered: {_gui_err}")
@@ -797,6 +803,44 @@ def _vram_event_payload() -> dict:
         "loaded_chat_role":    stats.get("loaded_chat_role"),
         "loaded_chat_model_id": stats.get("loaded_chat_model_id"),
     }
+
+
+def _build_gpu_tick_payload() -> dict:
+    """Same shape as GET /gpu — full gpu_stats() + vram_budget. Called by
+    the live-tick loop in gui_endpoints so the GUI can stop polling /gpu."""
+    try:
+        stats = gpu_stats()
+    except Exception:
+        return {}
+    try:
+        stats["vram_budget"] = {
+            "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
+            "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
+            "available_for_models_mb": round(vram_budget_available_mb(), 0),
+        }
+    except Exception:
+        pass
+    return stats
+
+
+def _build_health_tick_payload() -> dict:
+    """Slim subset of GET /health for live ticks. Excludes the per-role
+    remote-endpoint lookup (medium-cost) since that info only changes on
+    /config writes — which already emit route.changed. Consumers needing
+    the full payload can still call GET /health on demand."""
+    try:
+        return {
+            "status": "ready",
+            "version": SEEKDEEP_VERSION,
+            "device": device_name(),
+            "cuda_available": cuda_available(),
+            "loaded_task": loaded_task,
+            "loaded_chat_role": loaded_chat_role,
+            "loaded_chat_model_id": loaded_chat_model_id,
+            "gpu": gpu_stats(),
+        }
+    except Exception:
+        return {"status": "ready"}
 
 
 @app.on_event("startup")

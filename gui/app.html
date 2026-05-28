@@ -3049,7 +3049,19 @@ const SEEKDEEP_BASE = (function() {
     },
     start() {
       this.probe();
-      this.timer = setInterval(() => this.probe(), 5000);
+      // Live-event path: subscribe to gpu.tick / health.tick / route.changed
+      // on the WS event bus. The setInterval below stays as a 30s safety
+      // net for when the WS is down (sidecar restarting, etc).
+      const ev = window.SeekDeepEvents;
+      if (ev && typeof ev.on === 'function') {
+        ev.on('gpu.tick',     (data) => { if (data) this.applyGpu(data); });
+        ev.on('health.tick',  (data) => { if (data) this.applyHealth(data); });
+        ev.on('route.changed', () => this.probe());
+        ev.on('_open',         () => this.probe());
+        this.timer = setInterval(() => this.probe(), 30000);
+      } else {
+        this.timer = setInterval(() => this.probe(), 5000);
+      }
     }
   };
   LIVE.start();

@@ -1325,6 +1325,7 @@ def register_gui_endpoints(
     repo_root: str | None = None,
     warmup_handlers: dict[str, Callable[..., Any]] | None = None,
     stats_provider: Callable[[], dict] | None = None,
+    tick_providers: dict[str, Callable[[], dict]] | None = None,
 ) -> None:
     """
     Attach every GUI-required endpoint to `app`. Idempotent.
@@ -1335,14 +1336,13 @@ def register_gui_endpoints(
     /model/warm returns a clearly-flagged stub response.
 
     stats_provider, if provided, is a zero-arg callable returning the
-    AI-server's live request-counter snapshot dict (the same shape as
-    local_ai_server._seekdeep_req_stats() returns). /stats/snapshot calls
-    this for the ai_server.* block. Without it, we'd have to dynamically
-    `import local_ai_server` here — and when local_ai_server is the
-    process's __main__ module (i.e. `python local_ai_server.py`), that
-    import resolves to a DIFFERENT module instance with its own zero-
-    initialized counters. Passing a callback at registration time pins
-    us to the live counters in the running process.
+    AI-server's live request-counter snapshot dict.
+
+    tick_providers, if provided, maps event-topic ("gpu"/"health"/"route")
+    to a zero-arg snapshot callable. The tick loop calls each at its
+    configured cadence and publishes "<key>.tick" onto the WS event bus.
+    Lets us replace per-client HTTP polling with one server-side timer
+    fanning out via the existing /events websocket.
     """
     root = Path(repo_root or os.path.dirname(os.path.abspath(__file__))).resolve()
     _log_dir = (root / log_dir).resolve()
@@ -1413,7 +1413,16 @@ def register_gui_endpoints(
     async def post_config(patch: ConfigPatch):
         if not patch.updates:
             return {"ok": True, "updated": []}
-        return _merge_env(_env_path, patch.updates)
+        result = _merge_env(_env_path, patch.updates)
+        # Routing/persona/model knobs are env-driven, so any /config write
+        # might have changed how /chat resolves. Push route.changed so the
+        # chat helper-row badge re-fetches /route/debug without polling.
+        try:
+            event_bus.publish_sync({"type": "route.changed",
+                                     "data": {"keys": list(patch.updates.keys())[:32]}})
+        except Exception:
+            pass
+        return result
 
     # ----- GET /logs/tail -----
     # Token-gated: log bodies leak prompts, file paths, model state, errors.
@@ -3448,6 +3457,11 @@ def register_gui_endpoints(
                 raise HTTPException(400, "scope='server' requires guild_id")
             data["guilds"][gid] = entry
         _atomic_write_json(_persona_overrides_path, data)
+        try:
+            event_bus.publish_sync({"type": "route.changed",
+                                     "data": {"scope": scope, "persona": persona}})
+        except Exception:
+            pass
         return {"ok": True, "scope": scope, "persona": persona, "set_at": entry["setAt"]}
 
     # ----- GET /stats/counts -----
@@ -4452,6 +4466,79 @@ def register_gui_endpoints(
                 # Don't let a stray exception kill the heartbeat task
                 await asyncio.sleep(HEARTBEAT_SEC)
 
+    # ----- Live-tick producer (replaces client-side polling) -----
+    # Cadence per topic. Picked to be roughly twice as frequent as the
+    # old setIntervals so the UI feels fresher. Zero-cost when nobody's
+    # subscribed (publish() fast-paths to no-op).
+    TICK_CADENCE_SEC = {"gpu": 3.0, "health": 5.0, "launchers": 5.0}
+
+    def _build_launchers_tick_payload() -> dict:
+        """Slim version of GET /launchers/status — skips the err.log tail
+        scan because we'd be doing it every 5s. service.state.changed
+        already carries the err.log when an exit actually happens."""
+        services_out = {}
+        for svc in sorted(ALLOWED_SERVICES):
+            info = _service_state(svc, _log_dir)
+            pid = info["pid"]
+            uptime_s = None
+            started_at = None
+            if pid is not None:
+                name = _PID_FILE_NAMES.get(svc)
+                if name:
+                    pid_path = _log_dir / name
+                    if pid_path.is_file():
+                        try:
+                            mtime = pid_path.stat().st_mtime
+                            uptime_s = int(max(0, time.time() - mtime))
+                            started_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                        except OSError:
+                            pass
+            services_out[svc] = {
+                "ok": True, "service": svc,
+                "state": info["state"], "pid": pid,
+                "count": info["count"], "source": info["source"],
+                "transitioning": info["transitioning"],
+                "uptime_seconds": uptime_s, "started_at": started_at,
+            }
+            _emit_state_change_if_any(svc, info)
+        return {"ok": True, "services": services_out, "generated_at": _now_iso()}
+
+    async def _tick_loop():
+        next_due = {topic: 0.0 for topic in TICK_CADENCE_SEC}
+        while True:
+            try:
+                await asyncio.sleep(1.0)
+                if event_bus.subscriber_count <= 0:
+                    continue
+                now = time.time()
+                if now >= next_due["gpu"]:
+                    next_due["gpu"] = now + TICK_CADENCE_SEC["gpu"]
+                    if tick_providers and tick_providers.get("gpu"):
+                        try:
+                            data = tick_providers["gpu"]() or {}
+                            await event_bus.publish({"type": "gpu.tick", "data": data})
+                        except Exception:
+                            pass
+                if now >= next_due["health"]:
+                    next_due["health"] = now + TICK_CADENCE_SEC["health"]
+                    if tick_providers and tick_providers.get("health"):
+                        try:
+                            data = tick_providers["health"]() or {}
+                            await event_bus.publish({"type": "health.tick", "data": data})
+                        except Exception:
+                            pass
+                if now >= next_due["launchers"]:
+                    next_due["launchers"] = now + TICK_CADENCE_SEC["launchers"]
+                    try:
+                        await event_bus.publish({"type": "launchers.tick",
+                                                  "data": _build_launchers_tick_payload()})
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                await asyncio.sleep(2.0)
+
     @app.on_event("startup")
     async def _start_heartbeat():
         # Capture the running loop so producers in OTHER modules (notably
@@ -4461,11 +4548,13 @@ def register_gui_endpoints(
         event_bus.attach_loop(loop)
         # Stash the task on app.state so it can be cancelled on shutdown
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
+        app.state.seekdeep_tick_task = loop.create_task(_tick_loop())
 
     @app.on_event("shutdown")
     async def _stop_heartbeat():
-        t = getattr(app.state, "seekdeep_heartbeat_task", None)
-        if t and not t.done():
-            t.cancel()
+        for attr in ("seekdeep_heartbeat_task", "seekdeep_tick_task"):
+            t = getattr(app.state, attr, None)
+            if t and not t.done():
+                t.cancel()
 
     print(f"[SeekDeep] GUI endpoints registered  (log_dir={_log_dir}  data_dir={_data_dir}  env={_env_path})")

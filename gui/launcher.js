@@ -102,7 +102,15 @@
   // to UNKNOWN after 3 misses instead of leaving them in PROBING forever
   // (which would be a quiet lie when the AI server is genuinely down).
   let _launchStatusMisses = 0;
-  async function pumpStatus() {
+  async function pumpStatus(externalData) {
+    // Live-event path: when called with a payload (from launchers.tick
+    // subscription), skip the HTTP fetch and process the payload directly.
+    // Same shape as GET /launchers/status returns, just without the err.log
+    // tail (service.state.changed already carries those on actual transitions).
+    if (externalData && externalData.services) {
+      _launchStatusMisses = 0;
+      return _renderLaunchersPayload(externalData);
+    }
     let data;
     try {
       const r = await fetch(BASE + '/launchers/status', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
@@ -137,6 +145,12 @@
       return;
     }
     if (!data || !data.services) return;
+    return _renderLaunchersPayload(data);
+  }
+
+  // Shared renderer used by both the HTTP poll path (pumpStatus's fetch
+  // branch) and the WS live-event path (launchers.tick subscription).
+  function _renderLaunchersPayload(data) {
     // Sidebar Launcher badge: "N UP" / "N DOWN".
     let up = 0, total = 0;
     for (const s of Object.values(data.services)) {
@@ -245,26 +259,29 @@
     }
   }
 
-  // --- Sidebar GPU badge pump (lightweight /gpu probe every 10s) ----------
+  // --- Sidebar GPU badge pump (cheap /gpu probe or gpu.tick event) --------
   // The cLIVE pump in app.html already calls /gpu but only writes to the
   // GPU pane numbers, not the sidebar badge. We want the sidebar badge to
   // update on every page even before the user clicks into the GPU pane.
-  async function pumpGpuBadge() {
+  async function pumpGpuBadge(externalData) {
     const badge = document.getElementById('sbGpuBadge');
     if (!badge) return;
-    try {
-      const r = await fetch(BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-      if (!r.ok) return;
-      const g = await r.json();
-      if (g.used_pct != null) {
-        badge.textContent = Math.round(g.used_pct) + '%';
-        badge.classList.toggle('warn', g.used_pct >= 75);
-        badge.classList.toggle('bad',  g.used_pct >= 92);
-      } else if (g.available === false) {
-        badge.textContent = 'CPU';
-        badge.classList.remove('warn', 'bad');
-      }
-    } catch { /* keep last good value */ }
+    let g = externalData;
+    if (!g) {
+      try {
+        const r = await fetch(BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        if (!r.ok) return;
+        g = await r.json();
+      } catch { return; }
+    }
+    if (g.used_pct != null) {
+      badge.textContent = Math.round(g.used_pct) + '%';
+      badge.classList.toggle('warn', g.used_pct >= 75);
+      badge.classList.toggle('bad',  g.used_pct >= 92);
+    } else if (g.available === false) {
+      badge.textContent = 'CPU';
+      badge.classList.remove('warn', 'bad');
+    }
   }
 
   // --- Stats snapshot pump ------------------------------------------------
@@ -919,14 +936,31 @@
   function init() {
     wireButtons();
     pumpStatus();
-    setInterval(pumpStatus, 5000);
+    pumpStatsSnapshot();
+    pumpGpuBadge();
+    // Live-event path: subscribe to the WS ticks the server emits onto
+    // /events. When events.js is loaded + the WS is up, these arrive at
+    // server-driven cadence (3–5s) and update the UI without any HTTP
+    // round-trip. The setIntervals below stay in place at 30s as a
+    // safety net for when the WS is down (e.g. during sidecar restart).
+    if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
+      window.SeekDeepEvents.on('launchers.tick', (data) => pumpStatus(data));
+      window.SeekDeepEvents.on('gpu.tick',       (data) => pumpGpuBadge(data));
+      // service.state.changed is point-in-time (start/stop/exit). It's
+      // already faster than any tick — handle it the same way so the UI
+      // doesn't lag the actual transition.
+      window.SeekDeepEvents.on('service.state.changed', () => pumpStatus());
+      setInterval(pumpStatus,        30000);
+      setInterval(pumpGpuBadge,      30000);
+    } else {
+      // Legacy poll cadence — used only when events.js / WS isn't available.
+      setInterval(pumpStatus,        5000);
+      setInterval(pumpGpuBadge,      10000);
+    }
     // Stats snapshot pump: less frequent (30s) because it does more work
     // backend-side (HF cache scan, bot-stats file read, day-bucket sums).
-    pumpStatsSnapshot();
+    // Not yet wired to a tick event — stays poll-based.
     setInterval(pumpStatsSnapshot, 30000);
-    // GPU sidebar badge pump (10s; cheap /gpu probe).
-    pumpGpuBadge();
-    setInterval(pumpGpuBadge, 10000);
   }
 
   // Tauri sidecar restart listener: any code path that bounces the Python
