@@ -2459,6 +2459,13 @@ const SEEKDEEP_BASE = (function() {
       { id: 'image',  gridId: 'imageModels',  entries: catalog.image  || [], envKey: 'LOCAL_IMAGE_MODEL_ID',  allowNone: true  },
     ];
 
+    // /config redacts secrets to "*****" when they're set — so any non-empty
+    // value (including the literal "*****") means the user has saved a token.
+    // Empty string means no token in .env. The catalog endpoint already
+    // exposes `hf_token_set: true` for the same reason; either signal works.
+    const hfTokenSet = !!(envCurrent.HF_TOKEN && envCurrent.HF_TOKEN.length)
+                    || catalog.hf_token_set === true;
+
     for (const r of roles) {
       const grid = document.getElementById(r.gridId);
       if (!grid || !r.entries.length) continue;
@@ -2480,6 +2487,15 @@ const SEEKDEEP_BASE = (function() {
         card.dataset.id = e.repo_id;
         card.dataset.size = String(e.size_gb || 0);
         card.dataset.backend = e.backend || 'hf';
+        // Gated badge: if the user already has HF_TOKEN saved in .env, this
+        // is just informational ("✓ token set"). Only show the warn-colored
+        // "needs HF_TOKEN" pill when the token genuinely isn't set yet.
+        let gatedBadge = '';
+        if (e.gated) {
+          gatedBadge = hfTokenSet
+            ? '<div class="tiny" style="font-size:10px;color:var(--good);margin-top:2px;">🔑 gated · HF_TOKEN set ✓</div>'
+            : '<div class="tiny" style="font-size:10px;color:var(--warn);margin-top:2px;">⚠ gated · needs HF_TOKEN</div>';
+        }
         card.innerHTML =
           '<div class="check"></div>' +
           '<div class="head">' +
@@ -2489,7 +2505,7 @@ const SEEKDEEP_BASE = (function() {
           '<h4>' + esc(shortName) + '</h4>' +
           '<div class="id">' + esc(e.repo_id) + '</div>' +
           (e.why ? '<div class="tiny" style="font-size:10px;color:var(--hull-3);margin-top:4px;line-height:1.3;">' + esc(e.why) + '</div>' : '') +
-          (e.gated ? '<div class="tiny" style="font-size:10px;color:var(--warn);margin-top:2px;">⚠ gated · needs HF_TOKEN</div>' : '');
+          gatedBadge;
         grid.appendChild(card);
       }
       // Add a "Skip / none" card for vision + image (chat is required).
@@ -2527,38 +2543,89 @@ const SEEKDEEP_BASE = (function() {
   // error), the hardcoded cards stay visible — wizard remains usable.
   renderModelCardsFromCatalog();
 
-  // Detected GPU capacity from /gpu — populated by refreshVramCapacity().
-  // 24 GB was the previous hardcoded default that pretended every user had
-  // an RTX 4090. Users on 12 GB / 16 GB / 8 GB cards saw their stack
-  // claim "way under budget" when they were actually OVER. Now we probe
-  // nvidia_smi.total_mb and use it for both the "/N GB" label and the
-  // overflow threshold.
-  let vramCapacityGb = 24;  // safe default until /gpu resolves
+  // Detected GPU capacity + runtime quant/swap config from /gpu + /health.
+  // Catalog sizes are FP16 download sizes — but with chat_quant_mode=4bit
+  // (the default) Llama 8B occupies ~5 GB at runtime, not 16 GB. And with
+  // keep_mode=task-lru-swap, the image model only occupies VRAM while the
+  // image task is active (it swaps out when chat/vision become the LRU
+  // active task). So naive sum was telling 5090 owners "34 / 24 GB · over
+  // budget" when the actual peak is comfortable. Now we account for both.
+  let vramCapacityGb = 24;
+  let chatQuantMode = '4bit';                       // default per local_ai_server.py
+  let keepResident = { chat: true, vision: true, image: false };
   async function refreshVramCapacity() {
+    // Parallel fetch — /gpu has nvidia_smi.total_mb, /health has the
+    // quant + keep_resident config that drives the math below.
     try {
-      const r = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-      if (!r.ok) return;
-      const g = await r.json();
-      const totalMb = g?.nvidia_smi?.total_mb || g?.total_mb;
-      if (totalMb && totalMb > 0) {
-        vramCapacityGb = Math.round(totalMb / 1024);
-        const cap = document.getElementById('vramCapacity');
-        if (cap) cap.textContent = String(vramCapacityGb);
-        refreshVramBudget();  // re-render bar with new capacity
+      const [gRes, hRes] = await Promise.all([
+        fetch(SEEKDEEP_BASE + '/gpu',    { cache: 'no-store', signal: AbortSignal.timeout(3000) }).catch(() => null),
+        fetch(SEEKDEEP_BASE + '/health', { cache: 'no-store', signal: AbortSignal.timeout(3000) }).catch(() => null),
+      ]);
+      if (gRes && gRes.ok) {
+        const g = await gRes.json();
+        const totalMb = g?.nvidia_smi?.total_mb || g?.total_mb;
+        if (totalMb && totalMb > 0) {
+          vramCapacityGb = Math.round(totalMb / 1024);
+          const cap = document.getElementById('vramCapacity');
+          if (cap) cap.textContent = String(vramCapacityGb);
+        }
       }
+      if (hRes && hRes.ok) {
+        const h = await hRes.json();
+        if (typeof h?.chat_quant_mode === 'string') chatQuantMode = h.chat_quant_mode;
+        if (h?.keep_resident && typeof h.keep_resident === 'object') {
+          keepResident = Object.assign(keepResident, h.keep_resident);
+        }
+      }
+      refreshVramBudget();
     } catch {}
   }
   refreshVramCapacity();
 
+  // FP16 → runtime size multiplier for the chat model. bitsandbytes 4-bit
+  // (nf4 / int4) lands around 30% of FP16; 8-bit lands around 55%. Anything
+  // else (full / bf16 / fp16) is 1.0×. Vision + image models aren't
+  // currently quantized at load time, so their fp16 size IS the runtime size.
+  function chatQuantFactor() {
+    const m = String(chatQuantMode || '').toLowerCase();
+    if (m === '4bit' || m === 'int4' || m === 'nf4')  return 0.30;
+    if (m === '8bit' || m === 'int8')                 return 0.55;
+    return 1.0;
+  }
+
   function refreshVramBudget() {
-    const chat   = state.sizes.chat   || 0;
-    const image  = state.sizes.image  || 0;
-    const vision = state.sizes.vision || 0;
+    const chatRaw   = state.sizes.chat   || 0;       // FP16 download size
+    const imageRaw  = state.sizes.image  || 0;
+    const visionRaw = state.sizes.vision || 0;
+    const chat   = chatRaw * chatQuantFactor();       // runtime resident size
+    const image  = imageRaw;
+    const vision = visionRaw;
     const sysReserve = 4.0;
-    const total = chat + image + vision + sysReserve;
+
+    // Peak runtime resident VRAM under task-LRU swap:
+    //   - keep_resident roles stay loaded
+    //   - swappable roles only count toward peak while their task is active
+    //     (one at a time)
+    // The honest worst case is "chat+vision resident + largest swappable
+    // role peaks during its task". For the typical default
+    // {chat:true, vision:true, image:false}, peak = chat + vision + image
+    // (because when image runs, chat+vision are still pinned). That happens
+    // to equal the naive sum, but the chat-quant adjustment is what saves
+    // the budget — 5090 owners running 8B int4 + 3B vision + SDXL fit fine.
+    const residentChat   = keepResident.chat   ? chat   : 0;
+    const residentVision = keepResident.vision ? vision : 0;
+    const residentImage  = keepResident.image  ? image  : 0;
+    const swapCandidates = [
+      keepResident.chat   ? 0 : chat,
+      keepResident.vision ? 0 : vision,
+      keepResident.image  ? 0 : image,
+    ];
+    const peakSwap = Math.max(0, ...swapCandidates);
+    const total = residentChat + residentVision + residentImage + peakSwap + sysReserve;
+
     document.getElementById('vramTotal').textContent = total.toFixed(1);
-    document.getElementById('vbChat').textContent = chat.toFixed(1);
-    document.getElementById('vbImage').textContent = image.toFixed(1);
+    document.getElementById('vbChat').textContent   = chat.toFixed(1);
+    document.getElementById('vbImage').textContent  = image.toFixed(1);
     document.getElementById('vbVision').textContent = vision.toFixed(1);
     // total color flips red if it exceeds the user's actual capacity
     const totalEl = document.getElementById('vramTotal');
@@ -2590,7 +2657,9 @@ const SEEKDEEP_BASE = (function() {
       stack.querySelectorAll('i').forEach(c => c.classList.add('over'));
     }
 
-    document.getElementById('warmupSize').textContent = `~ ${(chat + image + vision).toFixed(0)} GB`;
+    // Warmup row shows total ON-DISK download (no quant — bitsandbytes
+    // quantizes at LOAD time, so the cached weights are still full size).
+    document.getElementById('warmupSize').textContent = `~ ${(chatRaw + imageRaw + visionRaw).toFixed(0)} GB`;
   }
 
   // ============ SEARXNG / STACK PROBES ============
