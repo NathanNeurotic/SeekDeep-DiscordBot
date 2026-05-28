@@ -3538,44 +3538,70 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
     # whatever Windows / symlink / cache-shape reason). Then load via the
     # `tokenizers` library and wrap in PreTrainedTokenizerFast. Every silent
     # failure path now LOGS so we can see which step missed.
+    def _is_actually_readable(path: str) -> bool:
+        # The user's long-running process has os.path.isfile() returning
+        # False for HF symlinks that ARE readable. Bypass isfile entirely;
+        # the only definition of "exists" that matters is "I can open it".
+        try:
+            with open(path, "rb") as _f:
+                _f.read(1)
+            return True
+        except (OSError, IOError):
+            return False
+
+    def _resolve_blob_via_symlink(symlink_path: str) -> str | None:
+        # When os.path.isfile() lies about a symlink, read the target
+        # manually and point at the underlying blob (which is a plain
+        # regular file, no symlink traversal needed).
+        try:
+            if not os.path.islink(symlink_path):
+                return symlink_path if _is_actually_readable(symlink_path) else None
+            target = os.readlink(symlink_path)
+            if not os.path.isabs(target):
+                target = os.path.normpath(os.path.join(os.path.dirname(symlink_path), target))
+            return target if _is_actually_readable(target) else None
+        except OSError:
+            return None
+
     def _resolve_cached_file(filename: str) -> str | None:
         cache_dir = str(MODEL_CACHE_DIR)
-        # Path A: huggingface_hub helper
+        # Path A: huggingface_hub helper. We accept its answer if open() works.
         try:
             from huggingface_hub import try_to_load_from_cache
             tj = try_to_load_from_cache(model_id, filename, cache_dir=cache_dir)
-            if tj and os.path.isfile(str(tj)):
-                return str(tj)
             if tj:
-                print(f"[SeekDeep Local AI] try_to_load_from_cache returned non-file: {tj!r}", flush=True)
+                resolved = _resolve_blob_via_symlink(str(tj))
+                if resolved:
+                    return resolved
+                print(f"[SeekDeep Local AI] try_to_load_from_cache gave {tj!r} but read failed", flush=True)
         except Exception as exc:
             print(f"[SeekDeep Local AI] try_to_load_from_cache raised: {exc!r}", flush=True)
-        # Path B: pure filesystem fallback. The cache layout is fixed by HF:
-        #   <cache_dir>/models--<org>--<name>/refs/main → <sha>
-        #   <cache_dir>/models--<org>--<name>/snapshots/<sha>/<filename>
+        # Path B: pure filesystem. Read refs/main → snapshot path → blob.
         try:
             org_name = model_id.replace("/", "--")
             repo_dir = os.path.join(cache_dir, f"models--{org_name}")
             refs_main = os.path.join(repo_dir, "refs", "main")
-            if os.path.isfile(refs_main):
+            if _is_actually_readable(refs_main):
                 with open(refs_main, encoding="utf-8") as _f:
                     sha = _f.read().strip()
                 candidate = os.path.join(repo_dir, "snapshots", sha, filename)
-                if os.path.isfile(candidate):
-                    return candidate
-                print(f"[SeekDeep Local AI] fs fallback: snapshot file missing at {candidate!r}", flush=True)
+                resolved = _resolve_blob_via_symlink(candidate)
+                if resolved:
+                    return resolved
+                print(f"[SeekDeep Local AI] fs fallback: file at {candidate!r} unreadable even via blob", flush=True)
             else:
                 print(f"[SeekDeep Local AI] fs fallback: no refs/main at {refs_main!r}", flush=True)
         except Exception as exc:
             print(f"[SeekDeep Local AI] fs fallback raised: {exc!r}", flush=True)
-        # Path C: glob any snapshot dir (handles models without refs/main)
+        # Path C: glob any snapshot dir.
         try:
             import glob as _glob
             org_name = model_id.replace("/", "--")
             pattern = os.path.join(cache_dir, f"models--{org_name}", "snapshots", "*", filename)
-            matches = _glob.glob(pattern)
-            if matches:
-                return matches[0]
+            for match in _glob.glob(pattern):
+                resolved = _resolve_blob_via_symlink(match)
+                if resolved:
+                    return resolved
         except Exception:
             pass
         return None
