@@ -249,6 +249,63 @@ def _resolve_model_cache_dir() -> Path:
 MODEL_CACHE_DIR = _resolve_model_cache_dir()
 # Reflect the resolved dir back into the env so huggingface_hub picks it up.
 os.environ["LOCAL_MODEL_CACHE_DIR"] = str(MODEL_CACHE_DIR)
+
+def _convert_hf_symlinks_to_hardlinks(cache_root) -> None:
+    # On this Windows install the running server process can't follow
+    # symlinks (OSError 22 "Invalid argument") even though subprocesses
+    # of the same Python can. transformers' cached_file then can't see
+    # config.json / model.safetensors and raises misleading errors:
+    #   "Unrecognized model in <id>. Should have a model_type key"
+    #   "<id> does not appear to have a file named ... model.safetensors"
+    # Replace every symlink under models--*/snapshots/*/ with a hardlink
+    # to its blob target. Hardlinks aren't blocked by the symlink-privilege
+    # requirement and Python/transformers open them transparently as files.
+    # Idempotent: skip files that are already non-symlinks.
+    import pathlib
+    try:
+        root = pathlib.Path(cache_root)
+        if not root.is_dir():
+            return
+        converted = 0
+        for repo in root.glob("models--*"):
+            snap_root = repo / "snapshots"
+            if not snap_root.is_dir():
+                continue
+            for snap in snap_root.iterdir():
+                if not snap.is_dir():
+                    continue
+                for entry in snap.iterdir():
+                    if not entry.is_symlink():
+                        continue
+                    try:
+                        target_str = os.readlink(str(entry))
+                    except OSError:
+                        continue
+                    if not os.path.isabs(target_str):
+                        target = (entry.parent / target_str).resolve()
+                    else:
+                        target = pathlib.Path(target_str)
+                    if not target.is_file():
+                        continue
+                    try:
+                        # Replace symlink with hardlink to the same blob.
+                        # Same volume → no copy, just a new dirent.
+                        os.unlink(str(entry))
+                        os.link(str(target), str(entry))
+                        converted += 1
+                    except OSError:
+                        # If the unlink/link fails, restore the symlink so
+                        # we don't leave the snapshot half-broken.
+                        if not entry.exists():
+                            try: os.symlink(target_str, str(entry))
+                            except OSError: pass
+        if converted:
+            print(f"[SeekDeep] HF cache: converted {converted} symlinks → hardlinks "
+                  f"(workaround for Windows process symlink-privilege issue)", flush=True)
+    except Exception as exc:
+        print(f"[SeekDeep] HF cache hardlink conversion skipped: {exc!r}", flush=True)
+
+_convert_hf_symlinks_to_hardlinks(MODEL_CACHE_DIR)
 # HF_HOME points at the cache root; HF_HUB_CACHE is the same path with /hub
 # semantics. Setting both keeps every HF caller (transformers, diffusers,
 # huggingface_hub) on the same resolved cache.
@@ -3534,6 +3591,76 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    # Multimodal-model guard. AutoModelForCausalLM raises "Unrecognized model"
+    # for multimodal architectures (Gemma3nForConditionalGeneration, PaliGemma,
+    # LLaVA, etc.) because their model_type isn't registered as a causal LM.
+    # The failed load corrupts transformers' auto-class registry in the running
+    # process — every subsequent load (even of a clean causal LM like Llama 3.1)
+    # then fails with the same "Unrecognized model" error. Pre-validate the
+    # config.json model_type so the bad load never happens. Treat as a normal
+    # load failure (caller falls through to fallback_chat) and the process
+    # state stays clean.
+    _MULTIMODAL_MODEL_TYPES = {
+        "gemma3n", "gemma4_vision", "gemma3_vision", "paligemma",
+        "llava", "llava_next", "llava_next_video", "llava_onevision",
+        "qwen2_vl", "qwen2_5_vl", "qwen2_audio", "idefics", "idefics2", "idefics3",
+    }
+    # Pre-load config.json directly from cache and pass it to from_pretrained.
+    # This bypasses transformers' own config resolution which keeps failing in
+    # the running process with "Unrecognized model in <id>" because OSError(22,
+    # 'Invalid argument') fires when opening symlinks under the snapshots/<sha>/
+    # dir. The blobs/ siblings are regular files — readable. We readlink ourselves.
+    def _open_json_via_symlink(path: str) -> dict | None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except OSError:
+            pass
+        try:
+            target = os.readlink(path)
+        except OSError:
+            return None
+        if not os.path.isabs(target):
+            target = os.path.normpath(os.path.join(os.path.dirname(path), target))
+        try:
+            with open(target, encoding="utf-8") as f:
+                return json.load(f)
+        except OSError:
+            return None
+
+    _preloaded_config = None
+    try:
+        _org_name = model_id.replace("/", "--")
+        _refs = os.path.join(str(MODEL_CACHE_DIR), f"models--{_org_name}", "refs", "main")
+        try:
+            with open(_refs, encoding="utf-8") as _f:
+                _sha = _f.read().strip()
+        except OSError:
+            _sha = None
+        _cfg_data = None
+        if _sha:
+            _candidate = os.path.join(str(MODEL_CACHE_DIR), f"models--{_org_name}",
+                                       "snapshots", _sha, "config.json")
+            _cfg_data = _open_json_via_symlink(_candidate)
+        if _cfg_data is not None:
+            _mt = (_cfg_data.get("model_type") or "").strip().lower()
+            print(f"[SeekDeep] config: cache-resolved model_type={_mt!r} for {model_id!r}", flush=True)
+            if _mt in _MULTIMODAL_MODEL_TYPES:
+                raise ValueError(
+                    f"model {model_id!r} has model_type={_mt!r} which is a multimodal "
+                    f"architecture and cannot load via AutoModelForCausalLM."
+                )
+            # Build the config object from the dict directly. AutoConfig has
+            # been failing in this process — sidestep it.
+            from transformers import AutoConfig as _AutoConfig
+            try:
+                _preloaded_config = _AutoConfig.for_model(_mt, **{k: v for k, v in _cfg_data.items() if k != "model_type"})
+                print(f"[SeekDeep] config: pre-built {type(_preloaded_config).__name__}", flush=True)
+            except Exception as exc:
+                print(f"[SeekDeep] config: AutoConfig.for_model FAIL: {exc!r}", flush=True)
+    except FileNotFoundError:
+        pass
+
     tokenizer_kwargs = {
         "cache_dir": str(MODEL_CACHE_DIR),
         "trust_remote_code": True,
@@ -3666,6 +3793,11 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                 extra = {"quantization_config": quant_config, "device_map": "auto"}
             else:
                 extra = {"torch_dtype": model_dtype(), "device_map": None, "low_cpu_mem_usage": True}
+            # Inject the pre-built config object if the guard above succeeded.
+            # transformers will skip its own (broken-in-this-process) config
+            # resolution and use ours.
+            if _preloaded_config is not None:
+                extra["config"] = _preloaded_config
         last_exc: BaseException | None = None
         for label, kw in attempts:
             kw_clean = {k: v for k, v in kw.items() if k != "use_fast"} if what == "model" else kw
