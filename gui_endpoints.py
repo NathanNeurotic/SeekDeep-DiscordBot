@@ -1559,22 +1559,57 @@ def register_gui_endpoints(
             # most recent .gui.err.log so the launcher card can show WHY
             # instead of just "EXITED". Was the #1 cause of "feels broken"
             # complaints — a silent EXITED pill with no error surface.
+            #
+            # Critical: ONLY surface err.log entries from the current session.
+            # The previous logic picked the most recent err.log by mtime,
+            # which could be a yesterday-old crash log still sitting in
+            # logs/ — and the launcher card would show that stale trace on
+            # every load, making the user think the bot was actively
+            # crashing when in fact they just hadn't started it. Now we
+            # pair the err.log against the matching .gui.out.log timestamp
+            # (same prefix `bot-YYYYMMDD-HHMMSS.gui.{err,out}.log`) and
+            # require the err.log to be NEWER than the latest .gui.out.log
+            # start — i.e. errors from the current spawn, not a previous
+            # session.
             last_error = None
             err_log_name = None
             if info["state"] in ("exited", "not-running"):
                 try:
+                    # Find the most recent .gui.out.log — its mtime is the
+                    # current/latest spawn's launch timestamp. err.logs
+                    # newer than this are this-session crashes.
+                    out_logs = sorted(
+                        _log_dir.glob(f"{svc}-*.gui.out.log"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    latest_spawn_mtime = (out_logs[0].stat().st_mtime
+                                          if out_logs else 0.0)
                     err_logs = sorted(
                         _log_dir.glob(f"{svc}-*.gui.err.log"),
                         key=lambda p: p.stat().st_mtime,
                         reverse=True,
                     )
                     for candidate in err_logs:
-                        if candidate.stat().st_size > 0:
-                            tail = _tail(candidate, 20)
-                            if tail:
-                                last_error = "\n".join(tail)[-1200:]
-                                err_log_name = candidate.name
-                                break
+                        st = candidate.stat()
+                        if st.st_size <= 0:
+                            continue
+                        # Stale-log guard: only surface this err.log if it
+                        # came from the most recent spawn. Allow ±5s slop
+                        # for filesystem clock skew. If no .gui.out.log
+                        # exists yet (fresh install), permit any err.log
+                        # newer than 1 hour.
+                        if latest_spawn_mtime > 0:
+                            if st.st_mtime + 5.0 < latest_spawn_mtime:
+                                continue  # err.log predates current spawn
+                        else:
+                            if time.time() - st.st_mtime > 3600:
+                                continue  # > 1h old, treat as stale
+                        tail = _tail(candidate, 20)
+                        if tail:
+                            last_error = "\n".join(tail)[-1200:]
+                            err_log_name = candidate.name
+                            break
                 except OSError:
                     pass
             services_out[svc] = {
