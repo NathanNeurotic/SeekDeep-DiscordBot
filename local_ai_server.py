@@ -3126,19 +3126,28 @@ def _hf_uninstall(model_id: str) -> dict:
         from huggingface_hub.errors import CacheNotFound
     except ImportError:
         CacheNotFound = Exception
+    cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
+    # Scan phase. Any scan failure (CacheNotFound, WinError 448 from HF
+    # symlinks on Windows, permission errors, etc.) means we can't see
+    # what's in the cache — treat that as "model absent" so the uninstall
+    # request is idempotent. Smoke test "uninstall absent → 200" was failing
+    # because scan exceptions surfaced as 500.
     try:
-        cache_dir = os.getenv("LOCAL_MODEL_CACHE_DIR", "").strip() or None
-        try:
-            info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
-        except CacheNotFound:
-            return {"ok": True, "model_id": model_id, "freed_bytes": 0,
-                    "note": "not in HF cache (cache directory not found)"}
+        info = scan_cache_dir(cache_dir=cache_dir) if cache_dir else scan_cache_dir()
+    except CacheNotFound:
+        return {"ok": True, "model_id": model_id, "freed_bytes": 0,
+                "note": "not in HF cache (cache directory not found)"}
+    except Exception as scan_exc:
+        return {"ok": True, "model_id": model_id, "freed_bytes": 0,
+                "note": f"cache unscannable, treating as absent: {type(scan_exc).__name__}: {str(scan_exc)[:120]}"}
+    # Delete phase. Real delete errors are still errors — we shouldn't
+    # silently pretend a permission denied on rm became a successful uninstall.
+    try:
         # Find the repo (handles 'meta-llama/Llama-3.1-8B-Instruct' shape)
         repo_info = next((r for r in info.repos if r.repo_id == model_id), None)
         if not repo_info:
             return {"ok": True, "model_id": model_id, "freed_bytes": 0,
                     "note": "not in HF cache (already absent)"}
-        # Collect every revision's hash and delete them
         revisions = [r.commit_hash for r in repo_info.revisions]
         if not revisions:
             return {"ok": True, "model_id": model_id, "freed_bytes": 0,
