@@ -1093,6 +1093,111 @@ def _find_bot_processes(bot_cwd: Path) -> list[dict]:
     return found
 
 
+def _find_ai_server_processes(project_root: Path) -> list[dict]:
+    """Mirror of _find_bot_processes but for `python local_ai_server.py`
+    rooted at project_root. Used by fresh-boot cleanup to kill stale AI
+    server zombies from prior sessions WITHOUT killing ourselves (callers
+    are responsible for filtering os.getpid() out of the result)."""
+    root_str = str(project_root.resolve()).lower()
+    found: list[dict] = []
+    seen_pids: set[int] = set()
+    # 1) psutil — cleanest.
+    try:
+        import psutil  # type: ignore
+        for p in psutil.process_iter(["pid", "name", "cmdline", "cwd"]):
+            try:
+                pid = p.info.get("pid")
+                if not pid or pid in seen_pids:
+                    continue
+                name = (p.info.get("name") or "").lower()
+                # Match python / pythonw / py / uvicorn binaries.
+                if not (name.startswith("python") or name.startswith("uvicorn") or name == "py.exe" or name == "py"):
+                    continue
+                cmdline = p.info.get("cmdline") or []
+                joined = " ".join(cmdline).lower()
+                if "local_ai_server.py" not in joined:
+                    continue
+                pcwd = ""
+                try:
+                    pcwd = (p.info.get("cwd") or p.cwd() or "").lower()
+                except Exception:
+                    pcwd = ""
+                if root_str not in pcwd and root_str not in joined:
+                    continue
+                found.append({"pid": pid, "cmdline": " ".join(cmdline)[:400],
+                              "cwd": pcwd, "source": "psutil"})
+                seen_pids.add(pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return found
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # 2) Windows WMI fallback.
+    if os.name == "nt":
+        try:
+            ps_cmd = (
+                "Get-CimInstance Win32_Process "
+                "| Where-Object { ($_.Name -like 'python*' -or $_.Name -like 'pythonw*' -or $_.Name -eq 'py.exe' -or $_.Name -like 'uvicorn*') "
+                "-and ($_.CommandLine -like '*local_ai_server.py*') } "
+                "| Select-Object ProcessId, CommandLine, ExecutablePath "
+                "| ConvertTo-Json -Compress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            raw = (out.stdout or "").strip()
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = [data]
+                for entry in data:
+                    pid = entry.get("ProcessId")
+                    cmd = (entry.get("CommandLine") or "")
+                    if not pid or pid in seen_pids:
+                        continue
+                    if root_str not in cmd.lower():
+                        continue
+                    found.append({"pid": int(pid), "cmdline": cmd[:400],
+                                  "cwd": "", "source": "wmi"})
+                    seen_pids.add(int(pid))
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+            pass
+    # 3) POSIX fallback.
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=10,
+        )
+        for line in (out.stdout or "").splitlines()[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            args = parts[1]
+            args_lc = args.lower()
+            if pid in seen_pids:
+                continue
+            if "local_ai_server.py" not in args_lc:
+                continue
+            if root_str not in args_lc:
+                continue
+            found.append({"pid": pid, "cmdline": args[:400],
+                          "cwd": "", "source": "ps"})
+            seen_pids.add(pid)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return found
+
+
 def _kill_pid(pid: int, timeout_s: float = 2.0) -> tuple[bool, str | None]:
     # Terminate a single PID gracefully, escalating to force-kill if it
     # outlives `timeout_s`. Returns (killed, error_message_or_None).
@@ -4814,42 +4919,123 @@ def register_gui_endpoints(
             except Exception:
                 await asyncio.sleep(2.0)
 
-    def _kill_orphan_bots_at_boot() -> None:
-        """Fresh-boot cleanup. Tauri sets SEEKDEEP_FRESH_BOOT=1 on the FIRST
-        sidecar spawn of an app launch (not on crash-respawn / restart_sidecar)
-        so that whatever bot processes leaked from the previous user session
-        get reaped before any new state accumulates. Without this the user
-        sees pile-ups they have to manually kill via the right-click menu —
-        we already had the kill-all endpoint; this just calls it at boot."""
+    def _clean_stale_stack_at_boot() -> None:
+        """Mirrors seekdeep_launcher.bat option 8's :cleanStaleStack. On
+        every Tauri cold-launch, before any new launchers spawn, reap every
+        stale instance from previous sessions so the user gets a clean
+        slate — no stacked node.exe / python.exe processes, no leftover
+        Docker containers serving stale code.
+
+        Order is:
+          1. node index.js scoped to our repo  (kill — except ourselves: not applicable)
+          2. python local_ai_server.py scoped to our repo  (kill — EXCLUDING our own PID)
+          3. Docker containers we manage: seekdeep-searxng + seekdeep-nim-*
+
+        Gate: SEEKDEEP_FRESH_BOOT=1 (Tauri-set on first sidecar spawn per
+        app launch). Mid-session sidecar respawns (ML install, restart-
+        sidecar, crash watchdog) skip this so the user's running stack
+        doesn't get nuked mid-task.
+        """
+        # 1. Stale bot processes
         try:
             bot_cwd = _resolve_bot_cwd(root)
             procs = _find_bot_processes(bot_cwd)
-            if not procs:
-                return
-            print(f"[SeekDeep] fresh-boot cleanup: reaping {len(procs)} orphan bot process(es)")
-            for entry in procs:
-                pid = entry["pid"]
-                ok, err = _kill_pid(pid)
-                note = "killed" if ok else f"failed: {err or 'unknown'}"
-                print(f"[SeekDeep]   pid {pid} ({entry.get('source', '?')}) - {note}")
-            try:
-                pid_name = _PID_FILE_NAMES.get("bot")
-                if pid_name:
-                    (_log_dir / pid_name).unlink(missing_ok=True)
-            except OSError:
-                pass
+            if procs:
+                print(f"[SeekDeep] fresh-boot: reaping {len(procs)} orphan bot process(es)")
+                for entry in procs:
+                    pid = entry["pid"]
+                    ok, err = _kill_pid(pid)
+                    note = "killed" if ok else f"failed: {err or 'unknown'}"
+                    print(f"[SeekDeep]   bot pid {pid} ({entry.get('source', '?')}) - {note}")
+                try:
+                    pid_name = _PID_FILE_NAMES.get("bot")
+                    if pid_name:
+                        (_log_dir / pid_name).unlink(missing_ok=True)
+                except OSError:
+                    pass
         except Exception as exc:
-            print(f"[SeekDeep] fresh-boot cleanup failed: {exc}")
+            print(f"[SeekDeep] fresh-boot bot cleanup failed: {exc}")
 
-    def _autostart_bot_at_boot() -> None:
-        """Fresh-boot autostart. After reaping orphans, bring the bot up so
-        the launcher card isn't EXITED on every fresh Tauri launch — the
-        user shouldn't have to click Restart / Launch All for the obvious
-        default state. Idempotent: skips if a bot is already running. Opt
-        out via SEEKDEEP_AUTOSTART_BOT=off in .env."""
+        # 2. Stale AI server processes (excluding ourselves)
+        try:
+            my_pid = os.getpid()
+            ai_procs = [p for p in _find_ai_server_processes(root) if p["pid"] != my_pid]
+            if ai_procs:
+                print(f"[SeekDeep] fresh-boot: reaping {len(ai_procs)} orphan ai-server process(es)")
+                for entry in ai_procs:
+                    pid = entry["pid"]
+                    ok, err = _kill_pid(pid)
+                    note = "killed" if ok else f"failed: {err or 'unknown'}"
+                    print(f"[SeekDeep]   ai-server pid {pid} ({entry.get('source', '?')}) - {note}")
+        except Exception as exc:
+            print(f"[SeekDeep] fresh-boot ai-server cleanup failed: {exc}")
+
+        # 3. SeekDeep-managed Docker containers (only if docker is up).
+        try:
+            r = subprocess.run(["docker", "version"], capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                removed = []
+                for container in ("seekdeep-searxng", "seekdeep-nim-chat", "seekdeep-nim-visual"):
+                    rr = subprocess.run(["docker", "rm", "-f", container],
+                                        capture_output=True, text=True, timeout=10)
+                    if rr.returncode == 0 and (rr.stdout or "").strip():
+                        removed.append(container)
+                if removed:
+                    print(f"[SeekDeep] fresh-boot: removed stale docker container(s): {', '.join(removed)}")
+        except FileNotFoundError:
+            # docker not installed — fine, skip silently.
+            pass
+        except Exception as exc:
+            if os.getenv("SEEKDEEP_DEBUG"):
+                print(f"[SeekDeep] fresh-boot docker cleanup skipped: {exc}")
+
+    def _autostart_stack_at_boot() -> None:
+        """After the clean-slate cleanup, bring the whole stack back up:
+          - SearXNG container (fresh — the previous one was just removed)
+          - AI server is us; no-op
+          - Bot via _start_service (fresh process, fresh Discord login)
+        Idempotent — re-checks state before each spawn. Opt out via
+        SEEKDEEP_AUTOSTART_BOT=off in .env (the env var also gates SearXNG
+        since 'clean every boot' is a single user choice)."""
         if os.getenv("SEEKDEEP_AUTOSTART_BOT", "on").strip().lower() in {"0", "false", "no", "off"}:
             print("[SeekDeep] fresh-boot autostart skipped (SEEKDEEP_AUTOSTART_BOT=off)")
             return
+
+        # SearXNG — we just removed the container in cleanup, so port 8080
+        # should be dead. If something else is on :8080, leave it alone.
+        try:
+            sx_up = False
+            try:
+                with socket.create_connection(("127.0.0.1", 8080), timeout=1):
+                    sx_up = True
+            except Exception:
+                sx_up = False
+            if sx_up:
+                print("[SeekDeep] fresh-boot autostart: searxng already on :8080, skipping")
+            else:
+                searxng_dir = (root / "searxng").resolve()
+                searxng_dir.mkdir(parents=True, exist_ok=True)
+                vol = f"{searxng_dir}:/etc/searxng:rw"
+                print("[SeekDeep] fresh-boot autostart: starting searxng container")
+                rr = subprocess.run([
+                    "docker", "run", "-d", "--name", "seekdeep-searxng",
+                    "--restart", "unless-stopped", "-p", "8080:8080",
+                    "-e", "BASE_URL=http://localhost:8080/",
+                    "-e", "INSTANCE_NAME=SeekDeep",
+                    "-v", vol, "searxng/searxng:latest",
+                ], capture_output=True, text=True, timeout=60)
+                if rr.returncode == 0:
+                    cid = (rr.stdout or "").strip()[:12]
+                    print(f"[SeekDeep] fresh-boot autostart: searxng container {cid} up")
+                else:
+                    err = (rr.stderr or "").strip()[:200]
+                    print(f"[SeekDeep] fresh-boot autostart: searxng docker run failed: {err}")
+        except FileNotFoundError:
+            print("[SeekDeep] fresh-boot autostart: docker not installed; skipping searxng")
+        except Exception as exc:
+            print(f"[SeekDeep] fresh-boot autostart searxng error: {exc}")
+
+        # Bot
         try:
             info = _service_state("bot", _log_dir)
             if info["state"] == "running":
@@ -4860,11 +5046,9 @@ def register_gui_endpoints(
             pid = result.get("pid") if isinstance(result, dict) else None
             print(f"[SeekDeep] fresh-boot autostart: bot spawned pid={pid}")
         except HTTPException as exc:
-            # _start_service raises HTTPException with a human-readable detail
-            # for known failure modes (missing node, bad cwd, etc).
-            print(f"[SeekDeep] fresh-boot autostart failed: {exc.detail}")
+            print(f"[SeekDeep] fresh-boot autostart bot failed: {exc.detail}")
         except Exception as exc:
-            print(f"[SeekDeep] fresh-boot autostart failed: {exc}")
+            print(f"[SeekDeep] fresh-boot autostart bot failed: {exc}")
 
     @app.on_event("startup")
     async def _start_heartbeat():
@@ -4873,15 +5057,16 @@ def register_gui_endpoints(
         # event_bus.publish_sync(...) without each one juggling its own loop.
         loop = asyncio.get_running_loop()
         event_bus.attach_loop(loop)
-        # Fresh-boot ritual: reap orphans, THEN bring the bot up so the
-        # launcher card is HEALTHY on the very first launcher.html visit.
-        # Both gated on the env var Tauri sets ONLY on the first sidecar
-        # spawn of a session; mid-session respawns (ML install, restart-
-        # sidecar, crash watchdog) skip both so the user's running bot
-        # isn't killed-and-respawned on every routine bounce.
+        # Fresh-boot ritual: clean the entire stale stack (bots + stray
+        # AI servers + SeekDeep Docker containers), then bring the stack
+        # back up. Mirrors seekdeep_launcher.bat option 8. Gated on the
+        # env var Tauri sets ONLY on the first sidecar spawn per app
+        # launch; mid-session respawns (ML install, restart-sidecar,
+        # crash watchdog) skip both so the user's running stack isn't
+        # nuked-and-respawned on every routine bounce.
         if os.getenv("SEEKDEEP_FRESH_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
-            _kill_orphan_bots_at_boot()
-            _autostart_bot_at_boot()
+            _clean_stale_stack_at_boot()
+            _autostart_stack_at_boot()
         # Stash the task on app.state so it can be cancelled on shutdown
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
         app.state.seekdeep_tick_task = loop.create_task(_tick_loop())
