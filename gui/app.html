@@ -2706,8 +2706,7 @@
 <!-- React + Babel for tweaks panel only -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script src="tweaks-panel.compiled.js"></script>
 
 <!-- App routing (vanilla — no framework) -->
 <script>
@@ -4897,33 +4896,28 @@ const SEEKDEEP_BASE = (function() {
 
 <!-- Tweaks panel -->
 <div id="tweaks-root"></div>
-<script type="text/babel">
+<script>
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "palette": [
-    "#2dd4ff",
-    "#00a8e8",
-    "#0d2152"
-  ],
+  "palette": ["#2dd4ff", "#00a8e8", "#0d2152"],
   "mode": "dark",
   "persona": "neurotic",
   "ambientMotion": true,
   "panelBlur": 18
-}/*EDITMODE-END*/;
-
-const APP_PALETTES = [
-  ["#2dd4ff","#00a8e8","#0d2152"], // abyss cyan (default)
-  ["#7af0c2","#1da37a","#02261a"], // bioluminescent moss
-  ["#ff6df0","#a82cc4","#1a0830"], // anglerfish violet
-  ["#ffb84d","#c97b00","#2a1a04"]  // sodium glow
+} /*EDITMODE-END*/;
+const APP_PALETTES = [["#2dd4ff", "#00a8e8", "#0d2152"],
+// abyss cyan (default)
+["#7af0c2", "#1da37a", "#02261a"],
+// bioluminescent moss
+["#ff6df0", "#a82cc4", "#1a0830"],
+// anglerfish violet
+["#ffb84d", "#c97b00", "#2a1a04"] // sodium glow
 ];
-
 const APP_PERSONAS = {
-  clinical:   "terse · numbered · footnoted",
-  neurotic:   "hedged · second-guessing · asks back",
+  clinical: "terse · numbered · footnoted",
+  neurotic: "hedged · second-guessing · asks back",
   unsettling: "ellipses · too-knowing pauses",
-  chaotic:    "CAPS LOCK · tangents · ENERGY"
+  chaotic: "CAPS LOCK · tangents · ENERGY"
 };
-
 function applyAppTweaks(t) {
   const root = document.documentElement;
   if (t.palette) {
@@ -4978,81 +4972,98 @@ function applyAppTweaks(t) {
     el.style.backdropFilter = `blur(${t.panelBlur || 18}px) saturate(140%)`;
   });
 }
-
 function adjLightness(hex, delta) {
-  const c = hex.replace('#','');
-  const r = parseInt(c.slice(0,2),16), g = parseInt(c.slice(2,4),16), b = parseInt(c.slice(4,6),16);
-  const adj = (v) => Math.max(0, Math.min(255, v + delta * 2.55));
-  const toHex = v => Math.round(adj(v)).toString(16).padStart(2,'0');
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16),
+    g = parseInt(c.slice(2, 4), 16),
+    b = parseInt(c.slice(4, 6), 16);
+  const adj = v => Math.max(0, Math.min(255, v + delta * 2.55));
+  const toHex = v => Math.round(adj(v)).toString(16).padStart(2, '0');
   return '#' + toHex(r) + toHex(g) + toHex(b);
 }
 const adjustLightness = adjLightness;
-
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  React.useEffect(() => { applyAppTweaks(t); }, [t.palette, t.mode, t.persona, t.ambientMotion, t.panelBlur]);
+  React.useEffect(() => {
+    applyAppTweaks(t);
+  }, [t.palette, t.mode, t.persona, t.ambientMotion, t.panelBlur]);
   // expose setTweak globally so vanilla config panel can sync persona
-  React.useEffect(() => { window.__seekdeepSetTweak = setTweak; }, [setTweak]);
+  React.useEffect(() => {
+    window.__seekdeepSetTweak = setTweak;
+  }, [setTweak]);
   // listen for persona changes from the config panel
   React.useEffect(() => {
-    const onPersona = (e) => setTweak('persona', e.detail);
+    const onPersona = e => setTweak('persona', e.detail);
     window.addEventListener('seekdeep:setPersona', onPersona);
     return () => window.removeEventListener('seekdeep:setPersona', onPersona);
   }, [setTweak]);
-
-  return (
-    <TweaksPanel title="Tweaks">
-      <TweakSection label="Palette">
-        <TweakColor
-          label="Accent"
-          value={t.palette}
-          onChange={v => setTweak('palette', v)}
-          options={APP_PALETTES}
-        />
-      </TweakSection>
-      <TweakSection label="Mode">
-        <TweakRadio
-          label="Theme"
-          value={t.mode}
-          options={[{value:'dark', label:'Dark'},{value:'light', label:'Light'}]}
-          onChange={v => setTweak('mode', v)}
-        />
-      </TweakSection>
-      <TweakSection label="Persona">
-        <TweakSelect
-          label="Active"
-          value={t.persona}
-          options={[
-            {value:'clinical', label:'Clinical — terse'},
-            {value:'neurotic', label:'Neurotic — hedged'},
-            {value:'unsettling', label:'Unsettling — pauses…'},
-            {value:'chaotic', label:'Chaotic — CAPS'}
-          ]}
-          onChange={v => setTweak('persona', v)}
-        />
-        <div style={{fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--hull-3)', lineHeight: 1.5, padding: '4px 12px 8px'}}>
-          {APP_PERSONAS[t.persona]}
-        </div>
-      </TweakSection>
-      <TweakSection label="Atmosphere">
-        <TweakToggle
-          label="Ambient drift"
-          value={t.ambientMotion}
-          onChange={v => setTweak('ambientMotion', v)}
-        />
-        <TweakSlider
-          label="Panel blur"
-          min={0} max={30} step={1} unit="px"
-          value={t.panelBlur}
-          onChange={v => setTweak('panelBlur', v)}
-        />
-      </TweakSection>
-    </TweaksPanel>
-  );
+  return /*#__PURE__*/React.createElement(TweaksPanel, {
+    title: "Tweaks"
+  }, /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Palette"
+  }, /*#__PURE__*/React.createElement(TweakColor, {
+    label: "Accent",
+    value: t.palette,
+    onChange: v => setTweak('palette', v),
+    options: APP_PALETTES
+  })), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Mode"
+  }, /*#__PURE__*/React.createElement(TweakRadio, {
+    label: "Theme",
+    value: t.mode,
+    options: [{
+      value: 'dark',
+      label: 'Dark'
+    }, {
+      value: 'light',
+      label: 'Light'
+    }],
+    onChange: v => setTweak('mode', v)
+  })), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Persona"
+  }, /*#__PURE__*/React.createElement(TweakSelect, {
+    label: "Active",
+    value: t.persona,
+    options: [{
+      value: 'clinical',
+      label: 'Clinical — terse'
+    }, {
+      value: 'neurotic',
+      label: 'Neurotic — hedged'
+    }, {
+      value: 'unsettling',
+      label: 'Unsettling — pauses…'
+    }, {
+      value: 'chaotic',
+      label: 'Chaotic — CAPS'
+    }],
+    onChange: v => setTweak('persona', v)
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--font-mono)',
+      fontSize: 10,
+      color: 'var(--hull-3)',
+      lineHeight: 1.5,
+      padding: '4px 12px 8px'
+    }
+  }, APP_PERSONAS[t.persona])), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Atmosphere"
+  }, /*#__PURE__*/React.createElement(TweakToggle, {
+    label: "Ambient drift",
+    value: t.ambientMotion,
+    onChange: v => setTweak('ambientMotion', v)
+  }), /*#__PURE__*/React.createElement(TweakSlider, {
+    label: "Panel blur",
+    min: 0,
+    max: 30,
+    step: 1,
+    unit: "px",
+    value: t.panelBlur,
+    onChange: v => setTweak('panelBlur', v)
+  })));
 }
-
 const root = ReactDOM.createRoot(document.getElementById('tweaks-root'));
-root.render(<App />);
+root.render(/*#__PURE__*/React.createElement(App, null));
 </script>
 
 <!-- ============================================================

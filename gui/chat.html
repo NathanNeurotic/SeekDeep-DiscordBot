@@ -635,8 +635,7 @@
 <!-- React + Babel for tweaks -->
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script src="tweaks-panel.compiled.js"></script>
 
 <script>
   // Smart BASE — same-origin when served via /gui mount, else 127.0.0.1:7865.
@@ -1137,20 +1136,13 @@
 
 <!-- Tweaks panel -->
 <div id="tweaks-root"></div>
-<script type="text/babel">
+<script>
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "palette": ["#2dd4ff","#00a8e8","#0d2152"],
+  "palette": ["#2dd4ff", "#00a8e8", "#0d2152"],
   "mode": "dark",
   "ambientMotion": true
-}/*EDITMODE-END*/;
-
-const PALETTES = [
-  ["#2dd4ff","#00a8e8","#0d2152"],
-  ["#7af0c2","#1da37a","#02261a"],
-  ["#ff6df0","#a82cc4","#1a0830"],
-  ["#ffb84d","#c97b00","#2a1a04"]
-];
-
+} /*EDITMODE-END*/;
+const PALETTES = [["#2dd4ff", "#00a8e8", "#0d2152"], ["#7af0c2", "#1da37a", "#02261a"], ["#ff6df0", "#a82cc4", "#1a0830"], ["#ffb84d", "#c97b00", "#2a1a04"]];
 function applyTweaks(t) {
   const root = document.documentElement;
   if (t.palette) {
@@ -1182,37 +1174,43 @@ function applyTweaks(t) {
   }
 }
 function adjL(hex, delta) {
-  const c = hex.replace('#','');
-  const r = parseInt(c.slice(0,2),16), g = parseInt(c.slice(2,4),16), b = parseInt(c.slice(4,6),16);
-  const adj = (v) => Math.max(0, Math.min(255, v + delta * 2.55));
-  const toHex = v => Math.round(adj(v)).toString(16).padStart(2,'0');
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16),
+    g = parseInt(c.slice(2, 4), 16),
+    b = parseInt(c.slice(4, 6), 16);
+  const adj = v => Math.max(0, Math.min(255, v + delta * 2.55));
+  const toHex = v => Math.round(adj(v)).toString(16).padStart(2, '0');
   return '#' + toHex(r) + toHex(g) + toHex(b);
 }
-
-const PERSONA_OPTS = [
-  { value: 'neurotic',   label: 'Neurotic — hedged' },
-  { value: 'unsettling', label: 'Unsettling — pauses…' },
-  { value: 'clinical',   label: 'Clinical — terse' },
-  { value: 'chaotic',    label: 'Chaotic — CAPS' },
-];
-
+const PERSONA_OPTS = [{
+  value: 'neurotic',
+  label: 'Neurotic — hedged'
+}, {
+  value: 'unsettling',
+  label: 'Unsettling — pauses…'
+}, {
+  value: 'clinical',
+  label: 'Clinical — terse'
+}, {
+  value: 'chaotic',
+  label: 'Chaotic — CAPS'
+}];
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   // Persona is owned by the chat.html Persona controller; Tweaks reflects + drives it.
   const [persona, setPersonaUI] = React.useState('clinical');
-
   React.useEffect(() => {
-    const onChange = (e) => {
+    const onChange = e => {
       const p = e.detail && e.detail.persona;
       if (p) setPersonaUI(p);
     };
     window.addEventListener('seekdeep:persona-changed', onChange);
     return () => window.removeEventListener('seekdeep:persona-changed', onChange);
   }, []);
-
-  React.useEffect(() => { applyTweaks(t); }, [t.palette, t.mode, t.ambientMotion]);
-
-  const pickPersona = (v) => {
+  React.useEffect(() => {
+    applyTweaks(t);
+  }, [t.palette, t.mode, t.ambientMotion]);
+  const pickPersona = v => {
     setPersonaUI(v);
     if (window.Persona && typeof window.Persona.choose === 'function') {
       window.Persona.choose(v);
@@ -1223,31 +1221,47 @@ function App() {
       window.Persona.clear();
     }
   };
-
-  return (
-    <TweaksPanel title="Tweaks">
-      <TweakSection label="Palette">
-        <TweakColor label="Accent" value={t.palette} onChange={v => setTweak('palette', v)} options={PALETTES} />
-      </TweakSection>
-      <TweakSection label="Mode">
-        <TweakRadio label="Theme" value={t.mode}
-          options={[{value:'dark',label:'Dark'},{value:'light',label:'Light'}]}
-          onChange={v => setTweak('mode', v)} />
-      </TweakSection>
-      <TweakSection label="Persona · global override">
-        <TweakSelect label="Active" value={persona}
-          options={PERSONA_OPTS}
-          onChange={pickPersona} />
-        <TweakButton label="▸ Clear override" onClick={clearPersona} />
-      </TweakSection>
-      <TweakSection label="Atmosphere">
-        <TweakToggle label="Ambient drift" value={t.ambientMotion} onChange={v => setTweak('ambientMotion', v)} />
-      </TweakSection>
-    </TweaksPanel>
-  );
+  return /*#__PURE__*/React.createElement(TweaksPanel, {
+    title: "Tweaks"
+  }, /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Palette"
+  }, /*#__PURE__*/React.createElement(TweakColor, {
+    label: "Accent",
+    value: t.palette,
+    onChange: v => setTweak('palette', v),
+    options: PALETTES
+  })), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Mode"
+  }, /*#__PURE__*/React.createElement(TweakRadio, {
+    label: "Theme",
+    value: t.mode,
+    options: [{
+      value: 'dark',
+      label: 'Dark'
+    }, {
+      value: 'light',
+      label: 'Light'
+    }],
+    onChange: v => setTweak('mode', v)
+  })), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Persona \xB7 global override"
+  }, /*#__PURE__*/React.createElement(TweakSelect, {
+    label: "Active",
+    value: persona,
+    options: PERSONA_OPTS,
+    onChange: pickPersona
+  }), /*#__PURE__*/React.createElement(TweakButton, {
+    label: "\u25B8 Clear override",
+    onClick: clearPersona
+  })), /*#__PURE__*/React.createElement(TweakSection, {
+    label: "Atmosphere"
+  }, /*#__PURE__*/React.createElement(TweakToggle, {
+    label: "Ambient drift",
+    value: t.ambientMotion,
+    onChange: v => setTweak('ambientMotion', v)
+  })));
 }
-
-ReactDOM.createRoot(document.getElementById('tweaks-root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('tweaks-root')).render(/*#__PURE__*/React.createElement(App, null));
 </script>
 <script src="nav.js" defer></script>
 </body>
