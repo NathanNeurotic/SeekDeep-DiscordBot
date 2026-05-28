@@ -2628,15 +2628,32 @@
     sortSelect?.addEventListener('change', e => { sortKey = e.target.value; renderGrid(); });
     refreshBtn?.addEventListener('click', () => load());
 
-    // Auto-load when the archive pane becomes active
+    // Auto-load when the archive pane becomes active. Drop the !snapshot
+    // gate so clicking back to the pane after the bot ran a fresh
+    // @SeekDeep archive snapshot picks up the new file — without the gate
+    // the GUI was showing stale "bot has not written a snapshot yet" even
+    // though the snapshot existed on disk.
     function onActive() {
       const pane = document.querySelector('[data-pane="archive"]');
-      if (pane && pane.classList.contains('active') && !snapshot) load();
+      if (pane && pane.classList.contains('active')) load();
     }
     document.querySelectorAll('.sidebar a[data-mod="archive"]').forEach(a => {
       a.addEventListener('click', () => setTimeout(onActive, 50));
     });
     onActive();
+    // Live-event hook: when the bot emits a snapshot.complete (or any
+    // archive.* signal), re-load so the pane reflects the new file without
+    // the user having to click Refresh. The bot's seekdeepBuildArchiveSnapshot
+    // path can be extended to publish this; for now we also poll once a
+    // minute as a cheap safety net.
+    if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
+      window.SeekDeepEvents.on('archive.snapshot.written', () => load());
+      window.SeekDeepEvents.on('bot.discord.ready',       () => load());
+    }
+    setInterval(() => {
+      const pane = document.querySelector('[data-pane="archive"]');
+      if (pane && pane.classList.contains('active')) load();
+    }, 60_000);
   })();
 
   // ===== Model row buttons · live wiring (POST /model/warm and /unload) =====

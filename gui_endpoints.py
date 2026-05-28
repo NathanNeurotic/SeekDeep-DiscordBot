@@ -3142,6 +3142,22 @@ def register_gui_endpoints(
         # in the GUI; raw HTTP callers (curl from outside) get 401.
         if file in _DATA_TOKEN_REQUIRED:
             await _require_gui_token(request)
+        # Bot may write to its OWN data dir (e.g. when SEEKDEEP_BOT_CWD points
+        # at the user's repo while the AI server runs from the Tauri runtime
+        # dir). If the primary _data_dir copy doesn't exist, fall back to
+        # ${bot_cwd}/data/${file}. This rescues the case where the user runs
+        # @SeekDeep archive snapshot and the bot writes successfully but the
+        # GUI's Archive browser pane shows "bot has not written a snapshot
+        # yet" because it's looking in the wrong directory.
+        if not target.is_file():
+            try:
+                bot_cwd = _resolve_bot_cwd(root)
+                if bot_cwd and bot_cwd.resolve() != root.resolve():
+                    fallback = (bot_cwd / "data" / file).resolve()
+                    if _is_inside(fallback, bot_cwd) and fallback.is_file():
+                        target = fallback
+            except Exception:
+                pass
         if not target.is_file():
             # Empty success so the GUI's normalized panes can show empty-state
             # rather than reporting an error for files the bot hasn't written yet.

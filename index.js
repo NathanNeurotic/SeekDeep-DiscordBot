@@ -17604,9 +17604,20 @@ async function seekdeepHandleArchiveStatusMessage(message, prompt = '') {
 // guild's archive threads into data/archive-snapshot.json. The 6h cron picks
 // up on its own but this lets a user force a refresh after a big archive
 // session, then peek at the GUI Archive pane to see fresh entries.
+//
+// Accepts every reasonable invocation form:
+//   "@SeekDeep archive snapshot"        (Discord ID-mention)
+//   "seekdeep archive snapshot"         (bare name, any case)
+//   "SeekDeep archive snapshot"         (capitalized)
+//   "@seekdeep archive snapshot"        (literal @ + name)
+//   "archive snapshot"                  (no addressing — when in DM / replying)
+// Previously only the first form worked; the others would fall through to
+// the chat model (and waste 60+s on a gemma-3n call) or hit the wrong
+// handler with a "fetch failed" error.
 function seekdeepIsArchiveSnapshotPrompt(value = '') {
   const cleaned = String(value || '')
-    .replace(/^\s*(?:<@(?:!|&)?\d+>\s*)+/g, '')
+    .replace(/^\s*(?:<@(?:!|&)?\d+>\s*)+/g, '')         // Discord <@123> ID-mention
+    .replace(/^\s*(?:@?(?:seekdeep|seekotics)\b[,:-]?\s*)+/i, '')  // bare name prefix
     .trim()
     .toLowerCase();
   return /^(?:archive\s+)?(?:snapshot|rescan|refresh|reindex)$/.test(cleaned)
@@ -17647,6 +17658,20 @@ async function seekdeepHandleArchiveSnapshotMessage(message, prompt = '') {
       await ack.edit({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
     } else {
       await message.reply({ content: summary, allowedMentions: { repliedUser: false } }).catch(() => null);
+    }
+    // Tell the GUI's Archive browser to re-load so the user doesn't have to
+    // click Refresh after running this command — the pane was showing
+    // stale "bot has not written a snapshot yet" copy until now.
+    if (!snap.skipped) {
+      try {
+        seekdeepEmitGuiEvent('archive.snapshot.written', {
+          guild_count: snap.guild_count,
+          shared_thread_count: snap.shared_thread_count,
+          user_thread_count: snap.user_thread_count,
+          entries,
+          elapsed_ms: snap.elapsed_ms,
+        });
+      } catch {}
     }
   } catch (err) {
     const summary = '❌ Archive snapshot failed: ' + (err?.message || String(err));
