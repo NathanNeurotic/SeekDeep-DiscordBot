@@ -5045,19 +5045,23 @@ def register_gui_endpoints(
         except Exception as exc:
             print(f"[SeekDeep] fresh-boot bot cleanup failed: {exc}")
 
-        # 2. Stale AI server processes (excluding ourselves)
-        try:
-            my_pid = os.getpid()
-            ai_procs = [p for p in _find_ai_server_processes(root) if p["pid"] != my_pid]
-            if ai_procs:
-                print(f"[SeekDeep] fresh-boot: reaping {len(ai_procs)} orphan ai-server process(es)")
-                for entry in ai_procs:
-                    pid = entry["pid"]
-                    ok, err = _kill_pid(pid)
-                    note = "killed" if ok else f"failed: {err or 'unknown'}"
-                    print(f"[SeekDeep]   ai-server pid {pid} ({entry.get('source', '?')}) - {note}")
-        except Exception as exc:
-            print(f"[SeekDeep] fresh-boot ai-server cleanup failed: {exc}")
+        # 2. AI server cleanup is DELIBERATELY skipped here. Tauri's
+        #    sidecar.rs::kill_listener_on_7865() already nukes any
+        #    process bound to :7865 BEFORE spawning the new sidecar, and
+        #    that's the only AI server that matters. Trying to also do
+        #    a psutil-based scan from inside the freshly-spawned server
+        #    raced badly: psutil's process_iter() saw our own python.exe
+        #    (and/or a transient Python sub-process from uvicorn worker
+        #    init) and the `pid != os.getpid()` filter wasn't catching
+        #    every variant. Log showed reliable self-immolation:
+        #
+        #      03:03:24  Started server process [94508]
+        #      03:03:28  fresh-boot: reaping 1 orphan ai-server
+        #      03:03:36  Started server process [67544]   ← Tauri respawned
+        #
+        #    So we leave the AI-server reaping to the Rust side (which
+        #    can safely target :7865 only) and limit Python-side fresh-
+        #    boot cleanup to the bot + docker containers.
 
         # 3. SeekDeep-managed Docker containers (only if docker is up).
         try:
