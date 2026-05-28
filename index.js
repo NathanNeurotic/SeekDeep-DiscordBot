@@ -363,6 +363,30 @@ async function seekdeepEmitGuiEvent(type, data) {
     // Server might be offline; bot must keep working regardless.
   }
 }
+
+// Path for the bot's Discord-readiness heartbeat file. The launcher card in
+// the GUI reads this so its pill reflects ACTUAL Discord connectivity, not
+// just whether the node process is alive. Without this, the pill stayed
+// green even when the bot crashed Discord-side or never connected.
+const SEEKDEEP_BOT_STATUS_PATH = path.join(__dirname, 'data', 'bot-status.json');
+
+function seekdeepWriteBotStatus(patch) {
+  try {
+    let prev = {};
+    try { if (fs.existsSync(SEEKDEEP_BOT_STATUS_PATH)) {
+      prev = JSON.parse(fs.readFileSync(SEEKDEEP_BOT_STATUS_PATH, 'utf8')) || {};
+    } } catch (_) { prev = {}; }
+    const merged = Object.assign({}, prev, patch, {
+      pid: process.pid,
+      heartbeat_at: new Date().toISOString(),
+    });
+    writeJsonAtomic(SEEKDEEP_BOT_STATUS_PATH, merged);
+  } catch (err) {
+    // Best-effort — status writes never block the bot's real work.
+    if (process.env.SEEKDEEP_DEBUG) console.warn('[SeekDeep] bot-status write failed:', err?.message || err);
+  }
+}
+
 function seekdeepClassifyRequestKind(target) {
   // Best-effort tag so the GUI can colour-code request lifecycle events.
   try {
@@ -9121,6 +9145,25 @@ try {
 } catch {}
 
 client.once('clientReady', async () => {
+  // Flip the bot-status file to ready=true ASAP so the launcher card pill
+  // turns green within a tick of Discord login, not whenever the next
+  // heartbeat fires. Same for the WS event so listening GUIs update live.
+  try {
+    seekdeepWriteBotStatus({
+      ready: true,
+      user_tag: client.user?.tag || null,
+      user_id: client.user?.id || null,
+      guild_count: client.guilds?.cache?.size || 0,
+      ready_at: new Date().toISOString(),
+      disconnect_at: null,
+      last_disconnect_reason: null,
+    });
+    seekdeepEmitGuiEvent('bot.discord.ready', {
+      user_tag: client.user?.tag || null,
+      guild_count: client.guilds?.cache?.size || 0,
+    });
+  } catch (_) {}
+
   try {
     await client.application.commands.set(commands);
   } catch (err) {
@@ -9261,7 +9304,64 @@ client.once('clientReady', async () => {
   
   // Start the background GPU logger.
   seekdeepStartGpuLogging();
+
+  // Heartbeat the bot-status file every 30s so /launchers/status can tell
+  // "ready N seconds ago" from "ready but the process is now wedged" — if
+  // the file mtime ages > ~90s while the process is alive, the bot is in
+  // a stuck state and the launcher pill flips to STALE.
+  setInterval(() => {
+    if (client.isReady && client.isReady()) {
+      seekdeepWriteBotStatus({
+        ready: true,
+        guild_count: client.guilds?.cache?.size || 0,
+      });
+    }
+  }, 30000).unref?.();
 });
+
+// Discord WebSocket lost / reconnecting. shardDisconnect fires with a
+// CloseEvent-like object. Flip ready=false so the launcher pill flips
+// to CONNECTING/DEGRADED until shardReady fires again.
+client.on('shardDisconnect', (event, shardId) => {
+  try {
+    seekdeepWriteBotStatus({
+      ready: false,
+      disconnect_at: new Date().toISOString(),
+      last_disconnect_reason: `shard ${shardId} closed (code=${event?.code ?? '?'})`,
+    });
+    seekdeepEmitGuiEvent('bot.discord.disconnect', {
+      shard: shardId, code: event?.code ?? null, reason: event?.reason || null,
+    });
+  } catch (_) {}
+});
+client.on('shardReady', (shardId) => {
+  try {
+    seekdeepWriteBotStatus({
+      ready: true,
+      ready_at: new Date().toISOString(),
+      guild_count: client.guilds?.cache?.size || 0,
+    });
+    seekdeepEmitGuiEvent('bot.discord.ready', {
+      shard: shardId, guild_count: client.guilds?.cache?.size || 0,
+    });
+  } catch (_) {}
+});
+
+// Graceful shutdown — let the launcher card show "EXITED · clean" instead
+// of the previous-run's last "READY" state when the bot process is gone.
+function _seekdeepMarkExited(reason) {
+  try {
+    seekdeepWriteBotStatus({
+      ready: false,
+      exited: true,
+      exit_at: new Date().toISOString(),
+      exit_reason: reason || null,
+    });
+  } catch (_) {}
+}
+process.on('SIGINT',  () => { _seekdeepMarkExited('SIGINT');  process.exit(0); });
+process.on('SIGTERM', () => { _seekdeepMarkExited('SIGTERM'); process.exit(0); });
+process.on('beforeExit', () => { _seekdeepMarkExited('beforeExit'); });
 
 process.on('unhandledRejection', (err) => {
   if (seekdeepIsDiscordAbortError(err)) {

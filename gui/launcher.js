@@ -152,10 +152,16 @@
   // branch) and the WS live-event path (launchers.tick subscription).
   function _renderLaunchersPayload(data) {
     // Sidebar Launcher badge: "N UP" / "N DOWN".
+    // For the bot service "up" requires BOTH the process running AND the
+    // Discord gateway being logged in — process-alive without Discord-ready
+    // shouldn't count as healthy in the STACK rollup either.
     let up = 0, total = 0;
-    for (const s of Object.values(data.services)) {
+    for (const [svcName, s] of Object.entries(data.services)) {
       total++;
-      if (s && s.state === 'running') up++;
+      if (!s) continue;
+      if (s.state !== 'running') continue;
+      if (svcName === 'bot' && s.discord && s.discord.present && !s.discord.ready) continue;
+      up++;
     }
     const sbLauncher = document.getElementById('sbLauncherBadge');
     if (sbLauncher) {
@@ -211,26 +217,82 @@
 
       // Health pill — honors transitioning (yellow during start/stop/restart)
       // and count (e.g. "RUNNING · 3 INSTANCES" for bot pile-ups).
+      //
+      // Bot service specifically: process being alive ≠ logged into Discord.
+      // s.discord carries the ready/stale state the bot writes to
+      // data/bot-status.json. We split the pill into three honest states
+      // when the process is up: READY (green, Discord logged in), CONNECTING
+      // (yellow, process up but not yet ready / disconnected), STALE (yellow,
+      // heartbeat > 90s old — bot is wedged).
       const pill = card.querySelector('.pill');
       if (pill) {
         const dot = pill.querySelector('.dot');
         const isTransitioning = s.transitioning === true || s.state === 'transitioning';
         const isUp = s.state === 'running';
         const isExited = s.state === 'exited' || s.state === 'not-running';
-        pill.classList.toggle('on', isUp && !isTransitioning);
-        pill.classList.toggle('bad', isExited && !isTransitioning);
-        pill.classList.toggle('warn', isTransitioning);
+        const d = s.discord;  // present for svc === 'bot'
+        const discordReady = !!(d && d.ready);
+        const discordStale = !!(d && d.stale);
+        const discordKnown = !!(d && d.present);
+        // For the bot, only show "HEALTHY" when Discord is actually ready.
+        // For other services, "HEALTHY" still means process-alive.
+        const isBot = svc === 'bot';
+        const botDegraded = isBot && isUp && discordKnown && !discordReady;
+        pill.classList.toggle('on',   (isUp && !isTransitioning && (!isBot || discordReady)));
+        pill.classList.toggle('bad',  isExited && !isTransitioning);
+        pill.classList.toggle('warn', isTransitioning || botDegraded);
         pill.innerHTML = '';
         if (dot) pill.appendChild(dot.cloneNode(true));
-        else { const d = document.createElement('span'); d.className = 'dot'; pill.appendChild(d); }
+        else { const dotEl = document.createElement('span'); dotEl.className = 'dot'; pill.appendChild(dotEl); }
         let label;
         if (isTransitioning) label = '… TRANSITIONING';
+        else if (isBot && isUp) {
+          if (discordReady)            label = (s.count && s.count > 1) ? `READY · ${s.count} INSTANCES` : 'READY · DISCORD';
+          else if (discordStale)       label = '… STALE · NO HEARTBEAT';
+          else if (discordKnown && d.exited) label = 'EXITED';
+          else if (discordKnown)       label = '… CONNECTING DISCORD';
+          else                          label = '… STARTING';
+        }
         else if (isUp) label = (s.count && s.count > 1)
           ? `RUNNING · ${s.count} INSTANCES`
           : 'HEALTHY';
         else if (isExited) label = 'EXITED';
         else label = 'UNKNOWN';
         pill.appendChild(document.createTextNode(label));
+      }
+
+      // Bot-specific subtitle line: "Discord: SeekDeep#1234 · 3 servers".
+      // Only rendered when we have a Discord identity to show. Lives just
+      // below the pid line so the user can see at a glance WHO the bot is
+      // logged in as, not just "the bot process is running".
+      if (svc === 'bot') {
+        const d = s.discord;
+        let line = card.querySelector('.bot-discord-line');
+        if (d && d.present && (d.user_tag || d.last_disconnect_reason)) {
+          if (!line) {
+            line = document.createElement('div');
+            line.className = 'bot-discord-line';
+            line.style.cssText = 'grid-column: 1 / -1; font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); margin-top: 4px; opacity: 0.8;';
+            const pillEl = card.querySelector('.pill');
+            (pillEl?.parentNode || card).appendChild(line);
+          }
+          if (d.ready) {
+            line.style.color = 'var(--good)';
+            line.textContent = `▸ Discord: ${d.user_tag || '?'} · ${d.guild_count ?? 0} server${d.guild_count === 1 ? '' : 's'}`;
+          } else if (d.exited) {
+            line.style.color = 'var(--bad)';
+            line.textContent = `▸ Discord: exited (${d.exit_reason || 'unclean'})`;
+          } else if (d.stale) {
+            line.style.color = 'var(--warn)';
+            line.textContent = `▸ Discord: heartbeat stale — bot may be wedged`;
+          } else {
+            line.style.color = 'var(--warn)';
+            const reason = d.last_disconnect_reason || 'connecting…';
+            line.textContent = `▸ Discord: not connected · ${reason}`;
+          }
+        } else if (line) {
+          line.remove();
+        }
       }
 
       // Show last_error tail when the service has exited, so the user sees

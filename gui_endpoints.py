@@ -1664,6 +1664,15 @@ def register_gui_endpoints(
                 "last_error":      last_error,
                 "last_error_log":  err_log_name,
             }
+            # Bot-specific: surface Discord login state. Process being alive
+            # is NOT proof the bot is online in the user's server — Discord
+            # gateway login is a separate handshake that can fail (bad token,
+            # missing intents, network), succeed late, or drop mid-session.
+            # The bot writes data/bot-status.json on every ready/disconnect
+            # transition and every 30s as a heartbeat; we read it here so
+            # the launcher card pill can reflect REAL connectivity.
+            if svc == "bot":
+                services_out[svc]["discord"] = _read_bot_discord_status()
             # Fire service.state.changed if anything user-visible flipped
             # since the last query. UI subscribers update immediately,
             # without waiting for the next 5s poll to notice.
@@ -4472,6 +4481,47 @@ def register_gui_endpoints(
     # subscribed (publish() fast-paths to no-op).
     TICK_CADENCE_SEC = {"gpu": 3.0, "health": 5.0, "launchers": 5.0}
 
+    def _read_bot_discord_status() -> dict:
+        """Read data/bot-status.json — the bot writes this on every ready /
+        disconnect transition and a 30s heartbeat. Returns a normalized dict
+        with at least {ready: bool, stale: bool} so the GUI can do branch-
+        free rendering. `stale` is true when the file exists but heartbeat
+        is > 90s old (means the bot process is alive — process state would
+        have flipped otherwise — but the bot is wedged inside the Node loop
+        and not writing heartbeats. Surface that as DEGRADED, not READY)."""
+        path = _data_dir / "bot-status.json"
+        if not path.is_file():
+            return {"ready": False, "stale": False, "present": False}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"ready": False, "stale": True, "present": True,
+                    "error": "bot-status.json unparseable"}
+        if not isinstance(raw, dict):
+            return {"ready": False, "stale": True, "present": True}
+        # Heartbeat freshness check. Bot heartbeats every 30s; ≥ 90s stale.
+        stale = False
+        try:
+            mtime = path.stat().st_mtime
+            stale = (time.time() - mtime) > 90.0
+        except OSError:
+            stale = True
+        ready = bool(raw.get("ready")) and not stale and not raw.get("exited")
+        return {
+            "ready": ready,
+            "stale": stale,
+            "present": True,
+            "user_tag": raw.get("user_tag"),
+            "user_id":  raw.get("user_id"),
+            "guild_count": raw.get("guild_count"),
+            "ready_at":  raw.get("ready_at"),
+            "disconnect_at": raw.get("disconnect_at"),
+            "last_disconnect_reason": raw.get("last_disconnect_reason"),
+            "exited": bool(raw.get("exited")),
+            "exit_reason": raw.get("exit_reason"),
+            "heartbeat_at": raw.get("heartbeat_at"),
+        }
+
     def _build_launchers_tick_payload() -> dict:
         """Slim version of GET /launchers/status — skips the err.log tail
         scan because we'd be doing it every 5s. service.state.changed
@@ -4493,13 +4543,16 @@ def register_gui_endpoints(
                             started_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
                         except OSError:
                             pass
-            services_out[svc] = {
+            row = {
                 "ok": True, "service": svc,
                 "state": info["state"], "pid": pid,
                 "count": info["count"], "source": info["source"],
                 "transitioning": info["transitioning"],
                 "uptime_seconds": uptime_s, "started_at": started_at,
             }
+            if svc == "bot":
+                row["discord"] = _read_bot_discord_status()
+            services_out[svc] = row
             _emit_state_change_if_any(svc, info)
         return {"ok": True, "services": services_out, "generated_at": _now_iso()}
 
