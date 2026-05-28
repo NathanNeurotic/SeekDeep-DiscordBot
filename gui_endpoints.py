@@ -4841,6 +4841,31 @@ def register_gui_endpoints(
         except Exception as exc:
             print(f"[SeekDeep] fresh-boot cleanup failed: {exc}")
 
+    def _autostart_bot_at_boot() -> None:
+        """Fresh-boot autostart. After reaping orphans, bring the bot up so
+        the launcher card isn't EXITED on every fresh Tauri launch — the
+        user shouldn't have to click Restart / Launch All for the obvious
+        default state. Idempotent: skips if a bot is already running. Opt
+        out via SEEKDEEP_AUTOSTART_BOT=off in .env."""
+        if os.getenv("SEEKDEEP_AUTOSTART_BOT", "on").strip().lower() in {"0", "false", "no", "off"}:
+            print("[SeekDeep] fresh-boot autostart skipped (SEEKDEEP_AUTOSTART_BOT=off)")
+            return
+        try:
+            info = _service_state("bot", _log_dir)
+            if info["state"] == "running":
+                print(f"[SeekDeep] fresh-boot autostart: bot already running pid={info['pid']}, skipping")
+                return
+            print("[SeekDeep] fresh-boot autostart: starting bot service")
+            result = _start_service("bot", root, _log_dir)
+            pid = result.get("pid") if isinstance(result, dict) else None
+            print(f"[SeekDeep] fresh-boot autostart: bot spawned pid={pid}")
+        except HTTPException as exc:
+            # _start_service raises HTTPException with a human-readable detail
+            # for known failure modes (missing node, bad cwd, etc).
+            print(f"[SeekDeep] fresh-boot autostart failed: {exc.detail}")
+        except Exception as exc:
+            print(f"[SeekDeep] fresh-boot autostart failed: {exc}")
+
     @app.on_event("startup")
     async def _start_heartbeat():
         # Capture the running loop so producers in OTHER modules (notably
@@ -4848,12 +4873,15 @@ def register_gui_endpoints(
         # event_bus.publish_sync(...) without each one juggling its own loop.
         loop = asyncio.get_running_loop()
         event_bus.attach_loop(loop)
-        # Fresh-boot remnant kill — runs once at app launch, before any new
-        # launchers can spawn. Gated on the env var Tauri sets ONLY on the
-        # first sidecar spawn of a session so mid-session respawns don't
-        # nuke the user's intentionally-running bot.
+        # Fresh-boot ritual: reap orphans, THEN bring the bot up so the
+        # launcher card is HEALTHY on the very first launcher.html visit.
+        # Both gated on the env var Tauri sets ONLY on the first sidecar
+        # spawn of a session; mid-session respawns (ML install, restart-
+        # sidecar, crash watchdog) skip both so the user's running bot
+        # isn't killed-and-respawned on every routine bounce.
         if os.getenv("SEEKDEEP_FRESH_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
             _kill_orphan_bots_at_boot()
+            _autostart_bot_at_boot()
         # Stash the task on app.state so it can be cancelled on shutdown
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
         app.state.seekdeep_tick_task = loop.create_task(_tick_loop())
