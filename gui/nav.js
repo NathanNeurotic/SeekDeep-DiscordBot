@@ -1477,11 +1477,89 @@
     }
   }
 
+  // ===== Generic POST + toast helper used by the context menu actions =====
+  // Wraps fetch with token injection, error capture, and a SeekDeepNotify
+  // toast for both success and failure. Returns the parsed JSON body so
+  // callers can inspect counts / details if they want richer feedback.
+  async function sdContextAction(opts) {
+    const { method = 'POST', endpoint, body = null, label = 'Action',
+            successTitle, successBody, errorTitle, tauriCommand = null,
+            requireConfirm = null } = opts;
+    if (requireConfirm) {
+      const ok = await (window.SeekDeepConfirm
+        ? window.SeekDeepConfirm(requireConfirm)
+        : Promise.resolve(window.confirm(requireConfirm.title + '\n\n' + (requireConfirm.body || ''))));
+      if (!ok) return null;
+    }
+    // Prefer Tauri command when available (matches the in-tray Restart sidecar
+    // path so a single code path handles both invocations).
+    if (tauriCommand) {
+      try {
+        const tauri = window.__TAURI__;
+        if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+          window.__seekdeepRestartingUntil = Date.now() + 12000;
+          await tauri.core.invoke(tauriCommand);
+          if (window.SeekDeepNotify?.toast) {
+            window.SeekDeepNotify.toast({
+              tone: 'good',
+              title: successTitle || (label + ' OK'),
+              body: successBody || (tauriCommand + ' invoked'),
+              ttl: 5000,
+            });
+          }
+          return { ok: true, tauri: true };
+        }
+      } catch (err) {
+        if (window.SeekDeepNotify?.toast) {
+          window.SeekDeepNotify.toast({
+            tone: 'bad',
+            title: errorTitle || (label + ' failed'),
+            body: String(err.message || err),
+            ttl: 7000,
+          });
+        }
+        return null;
+      }
+    }
+    if (!endpoint) return null;
+    try {
+      const r = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body == null ? '{}' : (typeof body === 'string' ? body : JSON.stringify(body)),
+        signal: AbortSignal.timeout(60000),
+      });
+      const parsed = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(parsed.detail || parsed.error || ('HTTP ' + r.status));
+      if (window.SeekDeepNotify?.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'good',
+          title: successTitle || (label + ' OK'),
+          body: successBody || (parsed.note || 'done'),
+          ttl: 5000,
+        });
+      }
+      return parsed;
+    } catch (err) {
+      if (window.SeekDeepNotify?.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'bad',
+          title: errorTitle || (label + ' failed'),
+          body: String(err.message || err),
+          ttl: 7000,
+        });
+      } else {
+        alert((errorTitle || (label + ' failed')) + ': ' + (err.message || err));
+      }
+      return null;
+    }
+  }
+
   // ===== Custom contextmenu: SeekDeep-styled, no generic browser menu =====
   // Default Chromium right-click made the app feel like a webpage (Save As,
-  // View Source, etc.). Replace with a tight branded menu: Reload always;
-  // Copy when text is selected; Paste in editable fields. Anything else
-  // intentionally omitted — escape hatch for devtools is F12 / Ctrl+Shift+I.
+  // View Source, etc.). Replace with a branded menu that surfaces every
+  // useful one-shot action: Restart / Kill / Flush / Smoke / Self-update /
+  // Doctor / Reload .env, plus the usual Copy/Paste/Reload basics.
   (function installContextMenu() {
     if (document.getElementById('sd-ctx-style')) return;
     const st = document.createElement('style');
@@ -1568,9 +1646,84 @@
         }});
       }
       if (items.length) items.push('-');
-      items.push({ label: 'Reload', kbd: 'F5', action: () => location.reload() });
+
+      // PAGE
+      items.push({ label: '↻ Reload page', kbd: 'F5', action: () => location.reload() });
+
+      // SERVICES — every launcher action one click away from anywhere
       items.push('-');
-      items.push({ label: 'Kill all bot instances', danger: true, action: () => killAllBotInstances() });
+      items.push({ label: '⟳ Restart bot', action: () => sdContextAction({
+        endpoint: '/launcher/bot/restart', label: 'Bot restart',
+        successTitle: 'Bot restarting',
+        successBody: 'Discord-ready watchdog will auto-restart again if connect fails',
+      })});
+      items.push({ label: '⟳ Restart AI server', action: () => sdContextAction({
+        tauriCommand: 'restart_sidecar',
+        endpoint: '/launcher/ai-server/restart',  // fallback when not in Tauri
+        label: 'AI server restart',
+        successTitle: 'AI server restarting',
+        successBody: '~5–10s; the bot stays up',
+      })});
+      items.push({ label: '⟳ Restart SearXNG', action: () => sdContextAction({
+        endpoint: '/launcher/searxng/restart', label: 'SearXNG restart',
+      })});
+      items.push({ label: '▸ Restart whole stack', action: () => sdContextAction({
+        endpoint: '/system/launch-all', label: 'Stack restart',
+        successTitle: 'Stack relaunched',
+        successBody: 'SearXNG → AI server → bot, in order',
+      })});
+
+      // MODELS + CONFIG
+      items.push('-');
+      items.push({ label: '⤓ Flush model cache', action: () => sdContextAction({
+        endpoint: '/unload', body: { force: true }, label: 'Flush',
+        successTitle: 'Models unloaded',
+        successBody: 'Next request reloads from disk cache',
+      })});
+      items.push({ label: '⟳ Reload .env', action: () => sdContextAction({
+        endpoint: '/config/reload', label: 'Reload .env',
+        successTitle: 'Reloaded .env',
+        successBody: 'In-memory config refreshed',
+      })});
+
+      // DIAGNOSTICS
+      items.push('-');
+      items.push({ label: '⟳ Smoke test', action: () => sdContextAction({
+        endpoint: '/system/smoke', label: 'Smoke',
+        successTitle: 'Smoke test ran',
+        successBody: 'See banner / Logs viewer for details',
+      })});
+      items.push({ label: '⚕ Doctor (preflight)', action: () => sdContextAction({
+        endpoint: '/system/doctor', label: 'Doctor',
+        successTitle: 'Doctor finished',
+        successBody: 'Open the wizard to see findings',
+      })});
+      items.push({ label: '⤴ Self-update from GitHub', action: () => sdContextAction({
+        endpoint: '/system/self-update', label: 'Self-update',
+        successTitle: 'Self-update started',
+        successBody: 'AI server will auto-restart when files land',
+        requireConfirm: {
+          title: 'Self-update from GitHub?',
+          body: 'Pulls latest local_ai_server.py + gui_endpoints.py + gui/ + scripts/ from main, writes them to the runtime dir, then auto-restarts the AI server.',
+          confirmLabel: 'Update',
+        },
+      })});
+
+      // DANGER — explicit confirm prompts on every entry here.
+      items.push('-');
+      items.push({ label: '↯ Kill all bot instances', danger: true, action: () => killAllBotInstances() });
+      items.push({ label: '↯ Force kill entire stack', danger: true, action: () => sdContextAction({
+        endpoint: '/system/kill-all', label: 'Force kill all',
+        successTitle: 'Stack killed',
+        successBody: 'bot + searxng force-killed · AI server kept (it\'s us)',
+        requireConfirm: {
+          title: 'Force-kill bot + SearXNG?',
+          body: 'Hard kill, no graceful shutdown. AI server is NOT killed (it would terminate this request). Use the tray icon to bounce the AI server.',
+          confirmLabel: 'Force kill',
+          destructive: true,
+        },
+      })});
+
       build(items, e.clientX, e.clientY);
     }, true);
     document.addEventListener('mousedown', (e) => {
