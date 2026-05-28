@@ -177,12 +177,7 @@
       if (!r.ok) {
         // The /chat 503 carries BOTH a friendly `error` and a raw `detail`
         // with the underlying exception (e.g. "OSError: tokenizer.json not
-        // found"). The original code showed `error || detail` which hid the
-        // detail whenever the error message was set — the user saw
-        // "Chat model failed (tokenizer-load-failure)" and had to dig
-        // through logs for the actual cause. Show both: the clean message
-        // first, then the raw detail in a smaller line so the diagnostic
-        // is inline.
+        // found"). Show both: clean message first, then raw detail.
         const body  = r.body || {};
         const head  = body.error || body.detail || 'chat request failed';
         const detail = (body.error && body.detail && body.detail !== body.error) ? body.detail : '';
@@ -191,7 +186,58 @@
           html += '<div class="tiny" style="margin-top:6px;color:var(--hull-3);font-family:var(--font-mono);font-size:11px;line-height:1.5;white-space:pre-wrap;">'
                + escapeHtml(detail) + '</div>';
         }
+        // Inline one-click fix for tokenizer-load-failure. The 503's
+        // friendly error says "Click Install ML libraries in the Control
+        // Center" but users had to navigate there manually — this button
+        // does it from the chat pane directly via the Tauri install_ml_deps
+        // command (POST /deps/install fallback for non-Tauri contexts).
+        // After the install finishes, the sidecar auto-restarts and the
+        // user retries chat.
+        if (body.reason === 'tokenizer-load-failure') {
+          html += '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;">'
+               +   '<button id="sdInstallTokenizerDeps" class="btn btn-primary" style="padding:6px 12px;font-size:11px;letter-spacing:0.1em;">'
+               +     '▸ INSTALL TOKENIZER DEPS'
+               +   '</button>'
+               +   '<span class="tiny" style="color:var(--hull-3);font-family:var(--font-mono);font-size:10px;">'
+               +     'installs tiktoken + sentencepiece into the running venv · then auto-restarts the AI server'
+               +   '</span>'
+               + '</div>';
+        }
         typing.text.innerHTML = html;
+        // Wire the install button after innerHTML lands in the DOM.
+        if (body.reason === 'tokenizer-load-failure') {
+          const btn = typing.text.querySelector('#sdInstallTokenizerDeps');
+          if (btn) btn.addEventListener('click', async () => {
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '… installing (~30s, no terminal needed)';
+            try {
+              // Tauri path: install_ml_deps spawns pip + kills sidecar +
+              // respawns. Non-Tauri path: POST /deps/install with the
+              // standard ML requirements file.
+              if (window.__TAURI__?.core?.invoke) {
+                await window.__TAURI__.core.invoke('install_ml_deps');
+              } else {
+                const post = await postJSON('/deps/install', {
+                  requirements_file: 'requirements-ml.txt',
+                });
+                if (!post.ok) throw new Error(post.body?.error || ('HTTP ' + post.status));
+              }
+              btn.textContent = '✓ INSTALL STARTED · watch Control Center → Logs for progress';
+              btn.style.background = 'var(--good)';
+            } catch (err) {
+              btn.disabled = false;
+              btn.textContent = orig;
+              btn.style.background = 'var(--bad)';
+              const msg = String(err?.message || err).slice(0, 200);
+              const errEl = document.createElement('div');
+              errEl.className = 'tiny';
+              errEl.style.cssText = 'margin-top:6px;color:var(--bad);font-family:var(--font-mono);font-size:11px;';
+              errEl.textContent = '✕ ' + msg;
+              btn.parentElement.appendChild(errEl);
+            }
+          });
+        }
         updateHelperRoute('default_chat', '', '[' + r.status + ']');
         return;
       }
