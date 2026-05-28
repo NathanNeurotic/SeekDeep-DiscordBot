@@ -28,7 +28,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 // Fresh-boot guard. False on the first spawn_server of an app launch, true
@@ -90,6 +90,21 @@ pub struct SidecarState {
     pub quit_requested: Mutex<bool>,
     pub intentional_kill: Mutex<bool>,
     pub respawn_attempts: Mutex<u32>,
+    // Set true at the top of boot_sequence; if a concurrent caller (user
+    // mashes Restart, watchdog races with restart_sidecar) sees it already
+    // true, they return without re-spawning. Without this, two boot_sequence
+    // calls would each spawn a child, the second one wins state.child, the
+    // first becomes orphaned-but-trying-to-bind-7865 → "Application shutdown
+    // complete" → looks like the server is crash-looping.
+    pub boot_in_progress: AtomicBool,
+    // Incremented every time boot_sequence successfully spawns a child.
+    // Every watchdog snapshots the generation at its own start. When it
+    // wakes up, if the generation has advanced, it knows a newer watchdog
+    // exists for the new child and silently exits. Stops the "two watchdogs
+    // racing to consume intentional_kill" bug where the second watchdog
+    // sees false (already consumed by the first) and respawns the child
+    // that was just intentionally killed.
+    pub watchdog_generation: AtomicU64,
 }
 
 /// Probe 127.0.0.1:7865 with a short connect timeout. True = some listener
@@ -1028,6 +1043,13 @@ const POLL_INTERVAL_SEC: u64 = 3;
 const HEALTHY_RESET_SEC: u64 = 120;
 
 pub fn start_crash_watchdog(app: AppHandle) {
+    // Snapshot the generation we're watching at start. If boot_sequence
+    // bumps the generation later (a fresh child was spawned), this watchdog
+    // is stale and exits next tick — the new spawn started its own watchdog.
+    let my_generation = {
+        let state = app.state::<SidecarState>();
+        state.watchdog_generation.load(Ordering::SeqCst)
+    };
     std::thread::spawn(move || {
         let mut alive_secs: u64 = 0;
         loop {
@@ -1037,6 +1059,11 @@ pub fn start_crash_watchdog(app: AppHandle) {
             // App-shutdown gate
             let quit = state.quit_requested.lock().map(|g| *g).unwrap_or(false);
             if quit { return; }
+
+            // Generation gate: a newer spawn → newer watchdog → we retire.
+            if state.watchdog_generation.load(Ordering::SeqCst) != my_generation {
+                return;
+            }
 
             // Check child status. Three relevant cases:
             //   1. handle is None → kill_child took it (or never spawned)
@@ -1117,6 +1144,26 @@ pub fn start_crash_watchdog(app: AppHandle) {
 /// page while we do the slow stuff (find python, pip install, spawn server).
 pub fn boot_sequence(app: AppHandle) {
     let state = app.state::<SidecarState>();
+
+    // Concurrent-boot guard. Two real callers race here:
+    //   1. user clicks Restart while a previous restart is mid-flight
+    //   2. crash watchdog fires boot_sequence at the same time restart_sidecar
+    //      runs from the tray menu
+    // Without this, both spawn a child, both try to bind 7865, the loser
+    // emits "Application shutdown complete" — looks like a crash, watchdog
+    // counts an attempt, exponential-backoff restart, repeat. That's the
+    // cascade the 11:43-11:53 boot log showed. CAS keeps it to one in-flight
+    // spawn at a time; concurrent callers no-op.
+    if state.boot_in_progress.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // RAII guard so every exit path (early return on PYTHON_NOT_FOUND,
+    // PORT_OCCUPIED_BY_UNKNOWN, EXTRACT_FAILED, etc.) clears the flag.
+    struct BootGuard<'a>(&'a AtomicBool);
+    impl<'a> Drop for BootGuard<'a> {
+        fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); }
+    }
+    let _guard = BootGuard(&state.boot_in_progress);
 
     // Stale-server guard. Previously this was a raw TCP probe — "if :7865
     // accepts a connection, assume it's our server and reuse it". That
@@ -1268,8 +1315,12 @@ pub fn boot_sequence(app: AppHandle) {
             if let Ok(mut guard) = state.child.lock() {
                 *guard = Some(child);
             }
+            // Bump the generation BEFORE starting the new watchdog so the
+            // old watchdog (if still polling) reads the new value and
+            // retires next tick. The new watchdog snapshots at start_crash
+            // _watchdog and gets the post-bump value.
+            state.watchdog_generation.fetch_add(1, Ordering::SeqCst);
             emit_status(&app, "SPAWNING");
-            // Watch for unexpected exits and respawn with backoff.
             start_crash_watchdog(app.clone());
         }
         Err(_e) => {
