@@ -1317,8 +1317,14 @@
     // stats.js · /stats/counts → [data-stat-*] cells (designer-shipped)
     inject('stats.js', null);
     // notify.js · shared banner + modal + toast primitive (designer-shipped).
-    // Must load BEFORE ml-deps.js + model-install.js because they consume it.
+    // Must load BEFORE ml-deps.js + model-install.js + long-task.js because
+    // they all consume it.
     inject('notify.js', 'SeekDeepNotify');
+    // long-task.js · page-wide live progress banner for deps.install /
+    // doctor / self-update event streams. Loads after notify.js so the
+    // banner primitive is available; idempotent module gate prevents
+    // double-binding when a page also includes the script directly.
+    inject('long-task.js', null);
     // ml-deps.js · first-use pip-install banner (designer-shipped)
     inject('ml-deps.js', null);
     // model-install.js · first-use HF/Ollama weight-download banner (designer-shipped)
