@@ -3532,33 +3532,45 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
-    # Self-heal the "Couldn't instantiate the backend tokenizer" path. The fast
-    # tokenizer route can fail intermittently inside a long-lived process while
-    # the slow path (sentencepiece-direct) still works against the same cache.
-    # We try fast first, fall back to slow, then to slow+offline.
+    # Self-heal three common long-lived-process failure modes:
+    #   1. fast tokenizer's rust backend rejects valid input (ValueError
+    #      "backend tokenizer") — long-running httpx/tokenizers state issue
+    #   2. HF Hub refresh fails mid-process (OSError "couldn't connect")
+    #      while the cache on disk is fully intact and would work offline
+    #   3. specific file in the snapshot got 401/404 from HF (gated changes,
+    #      revision pin drift) but cache has a working older snapshot
+    # All three are recoverable by retrying with use_fast=False + local-only.
     def _try_load_tokenizer():
         attempts = [
-            ("fast", dict(tokenizer_kwargs)),
-            ("slow", {**tokenizer_kwargs, "use_fast": False}),
-            ("slow-offline", {**tokenizer_kwargs, "use_fast": False, "local_files_only": True}),
+            ("fast",           dict(tokenizer_kwargs)),
+            ("fast-offline",   {**tokenizer_kwargs, "local_files_only": True}),
+            ("slow",           {**tokenizer_kwargs, "use_fast": False}),
+            ("slow-offline",   {**tokenizer_kwargs, "use_fast": False, "local_files_only": True}),
         ]
         last_exc = None
+        retryable_substrings = (
+            "backend tokenizer",       # misleading rust-tokenizer error
+            "couldn't connect",        # network blip mid-refresh
+            "couldn't find them in the cached files",  # transformers' OSError msg
+            "we couldn't find",        # variant
+            "connection error",        # httpx
+            "max retries exceeded",    # urllib3 / requests
+            "read timed out",          # network slow
+        )
         for label, kw in attempts:
             try:
                 tok = AutoTokenizer.from_pretrained(model_id, **kw)
                 if label != "fast":
-                    print(f"[SeekDeep Local AI] tokenizer self-heal: succeeded via {label} path "
-                          f"after fast path failed (model={model_id})", flush=True)
+                    print(f"[SeekDeep Local AI] tokenizer self-heal: succeeded via {label} "
+                          f"after earlier path(s) failed (model={model_id})", flush=True)
                 return tok
-            except ValueError as e:
+            except (ValueError, OSError) as e:
                 last_exc = e
-                # Only retry on the misleading "backend tokenizer" message; let
-                # other ValueErrors bubble up unchanged.
-                if "backend tokenizer" not in str(e):
+                msg = str(e).lower()
+                # Only retry on known-recoverable error shapes; bubble other
+                # ValueErrors/OSErrors (e.g. gated repo with no cache).
+                if not any(sub in msg for sub in retryable_substrings):
                     raise
-            except Exception as e:
-                # Network / auth / disk errors — propagate without retry.
-                raise
         raise last_exc
     chat_tokenizer = _try_load_tokenizer()
 
