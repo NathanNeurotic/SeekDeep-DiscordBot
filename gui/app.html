@@ -5739,7 +5739,21 @@ root.render(<App />);
 (function () {
   if (window.__seekdeepModelPickerLoaded) return;
   window.__seekdeepModelPickerLoaded = true;
-  const BASE = (window.SEEKDEEP_BASE || '');
+  // BASE resolver mirrors nav.js / events.js / fix-action.js — Tauri 2 on
+  // Windows serves bundled pages from http://tauri.localhost, so a bare
+  // relative path or window.SEEKDEEP_BASE='' resolves to Tauri's static
+  // file server (which returns index.html for unknown routes, hence the
+  // "Unexpected token '<', '<!doctype'" JSON parse error users saw on the
+  // Bot config → Quick Model Picker pane). SeekDeepResolveBase forces
+  // 127.0.0.1:7865 under Tauri context.
+  function resolveBase() {
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    if (window.SEEKDEEP_BASE) return window.SEEKDEEP_BASE;
+    if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+    return 'http://127.0.0.1:7865';
+  }
+  const BASE = resolveBase();
   const $ = (id) => document.getElementById(id);
 
   let lastScan = null;

@@ -175,8 +175,23 @@
         persona,
       });
       if (!r.ok) {
-        typing.text.innerHTML = '<span class="err">[' + r.status + ']</span> ' +
-          escapeHtml((r.body && (r.body.error || r.body.detail)) || 'chat request failed');
+        // The /chat 503 carries BOTH a friendly `error` and a raw `detail`
+        // with the underlying exception (e.g. "OSError: tokenizer.json not
+        // found"). The original code showed `error || detail` which hid the
+        // detail whenever the error message was set — the user saw
+        // "Chat model failed (tokenizer-load-failure)" and had to dig
+        // through logs for the actual cause. Show both: the clean message
+        // first, then the raw detail in a smaller line so the diagnostic
+        // is inline.
+        const body  = r.body || {};
+        const head  = body.error || body.detail || 'chat request failed';
+        const detail = (body.error && body.detail && body.detail !== body.error) ? body.detail : '';
+        let html = '<span class="err">[' + r.status + ']</span> ' + escapeHtml(head);
+        if (detail) {
+          html += '<div class="tiny" style="margin-top:6px;color:var(--hull-3);font-family:var(--font-mono);font-size:11px;line-height:1.5;white-space:pre-wrap;">'
+               + escapeHtml(detail) + '</div>';
+        }
+        typing.text.innerHTML = html;
         updateHelperRoute('default_chat', '', '[' + r.status + ']');
         return;
       }
