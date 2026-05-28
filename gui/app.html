@@ -4330,9 +4330,19 @@ const SEEKDEEP_BASE = (function() {
         else fail('logs unavailable · ' + msg);
       }
     }
-    function startStream() {
+    async function startStream() {
       try {
-        sse = new EventSource(SEEKDEEP_BASE + '/logs/stream');
+        // EventSource can't set request headers, so append the GUI token
+        // via ?token= — server accepts either form (see /logs/stream in
+        // gui_endpoints.py). Without this, the SSE connect 401s.
+        let url = SEEKDEEP_BASE + '/logs/stream';
+        if (window.SeekDeepAuth && typeof window.SeekDeepAuth.get === 'function') {
+          try {
+            const tok = await window.SeekDeepAuth.get();
+            if (tok) url += '?token=' + encodeURIComponent(tok);
+          } catch {}
+        }
+        sse = new EventSource(url);
         sse.onmessage = (e) => {
           try { const line = JSON.parse(e.data); if (typeof line === 'string') append(line); }
           catch (err) { window.SeekDeepDebug?.warn('SSE log.line parse', err); }

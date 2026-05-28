@@ -1404,9 +1404,22 @@ def register_gui_endpoints(
         }
 
     # ----- GET /logs/stream -----
-    # Token-gated for the same reason as /logs/tail.
-    @app.get("/logs/stream", dependencies=[Depends(_require_gui_token)])
-    async def get_logs_stream():
+    # Token-gated for the same reason as /logs/tail. Browser EventSource
+    # API cannot send custom headers, so accept the token via `?token=` query
+    # param too — same fallback pattern as the /events WebSocket below. The
+    # header path is preferred (used by fetch-based callers); the query path
+    # exists solely for EventSource. We don't use Depends(_require_gui_token)
+    # because that gate only checks the header.
+    @app.get("/logs/stream")
+    async def get_logs_stream(request: Request, token: str = ""):
+        if _AUTH_STATE.get("ready") and not _AUTH_STATE.get("disabled"):
+            expected = _current_token()
+            header_val = request.headers.get(_TOKEN_HEADER) or request.headers.get(_TOKEN_HEADER.lower())
+            supplied = header_val or token  # header beats query string
+            if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+                raise HTTPException(401,
+                    f"missing or invalid {_TOKEN_HEADER}; GUI EventSource passes it as ?token=, "
+                    f"fetch callers pass it as the {_TOKEN_HEADER} header")
         path = _find_active_log(_log_dir)
         if path is None:
             return JSONResponse({"ok": False, "error": "no log file"}, status_code=404)
