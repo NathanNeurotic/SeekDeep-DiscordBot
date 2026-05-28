@@ -418,14 +418,31 @@
       m.setAttribute('role', 'dialog');
       m.setAttribute('aria-modal', 'true');
 
-      const icon = opts.icon || ({ info: '▸', warn: '⚠', bad: '✕', good: '✓', neutral: '·' }[opts.tone || 'info']);
-      const label = opts.label || ({ info: '▸ NOTICE', warn: '⚠ HEADS UP', bad: '✕ ERROR', good: '✓ OK', neutral: '· INFO' }[opts.tone || 'info']);
+      // Resolve icon + label by tone. confirm() with destructive:true passes
+      // tone:'danger' which wasn't in the lookup tables — the modal then
+      // rendered "undefined undefined" as the chip text (CSS uppercases it
+      // to "UNDEFINED UNDEFINED"). Map every tone we actually pass, with a
+      // safe fallback for forward-compat.
+      const TONE_ICON  = { info: '▸', warn: '⚠', bad: '✕', good: '✓', neutral: '·', danger: '↯' };
+      const TONE_LABEL = {
+        info:    '▸ NOTICE',
+        warn:    '⚠ HEADS UP',
+        bad:     '✕ ERROR',
+        good:    '✓ OK',
+        neutral: '· INFO',
+        danger:  '↯ DESTRUCTIVE',
+      };
+      const tone = opts.tone || 'info';
+      const icon  = opts.icon  || TONE_ICON[tone]  || TONE_ICON.info;
+      const label = opts.label || TONE_LABEL[tone] || TONE_LABEL.info;
 
+      // Don't render the body in the head template — it would also render
+      // via bodyEl below, causing a visible double-paint. The head holds
+      // ONLY the tone-chip + title; the body element holds the body.
       m.innerHTML = `
         <div class="sdn-modal-head">
           <div class="sdn-label"><span class="sdn-icon">${icon}</span>${label}</div>
           <h3>${opts.title || ''}</h3>
-          ${opts.body && typeof opts.body === 'string' ? `<p>${opts.body}</p>` : ''}
         </div>
         <div class="sdn-modal-body" data-sdn-body></div>
         <div class="sdn-modal-foot"></div>
@@ -434,12 +451,18 @@
       const footEl = m.querySelector('.sdn-modal-foot');
 
       // Body can be: a string (HTML), an Element, or a render(bodyEl) callback.
+      // Plain-text strings (no HTML markers) get textContent treatment so
+      // they're escaped and visible — before this branch existed, a
+      // plain-text body silently disappeared after I moved body rendering
+      // out of the head template.
       if (typeof opts.render === 'function') {
         try { opts.render(bodyEl); } catch (e) { console.error('[notify] render error:', e); }
       } else if (opts.body instanceof Element) {
         bodyEl.appendChild(opts.body);
       } else if (typeof opts.body === 'string' && opts.body.includes('<')) {
         bodyEl.innerHTML = opts.body;
+      } else if (typeof opts.body === 'string' && opts.body) {
+        bodyEl.textContent = opts.body;
       } else if (!opts.body && opts.render == null) {
         bodyEl.remove();
       }

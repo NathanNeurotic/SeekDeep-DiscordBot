@@ -4705,6 +4705,38 @@ def register_gui_endpoints(
                     (_log_dir / pid_name).unlink(missing_ok=True)
             except OSError:
                 pass
+            # Invalidate bot-status.json (BOTH possible paths — the one we
+            # manage AND the one in the bot's __dirname when SEEKDEEP_BOT_CWD
+            # points at the user's repo). Without this, the next /launchers/
+            # status read finds a stale ready=true file from before the kill,
+            # and the launcher card sits at "READY · DISCORD" for ~90s until
+            # the heartbeat-stale check kicks in.
+            for candidate in (_data_dir / "bot-status.json",
+                              (bot_cwd / "data" / "bot-status.json").resolve()
+                              if bot_cwd else None):
+                if candidate is None:
+                    continue
+                try:
+                    if candidate.is_file():
+                        _atomic_write_json(candidate, {
+                            "ready": False,
+                            "exited": True,
+                            "exit_at": _now_iso(),
+                            "exit_reason": "force-kill-all",
+                            "pid": None,
+                            "heartbeat_at": _now_iso(),
+                        })
+                except Exception:
+                    pass
+            # Push a service.state.changed onto the bus so live subscribers
+            # flip the card immediately (no waiting for the next 5s tick).
+            try:
+                event_bus.publish_sync({"type": "service.state.changed",
+                                         "data": {"service": "bot",
+                                                  "state": "not-running",
+                                                  "reason": "force-kill-all"}})
+            except Exception:
+                pass
             results["bot"] = {"ok": True, "killed": killed, "count": len(killed)}
         except Exception as exc:
             results["bot"] = {"ok": False, "error": str(exc)[:200]}
