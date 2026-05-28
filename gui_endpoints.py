@@ -5042,7 +5042,14 @@ def register_gui_endpoints(
         "auto_restarted": False,
         "exit_restart_count": 0,
         "last_exit_restart_at": 0.0,
+        # Startup grace: don't spawn-on-"not-running" during the first 60s
+        # of this AI-server process's life. Previous-AI-server's bots may
+        # still be alive but not yet visible to psutil from this process's
+        # perspective (cache lag), and we don't want to stack a 5th bot on
+        # top of 4 existing ones just because we can't see them yet.
+        "ai_server_started_at": time.time(),
     }
+    _BOT_WATCHDOG_STARTUP_GRACE_S = float(os.getenv("SEEKDEEP_BOT_WATCHDOG_STARTUP_GRACE_S", "60") or 60)
 
     def _bot_discord_watchdog_check():
         """Called from the tick loop. Two recovery paths:
@@ -5058,10 +5065,39 @@ def register_gui_endpoints(
         try:
             info = _service_state("bot", _log_dir)
             state = info["state"]
+            bot_count = int(info.get("count") or 0)
+            # If we have ≥1 bot running, this is the SAFE branch. Pile-up
+            # reduction: if count > 1, kill the oldest excess so we converge
+            # to exactly one bot without ever spawning a new one ourselves.
+            if state == "running" and bot_count > 1:
+                try:
+                    bot_cwd = _resolve_bot_cwd(root)
+                    procs = _find_bot_processes(bot_cwd)
+                    # Sort by PID (ascending) — kill the OLDEST extras, keep
+                    # the newest as the live one. Newest most likely matches
+                    # the bot-status.json that downstream readers expect.
+                    procs.sort(key=lambda p: p.get("pid") or 0)
+                    excess = procs[:-1]  # all but the last (newest)
+                    if excess:
+                        print(f"[SeekDeep] bot watchdog: {len(procs)} bot instances detected — "
+                              f"reaping {len(excess)} excess to converge to 1")
+                        for entry in excess:
+                            ok, err = _kill_pid(entry["pid"])
+                            print(f"[SeekDeep]   reap bot pid {entry['pid']}: "
+                                  f"{'killed' if ok else f'failed: {err or 0}'}")
+                except Exception as exc:
+                    print(f"[SeekDeep] bot watchdog: pile-up reap failed: {exc}")
             if state in ("exited", "not-running"):
                 # Reset Discord-watchdog timer; the next spawn gets its
                 # own fresh 45s grace window.
                 _bot_watchdog["first_running_at"] = 0.0
+                # Startup grace: previous AI server's bots may still be
+                # alive but not yet visible to psutil from this fresh process.
+                # Defer any spawn until we've been up long enough for the
+                # scan to be reliable.
+                age = time.time() - _bot_watchdog["ai_server_started_at"]
+                if age < _BOT_WATCHDOG_STARTUP_GRACE_S:
+                    return
                 # Exit-respawn path, capped + cooled-down.
                 max_restarts = int(os.getenv("SEEKDEEP_BOT_EXIT_RESTART_MAX", "3") or 3)
                 cooldown_s = float(os.getenv("SEEKDEEP_BOT_EXIT_RESTART_COOLDOWN_S", "30") or 30)
