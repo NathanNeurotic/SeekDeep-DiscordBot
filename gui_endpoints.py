@@ -913,6 +913,34 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out_log = log_dir / f"{service}-{stamp}.gui.out.log"
     err_log = log_dir / f"{service}-{stamp}.gui.err.log"
+
+    # Build the child's env. For the bot, inject the LIVE SEEKDEEP_GUI_TOKEN
+    # from our .env so the bot can authenticate POST /events/emit calls
+    # WITHOUT having to read its own __dirname/.env (which diverges from
+    # the AI server's .env when SEEKDEEP_BOT_CWD points at the user's repo
+    # while the AI server runs from the Tauri runtime dir). Without this,
+    # the bot's emit-event path 401s and disables itself with the error
+    # "GUI events emit got 401 (after .env re-read) — token mismatch
+    # persists; disabling further emits."
+    child_env = os.environ.copy()
+    if service == "bot":
+        try:
+            tok = _current_token()
+            if tok:
+                child_env["SEEKDEEP_GUI_TOKEN"] = tok
+            # Also write it to the BOT's .env so `_seekdeepReReadTokenFromEnvFile`
+            # in index.js (the bot's own self-heal path) doesn't hit a stale
+            # value if/when this process-env one ever rotates mid-session.
+            try:
+                bot_env_path = (cwd / ".env").resolve()
+                # Only sync if it's NOT the same file we already manage.
+                if tok and bot_env_path != _env_path.resolve():
+                    _merge_env(bot_env_path, {"SEEKDEEP_GUI_TOKEN": tok})
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     try:
         out_f = out_log.open("ab")
         err_f = err_log.open("ab")
@@ -922,7 +950,7 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
         if os.name == "nt":
             _flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(
-            cmd, cwd=str(cwd),
+            cmd, cwd=str(cwd), env=child_env,
             stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
             creationflags=_flags,
         )
@@ -4822,25 +4850,69 @@ def register_gui_endpoints(
     # the bot ONCE per session if Discord doesn't ready within ~45s of the
     # process starting. Subsequent failures need manual intervention (we
     # don't want a restart loop on persistently-bad tokens).
-    _bot_watchdog = {"first_running_at": 0.0, "auto_restarted": False}
+    #
+    # ALSO auto-restarts on EXITED state up to N times: catches the case
+    # where the bot crashes from a Discord ECONNRESET (transient WS drop)
+    # and would otherwise sit as EXITED until the user manually clicks
+    # Restart. Capped at SEEKDEEP_BOT_EXIT_RESTART_MAX (default 3) to
+    # prevent crash-loops on persistent failures (bad token, missing
+    # node_modules, etc).
+    _bot_watchdog = {
+        "first_running_at": 0.0,
+        "auto_restarted": False,
+        "exit_restart_count": 0,
+        "last_exit_restart_at": 0.0,
+    }
 
     def _bot_discord_watchdog_check():
-        """Called from the tick loop. If the bot process has been running
-        for ≥45s but Discord still isn't ready, restart it once. Crucially,
-        auto_restarted LATCHES True for the rest of the app session — if
-        we reset it when the bot transitions through 'transitioning' /
-        'not-running' during the auto-restart itself, the watchdog would
-        loop forever on a persistently-bad token."""
+        """Called from the tick loop. Two recovery paths:
+
+          (1) bot RUNNING but Discord not ready ≥45s → restart once
+              (auto_restarted latches True for the session afterwards)
+
+          (2) bot EXITED → restart up to N times with a 30s cool-down
+              between attempts (catches transient Discord ECONNRESETs
+              that crashed the bot; gives up if it keeps crashing right
+              back so the user sees the err.log instead of a loop)
+        """
         try:
             info = _service_state("bot", _log_dir)
-            if info["state"] != "running":
-                # Reset only the timer — auto_restarted stays as-is so the
-                # next start doesn't earn a fresh one-shot. If the user
-                # manually restarts via the launcher card and it ALSO fails
-                # Discord login, they'll see the "CONNECTING DISCORD" pill
-                # and the disconnect reason from the bot-status surface.
+            state = info["state"]
+            if state in ("exited", "not-running"):
+                # Reset Discord-watchdog timer; the next spawn gets its
+                # own fresh 45s grace window.
+                _bot_watchdog["first_running_at"] = 0.0
+                # Exit-respawn path, capped + cooled-down.
+                max_restarts = int(os.getenv("SEEKDEEP_BOT_EXIT_RESTART_MAX", "3") or 3)
+                cooldown_s = float(os.getenv("SEEKDEEP_BOT_EXIT_RESTART_COOLDOWN_S", "30") or 30)
+                now_t = time.time()
+                if _bot_watchdog["exit_restart_count"] >= max_restarts:
+                    return  # gave up; leave the EXITED card visible
+                if now_t - _bot_watchdog["last_exit_restart_at"] < cooldown_s:
+                    return  # still in cooldown
+                _bot_watchdog["exit_restart_count"] += 1
+                _bot_watchdog["last_exit_restart_at"] = now_t
+                print(f"[SeekDeep] bot watchdog: bot EXITED, auto-restarting "
+                      f"(attempt {_bot_watchdog['exit_restart_count']}/{max_restarts})")
+                try:
+                    event_bus.publish_sync({"type": "bot.watchdog.restarting",
+                                             "data": {"reason": "exited",
+                                                      "attempt": _bot_watchdog["exit_restart_count"],
+                                                      "max": max_restarts}})
+                except Exception:
+                    pass
+                try:
+                    _start_service("bot", root, _log_dir)
+                except Exception as exc:
+                    print(f"[SeekDeep] bot watchdog: exit-respawn failed: {exc}")
+                return
+            if state != "running":
                 _bot_watchdog["first_running_at"] = 0.0
                 return
+            # Bot is running — reset the exit-respawn counter so a future
+            # crash gets a fresh budget of retries.
+            _bot_watchdog["exit_restart_count"] = 0
+            _bot_watchdog["last_exit_restart_at"] = 0.0
             now = time.time()
             if _bot_watchdog["first_running_at"] == 0.0:
                 _bot_watchdog["first_running_at"] = now
