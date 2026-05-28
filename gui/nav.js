@@ -106,8 +106,13 @@
     // GET requests to these paths require the X-SeekDeep-Token header on the
     // backend (AUD-003 — sensitive reads policy). Without auto-attaching the
     // header here every GUI page that fetches /memory/users / per-guild
-    // archive config would hit 401. AUD-003.
-    const SENSITIVE_READ_RE = /\/(memory|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|$)/;
+    // archive config / logs/tail would hit 401. AUD-003.
+    //
+    // `/logs/(tail|stream)` was missing — that's why Logs Viewer rendered
+    // "logs unavailable · HTTP 401" on a fresh page load and never recovered
+    // (the 401 retry path below is ALSO gated on needsToken so it never
+    // tried to refresh the token either).
+    const SENSITIVE_READ_RE = /\/(memory|logs\/(tail|stream)|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|$)/;
     window.fetch = async function patchedFetch(input, init) {
       init = init || {};
       const method = (init.method || (input && input.method) || 'GET').toUpperCase();
@@ -128,13 +133,18 @@
       } catch (err) {
         throw err;
       }
-      // Auto-retry on 401 for token-required calls: the user may have
-      // rotated SEEKDEEP_GUI_TOKEN in .env mid-session, or the sidecar
-      // restarted with a different token. Force-refresh the cache and
-      // retry once. Idempotent on GETs; for writes the server is
-      // responsible for not double-applying a re-played POST (every
-      // write endpoint reads then writes atomically — no duplicates).
-      if (needsToken && response.status === 401 && !init.__seekdeepRetried) {
+      // Auto-retry on 401 for ANY of our server's endpoints (not gated on
+      // needsToken). Previously this branch only fired when needsToken was
+      // already true — but a GET to a sensitive endpoint NOT in the regex
+      // (e.g. /logs/tail before the regex caught it, or any future token-
+      // gated read) would still return 401, and the retry path wouldn't
+      // attempt because needsToken was false. Now: ANY 401 from our own
+      // server triggers a token-cache reset + re-fetch + one retry with
+      // the fresh token attached. The server tells us whether auth was
+      // actually required — if it 401'd, it was. Idempotent on GETs;
+      // for writes the server is responsible for not double-applying a
+      // re-played POST (every write endpoint reads then writes atomically).
+      if (url && isOurServer(url) && response.status === 401 && !init.__seekdeepRetried) {
         if (typeof window.SeekDeepAuth?.reset === 'function') {
           window.SeekDeepAuth.reset();
         }

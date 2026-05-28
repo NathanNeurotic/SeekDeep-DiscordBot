@@ -55,7 +55,16 @@ html, body { margin: 0; padding: 0; }
 body {
   font-family: var(--font-display);
   color: var(--hull);
-  background: var(--ink);
+  /* Backdrop now matches the chat.html .win container's gridded look so
+     every page (with or without .win) shows the same subtle grid + dark
+     gradient. Previously: pages with .win (chat, Control Center, installer,
+     etc.) showed the grid; pages without (About, setup-wizard, boot,
+     landing, mobile, tour, pitch) showed only body+abyss+bubbles, which
+     read as a totally different design. Now they all share this base. */
+  background:
+    linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%);
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;

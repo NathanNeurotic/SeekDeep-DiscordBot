@@ -2178,10 +2178,15 @@ async function postLocal(pathname, body, options = {}) {
         signal: controller?.signal,
       });
     } catch (err) {
-      // fetchJson throws "fetchJson HTTP 401" style errors. Detect 401 and try
-      // refreshing the token from .env once.
+      // fetchJson throws Error objects with `status` / `statusText` / `url`
+      // attributes for HTTP failures, plus a "fetchJson HTTP <code>" message.
+      // Earlier we only checked the message text — but the bot exit log
+      // showed errors arriving with `status: 401` on the OBJECT and a
+      // message that didn't contain "401" (e.g. just "Unauthorized"), so
+      // the self-heal branch never fired and the 401 bubbled up to crash
+      // askVision / seekdeepDispatchAddressedMessage. Check both forms.
       const msg = String(err?.message || err);
-      const is401 = /\b401\b/.test(msg);
+      const is401 = err?.status === 401 || /\b401\b/.test(msg) || /unauthorized/i.test(msg);
       if (!is401) throw err;
       const fresh = typeof _seekdeepReReadTokenFromEnvFile === 'function'
         ? _seekdeepReReadTokenFromEnvFile()

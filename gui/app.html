@@ -3279,10 +3279,17 @@ const SEEKDEEP_BASE = (function() {
   // SPA but not via a real beforeunload — so this guards the page-reload
   // / window-close / external-link case). Sidebar nav doesn't fire
   // beforeunload, so dirty state survives across panes already.
+  //
+  // Critical scoping: ONLY warn when the user is currently looking at the
+  // Bot config pane AND it has DIRTY save buttons. Earlier this fired
+  // from any pane (Image playground, Chat playground, Archive) because
+  // it queried the whole document — and a lingering "DIRTY" from an
+  // earlier session would prompt on every page-nav out of app.html.
   window.addEventListener('beforeunload', (e) => {
-    const dirty = document.querySelectorAll('.config-row .save').length
-      ? [...document.querySelectorAll('.config-row .save')].some(s => s.textContent.includes('DIRTY'))
-      : false;
+    const activeConfigPane = document.querySelector('.pane.active[data-pane="config"]');
+    if (!activeConfigPane) return undefined;  // not on config pane → no risk
+    const saves = activeConfigPane.querySelectorAll('.config-row .save');
+    const dirty = [...saves].some(s => s.textContent.includes('DIRTY'));
     if (!dirty) return undefined;
     e.preventDefault();
     e.returnValue = 'You have unsaved config changes. Save them before reloading.';
