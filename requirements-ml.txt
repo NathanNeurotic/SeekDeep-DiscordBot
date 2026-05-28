@@ -42,7 +42,18 @@ bitsandbytes>=0.45.0
 transformers>=4.51.0
 diffusers>=0.33.0
 safetensors>=0.5.0
+# Both sentencepiece + tiktoken: transformers needs ONE of these to
+# instantiate slow tokenizers when the fast (rust `tokenizers`) backend
+# can't parse a model's tokenizer.json. Different model families use
+# different conventions:
+#   - sentencepiece: Llama 2, Mistral, Gemma, IBM Granite (older)
+#   - tiktoken:      Llama 3.x, Qwen 2.5+, IBM Granite 3.x
+# We require both as belt-and-suspenders so AutoTokenizer.from_pretrained
+# never bails with "You need to have sentencepiece or tiktoken installed
+# to convert a slow tokenizer to a fast one." — the exact ValueError
+# users hit with Llama 3.1 / Granite 3.3 (tokenizer-load-failure 503).
 sentencepiece>=0.2.0
+tiktoken>=0.8.0
 protobuf>=5.0.0
 einops>=0.8.0
 timm>=1.0.15

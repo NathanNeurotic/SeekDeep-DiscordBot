@@ -3788,6 +3788,17 @@ def chat(req: ChatRequest):
             clean_msg = ("Out of VRAM — the model couldn't fit. Free GPU memory: "
                          "click 'Flush model cache' in the Control Center (or POST /unload), "
                          "close other CUDA apps, or pick a smaller quantization in Config.")
+        elif reason == "tokenizer-load-failure":
+            # transformers needs sentencepiece OR tiktoken to convert slow
+            # tokenizers. Llama 3.x uses tiktoken, Llama 2 / Mistral / etc.
+            # use sentencepiece. Both belong in requirements-ml.txt as of
+            # the tiktoken add. If the user installed before that landed,
+            # one re-run of "Install ML libraries" pulls the missing dep.
+            clean_msg = ("Chat model's tokenizer couldn't load. transformers needs "
+                         "sentencepiece (Llama 2 / Mistral / Granite ≤3.2) or tiktoken "
+                         "(Llama 3.x / Qwen / Granite 3.3+) installed. Click 'Install ML "
+                         "libraries' in the Control Center to pull them — pip will skip "
+                         "deps you already have.")
         elif reason.startswith("chat-load-error:"):
             clean_msg = f"Chat model failed to load ({reason.split(':',1)[1]}). Open Control Center → View logs for the full trace."
         else:
