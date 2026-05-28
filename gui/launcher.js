@@ -947,6 +947,153 @@
       });
     }
 
+    // ---- Reload .env button -------------------------------------------
+    // Re-reads .env from disk into the server's os.environ. Picks up
+    // token / model-id / feature-flag edits without restarting the sidecar.
+    const reloadEnvBtn = document.getElementById('qaReloadEnvBtn');
+    if (reloadEnvBtn) {
+      reloadEnvBtn.addEventListener('click', async () => {
+        const sdn = notify();
+        const orig = reloadEnvBtn.textContent;
+        reloadEnvBtn.disabled = true;
+        reloadEnvBtn.textContent = '… reloading';
+        try {
+          const r = await fetch(BASE + '/config/reload', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: '{}', signal: AbortSignal.timeout(8000),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+          const cnt = (j.changed || []).length + (j.added || []).length;
+          const tone = cnt > 0 ? 'good' : 'info';
+          const body = cnt > 0
+            ? `${j.changed?.length || 0} changed, ${j.added?.length || 0} added (of ${j.total_keys || 0} keys).`
+            : `No changes (all ${j.total_keys || 0} keys matched). Edit .env and click again.`;
+          if (sdn) sdn.toast({ tone, title: 'Reloaded .env', body, ttl: 5000 });
+          reloadEnvBtn.textContent = cnt > 0 ? `✓ ${cnt} updated` : '✓ no changes';
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Reload failed', body: String(err.message || err), ttl: 6000 });
+          reloadEnvBtn.textContent = '✕ failed';
+        } finally {
+          setTimeout(() => { reloadEnvBtn.disabled = false; reloadEnvBtn.textContent = orig; }, 3500);
+        }
+      });
+    }
+
+    // ---- Flush model cache button -------------------------------------
+    // Unloads chat + image + vision models from VRAM. Hits POST /unload
+    // with force=true so keep-resident pins don't block.
+    const flushBtn = document.getElementById('qaFlushCacheBtn');
+    if (flushBtn) {
+      flushBtn.addEventListener('click', async () => {
+        if (!await (window.SeekDeepConfirm || window.confirm)('Unload all models from VRAM?\nForces eviction even for keep-resident pinned roles. Next request will reload from disk cache.')) return;
+        const sdn = notify();
+        const orig = flushBtn.textContent;
+        flushBtn.disabled = true;
+        flushBtn.textContent = '… flushing';
+        try {
+          const r = await fetch(BASE + '/unload', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true }), signal: AbortSignal.timeout(15000),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+          if (sdn) sdn.toast({ tone: 'good', title: 'Models flushed', body: `Freed ${j.freed_mb ?? '?'} MB. Next request reloads from disk.`, ttl: 5000 });
+          flushBtn.textContent = '✓ flushed';
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Flush failed', body: String(err.message || err), ttl: 6000 });
+          flushBtn.textContent = '✕ failed';
+        } finally {
+          setTimeout(() => { flushBtn.disabled = false; flushBtn.textContent = orig; }, 3500);
+        }
+      });
+    }
+
+    // ---- Smoke test button --------------------------------------------
+    // Runs scripts/smoke_gui_endpoints.py in-process via POST /system/smoke
+    // and shows pass/fail results inline. No terminal required.
+    const smokeBtn = document.getElementById('qaSmokeTestBtn');
+    if (smokeBtn) {
+      smokeBtn.addEventListener('click', async () => {
+        const sdn = notify();
+        const orig = smokeBtn.textContent;
+        smokeBtn.disabled = true;
+        smokeBtn.textContent = '… running smoke';
+        try {
+          const r = await fetch(BASE + '/system/smoke', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: '{}', signal: AbortSignal.timeout(60000),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+          const tone = j.ok ? 'good' : 'bad';
+          const title = j.ok
+            ? `✓ Smoke ${j.passed}/${j.total} passed`
+            : `✕ Smoke ${j.failed}/${j.total} failed`;
+          let body = '';
+          if (j.failed > 0 && Array.isArray(j.failures)) {
+            body = j.failures.slice(0, 8).map(f => `▸ ${f.name}: ${f.detail || ''}`).join('\n');
+            if (j.failures.length > 8) body += `\n… and ${j.failures.length - 8} more`;
+          } else {
+            body = `All ${j.total} endpoint contracts hold.`;
+          }
+          if (sdn?.banner) {
+            sdn.banner({
+              id: 'sd-smoke-results', tone, title,
+              body: '<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:6px 0 0; max-height:240px; overflow:auto;">' + body.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</pre>',
+              primary: { label: 'Dismiss', onClick: ({ close }) => close() },
+              dismissible: true, sticky: !j.ok,
+            });
+          } else if (sdn) {
+            sdn.toast({ tone, title, body: body.split('\n').slice(0, 3).join(' · '), ttl: 9000 });
+          }
+          smokeBtn.textContent = j.ok ? '✓ smoke passed' : `✕ ${j.failed} failed`;
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Smoke run failed', body: String(err.message || err), ttl: 8000 });
+          smokeBtn.textContent = '✕ failed';
+        } finally {
+          setTimeout(() => { smokeBtn.disabled = false; smokeBtn.textContent = orig; }, 6000);
+        }
+      });
+    }
+
+    // ---- Force kill all button ----------------------------------------
+    // Nuclear button: kills bot + SearXNG container. Does NOT touch the
+    // AI server (use Tauri tray to restart that — we'd kill our own
+    // request handler).
+    const killBtn = document.getElementById('qaForceKillBtn');
+    if (killBtn) {
+      killBtn.addEventListener('click', async () => {
+        if (!await (window.SeekDeepConfirm || window.confirm)('Force-kill every service?\n· Bot processes (all instances)\n· SearXNG container (docker rm -f)\n· AI server is NOT killed — use the tray icon to restart it if you need to.\n\nThis is a hard kill — no graceful shutdown.')) return;
+        const sdn = notify();
+        const orig = killBtn.textContent;
+        killBtn.disabled = true;
+        killBtn.textContent = '… killing';
+        try {
+          const r = await fetch(BASE + '/system/kill-all', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: '{}', signal: AbortSignal.timeout(20000),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+          const botKilled = j.results?.bot?.count || 0;
+          const sxOk = j.results?.searxng?.ok;
+          if (sdn) sdn.toast({
+            tone: 'warn',
+            title: 'Force kill done',
+            body: `Bot procs killed: ${botKilled}${sxOk ? ' · SearXNG removed' : ' · SearXNG ' + (j.results?.searxng?.error || 'unchanged')}`,
+            ttl: 6000,
+          });
+          killBtn.textContent = `✓ killed ${botKilled} + sx`;
+        } catch (err) {
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Force kill failed', body: String(err.message || err), ttl: 8000 });
+          killBtn.textContent = '✕ failed';
+        } finally {
+          setTimeout(() => { killBtn.disabled = false; killBtn.textContent = orig; }, 4000);
+        }
+      });
+    }
+
     // ---- Bot CWD field -----------------------------------------------
     // Lets the user point `node index.js` at their actual repo dir when
     // running under Tauri (where cwd defaults to %APPDATA%/SeekDeep/app/).

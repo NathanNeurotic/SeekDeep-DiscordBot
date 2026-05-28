@@ -4475,6 +4475,145 @@ def register_gui_endpoints(
                 # Don't let a stray exception kill the heartbeat task
                 await asyncio.sleep(HEARTBEAT_SEC)
 
+    # ----- POST /config/reload -----
+    # Re-reads .env from disk into os.environ so config changes (HF_TOKEN,
+    # DISCORD_TOKEN, model IDs, feature flags) take effect WITHOUT a sidecar
+    # restart. Wired to the Quick Actions "Reload .env" button. Returns
+    # the list of keys that changed so the GUI can toast a summary.
+    @app.post("/config/reload", dependencies=[Depends(_require_gui_token)])
+    def post_config_reload():
+        changed: list[str] = []
+        added: list[str] = []
+        try:
+            if not _env_path.is_file():
+                return {"ok": False, "error": f".env not found at {_env_path}"}
+            new_env: dict[str, str] = {}
+            for raw in _env_path.read_text(encoding="utf-8").splitlines():
+                s = raw.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "=" not in s:
+                    continue
+                k, _, v = s.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if not k:
+                    continue
+                new_env[k] = v
+            for k, v in new_env.items():
+                old = os.environ.get(k)
+                if old is None:
+                    added.append(k)
+                elif old != v:
+                    changed.append(k)
+                os.environ[k] = v
+            try:
+                event_bus.publish_sync({"type": "config.reloaded",
+                                         "data": {"changed": changed, "added": added}})
+            except Exception:
+                pass
+            return {"ok": True, "changed": changed, "added": added,
+                    "total_keys": len(new_env)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:240]}
+
+    # ----- POST /system/kill-all -----
+    # Force-kill EVERY service we manage: bot processes (uses the same
+    # _find_bot_processes + _kill_pid that /launcher/bot/kill-all uses),
+    # the SearXNG container, AND the in-process flag for AI-server self-
+    # kill (we can't kill ourselves cleanly from here — caller should use
+    # Tauri's restart_sidecar command for that). Wired to the Quick
+    # Actions "Force kill all" button.
+    @app.post("/system/kill-all", dependencies=[Depends(_require_gui_token)])
+    def post_system_kill_all():
+        results: dict = {}
+        # 1. Bot — reuse kill-all logic from above
+        try:
+            _begin_transition("bot")
+            bot_cwd = _resolve_bot_cwd(root)
+            procs = _find_bot_processes(bot_cwd)
+            killed = []
+            for entry in procs:
+                ok, err = _kill_pid(entry["pid"])
+                killed.append({"pid": entry["pid"], "ok": ok, "error": err})
+            # Clean up tracker + PID file so launcher card reflects gone.
+            _PROCESSES.pop("bot", None)
+            try:
+                pid_name = _PID_FILE_NAMES.get("bot")
+                if pid_name:
+                    (_log_dir / pid_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            results["bot"] = {"ok": True, "killed": killed, "count": len(killed)}
+        except Exception as exc:
+            results["bot"] = {"ok": False, "error": str(exc)[:200]}
+        finally:
+            _end_transition("bot")
+        # 2. SearXNG — docker rm -f
+        try:
+            r = subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+                               capture_output=True, text=True, timeout=15)
+            results["searxng"] = {"ok": r.returncode == 0,
+                                  "removed": "seekdeep-searxng" if r.returncode == 0 else None,
+                                  "error": (r.stderr or "")[:200] if r.returncode != 0 else None}
+        except Exception as exc:
+            results["searxng"] = {"ok": False, "error": str(exc)[:200]}
+        # 3. AI server self — refuse, point caller at Tauri restart
+        results["ai_server"] = {"ok": False, "skipped": True,
+                                "note": "use Tauri restart_sidecar to bounce the AI server"}
+        return {"ok": True, "results": results}
+
+    # ----- POST /system/smoke -----
+    # Runs the in-process GUI endpoint smoke suite (scripts/smoke_gui_endpoints.py)
+    # AND returns the structured pass/fail results. The script was designed
+    # for command-line invocation but its check helpers + result list are
+    # importable. Wired to the Quick Actions "Smoke test" button so the
+    # user gets a single click → results modal instead of a "run this in a
+    # terminal" instruction. Times out after 30s; safe to run repeatedly.
+    @app.post("/system/smoke", dependencies=[Depends(_require_gui_token)])
+    def post_system_smoke():
+        import importlib.util
+        smoke_path = root / "scripts" / "smoke_gui_endpoints.py"
+        if not smoke_path.is_file():
+            return {"ok": False, "error": f"smoke script not found at {smoke_path}"}
+        import io, contextlib
+        buf = io.StringIO()
+        spec = importlib.util.spec_from_file_location("seekdeep_smoke_runtime", smoke_path)
+        if spec is None or spec.loader is None:
+            return {"ok": False, "error": "could not load smoke script"}
+        mod = importlib.util.module_from_spec(spec)
+        rc: int | None = None
+        try:
+            # The script structures its checks inside a `main()` function that
+            # only fires when run as __main__. Importing it via exec_module
+            # leaves the checks unexecuted — we have to call main() ourselves
+            # AND capture its stdout so the GUI log preview has the check
+            # lines, not a blank string.
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "main") and callable(mod.main):
+                    try:
+                        rc = mod.main()
+                    except SystemExit as se:
+                        rc = int(se.code) if isinstance(se.code, int) else 1
+        except SystemExit as se:
+            rc = int(se.code) if isinstance(se.code, int) else 1
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:400],
+                    "output": buf.getvalue()[-4000:]}
+        results = getattr(mod, "_results", []) or []
+        passed = sum(1 for r in results if r and r[0])
+        failed = sum(1 for r in results if r and not r[0])
+        return {
+            "ok": failed == 0 and (rc in (None, 0)),
+            "total": len(results),
+            "passed": passed,
+            "failed": failed,
+            "failures": [{"name": r[1], "detail": r[2]} for r in results if r and not r[0]],
+            "output": buf.getvalue()[-4000:],
+            "exit_code": rc,
+        }
+
     # ----- Live-tick producer (replaces client-side polling) -----
     # Cadence per topic. Picked to be roughly twice as frequent as the
     # old setIntervals so the UI feels fresher. Zero-cost when nobody's
@@ -4556,14 +4695,81 @@ def register_gui_endpoints(
             _emit_state_change_if_any(svc, info)
         return {"ok": True, "services": services_out, "generated_at": _now_iso()}
 
+    # Bot Discord watchdog state. Process-up-but-Discord-not-ready is the
+    # exact failure mode the launcher pill used to lie about — and the user
+    # had to manually click Restart to recover. This guard auto-restarts
+    # the bot ONCE per session if Discord doesn't ready within ~45s of the
+    # process starting. Subsequent failures need manual intervention (we
+    # don't want a restart loop on persistently-bad tokens).
+    _bot_watchdog = {"first_running_at": 0.0, "auto_restarted": False}
+
+    def _bot_discord_watchdog_check():
+        """Called from the tick loop. If the bot process has been running
+        for ≥45s but Discord still isn't ready, restart it once. Crucially,
+        auto_restarted LATCHES True for the rest of the app session — if
+        we reset it when the bot transitions through 'transitioning' /
+        'not-running' during the auto-restart itself, the watchdog would
+        loop forever on a persistently-bad token."""
+        try:
+            info = _service_state("bot", _log_dir)
+            if info["state"] != "running":
+                # Reset only the timer — auto_restarted stays as-is so the
+                # next start doesn't earn a fresh one-shot. If the user
+                # manually restarts via the launcher card and it ALSO fails
+                # Discord login, they'll see the "CONNECTING DISCORD" pill
+                # and the disconnect reason from the bot-status surface.
+                _bot_watchdog["first_running_at"] = 0.0
+                return
+            now = time.time()
+            if _bot_watchdog["first_running_at"] == 0.0:
+                _bot_watchdog["first_running_at"] = now
+                return  # just observed running; give it the grace window
+            if _bot_watchdog["auto_restarted"]:
+                return  # already used our one shot
+            if now - _bot_watchdog["first_running_at"] < 45.0:
+                return  # still inside grace window
+            d = _read_bot_discord_status()
+            if d.get("ready"):
+                return  # all good
+            # Process up ≥45s but Discord isn't ready. Auto-restart once.
+            _bot_watchdog["auto_restarted"] = True
+            print(f"[SeekDeep] bot watchdog: process up {int(now - _bot_watchdog['first_running_at'])}s but Discord not ready — auto-restarting once")
+            try:
+                event_bus.publish_sync({"type": "bot.watchdog.restarting",
+                                         "data": {"reason": "discord-not-ready-after-45s",
+                                                  "discord": d}})
+            except Exception:
+                pass
+            try:
+                _stop_service("bot", _log_dir)
+            except Exception as exc:
+                print(f"[SeekDeep] bot watchdog: stop failed: {exc}")
+            # Reset the timer so the new spawn gets its own 45s window.
+            _bot_watchdog["first_running_at"] = 0.0
+            time.sleep(0.8)
+            try:
+                _start_service("bot", root, _log_dir)
+            except Exception as exc:
+                print(f"[SeekDeep] bot watchdog: restart failed: {exc}")
+        except Exception as exc:
+            # Watchdog must never crash the tick loop.
+            if os.getenv("SEEKDEEP_DEBUG"):
+                print(f"[SeekDeep] bot watchdog error: {exc}")
+
     async def _tick_loop():
         next_due = {topic: 0.0 for topic in TICK_CADENCE_SEC}
+        next_watchdog = 0.0
         while True:
             try:
                 await asyncio.sleep(1.0)
+                now = time.time()
+                # Bot Discord watchdog runs every 5s regardless of subscribers
+                # — the GUI doesn't have to be open for this auto-recovery.
+                if now >= next_watchdog:
+                    next_watchdog = now + 5.0
+                    _bot_discord_watchdog_check()
                 if event_bus.subscriber_count <= 0:
                     continue
-                now = time.time()
                 if now >= next_due["gpu"]:
                     next_due["gpu"] = now + TICK_CADENCE_SEC["gpu"]
                     if tick_providers and tick_providers.get("gpu"):
