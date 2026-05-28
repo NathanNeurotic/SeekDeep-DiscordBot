@@ -389,7 +389,7 @@
       <div class="roadmap-hero">
         <h1 class="live">Roadmap</h1>
         <div class="sub">▸ what shipped, what's next, what's parked, what we won't ship</div>
-        <div class="meta">SOURCE · <em>PLANNED.md</em> · LAST AUDIT 2026-05-19</div>
+        <div class="meta">SOURCE · <em>PLANNED.md</em> + git log · LAST AUDIT 2026-05-27 · v10.35.6</div>
       </div>
 
       <div class="stat-bar" id="statBar">
@@ -436,27 +436,28 @@
 
       <section class="phase" id="phase-memory">
         <div class="phase-head">
-          <h2 class="parked"><span class="dot"></span>Persistent memory roadmap</h2>
-          <span class="meta">▸ rolling → on-disk JSON · privacy-first</span>
+          <h2 class="live"><span class="dot"></span>Persistent memory · shipped</h2>
+          <span class="meta">▸ on-disk JSON · 9 /memory/* endpoints · v10.35.x</span>
         </div>
-        <p class="phase-note">SeekDeep's conversation memory is in-RAM only — restarts wipe it. The proposed persistence layer adds <span class="mono">data/user-memories.json</span> + <span class="mono">data/channel-memories.json</span> with atomic writes, opt-in/out, export/clear commands, and 25-fact/10KB caps.</p>
+        <p class="phase-note">No longer parked. Persistent memory shipped in v10.35.x — <span class="mono">data/user-facts.json</span> is the on-disk store, atomic-written by both the Discord bot and the <span class="mono">/memory/*</span> HTTP endpoints. The web playground uses <span class="mono">web-owner</span> as the default user-id so single-user setups work without auth.</p>
 
         <div class="longform">
-          <h4>▸ Why this is parked</h4>
-          <p>Persistent memory looks small from outside, but injecting facts into the prompt requires <strong>semantic search</strong> (local vector store) or <strong>summarization</strong> to decide when to include them. Randomly stuffing long lists burns context window tokens and degrades small-model attention.</p>
+          <h4>▸ How it works now</h4>
+          <p>Facts live in <span class="mono">data/user-facts.json</span>. Writes are atomic (temp-then-rename) so concurrent writers from the bot and the GUI bound to last-writer-wins instead of corruption. Memory injection into prompts is plain inclusion — no semantic search yet — capped at 25 facts / 10 KB per user with oldest-first LRU pruning.</p>
 
           <div class="grid-2">
             <div class="col">
-              <h5>API · proposed</h5>
-              <p><span class="mono">@SeekDeep remember &lt;fact&gt;</span><br/>
-                 <span class="mono">@SeekDeep forget &lt;topic&gt;</span><br/>
-                 <span class="mono">@SeekDeep memory export</span><br/>
-                 <span class="mono">@SeekDeep memory clear</span><br/>
-                 <span class="mono">@SeekDeep memory feature off</span> (admin)</p>
+              <h5>API · live</h5>
+              <p><span class="mono">GET /memory/users</span><br/>
+                 <span class="mono">GET /memory/user/&lt;id&gt;</span><br/>
+                 <span class="mono">POST /memory/user/&lt;id&gt;/fact</span><br/>
+                 <span class="mono">PATCH /memory/user/&lt;id&gt;/fact/&lt;n&gt;</span><br/>
+                 <span class="mono">DELETE /memory/user/&lt;id&gt;/fact/&lt;n&gt;</span><br/>
+                 Plus <span class="mono">/memory/presets/&lt;id&gt;</span> for the four KNOWN_PRESETS quick-toggles. Same routes power the Discord <span class="mono">/remember /recall /forget</span> commands.</p>
             </div>
             <div class="col">
-              <h5>Privacy guardrails</h5>
-              <p>Per-server disable switch lives in <span class="mono">persona-overrides.json</span>. Per-user opt-out for individual privacy. Bounded storage: 25 facts max or 10 KB per profile, oldest-first LRU pruning.</p>
+              <h5>Still open</h5>
+              <p>Semantic search / summarization on retrieval is not yet implemented — prompt injection is "include them all" up to the cap. For under ~25 short facts this is fine; for richer profiles we\'d want a small local embedding model. Filed under QoL wishlist, not blocking.</p>
             </div>
           </div>
         </div>
@@ -468,57 +469,96 @@
 
 <script>
 // ===========================================================
-// ROADMAP DATA — lifted from PLANNED.md (audit 2026-05-19)
+// ROADMAP DATA — audit 2026-05-27 against v10.35.6
 // ===========================================================
 const PHASES = [
   {
-    id: 'sprint-fixes',
-    title: 'v10.34 sprint — confirmed bug fixes',
+    id: 'tauri-shell',
+    title: 'Tauri 2 desktop shell',
     status: 'shipped',
-    meta: '5 bugs · 565 smoke tests',
-    note: 'Confirmed bugs from live testing on 2026-05-19. All shipped and verified by the smoke suite.',
+    meta: 'v10.35.x · Windows MSI + macOS DMG',
+    note: 'SeekDeep ships as a native desktop app — no terminal, no .bat files. Tauri Rust spawns the Python sidecar, kills stale servers, and survives MSI overwrites without losing the user.',
     items: [
-      { title: 'Persona modal crash', desc: 'Label shortened from 52 → 25 chars (<span class="mono">"Persona name (or reset)"</span>) to satisfy Discord\'s 45-char limit.', cat: 'features', version: 'v10.34' },
-      { title: 'Deprecated <span class="mono">ephemeral: true</span>', desc: 'All 11 occurrences migrated to <span class="mono">flags: MessageFlags.Ephemeral</span>.', cat: 'qol', version: 'v10.34' },
-      { title: 'Shared archive button 77s-637s latency', desc: 'Removed O(n) full thread scan from the shared archive button path. Now trusts the JSON profile fast count. Verification scans reserved for <span class="mono">archive status</span>.', cat: 'perf', version: 'v10.34' },
-      { title: 'Archive delete button <span class="mono">50027</span> error', desc: 'Removed full thread scan from delete path. Decrements profile count atomically. Final <span class="mono">editReply</span> wrapped in try/catch with fallback to <span class="mono">channel.send</span>.', cat: 'perf', version: 'v10.34' },
-      { title: 'Inpaint prompt extraction', desc: 'Now extracts removal target ("the small houses") instead of generic fill prompt. Combines target+scene when scene is non-generic.', cat: 'image', version: 'v10.34' },
+      { title: 'Sidecar + boot sequence', desc: 'Rust shell extracts bundled resources to <span class="mono">%APPDATA%\\com.nathanneurotic.seekdeep\\app</span>, finds Python, validates deps, spawns <span class="mono">local_ai_server.py</span>. Version-aware: kills any stale :7865 server (different version OR same-version after pip install) before re-spawning so newly-installed deps load.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Fresh-boot remnant cleanup', desc: 'Tauri sets <span class="mono">SEEKDEEP_FRESH_BOOT=1</span> on the FIRST sidecar spawn of each launch. Python startup reaps any leftover <span class="mono">node index.js</span> bot processes from previous sessions. Mid-session respawns (ML install, crash watchdog) skip this so your running bot survives.', cat: 'features', version: 'v10.35.6' },
+      { title: 'System tray + minimize', desc: 'Right-click tray menu: Open, Restart sidecar, Self-update, Quit. Closing the window minimizes to tray instead of killing the AI server.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Self-update from GitHub', desc: 'POST <span class="mono">/system/self-update</span> pulls the latest <span class="mono">local_ai_server.py</span>, <span class="mono">gui/</span>, and <span class="mono">scripts/</span> from <span class="mono">main</span> and auto-restarts the sidecar so changes take effect immediately.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Nightly Windows MSI builds', desc: 'GitHub Actions builds and publishes a signed MSI on every push to main. Release notes embed SmartScreen guidance images (<em>"More info" → "Run anyway"</em>) so first-run users aren\'t blocked.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Always-fresh sidecar respawn', desc: 'Previously matched-version sidecars were reused on relaunch — which trapped users behind stale <span class="mono">sys.modules</span> after a pip install. Now every Tauri launch kills+respawns. Set <span class="mono">SEEKDEEP_TAURI_REUSE_SIDECAR=1</span> to opt out.', cat: 'features', version: 'v10.35.x' },
     ]
   },
   {
-    id: 'image-quality',
-    title: 'Image pipeline quality',
+    id: 'live-events',
+    title: 'Live events bus — push instead of poll',
     status: 'shipped',
-    meta: '5 pipelines tuned',
-    note: 'Audited all 5 image pipelines on 2026-05-19. Default parameters are what Node sends (not just the Python fallbacks).',
+    meta: 'v10.35.6 · 7 event families',
+    note: 'A single /events WebSocket replaces ~80% of the per-pane HTTP polling. Server emits ticks on a timer; clients subscribe and update UI on each event. Polling stays in place as a 30s safety net for when the WS is down.',
     items: [
-      { title: 'Inpainting quality improvements', desc: 'CLIPSeg mask threshold 0.4 → 0.3, <span class="mono">MaxFilter(21)</span> dilation, <span class="mono">GaussianBlur(8)</span> feathering. Inpaint params: strength 0.95, guidance 5.0, steps 30, negative prompt now sent.', cat: 'image', version: 'v10.31+' },
-      { title: 'Pix2Pix image_guidance_scale', desc: 'Now adaptive: heavy edits (scene/style) get 1.2, light edits (brightness/color) get 2.0, default 1.5. Was hardcoded at 1.0.', cat: 'image', version: 'v10.34' },
-      { title: 'img2img guidance_scale', desc: 'Changed from <span class="mono">IMAGE_GUIDANCE_SCALE</span> (txt2img\'s 7.0) to <span class="mono">IMAGE_IMG2IMG_GUIDANCE_SCALE</span> (default 5.0).', cat: 'image', version: 'v10.34' },
-      { title: 'Context menu img2img auto-routing', desc: 'Instruction-like prompts auto-route to pix2pix (modifications) or inpaint (removals) when features are enabled.', cat: 'image', version: 'v10.34' },
-      { title: 'Adaptive strength · scene/environment tier', desc: 'Added 0.80 tier for scene keywords. Generic "make it" bumped 0.65 → 0.70.', cat: 'image', version: 'v10.34' },
+      { title: 'WebSocket event bus', desc: '<span class="mono">/events</span> WS with token query-param auth, exponential reconnect, hello/heartbeat keepalives. Client API: <span class="mono">window.SeekDeepEvents.on(topic, cb)</span>.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Live status ticks', desc: 'Server-side <span class="mono">_tick_loop</span> publishes <span class="mono">gpu.tick</span> (3s), <span class="mono">health.tick</span> (5s), <span class="mono">launchers.tick</span> (5s). Fast-paths to no-op when zero subscribers — idle box pays nothing.', cat: 'perf', version: 'v10.35.6' },
+      { title: 'Event-driven route badge', desc: 'POST <span class="mono">/config</span> and <span class="mono">/persona</span> emit <span class="mono">route.changed</span>. Chat playground re-fetches <span class="mono">/route/debug</span> only on changes, not every 8s.', cat: 'perf', version: 'v10.35.6' },
+      { title: 'Service state events', desc: '<span class="mono">service.state.changed</span> fires whenever a launcher transitions. Launcher cards update instantly without waiting for the next poll cycle.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Long-task progress banner', desc: 'Page-wide <span class="mono">long-task.js</span> banner subscribes to <span class="mono">deps.install.*</span>, <span class="mono">doctor.*</span>, <span class="mono">self-update.*</span>. Shows elapsed time + line count + last log line on every page, not just the wizard.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Streaming logs', desc: '<span class="mono">/logs/stream</span> SSE replaces the 3s <span class="mono">/logs/tail</span> poll loop in the Logs Viewer.', cat: 'perf', version: 'v10.35.x' },
     ]
   },
   {
-    id: 'router-perf',
-    title: 'Model router + performance',
+    id: 'ml-deps-installer',
+    title: 'ML deps installer + model wizard',
     status: 'shipped',
-    meta: '2 items · live',
-    note: 'The model router now actively routes lightweight tasks (translations, greetings) to gemma-3n. Thread renames debounced to prevent API spam.',
+    meta: 'v10.35.x · pip + HF cache',
+    note: 'Heavy ML libraries (torch, transformers, diffusers) are NOT bundled with the .exe — they install on first use via an in-app flow. HF model weights download progressively with live progress.',
     items: [
-      { title: '<span class="mono">lightweight_chat</span> routing', desc: 'Router routes to <span class="mono">lightweight_chat</span> (gemma-3n-E4B-it) for translation tasks, greetings, short trivial prompts. Only activates when <span class="mono">LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID</span> is set.', cat: 'router', version: 'v10.34' },
-      { title: 'Thread rename debounce', desc: '<span class="mono">seekdeepMaybeRenameArchiveThread</span> tracks last rename time per thread with 30-second cooldown. Rapid archive clicks no longer queue rename API calls.', cat: 'perf', version: 'v10.34' },
+      { title: 'Split requirements', desc: '<span class="mono">requirements-local.txt</span> is the FastAPI boot stack (~25 MB). <span class="mono">requirements-ml.txt</span> is the heavy GPU stack (~2 GB torch+transformers+diffusers+tiktoken+sentencepiece, pinned to <span class="mono">torch==2.11.0+cu128</span>).', cat: 'features', version: 'v10.35.x' },
+      { title: 'POST /deps/install', desc: 'Endpoint streams pip output via <span class="mono">deps.install.line</span> events. Auto-kills the sidecar first so dep installs don\'t race with running imports. Classifier branches for known failure modes (ResolutionImpossible, tokenizer-load-failure, Python-too-new, etc.).', cat: 'features', version: 'v10.35.x' },
+      { title: 'Inline INSTALL TOKENIZER DEPS button', desc: 'Chat 503 with <span class="mono">tokenizer-load-failure</span> shows a one-click fix button right in the conversation. Calls Tauri\'s <span class="mono">install_ml_deps</span> or POSTs <span class="mono">/deps/install</span>, then auto-restarts.', cat: 'features', version: 'v10.35.6' },
+      { title: 'HF model picker + cache scan', desc: 'Quick Model Picker on Bot Config + Models pane. Lists curated catalog + locally-cached repos. WinError 448 (HF symlink failure) detected with one-click fix. Ollama-aware "cached" badge.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Streaming HF download', desc: 'First-use model download shows live progress (MB / total MB, %, ETA) via <span class="mono">model.download.line</span> events. Resumable.', cat: 'features', version: 'v10.35.x' },
+      { title: 'PyTorch sm_120 + cu128 detect', desc: 'RTX 50-series (Blackwell sm_120) needs cu128 wheels. Detected automatically; one-click "Install cu128 variant" button on Installer page.', cat: 'features', version: 'v10.35.x' },
+    ]
+  },
+  {
+    id: 'gui-surface',
+    title: 'Control Center — full GUI surface',
+    status: 'shipped',
+    meta: 'v10.35.x · 16 panes',
+    note: 'Every Discord-side feature is now driveable from the desktop GUI: chat, image, vision, archive, memory, prompts, doctor, logs, launchers, stats. No-Discord (Standalone) mode runs without Discord at all.',
+    items: [
+      { title: 'Chat / image / vision playgrounds', desc: 'Full local playground for <span class="mono">/chat</span>, <span class="mono">/image</span> (txt2img / img2img / pix2pix / inpaint / upscale), <span class="mono">/vision</span>. Slash commands (<span class="mono">/remember</span>, <span class="mono">/recall</span>, <span class="mono">/route</span>, <span class="mono">/help</span>) work locally too.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Memory + persona endpoints', desc: '9 <span class="mono">/memory/*</span> routes + <span class="mono">/persona</span> with scope=channel|server|global. Same atomic-write semantics as the Discord-side handlers; data flows are identical.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Universal Archive surface', desc: 'Context-menu "Archive this" works on any message. Reply-with-archive surface; 📥 reaction notifies the author. Edit-in-place updates the published copy; deletion writes a tombstone.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Prompts marketplace', desc: '<span class="mono">#prompts</span> channel becomes a browsable library on the Prompts pane. Editable in-place; deletes tombstone the published copy. 14-day reshare logic prevents spam.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Launcher card lifecycle', desc: 'Single source of truth — <span class="mono">_service_state()</span>. Reports running / exited / transitioning / not-running with PID + count + uptime + last_error tail. Stale yesterday-old err.log guard against false-crash banners.', cat: 'features', version: 'v10.35.x' },
+      { title: 'Doctor + stats + cache prune', desc: '<span class="mono">/system/doctor</span> preflight (Python/Git/Docker/HF probes), <span class="mono">/stats/snapshot</span> (per-user activity over 30d), <span class="mono">/cache/prune</span> (HF cache eviction).', cat: 'features', version: 'v10.35.x' },
+      { title: 'Kill-all-bot-instances', desc: 'Right-click action on the bot launcher card. Enumerates every <span class="mono">node index.js</span> process scoped to the repo cwd and force-kills. Solves the "bot instances pile up" symptom that earlier auto-restart loops created.', cat: 'features', version: 'v10.35.6' },
+      { title: 'Standalone (no-Discord) boot mode', desc: 'Run the AI server + GUI without a Discord token — full playgrounds, no bot login required. <span class="mono">--no-discord</span> launcher flag.', cat: 'features', version: 'v10.35.x' },
+    ]
+  },
+  {
+    id: 'resilience',
+    title: 'Resilience + polish',
+    status: 'shipped',
+    meta: 'v10.35.x · 12 papercuts',
+    note: 'The "feels broken" papercuts — silent failures, console flashes, false-positive banners, stale state — all hunted down and either fixed or surfaced inline with a one-click recovery button.',
+    items: [
+      { title: 'Subprocess CREATE_NO_WINDOW', desc: 'Module-local subprocess shim auto-injects <span class="mono">creationflags=CREATE_NO_WINDOW</span> on Windows. Every periodic probe (nvidia-smi, where, doctor) no longer flashes a black terminal on focus.', cat: 'qol', version: 'v10.35.6' },
+      { title: 'Chat input click no longer hangs', desc: 'Spellcheck off on every textarea/input + synchronous warm-up textarea at nav.js entry. Webview2 TSF / spellcheck-COM cold-start happens during page load, not on first click.', cat: 'qol', version: 'v10.35.6' },
+      { title: 'Suppressed transient errors during restart', desc: 'Global restart-window flag silences <span class="mono">/health</span>, <span class="mono">/logs/tail</span>, <span class="mono">/launchers/status</span> error toasts during a known sidecar bounce so users don\'t see panic banners during a planned 5s gap.', cat: 'qol', version: 'v10.35.x' },
+      { title: 'Resilient HF cache scan', desc: 'WinError 448 (HF symlinks across drives) surfaces inline with a "Fix cache" button that switches HF_HOME to a same-drive path.', cat: 'features', version: 'v10.35.x' },
+      { title: 'CPU-only banner truth', desc: 'Was crying "CPU ONLY" any time torch wasn\'t imported. Now gated on <span class="mono">gpu.torch_present === true && cuda_available === false</span> so missing-deps is reported as missing-deps, not as no-GPU.', cat: 'qol', version: 'v10.35.6' },
+      { title: 'SmartScreen guidance everywhere', desc: 'README + every GitHub release description embeds the SmartScreen "More info → Run anyway" screenshots. Backfill script for past releases.', cat: 'features', version: 'v10.35.x' },
     ]
   },
   {
     id: 'next-up',
     title: 'Next up',
     status: 'flight',
-    meta: '2 priorities',
-    note: "What's actively on the radar — scaffolded but waiting on model downloads or external lifts.",
+    meta: '3 priorities',
+    note: 'Actively on the radar — scaffolded with feature flags but blocked on model downloads, external lifts, or design decisions.',
     items: [
-      { title: 'Real-ESRGAN model download', desc: 'Scaffolded in v10.25 — needs user approval for the model cache addition. Right-click "Upscale 2x" already gated behind <span class="mono">SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on</span>.', cat: 'image' },
-      { title: 'TTS voice channel', desc: 'Biggest remaining lift. Piper or XTTS — voice connection, model setup, per-channel opt-in. Gated behind <span class="mono">SEEKDEEP_FEATURE_TTS_VOICE=on</span>.', cat: 'features' },
+      { title: 'Real-ESRGAN upscale model', desc: 'Right-click "Upscale 2x" path is wired; needs the model weights cached + a first-run consent prompt. Gated behind <span class="mono">SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on</span>.', cat: 'image' },
+      { title: 'TTS voice channel', desc: 'Piper or XTTS — voice connection, model setup, per-channel opt-in. Largest remaining lift; gated behind <span class="mono">SEEKDEEP_FEATURE_TTS_VOICE=on</span>. TTS page UI already drafted.', cat: 'features' },
+      { title: 'Live-events for /stats/snapshot', desc: '<span class="mono">/stats/snapshot</span> is the last 30s poll we haven\'t pushed onto the event bus. Could fire <span class="mono">stats.tick</span> on the same loop. Low priority — 30s is fine.', cat: 'perf' },
     ]
   },
   {

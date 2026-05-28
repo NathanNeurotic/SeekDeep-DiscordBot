@@ -28,7 +28,15 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+// Fresh-boot guard. False on the first spawn_server of an app launch, true
+// for every subsequent spawn (crash-respawn, restart_sidecar after ML deps
+// install, etc). Used to set SEEKDEEP_FRESH_BOOT=1 ONLY on the first spawn
+// so the Python side knows to kill orphan bot processes from previous user
+// sessions without nuking the user's intentionally-running bot mid-session.
+static FIRST_SPAWN_DONE: AtomicBool = AtomicBool::new(false);
 
 // Windows: CREATE_NO_WINDOW (0x08000000) prevents spawned console apps
 // from opening a black cmd-window alongside the Tauri shell. Without it,
@@ -628,11 +636,21 @@ pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Chi
     let log_file = fs::File::create(&log_path).map_err(|e| format!("create log: {e}"))?;
     let log_clone = log_file.try_clone().map_err(|e| format!("clone log fd: {e}"))?;
 
-    let child = quiet_command(python)
-        .arg("local_ai_server.py")
+    // Fresh-boot flag — set on the FIRST spawn of an app launch only. The
+    // Python startup hook reads this and reaps orphan bot processes from
+    // a previous user session. Mid-session respawns (ML install, restart,
+    // crash watchdog) don't set it so the user's running bot survives.
+    let is_fresh_boot = !FIRST_SPAWN_DONE.swap(true, Ordering::SeqCst);
+
+    let mut cmd = quiet_command(python);
+    cmd.arg("local_ai_server.py")
         .current_dir(runtime)
         .env("SEEKDEEP_EMIT_LOG_LINES", "on")
-        .env("SEEKDEEP_TAURI_SHELL", "1")
+        .env("SEEKDEEP_TAURI_SHELL", "1");
+    if is_fresh_boot {
+        cmd.env("SEEKDEEP_FRESH_BOOT", "1");
+    }
+    let child = cmd
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .spawn()

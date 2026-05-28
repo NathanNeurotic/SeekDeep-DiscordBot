@@ -4539,6 +4539,33 @@ def register_gui_endpoints(
             except Exception:
                 await asyncio.sleep(2.0)
 
+    def _kill_orphan_bots_at_boot() -> None:
+        """Fresh-boot cleanup. Tauri sets SEEKDEEP_FRESH_BOOT=1 on the FIRST
+        sidecar spawn of an app launch (not on crash-respawn / restart_sidecar)
+        so that whatever bot processes leaked from the previous user session
+        get reaped before any new state accumulates. Without this the user
+        sees pile-ups they have to manually kill via the right-click menu —
+        we already had the kill-all endpoint; this just calls it at boot."""
+        try:
+            bot_cwd = _resolve_bot_cwd(root)
+            procs = _find_bot_processes(bot_cwd)
+            if not procs:
+                return
+            print(f"[SeekDeep] fresh-boot cleanup: reaping {len(procs)} orphan bot process(es)")
+            for entry in procs:
+                pid = entry["pid"]
+                ok, err = _kill_pid(pid)
+                note = "killed" if ok else f"failed: {err or 'unknown'}"
+                print(f"[SeekDeep]   pid {pid} ({entry.get('source', '?')}) - {note}")
+            try:
+                pid_name = _PID_FILE_NAMES.get("bot")
+                if pid_name:
+                    (_log_dir / pid_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        except Exception as exc:
+            print(f"[SeekDeep] fresh-boot cleanup failed: {exc}")
+
     @app.on_event("startup")
     async def _start_heartbeat():
         # Capture the running loop so producers in OTHER modules (notably
@@ -4546,6 +4573,12 @@ def register_gui_endpoints(
         # event_bus.publish_sync(...) without each one juggling its own loop.
         loop = asyncio.get_running_loop()
         event_bus.attach_loop(loop)
+        # Fresh-boot remnant kill — runs once at app launch, before any new
+        # launchers can spawn. Gated on the env var Tauri sets ONLY on the
+        # first sidecar spawn of a session so mid-session respawns don't
+        # nuke the user's intentionally-running bot.
+        if os.getenv("SEEKDEEP_FRESH_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
+            _kill_orphan_bots_at_boot()
         # Stash the task on app.state so it can be cancelled on shutdown
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
         app.state.seekdeep_tick_task = loop.create_task(_tick_loop())
