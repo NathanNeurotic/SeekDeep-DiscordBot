@@ -3532,59 +3532,42 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
-    # Self-heal three common long-lived-process failure modes:
-    #   1. fast tokenizer's rust backend rejects valid input (ValueError
-    #      "backend tokenizer") — long-running httpx/tokenizers state issue
-    #   2. HF Hub refresh fails mid-process (OSError "couldn't connect")
-    #      while the cache on disk is fully intact and would work offline
-    #   3. specific file in the snapshot got 401/404 from HF (gated changes,
-    #      revision pin drift) but cache has a working older snapshot
-    # All three are recoverable by retrying with use_fast=False + local-only.
-    def _try_load_tokenizer():
+    # Cache-first attempt order. Steady state for this bot is "model is
+    # already on disk" — every load was preceded by a download at install
+    # time. Calling the HF Hub on every load is what kept poisoning the
+    # long-running process (stale httpx → OSError, then ValueError, then
+    # whatever next). When the cache has the file, we never call out at
+    # all. Network attempts are last-resort for genuine first-downloads.
+    def _try_load(cls, *, what: str):
         attempts = [
-            ("fast",           dict(tokenizer_kwargs)),
-            ("fast-offline",   {**tokenizer_kwargs, "local_files_only": True}),
-            ("slow",           {**tokenizer_kwargs, "use_fast": False}),
-            ("slow-offline",   {**tokenizer_kwargs, "use_fast": False, "local_files_only": True}),
+            ("cache-fast", {**tokenizer_kwargs, "local_files_only": True}),
+            ("cache-slow", {**tokenizer_kwargs, "local_files_only": True, "use_fast": False}),
+            ("hub-fast",   dict(tokenizer_kwargs)),
+            ("hub-slow",   {**tokenizer_kwargs, "use_fast": False}),
         ]
-        last_exc = None
-        retryable_substrings = (
-            "backend tokenizer",       # misleading rust-tokenizer error
-            "couldn't connect",        # network blip mid-refresh
-            "couldn't find them in the cached files",  # transformers' OSError msg
-            "we couldn't find",        # variant
-            "connection error",        # httpx
-            "max retries exceeded",    # urllib3 / requests
-            "read timed out",          # network slow
-        )
+        # Model loads share the kwargs base but layer on quant_config /
+        # device_map / dtype. Re-apply those to each model attempt.
+        extra: dict = {}
+        if what == "model":
+            if quant_config is not None and cuda_available():
+                extra = {"quantization_config": quant_config, "device_map": "auto"}
+            else:
+                extra = {"torch_dtype": model_dtype(), "device_map": None, "low_cpu_mem_usage": True}
+        last_exc: BaseException | None = None
         for label, kw in attempts:
+            # AutoModel doesn't accept use_fast — strip it before calling.
+            kw_clean = {k: v for k, v in kw.items() if k != "use_fast"} if what == "model" else kw
             try:
-                tok = AutoTokenizer.from_pretrained(model_id, **kw)
-                if label != "fast":
-                    print(f"[SeekDeep Local AI] tokenizer self-heal: succeeded via {label} "
-                          f"after earlier path(s) failed (model={model_id})", flush=True)
-                return tok
+                obj = cls.from_pretrained(model_id, **kw_clean, **extra)
+                if label != "cache-fast":
+                    print(f"[SeekDeep Local AI] {what} loaded via {label} "
+                          f"(model={model_id})", flush=True)
+                return obj
             except (ValueError, OSError) as e:
                 last_exc = e
-                msg = str(e).lower()
-                # Only retry on known-recoverable error shapes; bubble other
-                # ValueErrors/OSErrors (e.g. gated repo with no cache).
-                if not any(sub in msg for sub in retryable_substrings):
-                    raise
-        raise last_exc
-    chat_tokenizer = _try_load_tokenizer()
-
-    model_kwargs = dict(tokenizer_kwargs)
-    if quant_config is not None and cuda_available():
-        # bitsandbytes places weights itself; device_map='auto' is required.
-        model_kwargs["quantization_config"] = quant_config
-        model_kwargs["device_map"] = "auto"
-    else:
-        model_kwargs["torch_dtype"] = model_dtype()
-        model_kwargs["device_map"] = None
-        model_kwargs["low_cpu_mem_usage"] = True
-
-    chat_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        raise last_exc  # every attempt failed — surface the last one
+    chat_tokenizer = _try_load(AutoTokenizer, what="tokenizer")
+    chat_model = _try_load(AutoModelForCausalLM, what="model")
 
     # Only move manually when NOT using bnb quant — bnb already placed the weights.
     if quant_config is None and cuda_available():
