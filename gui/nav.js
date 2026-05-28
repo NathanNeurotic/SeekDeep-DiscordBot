@@ -1285,6 +1285,11 @@
     }
     inject('events.js',  'SeekDeepEvents');
     inject('version.js', 'SeekDeepVersion');
+    // fix-action.js · shared retry/watch_events/hint helper used by both
+    // app.html's launcher fix-button and setup-wizard.html's runFix. Single
+    // source of truth so the .subscribe-vs-.on class of bug (Phase 1) can't
+    // recur per-pane.
+    inject('fix-action.js', 'SeekDeepFixAction');
     // playground.js targets chat.html only; auto-inject everywhere and let
     // the script no-op on non-chat pages (the file checks location.pathname).
     // Gated by SEEKDEEP_FEATURE_WEB_PLAYGROUND when the bot serves /gui

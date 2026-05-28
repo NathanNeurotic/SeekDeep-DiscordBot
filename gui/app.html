@@ -1813,7 +1813,7 @@
             <div class="sub">Visual browse for user &amp; shared archive threads. <span id="archSnapshotMeta" class="tiny muted" style="font-family: var(--font-mono);">— snapshot pending</span></div>
           </div>
           <div class="actions">
-            <input id="archSearchInput" placeholder="Search archive…" style="width: 240px;" title="Filter by prompt text, archive key, requester ID, or model" />
+            <input id="archSearchInput" placeholder="Search archive…" style="width: 240px;" title="Filter by archived message text, archive key, requester ID, or model" />
             <select id="archSortSelect" class="mono" style="width: 160px; padding: 8px 10px; font-size: 12px;">
               <option value="ts-desc">Sort: newest</option>
               <option value="ts-asc">Sort: oldest</option>
@@ -4508,85 +4508,45 @@ const SEEKDEEP_BASE = (function() {
                 btn.disabled = true;
                 btn.textContent = '… running';
                 const sdn = window.SeekDeepNotify;
-                try {
-                  const init = { method: fa.method || 'POST', headers: { 'Content-Type': 'application/json' } };
-                  if (fa.body) init.body = JSON.stringify(fa.body);
-                  // Long-running fixes (ML deps install) need a generous
-                  // timeout — 10 min covers torch+transformers+diffusers.
-                  init.signal = AbortSignal.timeout(fa.long_running ? 600_000 : 60_000);
-                  const r = await fetch(SEEKDEEP_BASE + fa.endpoint, init);
-                  const result = await r.json().catch(() => ({}));
-                  if (r.ok && result.ok !== false) {
-                    // If the endpoint exposes watch_events (e.g. /deps/install
-                    // and /system/reinstall-torch both return immediately and
-                    // run in a background thread), we MUST wait for the
-                    // matching event before showing DONE. Otherwise users see
-                    // green while pip is still downloading 2 GB of torch wheels.
-                    //
-                    // SeekDeepEvents exposes .on(type, handler) — NOT
-                    // .subscribe(). The earlier code probed .subscribe and
-                    // always fell through to the synchronous DONE path, which
-                    // is why the button flashed green then reverted as soon
-                    // as the firstrun re-poll saw torch was still missing.
-                    if (Array.isArray(fa.watch_events) && fa.watch_events.length && window.SeekDeepEvents?.on) {
-                      btn.textContent = '⏳ running…';
-                      if (sdn?.toast) sdn.toast({ tone: 'info', title: c.label, body: result.note || 'Background work started · waiting for completion event…', ttl: 5000 });
-                      let resolved = false;
-                      const unsubs = [];
-                      const settle = (evType, data) => {
-                        if (resolved) return;
-                        resolved = true;
-                        unsubs.forEach(u => { try { u && u(); } catch {} });
-                        const failed = /\.(failed|error)$/.test(evType);
-                        if (!failed) {
-                          btn.textContent = '✓ DONE';
-                          btn.style.background = 'var(--good)';
-                          if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label + ' · complete', body: data?.note || 'Fix applied · re-checking…', ttl: 5000 });
-                          setTimeout(load, 1500);
-                        } else {
-                          btn.textContent = '✕ FAILED';
-                          btn.style.background = 'var(--bad)';
-                          const err = data?.error || data?.hint || data?.note
-                                   || (data?.exit_code != null ? `pip exit ${data.exit_code}` : 'event reported failure');
-                          if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · fix failed', body: String(err).slice(0, 240), ttl: 8000 });
-                          setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
-                        }
-                      };
-                      // Register one handler per watched event type. .on()
-                      // returns the unsubscriber so we can clean up after
-                      // the first terminal event fires.
-                      for (const evType of fa.watch_events) {
-                        unsubs.push(window.SeekDeepEvents.on(evType, (data) => settle(evType, data)));
-                      }
-                      // Hard cap: if no event arrives in 15 min, surface the timeout.
-                      setTimeout(() => {
-                        if (resolved) return;
-                        resolved = true;
-                        unsubs.forEach(u => { try { u && u(); } catch {} });
-                        btn.textContent = '⚠ TIMED OUT';
-                        btn.style.background = 'var(--warn)';
-                        if (sdn?.toast) sdn.toast({ tone: 'warn', title: c.label + ' · timeout', body: 'No completion event arrived in 15 min. Check the Logs viewer.', ttl: 10000 });
-                        setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
-                      }, 15 * 60 * 1000);
-                    } else {
-                      btn.textContent = '✓ DONE';
-                      btn.style.background = 'var(--good)';
-                      if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label, body: result.note || 'Fix complete · re-checking…', ttl: 5000 });
-                      // Re-poll firstrun after a short delay so the user
-                      // sees the row turn green if the fix succeeded.
-                      setTimeout(load, fa.long_running ? 4000 : 2000);
-                    }
-                  } else {
-                    btn.textContent = '✕ FAILED';
-                    btn.style.background = 'var(--bad)';
-                    const err = result.error || result.detail || 'HTTP ' + r.status;
-                    if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · fix failed', body: String(err).slice(0, 240), ttl: 8000 });
-                    setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
-                  }
-                } catch (err) {
+                // Single source of truth for retry/watch_events/hint via
+                // gui/fix-action.js. UI hooks below adapt the result to the
+                // launcher card pill + toast presentation.
+                if (!window.SeekDeepFixAction) {
+                  // fix-action.js not loaded yet (unlikely — nav.js auto-loads
+                  // it). Surface a clear error instead of silently failing.
                   btn.textContent = '✕ ERROR';
                   btn.style.background = 'var(--bad)';
-                  if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label + ' · network error', body: String(err.message || err).slice(0, 240), ttl: 8000 });
+                  if (sdn?.toast) sdn.toast({ tone: 'bad', title: c.label, body: 'fix-action.js failed to load', ttl: 8000 });
+                  setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
+                  return;
+                }
+                if (Array.isArray(fa.watch_events) && fa.watch_events.length) {
+                  btn.textContent = '⏳ running…';
+                  if (sdn?.toast) sdn.toast({ tone: 'info', title: c.label, body: 'Background work started · waiting for completion event…', ttl: 5000 });
+                }
+                const result = await window.SeekDeepFixAction.run({
+                  endpoint:    fa.endpoint,
+                  method:      fa.method,
+                  body:        fa.body,
+                  watchEvents: fa.watch_events,
+                  longRunning: !!fa.long_running,
+                });
+                if (result.ok) {
+                  btn.textContent = '✓ DONE';
+                  btn.style.background = 'var(--good)';
+                  if (sdn?.toast) sdn.toast({ tone: 'good', title: c.label + ' · complete', body: result.payload?.note || 'Fix applied · re-checking…', ttl: 5000 });
+                  setTimeout(load, result.settled_via === 'watch-event' ? 1500 : (fa.long_running ? 4000 : 2000));
+                } else {
+                  const isTimeout = result.settled_via === 'event-timeout';
+                  btn.textContent = isTimeout ? '⚠ TIMED OUT' : '✕ FAILED';
+                  btn.style.background = isTimeout ? 'var(--warn)' : 'var(--bad)';
+                  const errBody = (result.hint || result.error || '').toString().slice(0, 240);
+                  if (sdn?.toast) sdn.toast({
+                    tone: isTimeout ? 'warn' : 'bad',
+                    title: c.label + (isTimeout ? ' · timeout' : ' · fix failed'),
+                    body: errBody,
+                    ttl: 8000,
+                  });
                   setTimeout(() => { btn.textContent = origLbl; btn.style.background = ''; btn.disabled = false; }, 4000);
                 }
               });
