@@ -3532,7 +3532,35 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
-    chat_tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_kwargs)
+    # Self-heal the "Couldn't instantiate the backend tokenizer" path. The fast
+    # tokenizer route can fail intermittently inside a long-lived process while
+    # the slow path (sentencepiece-direct) still works against the same cache.
+    # We try fast first, fall back to slow, then to slow+offline.
+    def _try_load_tokenizer():
+        attempts = [
+            ("fast", dict(tokenizer_kwargs)),
+            ("slow", {**tokenizer_kwargs, "use_fast": False}),
+            ("slow-offline", {**tokenizer_kwargs, "use_fast": False, "local_files_only": True}),
+        ]
+        last_exc = None
+        for label, kw in attempts:
+            try:
+                tok = AutoTokenizer.from_pretrained(model_id, **kw)
+                if label != "fast":
+                    print(f"[SeekDeep Local AI] tokenizer self-heal: succeeded via {label} path "
+                          f"after fast path failed (model={model_id})", flush=True)
+                return tok
+            except ValueError as e:
+                last_exc = e
+                # Only retry on the misleading "backend tokenizer" message; let
+                # other ValueErrors bubble up unchanged.
+                if "backend tokenizer" not in str(e):
+                    raise
+            except Exception as e:
+                # Network / auth / disk errors — propagate without retry.
+                raise
+        raise last_exc
+    chat_tokenizer = _try_load_tokenizer()
 
     model_kwargs = dict(tokenizer_kwargs)
     if quant_config is not None and cuda_available():
