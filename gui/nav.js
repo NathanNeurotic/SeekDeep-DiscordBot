@@ -10,9 +10,19 @@
   'use strict';
   if (document.getElementById('sd-nav-root')) return;
 
-  // Disable spellcheck on every textarea/input so Webview2 doesn't cold-start
-  // the Windows TSF + spellcheck COM service on first focus (5s UI freeze).
-  // Done at page-load by walking the DOM once + observing future additions.
+  // Two-part fix for the Webview2 text-input cold-start (5s UI freeze on
+  // first textarea focus on Windows):
+  //
+  //   1. disableSpellcheckEverywhere — sets spellcheck=false on every text
+  //      input so spellcheck-COM specifically doesn't init. Helps for the
+  //      Grammarly-style hangs but doesn't cover TSF init.
+  //
+  //   2. warmTextInput — synchronously focus+blur+remove a real spellcheck=true
+  //      textarea on script entry, BEFORE the page is interactive. The 5s
+  //      freeze (if any) happens during page load — user sees "Chat" tab
+  //      taking a beat to render — instead of on their first click. Earlier
+  //      version ran at requestIdleCallback time, which collided with user
+  //      input; that broke Send. Running before paint avoids the race.
   (function disableSpellcheckEverywhere() {
     if (window.__seekdeepSpellOff) return;
     window.__seekdeepSpellOff = true;
@@ -24,6 +34,7 @@
         el.setAttribute('autocorrect', 'off');
         el.setAttribute('autocapitalize', 'off');
         el.setAttribute('data-gramm', 'false');
+        if ('spellcheck' in el) el.spellcheck = false;  // also the IDL property
       } catch {}
     };
     const walk = () => {
@@ -42,6 +53,41 @@
       if (document.body) mo.observe(document.body, { childList: true, subtree: true });
       else document.addEventListener('DOMContentLoaded', () => mo.observe(document.body, { childList: true, subtree: true }), { once: true });
     }
+  })();
+
+  (function warmTextInput() {
+    if (window.__seekdeepTextWarmed) return;
+    window.__seekdeepTextWarmed = true;
+    const run = () => {
+      if (!document.body) return;
+      try {
+        // Stash whatever the user was looking at so the warm-up doesn't
+        // visibly steal focus mid-interaction (defensive — should only
+        // ever run before first paint, but page-pivots can re-enter).
+        const prev = document.activeElement;
+        const t = document.createElement('textarea');
+        t.setAttribute('aria-hidden', 'true');
+        t.setAttribute('tabindex', '-1');
+        // spellcheck=true so the focus actually cold-starts TSF/COM.
+        t.setAttribute('spellcheck', 'true');
+        // 1px square at top-left, fully transparent — Webview2 won't skip
+        // the cold-start the way it does for true offscreen (-9999px).
+        t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+        document.body.appendChild(t);
+        // Synchronous focus+blur+remove — the cold-start happens INSIDE
+        // these calls. By the time this function returns, the warm-up
+        // element is gone, so it can't possibly steal focus from a later
+        // user click.
+        t.focus();
+        t.blur();
+        t.remove();
+        if (prev && prev !== document.body && typeof prev.focus === 'function') {
+          try { prev.focus(); } catch {}
+        }
+      } catch {}
+    };
+    if (document.body) run();
+    else document.addEventListener('DOMContentLoaded', run, { once: true });
   })();
 
   // ===== Token auth: auto-inject X-SeekDeep-Token on POSTs to our server =====
