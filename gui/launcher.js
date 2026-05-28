@@ -910,19 +910,49 @@
         const orig = suBtn.textContent;
         suBtn.disabled = true;
         suBtn.textContent = '⏳ Updating…';
+        // Watch for the self-update.complete WS event. If it fires, the
+        // operation succeeded server-side — we can ignore a fetch() that
+        // dropped halfway (the "Failed to fetch" false positive the user
+        // saw). The bus is wired via gui/events.js; subscribe is no-op
+        // if events bus hasn't loaded yet.
+        let wsCompleteData = null;
+        let wsCompleteOff = null;
         try {
-          const r = await fetch(BASE + '/system/self-update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-            signal: AbortSignal.timeout(60000),
-          });
-          if (!r.ok) {
-            let msg = 'HTTP ' + r.status;
-            try { const j = await r.json(); msg = j.detail || j.error || msg; } catch {}
-            throw new Error(msg);
+          if (window.SeekDeepEvents?.on) {
+            wsCompleteOff = window.SeekDeepEvents.on('self-update.complete', (data) => {
+              wsCompleteData = data || { ok: true };
+            });
           }
-          const j = await r.json();
+        } catch {}
+        try {
+          let j;
+          let r;
+          try {
+            r = await fetch(BASE + '/system/self-update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+              signal: AbortSignal.timeout(60000),
+            });
+            if (!r.ok) {
+              let msg = 'HTTP ' + r.status;
+              try { const jj = await r.json(); msg = jj.detail || jj.error || msg; } catch {}
+              throw new Error(msg);
+            }
+            j = await r.json();
+          } catch (fetchErr) {
+            // Fetch dropped mid-operation. Wait up to 5s for the bus to
+            // deliver self-update.complete; if it arrives, treat as success.
+            const waitDeadline = Date.now() + 5000;
+            while (Date.now() < waitDeadline && !wsCompleteData) {
+              await new Promise(r => setTimeout(r, 250));
+            }
+            if (wsCompleteData) {
+              j = { ok: true, downloaded: new Array(wsCompleteData.committed || 0).fill({}), errors: wsCompleteData.errors || [] };
+            } else {
+              throw fetchErr;
+            }
+          }
           const updated = (j.downloaded && j.downloaded.length) || (j.updated && j.updated.length) || 0;
           if (sdn) sdn.toast({ tone: 'good', title: 'Self-update OK', body: `Updated ${updated} file(s) · restarting AI server now…`, ttl: 5000 });
           suBtn.textContent = '⏳ restarting…';
@@ -948,6 +978,7 @@
           suBtn.textContent = orig;
         } finally {
           suBtn.disabled = false;
+          try { if (wsCompleteOff) wsCompleteOff(); } catch {}
         }
       });
     }
