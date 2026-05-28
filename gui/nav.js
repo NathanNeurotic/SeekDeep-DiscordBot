@@ -56,7 +56,15 @@
   })();
 
   (function warmTextInput() {
-    if (window.__seekdeepTextWarmed) return;
+    // sessionStorage persists across same-tab navigations within the Tauri
+    // window. window.__seekdeepTextWarmed alone resets per page-load, so
+    // the warm-up was firing on EVERY navigation (boot.html → loading →
+    // app.html → chat.html) and the user perceived it as "delay on the
+    // chat tab." First page eats the cost; every subsequent navigation
+    // skips it because sessionStorage remembers TSF is already warm.
+    let alreadyWarmed = false;
+    try { alreadyWarmed = sessionStorage.getItem('__sdTextWarmed') === '1'; } catch {}
+    if (alreadyWarmed || window.__seekdeepTextWarmed) return;
     window.__seekdeepTextWarmed = true;
     const run = () => {
       if (!document.body) return;
@@ -66,19 +74,9 @@
         t.setAttribute('aria-hidden', 'true');
         t.setAttribute('tabindex', '-1');
         t.setAttribute('spellcheck', 'true');
-        // Place it at a real on-screen pixel — Webview2 defers TSF init
-        // for elements with display:none / opacity:0 / -9999px offsets.
-        // A 1px element with opacity:0.001 stays visually invisible but
-        // is "real" enough for the input subsystem to actually warm up.
         t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.001;pointer-events:none;z-index:-1;background:transparent;color:transparent;border:none;outline:none;';
         document.body.appendChild(t);
         t.focus();
-        // Inject an actual character + dispatch an input event. The bare
-        // focus() call alone wasn't forcing Webview2 to spin up TSF +
-        // spellcheck COM — the cold-start kept happening on the user's
-        // first REAL keystroke later. Setting .value and dispatching
-        // input/keydown forces the renderer to fully engage the IME path
-        // here, while the user is still looking at the loading shimmer.
         t.value = 'a';
         try { t.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'a', inputType: 'insertText' })); } catch {}
         try { t.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true })); } catch {}
@@ -89,6 +87,7 @@
         if (prev && prev !== document.body && typeof prev.focus === 'function') {
           try { prev.focus(); } catch {}
         }
+        try { sessionStorage.setItem('__sdTextWarmed', '1'); } catch {}
       } catch {}
     };
     if (document.body) run();

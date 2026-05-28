@@ -332,14 +332,15 @@
   </main>
 
 <script>
-  /* TSF / spellcheck warm-up — fires here so Webview2 cold-starts its
-     Windows text-input subsystem during the loading screen (when the user
-     is already watching a progress bar) instead of on their first click
-     in chat.html (where it manifested as a 5s app hang). Setting .value
-     + dispatching input + key events seems to be required to actually
-     engage TSF — bare focus() on a hidden element wasn't triggering it. */
+  /* TSF / spellcheck warm-up — fires ONCE here on the loading page so
+     Webview2 cold-starts its Windows text-input subsystem before the user
+     ever reaches an interactive page. sessionStorage prevents the warm-up
+     from re-firing on every subsequent navigation (which is what
+     produced the "delay + flash when opening the chat tab" symptom: the
+     warm-up was effectively running again on chat.html). */
   (function warmTextInputDuringLoad() {
     try {
+      if (sessionStorage.getItem('__sdTextWarmed') === '1') return;
       const t = document.createElement('textarea');
       t.setAttribute('aria-hidden', 'true');
       t.setAttribute('tabindex', '-1');
@@ -354,6 +355,7 @@
       t.value = '';
       t.blur();
       t.remove();
+      try { sessionStorage.setItem('__sdTextWarmed', '1'); } catch {}
     } catch {}
   })();
 
