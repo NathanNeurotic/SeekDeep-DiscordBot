@@ -252,15 +252,14 @@ os.environ["LOCAL_MODEL_CACHE_DIR"] = str(MODEL_CACHE_DIR)
 
 def _convert_hf_symlinks_to_hardlinks(cache_root) -> None:
     # On this Windows install the running server process can't follow
-    # symlinks (OSError 22 "Invalid argument") even though subprocesses
-    # of the same Python can. transformers' cached_file then can't see
-    # config.json / model.safetensors and raises misleading errors:
-    #   "Unrecognized model in <id>. Should have a model_type key"
-    #   "<id> does not appear to have a file named ... model.safetensors"
-    # Replace every symlink under models--*/snapshots/*/ with a hardlink
-    # to its blob target. Hardlinks aren't blocked by the symlink-privilege
-    # requirement and Python/transformers open them transparently as files.
-    # Idempotent: skip files that are already non-symlinks.
+    # symlinks (OSError 22 / WinError 448) even though subprocesses of the
+    # same Python can. transformers' cached_file then can't see config.json
+    # / model.safetensors and raises misleading errors. Same blocker hits
+    # diffusers for image models (which have nested subdirs: vae/, unet/,
+    # text_encoder/, tokenizer/...) so we recurse through every snapshot.
+    # Replace every symlink with a hardlink to its blob target. Hardlinks
+    # aren't blocked by the symlink-privilege requirement and Python +
+    # transformers + diffusers open them transparently as files.
     import pathlib
     try:
         root = pathlib.Path(cache_root)
@@ -274,31 +273,31 @@ def _convert_hf_symlinks_to_hardlinks(cache_root) -> None:
             for snap in snap_root.iterdir():
                 if not snap.is_dir():
                     continue
-                for entry in snap.iterdir():
-                    if not entry.is_symlink():
-                        continue
-                    try:
-                        target_str = os.readlink(str(entry))
-                    except OSError:
-                        continue
-                    if not os.path.isabs(target_str):
-                        target = (entry.parent / target_str).resolve()
-                    else:
-                        target = pathlib.Path(target_str)
-                    if not target.is_file():
-                        continue
-                    try:
-                        # Replace symlink with hardlink to the same blob.
-                        # Same volume → no copy, just a new dirent.
-                        os.unlink(str(entry))
-                        os.link(str(target), str(entry))
-                        converted += 1
-                    except OSError:
-                        # If the unlink/link fails, restore the symlink so
-                        # we don't leave the snapshot half-broken.
-                        if not entry.exists():
-                            try: os.symlink(target_str, str(entry))
-                            except OSError: pass
+                # Walk ALL nested entries. Diffusers models have subdirs
+                # (vae/, unet/, etc.); a flat iterdir would miss them.
+                for dirpath, _dirs, files in os.walk(str(snap)):
+                    for fname in files:
+                        entry = pathlib.Path(dirpath) / fname
+                        if not entry.is_symlink():
+                            continue
+                        try:
+                            target_str = os.readlink(str(entry))
+                        except OSError:
+                            continue
+                        if not os.path.isabs(target_str):
+                            target = (entry.parent / target_str).resolve()
+                        else:
+                            target = pathlib.Path(target_str)
+                        if not target.is_file():
+                            continue
+                        try:
+                            os.unlink(str(entry))
+                            os.link(str(target), str(entry))
+                            converted += 1
+                        except OSError:
+                            if not entry.exists():
+                                try: os.symlink(target_str, str(entry))
+                                except OSError: pass
         if converted:
             print(f"[SeekDeep] HF cache: converted {converted} symlinks → hardlinks "
                   f"(workaround for Windows process symlink-privilege issue)", flush=True)
