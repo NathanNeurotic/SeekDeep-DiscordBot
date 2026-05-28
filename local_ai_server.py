@@ -654,6 +654,34 @@ def _ensure_tokenizer_deps_synchronously() -> None:
 
 _ensure_tokenizer_deps_synchronously()
 
+def _warn_about_multimodal_chat_role_configs() -> None:
+    # Each multimodal model_type listed below CAN'T load via AutoModelForCausalLM.
+    # When a chat role points at one of these, every /chat request to that
+    # role pays an auto-fallback hop (which works — see _is_fallback_eligible_
+    # exception — but adds ~5-10s of model swap if the fallback model isn't
+    # already resident). Surfacing this at boot lets the user fix the binding
+    # in Bot Config instead of silently paying the fallback every request.
+    multimodal_types = ("gemma3n", "paligemma", "llava", "qwen2_vl", "qwen2_5_vl",
+                        "qwen2_audio", "idefics", "idefics2", "idefics3")
+    multimodal_id_hints = ("gemma-3n", "paligemma", "llava", "qwen2-vl", "qwen2.5-vl",
+                           "qwen2-audio", "idefics")
+    try:
+        roles = chat_role_map()
+    except Exception:
+        return
+    for role, model_id in roles.items():
+        if not model_id:
+            continue
+        mid_lower = model_id.lower()
+        if any(hint in mid_lower for hint in multimodal_id_hints):
+            print(f"[SeekDeep Local AI] config note: chat role {role!r} -> {model_id!r} "
+                  f"looks multimodal; every /chat to this role will auto-fall through to "
+                  f"fallback_chat. Consider pointing this role at a text-only model "
+                  f"(e.g. google/gemma-2-2b-it, microsoft/Phi-3-mini-4k-instruct) in .env.",
+                  flush=True)
+
+_warn_about_multimodal_chat_role_configs()
+
 app = FastAPI(title="SeekDeep Local AI Server", version=SEEKDEEP_VERSION)
 
 # ===== CORS =====
