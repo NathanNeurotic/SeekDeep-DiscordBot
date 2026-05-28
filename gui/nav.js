@@ -10,30 +10,37 @@
   'use strict';
   if (document.getElementById('sd-nav-root')) return;
 
-  // Warm Webview2's text-input subsystem (TSF + spellcheck COM) ASAP so the
-  // user's first real input-focus isn't a 5s cold-start freeze on Windows.
-  // Hidden offscreen textarea, focused+blurred once after idle, then removed.
-  (function warmTextInput() {
-    if (window.__seekdeepTextWarmed) return;
-    window.__seekdeepTextWarmed = true;
-    const run = () => {
+  // Disable spellcheck on every textarea/input so Webview2 doesn't cold-start
+  // the Windows TSF + spellcheck COM service on first focus (5s UI freeze).
+  // Done at page-load by walking the DOM once + observing future additions.
+  (function disableSpellcheckEverywhere() {
+    if (window.__seekdeepSpellOff) return;
+    window.__seekdeepSpellOff = true;
+    const off = (el) => {
+      if (!el || el.__sdOff) return;
+      el.__sdOff = true;
       try {
-        const t = document.createElement('textarea');
-        t.setAttribute('aria-hidden', 'true');
-        t.tabIndex = -1;
-        t.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-        document.body.appendChild(t);
-        t.focus();
-        // Yield, blur, remove — gives the OS a beat to spin up TSF/spellcheck.
-        setTimeout(() => { try { t.blur(); t.remove(); } catch {} }, 50);
+        el.setAttribute('spellcheck', 'false');
+        el.setAttribute('autocorrect', 'off');
+        el.setAttribute('autocapitalize', 'off');
+        el.setAttribute('data-gramm', 'false');
       } catch {}
     };
-    if (document.body) {
-      (window.requestIdleCallback || setTimeout)(run, 200);
-    } else {
-      document.addEventListener('DOMContentLoaded', () => {
-        (window.requestIdleCallback || setTimeout)(run, 200);
-      }, { once: true });
+    const walk = () => {
+      document.querySelectorAll('textarea, input[type="text"], input:not([type]), input[type="search"], [contenteditable=""], [contenteditable="true"]').forEach(off);
+    };
+    if (document.body) walk();
+    else document.addEventListener('DOMContentLoaded', walk, { once: true });
+    if (typeof MutationObserver === 'function') {
+      const mo = new MutationObserver((muts) => {
+        for (const m of muts) for (const n of m.addedNodes) {
+          if (n.nodeType !== 1) continue;
+          if (n.matches?.('textarea, input[type="text"], input:not([type]), input[type="search"], [contenteditable=""], [contenteditable="true"]')) off(n);
+          n.querySelectorAll?.('textarea, input[type="text"], input:not([type]), input[type="search"], [contenteditable=""], [contenteditable="true"]').forEach(off);
+        }
+      });
+      if (document.body) mo.observe(document.body, { childList: true, subtree: true });
+      else document.addEventListener('DOMContentLoaded', () => mo.observe(document.body, { childList: true, subtree: true }), { once: true });
     }
   })();
 
