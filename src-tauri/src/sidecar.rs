@@ -1095,8 +1095,43 @@ pub fn boot_sequence(app: AppHandle) {
     if server_already_listening() && !bundle_is_fresh {
         match server_identity() {
             Some(remote_version) if remote_version == our_version => {
-                emit_status(&app, "EXTERNAL_SERVER_RUNNING");
-                return;
+                // ALWAYS-FRESH-ON-LAUNCH: previously we'd reuse the existing
+                // sidecar when versions matched (emit EXTERNAL_SERVER_RUNNING
+                // and return). That's a trap: if the user `pip install`s a
+                // new ML dep (e.g. tiktoken) while the server is running,
+                // then relaunches Tauri, the running interpreter still has
+                // the old `sys.modules` snapshot — no tiktoken import — and
+                // the next /chat 503s with tokenizer-load-failure. They had
+                // to manually click Restart on the AI server card to fix.
+                //
+                // Now: every Tauri launch kills the existing sidecar and
+                // respawns it. Fresh Python interpreter, fresh module
+                // imports, picks up any newly-installed deps automatically.
+                // The cost is ~2s of respawn time on every launch; the
+                // benefit is "I installed X, restart the app, it just works."
+                //
+                // Opt out via SEEKDEEP_TAURI_REUSE_SIDECAR=1 in .env if you
+                // have a long-running session with hot models you don't want
+                // to lose on app relaunch.
+                let reuse_env = std::env::var("SEEKDEEP_TAURI_REUSE_SIDECAR")
+                    .ok()
+                    .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                    .unwrap_or(false);
+                if reuse_env {
+                    emit_status(&app, "EXTERNAL_SERVER_RUNNING");
+                    return;
+                }
+                let _ = app.emit(
+                    "sidecar:status",
+                    serde_json::json!({
+                        "code": "FRESH_BOOT_RESPAWN",
+                        "detail": format!(
+                            "matched-version sidecar on :7865 (v{remote_version}); killing it for a clean-Python respawn so newly-installed pip deps load. Set SEEKDEEP_TAURI_REUSE_SIDECAR=1 in .env to skip this."
+                        ),
+                    }),
+                );
+                kill_listener_on_7865();
+                std::thread::sleep(Duration::from_millis(800));
             }
             Some(remote_version) => {
                 let detail = format!(
