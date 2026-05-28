@@ -9337,7 +9337,10 @@ client.once('clientReady', async () => {
   if (!['1', 'true', 'yes', 'on'].includes(
         String(process.env.SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER || '').trim().toLowerCase())) {
     let aiServerMisses = 0;
-    const MAX_MISSES = 4;  // 4 misses × 15s = 60s grace before self-exit
+    let aiServerEverReached = false;
+    // 10 × 15s = 150s grace before self-exit (covers cold-boot tokenizer install + self-update bounce).
+    const MAX_MISSES = parseInt(process.env.SEEKDEEP_BOT_AI_GRACE_MISSES || '10', 10) || 10;
+    const PROBE_INTERVAL_MS = parseInt(process.env.SEEKDEEP_BOT_AI_PROBE_MS || '15000', 10) || 15000;
     setInterval(async () => {
       try {
         const controller = new AbortController();
@@ -9346,6 +9349,7 @@ client.once('clientReady', async () => {
           const r = await fetch(`${LOCAL_AI_BASE_URL}/health`, { signal: controller.signal });
           if (r.ok) {
             aiServerMisses = 0;
+            aiServerEverReached = true;
             return;
           }
         } finally {
@@ -9355,8 +9359,10 @@ client.once('clientReady', async () => {
         // Unreachable — count as a miss
       }
       aiServerMisses++;
-      if (aiServerMisses >= MAX_MISSES) {
-        console.warn(`[SeekDeep] AI server unreachable for ${aiServerMisses * 15}s — self-exiting so the next Tauri launch finds a clean machine. Override with SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER=1.`);
+      // Don't self-exit until we've reached the AI server at least once (otherwise we'd die before first contact).
+      if (aiServerMisses >= MAX_MISSES && aiServerEverReached) {
+        const secs = Math.round(aiServerMisses * (PROBE_INTERVAL_MS / 1000));
+        console.warn(`[SeekDeep] AI server unreachable for ${secs}s — self-exiting so the next Tauri launch finds a clean machine. Override with SEEKDEEP_KEEP_BOT_WITHOUT_AI_SERVER=1, or tune SEEKDEEP_BOT_AI_GRACE_MISSES / SEEKDEEP_BOT_AI_PROBE_MS.`);
         try {
           seekdeepWriteBotStatus({
             ready: false,
@@ -9367,7 +9373,7 @@ client.once('clientReady', async () => {
         } catch (_) {}
         process.exit(0);
       }
-    }, 15000).unref?.();
+    }, PROBE_INTERVAL_MS).unref?.();
   }
 });
 
