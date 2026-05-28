@@ -61,24 +61,29 @@
     const run = () => {
       if (!document.body) return;
       try {
-        // Stash whatever the user was looking at so the warm-up doesn't
-        // visibly steal focus mid-interaction (defensive — should only
-        // ever run before first paint, but page-pivots can re-enter).
         const prev = document.activeElement;
         const t = document.createElement('textarea');
         t.setAttribute('aria-hidden', 'true');
         t.setAttribute('tabindex', '-1');
-        // spellcheck=true so the focus actually cold-starts TSF/COM.
         t.setAttribute('spellcheck', 'true');
-        // 1px square at top-left, fully transparent — Webview2 won't skip
-        // the cold-start the way it does for true offscreen (-9999px).
-        t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;';
+        // Place it at a real on-screen pixel — Webview2 defers TSF init
+        // for elements with display:none / opacity:0 / -9999px offsets.
+        // A 1px element with opacity:0.001 stays visually invisible but
+        // is "real" enough for the input subsystem to actually warm up.
+        t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.001;pointer-events:none;z-index:-1;background:transparent;color:transparent;border:none;outline:none;';
         document.body.appendChild(t);
-        // Synchronous focus+blur+remove — the cold-start happens INSIDE
-        // these calls. By the time this function returns, the warm-up
-        // element is gone, so it can't possibly steal focus from a later
-        // user click.
         t.focus();
+        // Inject an actual character + dispatch an input event. The bare
+        // focus() call alone wasn't forcing Webview2 to spin up TSF +
+        // spellcheck COM — the cold-start kept happening on the user's
+        // first REAL keystroke later. Setting .value and dispatching
+        // input/keydown forces the renderer to fully engage the IME path
+        // here, while the user is still looking at the loading shimmer.
+        t.value = 'a';
+        try { t.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'a', inputType: 'insertText' })); } catch {}
+        try { t.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true })); } catch {}
+        try { t.dispatchEvent(new KeyboardEvent('keyup',   { key: 'a', code: 'KeyA', bubbles: true })); } catch {}
+        t.value = '';
         t.blur();
         t.remove();
         if (prev && prev !== document.body && typeof prev.focus === 'function') {

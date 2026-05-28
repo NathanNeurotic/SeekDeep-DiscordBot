@@ -332,6 +332,31 @@
   </main>
 
 <script>
+  /* TSF / spellcheck warm-up — fires here so Webview2 cold-starts its
+     Windows text-input subsystem during the loading screen (when the user
+     is already watching a progress bar) instead of on their first click
+     in chat.html (where it manifested as a 5s app hang). Setting .value
+     + dispatching input + key events seems to be required to actually
+     engage TSF — bare focus() on a hidden element wasn't triggering it. */
+  (function warmTextInputDuringLoad() {
+    try {
+      const t = document.createElement('textarea');
+      t.setAttribute('aria-hidden', 'true');
+      t.setAttribute('tabindex', '-1');
+      t.setAttribute('spellcheck', 'true');
+      t.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.001;pointer-events:none;z-index:-1;background:transparent;color:transparent;border:none;outline:none;';
+      document.body.appendChild(t);
+      t.focus();
+      t.value = 'a';
+      try { t.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'a', inputType: 'insertText' })); } catch {}
+      try { t.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true })); } catch {}
+      try { t.dispatchEvent(new KeyboardEvent('keyup',   { key: 'a', code: 'KeyA', bubbles: true })); } catch {}
+      t.value = '';
+      t.blur();
+      t.remove();
+    } catch {}
+  })();
+
   /* Boot poller — runs entirely standalone (no nav.js / events.js needed).
      Drives the phase ladder + status line + progress bar based on which
      endpoints the local server can answer.

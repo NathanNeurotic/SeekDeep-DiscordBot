@@ -20,3 +20,13 @@ requests>=2.32.0
 huggingface_hub>=0.30.0
 matplotlib>=3.9.0
 psutil>=6.0.0
+
+# Tokenizer backends. These are TINY (~10 MB combined) and pure-import —
+# no GPU, no torch, no diffusers. Promoting them to boot deps because
+# transformers needs at least one of them to load a fast tokenizer for
+# every modern chat model (Llama 3.x → tiktoken, Llama 2/Mistral/Granite
+# ≤3.2 → sentencepiece). Without them, /chat 503s on first load with
+# "Couldn't instantiate the backend tokenizer". Boot-time install means
+# no "click INSTALL TOKENIZER DEPS to continue" prompt on fresh installs.
+tiktoken>=0.8.0
+sentencepiece>=0.2.0

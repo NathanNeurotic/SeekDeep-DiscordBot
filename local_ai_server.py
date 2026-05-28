@@ -843,6 +843,75 @@ def _build_health_tick_payload() -> dict:
         return {"status": "ready"}
 
 
+def _auto_install_tokenizer_deps_if_missing() -> None:
+    """If tiktoken or sentencepiece is missing, kick off a background pip
+    install. Existing installs from before these were promoted to boot deps
+    don't have them; the user shouldn't have to click 'INSTALL TOKENIZER
+    DEPS' from the chat playground 503 banner. Self-rescues silently.
+
+    Runs in a daemon thread so import + pip don't block the FastAPI event
+    loop. Emits deps.install.* events so the long-task banner picks it up."""
+    missing: list[str] = []
+    for mod, pkg in [("tiktoken", "tiktoken>=0.8.0"),
+                     ("sentencepiece", "sentencepiece>=0.2.0")]:
+        try:
+            __import__(mod)
+        except Exception:
+            missing.append(pkg)
+    if not missing:
+        return
+
+    import threading
+    import subprocess as _sub
+
+    def _run():
+        try:
+            _emit_event("deps.install.started", {
+                "reason": "tokenizer-deps-missing-at-boot",
+                "packages": missing,
+                "auto": True,
+            })
+            _nw = getattr(_sub, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                   "--disable-pip-version-check", *missing]
+            print(f"[SeekDeep] tokenizer auto-install: {' '.join(cmd)}", flush=True)
+            proc = _sub.Popen(cmd, stdout=_sub.PIPE, stderr=_sub.STDOUT,
+                              text=True, creationflags=_nw)
+            for line in proc.stdout or []:
+                line = line.rstrip()
+                if line:
+                    _emit_event("deps.install.line", {"line": line})
+            rc = proc.wait()
+            if rc == 0:
+                print(f"[SeekDeep] tokenizer auto-install OK ({', '.join(missing)})", flush=True)
+                _emit_event("deps.install.complete", {
+                    "note": f"installed {', '.join(missing)}",
+                    "auto": True,
+                })
+            else:
+                print(f"[SeekDeep] tokenizer auto-install failed (rc={rc})", flush=True)
+                _emit_event("deps.install.failed", {
+                    "exit_code": rc,
+                    "hint": "manual: python -m pip install tiktoken sentencepiece",
+                })
+        except Exception as exc:
+            print(f"[SeekDeep] tokenizer auto-install error: {exc}", flush=True)
+            _emit_event("deps.install.failed", {"error": str(exc)[:240]})
+
+    t = threading.Thread(target=_run, daemon=True, name="sd-tokenizer-auto-install")
+    t.start()
+
+
+@app.on_event("startup")
+async def _auto_install_tokenizer_on_startup():
+    """Fires once on server startup. Cheap import probes; only does work
+    when one of the tokenizer backends is actually missing."""
+    try:
+        _auto_install_tokenizer_deps_if_missing()
+    except Exception as exc:
+        print(f"[SeekDeep] tokenizer auto-install scheduling failed: {exc}", flush=True)
+
+
 @app.on_event("startup")
 async def _start_vram_sampler():
     """Emits a vram.sample event every 10 seconds while at least one GUI
