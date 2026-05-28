@@ -542,6 +542,62 @@ def _read_pkg_version() -> str:
 
 SEEKDEEP_VERSION = _read_pkg_version()
 
+
+def _ensure_tokenizer_deps_synchronously() -> None:
+    """SYNCHRONOUS at module load — blocks until tiktoken + sentencepiece
+    are importable. Runs BEFORE the FastAPI app is created so port 7865
+    doesn't open until /chat will actually work.
+
+    Tradeoff: first launch after this fix is ~30s slower if either dep is
+    missing (one pip install). Every subsequent launch: zero overhead (both
+    imports succeed instantly, function is a no-op). The 30s shows on the
+    Tauri loading screen — which is exactly the place users expect to wait.
+
+    Was async-on-startup-hook before, which gave the server a head-start and
+    let /chat 503 with tokenizer-load-failure for ~30s after boot. User
+    flagged this as "chat is broken on boot." Blocking the import here makes
+    that race impossible by construction."""
+    import importlib, sys
+    missing: list[tuple[str, str]] = []
+    for mod, pkg in (("tiktoken", "tiktoken>=0.8.0"),
+                     ("sentencepiece", "sentencepiece>=0.2.0")):
+        try:
+            importlib.import_module(mod)
+        except Exception:
+            missing.append((mod, pkg))
+    if not missing:
+        return
+    pkgs = [pkg for _, pkg in missing]
+    print(f"[SeekDeep] BOOT: installing missing tokenizer deps {pkgs} "
+          f"(blocking; ~30s; only happens once)", flush=True)
+    try:
+        import subprocess as _sub
+        _nw = getattr(_sub, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        rc = _sub.call(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "--disable-pip-version-check", *pkgs],
+            creationflags=_nw,
+        )
+        if rc != 0:
+            print(f"[SeekDeep] BOOT: tokenizer pip install exited rc={rc} - "
+                  f"chat will 503 until manually fixed via INSTALL TOKENIZER "
+                  f"DEPS button.", flush=True)
+            return
+        # Re-import so the running interpreter actually sees the new modules.
+        for mod, _ in missing:
+            try:
+                importlib.invalidate_caches()
+                importlib.import_module(mod)
+            except Exception as exc:
+                print(f"[SeekDeep] BOOT: still can't import {mod} after install: {exc}", flush=True)
+        print(f"[SeekDeep] BOOT: tokenizer deps installed; continuing startup", flush=True)
+    except Exception as exc:
+        print(f"[SeekDeep] BOOT: tokenizer auto-install failed: {exc} - "
+              f"chat will 503 until manually fixed.", flush=True)
+
+
+_ensure_tokenizer_deps_synchronously()
+
 app = FastAPI(title="SeekDeep Local AI Server", version=SEEKDEEP_VERSION)
 
 # ===== CORS =====
@@ -841,75 +897,6 @@ def _build_health_tick_payload() -> dict:
         }
     except Exception:
         return {"status": "ready"}
-
-
-def _auto_install_tokenizer_deps_if_missing() -> None:
-    """If tiktoken or sentencepiece is missing, kick off a background pip
-    install. Existing installs from before these were promoted to boot deps
-    don't have them; the user shouldn't have to click 'INSTALL TOKENIZER
-    DEPS' from the chat playground 503 banner. Self-rescues silently.
-
-    Runs in a daemon thread so import + pip don't block the FastAPI event
-    loop. Emits deps.install.* events so the long-task banner picks it up."""
-    missing: list[str] = []
-    for mod, pkg in [("tiktoken", "tiktoken>=0.8.0"),
-                     ("sentencepiece", "sentencepiece>=0.2.0")]:
-        try:
-            __import__(mod)
-        except Exception:
-            missing.append(pkg)
-    if not missing:
-        return
-
-    import threading
-    import subprocess as _sub
-
-    def _run():
-        try:
-            _emit_event("deps.install.started", {
-                "reason": "tokenizer-deps-missing-at-boot",
-                "packages": missing,
-                "auto": True,
-            })
-            _nw = getattr(_sub, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-            cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                   "--disable-pip-version-check", *missing]
-            print(f"[SeekDeep] tokenizer auto-install: {' '.join(cmd)}", flush=True)
-            proc = _sub.Popen(cmd, stdout=_sub.PIPE, stderr=_sub.STDOUT,
-                              text=True, creationflags=_nw)
-            for line in proc.stdout or []:
-                line = line.rstrip()
-                if line:
-                    _emit_event("deps.install.line", {"line": line})
-            rc = proc.wait()
-            if rc == 0:
-                print(f"[SeekDeep] tokenizer auto-install OK ({', '.join(missing)})", flush=True)
-                _emit_event("deps.install.complete", {
-                    "note": f"installed {', '.join(missing)}",
-                    "auto": True,
-                })
-            else:
-                print(f"[SeekDeep] tokenizer auto-install failed (rc={rc})", flush=True)
-                _emit_event("deps.install.failed", {
-                    "exit_code": rc,
-                    "hint": "manual: python -m pip install tiktoken sentencepiece",
-                })
-        except Exception as exc:
-            print(f"[SeekDeep] tokenizer auto-install error: {exc}", flush=True)
-            _emit_event("deps.install.failed", {"error": str(exc)[:240]})
-
-    t = threading.Thread(target=_run, daemon=True, name="sd-tokenizer-auto-install")
-    t.start()
-
-
-@app.on_event("startup")
-async def _auto_install_tokenizer_on_startup():
-    """Fires once on server startup. Cheap import probes; only does work
-    when one of the tokenizer backends is actually missing."""
-    try:
-        _auto_install_tokenizer_deps_if_missing()
-    except Exception as exc:
-        print(f"[SeekDeep] tokenizer auto-install scheduling failed: {exc}", flush=True)
 
 
 @app.on_event("startup")
