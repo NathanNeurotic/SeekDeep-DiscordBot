@@ -3896,6 +3896,10 @@ def _classify_chat_load_failure(exc: Exception) -> str:
         return "tokenizer-load-failure"
     if name == "ValueError" and "model_id configured" in msg:
         return "no-model-configured"
+    if "multimodal" in msg or "automodelforcausallm" in msg:
+        return "multimodal-not-causal-lm"
+    if "unrecognized model" in msg:
+        return "unrecognized-model"
     return f"chat-load-error:{name}"
 
 
@@ -3910,6 +3914,17 @@ def _is_fallback_eligible_exception(exc: Exception) -> bool:
     if "huggingface" in msg or "hf hub" in msg or "huggingface_hub" in msg or "401" in msg or "403" in msg:
         return True
     if "tokenizer" in msg:
+        return True
+    # Multimodal guard fires when a multimodal model_type is configured for
+    # a chat role. Without this branch, the bot's image-refinement prompt
+    # (which routes to lightweight_chat) 503s instead of falling through
+    # to fallback_chat / default_chat — and the user sees "static rules"
+    # refinement instead of a real LLM rewrite.
+    if "multimodal" in msg or "automodelforcausallm" in msg:
+        return True
+    # "Unrecognized model" still leaks through transformers' AutoConfig in
+    # the rare case our guard misses; treat as fallback-eligible too.
+    if "unrecognized model" in msg:
         return True
     return False
 
@@ -4182,6 +4197,23 @@ def chat(req: ChatRequest):
                          "(Llama 3.x / Qwen / Granite 3.3+) installed. Click 'Install ML "
                          "libraries' in the Control Center to pull them — pip will skip "
                          "deps you already have.")
+        elif reason == "multimodal-not-causal-lm":
+            # User configured a multimodal-only model for a chat role. The role
+            # router will auto-fallback to fallback_chat / default_chat for the
+            # current request, but the underlying config still needs fixing so
+            # this role works on its own. Be specific so the user knows what to do.
+            clean_msg = ("A chat role is configured with a multimodal model "
+                         "(e.g. gemma-3n-E4B-it, paligemma, llava). Those load via "
+                         "AutoModelForImageTextToText, not AutoModelForCausalLM, "
+                         "so they can't serve plain text chat. Change the model_id "
+                         "for this role in Config → Bot Config to a text-only chat "
+                         "model (Llama 3.x, Qwen2.5, Granite 3.3+, Mistral, etc.).")
+        elif reason == "unrecognized-model":
+            clean_msg = ("Chat model's config.json couldn't be read by transformers. "
+                         "Usually fixes itself after restarting the AI server (the "
+                         "hardlink workaround at boot makes the cache readable again). "
+                         "If it persists, the cache for this model may be incomplete — "
+                         "re-download via Model Manager.")
         elif reason.startswith("chat-load-error:"):
             clean_msg = f"Chat model failed to load ({reason.split(':',1)[1]}). Open Control Center → View logs for the full trace."
         else:
