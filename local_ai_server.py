@@ -3532,42 +3532,76 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
 
-    # Direct tokenizer load: bypass AutoTokenizer routing entirely. The
-    # cache has tokenizer.json on disk; the `tokenizers` library loads it
-    # natively without going through transformers' auto-class lookup —
-    # which is the part that keeps breaking in the long-running process.
-    # We then wrap in PreTrainedTokenizerFast so downstream code (chat
-    # template, encode/decode, special tokens) sees the same API it had
-    # from AutoTokenizer.from_pretrained.
-    def _try_load_tokenizer_direct():
+    # Direct tokenizer load: bypass AutoTokenizer routing entirely. Two paths
+    # to find tokenizer.json — huggingface_hub's helper (clean API) AND a
+    # pure-filesystem glob (works even when huggingface_hub returns None for
+    # whatever Windows / symlink / cache-shape reason). Then load via the
+    # `tokenizers` library and wrap in PreTrainedTokenizerFast. Every silent
+    # failure path now LOGS so we can see which step missed.
+    def _resolve_cached_file(filename: str) -> str | None:
+        cache_dir = str(MODEL_CACHE_DIR)
+        # Path A: huggingface_hub helper
         try:
             from huggingface_hub import try_to_load_from_cache
+            tj = try_to_load_from_cache(model_id, filename, cache_dir=cache_dir)
+            if tj and os.path.isfile(str(tj)):
+                return str(tj)
+            if tj:
+                print(f"[SeekDeep Local AI] try_to_load_from_cache returned non-file: {tj!r}", flush=True)
+        except Exception as exc:
+            print(f"[SeekDeep Local AI] try_to_load_from_cache raised: {exc!r}", flush=True)
+        # Path B: pure filesystem fallback. The cache layout is fixed by HF:
+        #   <cache_dir>/models--<org>--<name>/refs/main → <sha>
+        #   <cache_dir>/models--<org>--<name>/snapshots/<sha>/<filename>
+        try:
+            org_name = model_id.replace("/", "--")
+            repo_dir = os.path.join(cache_dir, f"models--{org_name}")
+            refs_main = os.path.join(repo_dir, "refs", "main")
+            if os.path.isfile(refs_main):
+                with open(refs_main, encoding="utf-8") as _f:
+                    sha = _f.read().strip()
+                candidate = os.path.join(repo_dir, "snapshots", sha, filename)
+                if os.path.isfile(candidate):
+                    return candidate
+                print(f"[SeekDeep Local AI] fs fallback: snapshot file missing at {candidate!r}", flush=True)
+            else:
+                print(f"[SeekDeep Local AI] fs fallback: no refs/main at {refs_main!r}", flush=True)
+        except Exception as exc:
+            print(f"[SeekDeep Local AI] fs fallback raised: {exc!r}", flush=True)
+        # Path C: glob any snapshot dir (handles models without refs/main)
+        try:
+            import glob as _glob
+            org_name = model_id.replace("/", "--")
+            pattern = os.path.join(cache_dir, f"models--{org_name}", "snapshots", "*", filename)
+            matches = _glob.glob(pattern)
+            if matches:
+                return matches[0]
+        except Exception:
+            pass
+        return None
+
+    def _try_load_tokenizer_direct():
+        try:
             from tokenizers import Tokenizer as _RawTokenizer
             from transformers import PreTrainedTokenizerFast
         except Exception as exc:
             print(f"[SeekDeep Local AI] direct tokenizer path unavailable: {exc!r}", flush=True)
             return None
-        cache_dir = str(MODEL_CACHE_DIR)
+        tj = _resolve_cached_file("tokenizer.json")
+        if not tj:
+            print(f"[SeekDeep Local AI] direct path: no tokenizer.json found for {model_id} "
+                  f"in {MODEL_CACHE_DIR} — falling through to AutoTokenizer", flush=True)
+            return None
         try:
-            tj = try_to_load_from_cache(model_id, "tokenizer.json", cache_dir=cache_dir)
-        except Exception:
-            tj = None
-        if not tj or not os.path.isfile(str(tj)):
-            return None  # no tokenizer.json in cache → fall through
-        try:
-            backend = _RawTokenizer.from_file(str(tj))
+            backend = _RawTokenizer.from_file(tj)
         except Exception as exc:
-            print(f"[SeekDeep Local AI] tokenizer.json on disk but unreadable: {exc!r}", flush=True)
+            print(f"[SeekDeep Local AI] tokenizer.json at {tj!r} unreadable: {exc!r}", flush=True)
             return None
         tok = PreTrainedTokenizerFast(tokenizer_object=backend)
-        # Hydrate chat_template + special tokens from tokenizer_config.json.
-        try:
-            tc = try_to_load_from_cache(model_id, "tokenizer_config.json", cache_dir=cache_dir)
-        except Exception:
-            tc = None
-        if tc and os.path.isfile(str(tc)):
+        tc = _resolve_cached_file("tokenizer_config.json")
+        if tc:
             try:
-                with open(str(tc), encoding="utf-8") as _f:
+                with open(tc, encoding="utf-8") as _f:
                     cfg = json.load(_f)
                 if isinstance(cfg.get("chat_template"), str):
                     tok.chat_template = cfg["chat_template"]
@@ -3579,7 +3613,7 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                         setattr(tok, k, v["content"])
             except Exception as exc:
                 print(f"[SeekDeep Local AI] tokenizer_config hydration partial: {exc!r}", flush=True)
-        print(f"[SeekDeep Local AI] tokenizer loaded via direct cache (model={model_id})", flush=True)
+        print(f"[SeekDeep Local AI] tokenizer loaded via direct cache (model={model_id}, file={tj})", flush=True)
         return tok
 
     # Cache-first AutoTokenizer fallback chain (for models without
