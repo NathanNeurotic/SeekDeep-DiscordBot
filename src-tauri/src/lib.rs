@@ -157,6 +157,13 @@ fn view_logs(app: tauri::AppHandle) -> Result<(), String> {
 fn restart_sidecar(app: tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<SidecarState>();
     sidecar::kill_child(state.inner());
+    // User-initiated restart sweeps orphan local_ai_server.py processes too,
+    // not just the tracked child. Repeated Restart clicks (or a Restart while
+    // a previous Tauri session's orphan was still wedged on :7865) would
+    // otherwise stack duplicate python.exe interpreters that all try to bind
+    // 7865 and lose. boot_sequence's LAUNCH_REAPED guard only fires once per
+    // Tauri launch, so manual Restart deliberately bypasses it here.
+    sidecar::kill_orphan_ai_servers();
     sidecar::emit_status(&app, "RESTARTING");
     let handle = app.clone();
     thread::spawn(move || {
