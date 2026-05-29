@@ -2540,7 +2540,7 @@ def register_gui_endpoints(
         import urllib.request, urllib.error
         ref = str((body or {}).get("ref") or "main").strip()
         # Allowlist: main / a tag / a commit SHA. No arbitrary refs.
-        if not (ref == "main" or ref.startswith("v") or (len(ref) >= 7 and all(c in "0123456789abcdef" for c in ref))):
+        if not (ref == "main" or ref.startswith("v") or (7 <= len(ref) <= 40 and all(c in "0123456789abcdef" for c in ref))):
             event_bus.publish_sync({"type": "self-update.failed",
                                     "data": {"error": "ref must be main|v*|<sha>"}})
             raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
