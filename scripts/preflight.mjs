@@ -137,7 +137,7 @@ stage('js', () => {
   // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
   // interceptor + jump palette + SeekDeepPrompt API — a parse error there
   // silently breaks every page.
-  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js'];
+  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js'];
   for (const t of targets) {
     if (!existsSync(path.join(ROOT, t))) continue;
     const r = checkJsFile(t);
@@ -205,6 +205,65 @@ stage('html-js', () => {
 stage('py', () => runPyCompile());
 stage('smoke', () => runSmokeTest());
 stage('gui-smoke', () => runGuiSmoke());
+
+// CRIT-3: docs drift guard. Fail-closed assertions so the version-filename,
+// memory-default, and smoke-count drift the audit found (DOC-1 / CONF-1 /
+// DOC-2) cannot silently come back. Pure string/file checks — fast, no
+// network, no server boot.
+stage('docs', () => {
+  const problems = [];
+
+  // (a) DOC-1: README must not hardcode a SeekDeep_<x.y.z>_ download
+  // filename — those drift from package.json every release. The canonical
+  // form is the SeekDeep_<version>_ placeholder.
+  const readmePath = path.join(ROOT, 'README.md');
+  if (existsSync(readmePath)) {
+    const readme = readFileSync(readmePath, 'utf8');
+    const hard = readme.match(/SeekDeep_\d+\.\d+\.\d+[_-]/g);
+    if (hard && hard.length) {
+      problems.push(`README hardcodes version filename(s): ${[...new Set(hard)].join(', ')} — use SeekDeep_<version>_ (DOC-1)`);
+    }
+  }
+
+  // (b) CONF-1: the four rolling-memory caps in .env.example must match
+  // .env.default (the canonical source). Drift here is exactly the bug
+  // CONF-1 fixed.
+  const memKeys = ['MAX_CONTEXT_MESSAGES', 'MAX_CONTEXT_CHARS',
+                   'SEEKDEEP_MEMORY_RECENT_ENTRIES', 'SEEKDEEP_MEMORY_CONTEXT_CHARS'];
+  const readEnv = (rel) => {
+    const p = path.join(ROOT, rel);
+    if (!existsSync(p)) return null;
+    const map = {};
+    for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+      if (m) map[m[1]] = m[2].trim();
+    }
+    return map;
+  };
+  const def = readEnv('.env.default');
+  const ex = readEnv('.env.example');
+  if (def && ex) {
+    for (const k of memKeys) {
+      if (def[k] != null && ex[k] != null && def[k] !== ex[k]) {
+        problems.push(`.env.example ${k}=${ex[k]} != .env.default ${k}=${def[k]} (CONF-1)`);
+      }
+    }
+  }
+
+  // (c) DOC-2: the smoke total must be read live. Assert smoke_test.mjs still
+  // prints a `pass=<N>` line (the live-count mechanism the README now points
+  // at) so nobody silently replaces it with a frozen number.
+  const smokePath = path.join(ROOT, 'smoke_test.mjs');
+  if (existsSync(smokePath)) {
+    const smoke = readFileSync(smokePath, 'utf8');
+    if (!/pass=/.test(smoke)) {
+      problems.push('smoke_test.mjs no longer prints a live `pass=` total (DOC-2)');
+    }
+  }
+
+  if (problems.length) return { ok: false, detail: problems.join(' · ') };
+  return { ok: true, detail: 'version-filenames placeholder · env memory caps aligned · smoke total live' };
+});
 
 const failed = stages.filter((s) => !s.ok);
 const passed = stages.filter((s) => s.ok && !s.skipped);
