@@ -1273,8 +1273,12 @@ def move_inputs(value: Any, device: Any) -> Any:
     try:
         if hasattr(value, "to"):
             return value.to(device)
-    except Exception:
-        pass
+    except Exception as exc:
+        # CRIT-1: a failed .to(device) silently falls through below and the
+        # tensor stays on its current device (usually CPU) — a hard-to-spot
+        # cause of "chat is slow" / device-mismatch errors downstream. Log
+        # before swallowing; control flow is unchanged (we still fall through).
+        print(f"[SeekDeep Local AI] move_inputs: .to({device!r}) failed, tensor left in place: {type(exc).__name__}: {exc}", flush=True)
 
     if isinstance(value, dict):
         return {k: move_inputs(v, device) for k, v in value.items()}
@@ -3831,8 +3835,12 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                 resolved = _resolve_blob_via_symlink(match)
                 if resolved:
                     return resolved
-        except Exception:
-            pass
+        except Exception as exc:
+            # CRIT-1: the other resolution paths above (refs/main, fs
+            # fallback) log on failure; this glob path was the lone silent
+            # swallow. A failure here means model files can't be located in
+            # the HF cache — worth surfacing. Control flow unchanged.
+            print(f"[SeekDeep Local AI] cache glob resolve raised for {model_id!r}/{filename!r}: {type(exc).__name__}: {exc}", flush=True)
         return None
 
     def _try_load_tokenizer_direct():
