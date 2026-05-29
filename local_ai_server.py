@@ -1852,6 +1852,37 @@ def _gemini_chat(messages: list[dict], model: str, base_url: str,
 # caller or a DoS attempt rather than a real user image. Override with
 # LOCAL_AI_MAX_IMAGE_BYTES in .env if you genuinely need larger uploads.
 LOCAL_AI_MAX_IMAGE_BYTES = int(os.getenv("LOCAL_AI_MAX_IMAGE_BYTES", str(24 * 1024 * 1024)))
+# Cap decoded dimensions before PIL loads/converts the image. Compressed files
+# can sit under the byte cap while expanding to hundreds of MB in RGB pixels.
+LOCAL_AI_MAX_IMAGE_PIXELS = int(os.getenv("LOCAL_AI_MAX_IMAGE_PIXELS", "36000000"))
+
+
+def _check_image_pixel_budget(img: Image.Image, *, label: str = "image") -> None:
+    try:
+        pixels = int(img.width) * int(img.height)
+    except Exception:
+        raise HTTPException(400, f"{label} dimensions could not be read")
+    if pixels > LOCAL_AI_MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            413,
+            f"{label} is {img.width}x{img.height} ({pixels} pixels); "
+            f"max is {LOCAL_AI_MAX_IMAGE_PIXELS} pixels",
+        )
+
+
+def open_image_bytes(data: bytes, *, mode: str | None = "RGB", label: str = "image") -> Image.Image:
+    try:
+        img = Image.open(io.BytesIO(data))
+        _check_image_pixel_budget(img, label=label)
+        if mode:
+            img = img.convert(mode)
+        return img
+    except HTTPException:
+        raise
+    except Image.DecompressionBombError as e:
+        raise HTTPException(413, f"{label} exceeds PIL decompression safety limits: {e}") from e
+    except (UnidentifiedImageError, OSError) as e:
+        raise HTTPException(400, f"could not open {label}: {e}") from e
 
 def b64_to_bytes(data: str, *, max_bytes: int = None) -> bytes:
     """Decode a base64 string (with optional data: URL prefix) to bytes.
@@ -1906,13 +1937,7 @@ def open_image_b64(data: str, *, mode: str = "RGB", max_bytes: int = None) -> Im
     HTTPException(400) for both the decode and open failures so direct API
     callers get a predictable response shape. AUD-005."""
     src_bytes = b64_to_bytes(data, max_bytes=max_bytes)
-    try:
-        img = Image.open(io.BytesIO(src_bytes))
-        if mode:
-            img = img.convert(mode)
-        return img
-    except (UnidentifiedImageError, OSError) as e:
-        raise HTTPException(400, f"could not open image_b64: {e}")
+    return open_image_bytes(src_bytes, mode=mode, label="image_b64")
 
 
 chat_model = None
@@ -2293,24 +2318,24 @@ class InpaintRequest(BaseModel):
 
 
 class InpaintMaskPreviewRequest(BaseModel):
-    image_b64: str
-    remove_target: str = ""
+    image_b64: str = Field(max_length=_MAX_B64_CHARS)
+    remove_target: str = Field(default="", max_length=_MAX_PROMPT_CHARS)
     width: int = Field(default=1024, ge=256, le=1536)
     height: int = Field(default=1024, ge=256, le=1536)
 
 
 class InstructPix2PixRequest(BaseModel):
-    instruction: str
-    image_b64: str
+    instruction: str = Field(max_length=_MAX_PROMPT_CHARS)
+    image_b64: str = Field(max_length=_MAX_B64_CHARS)
     steps: int = Field(default=30, ge=1, le=50)
     guidance_scale: float = Field(default=9.0, ge=0.0, le=20.0)
     image_guidance_scale: float = Field(default=1.0, ge=0.1, le=5.0)
     seed: Optional[int] = None
-    negative_prompt: str = ""
+    negative_prompt: str = Field(default="", max_length=_MAX_PROMPT_CHARS)
 
 
 class UpscaleRequest(BaseModel):
-    image_b64: str
+    image_b64: str = Field(max_length=_MAX_B64_CHARS)
     scale: int = Field(default=2, ge=2, le=4)
     method: Literal["lanczos", "realesrgan"] = "lanczos"
     resample: Literal["lanczos", "bicubic", "nearest"] = "lanczos"
@@ -4414,7 +4439,7 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
     is_video = media_kind == "video" or (media_kind == "auto" and ext in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".gif"})
 
     if not is_video:
-        img = Image.open(io.BytesIO(media_bytes)).convert("RGB")
+        img = open_image_bytes(media_bytes, mode="RGB", label="vision image")
         return [img], "image"
 
     # Video path: sample up to 8 frames.
@@ -4425,7 +4450,9 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
         frames = []
         for idx, frame in enumerate(iio.imiter(tmp)):
             if idx % 15 == 0:
-                frames.append(Image.fromarray(frame).convert("RGB"))
+                img = Image.fromarray(frame)
+                _check_image_pixel_budget(img, label="vision video frame")
+                frames.append(img.convert("RGB"))
             if len(frames) >= 8:
                 break
         try:
@@ -4829,10 +4856,12 @@ def upscale(req: UpscaleRequest):
         raise HTTPException(status_code=400, detail=f"Invalid base64 image payload: {exc}") from exc
 
     try:
-        opened_img = Image.open(io.BytesIO(source_bytes))
+        opened_img = open_image_bytes(source_bytes, mode=None, label="upscale image")
         opened_img.load()
     except UnidentifiedImageError as exc:
         raise HTTPException(status_code=400, detail="Unsupported or unrecognized image format.") from exc
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}") from exc
 
@@ -5035,8 +5064,25 @@ def upscale(req: UpscaleRequest):
                 device=device
             )
 
-            img_np = np.array(source_img)
-            if source_img.mode == "RGBA":
+            img_for_upscale = source_img
+            max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
+            if source_img.width * source_img.height * scale * scale > int(max_pixels):
+                img_for_upscale, upscale_clamp_meta = seekdeep_fit_upscale_input_to_output_cap(
+                    source_img,
+                    scale,
+                    max_pixels,
+                )
+                print(
+                    "[seekdeep] realesrgan upscale output clamped: "
+                    f"{upscale_clamp_meta['requested_width']}x{upscale_clamp_meta['requested_height']} "
+                    f"({upscale_clamp_meta['requested_pixels']} pixels) -> "
+                    f"{upscale_clamp_meta['output_width']}x{upscale_clamp_meta['output_height']} "
+                    f"({upscale_clamp_meta['output_pixels']} pixels), "
+                    f"cap={upscale_clamp_meta['max_output_pixels']}"
+                )
+
+            img_np = np.array(img_for_upscale)
+            if img_for_upscale.mode == "RGBA":
                 img_np = img_np[:, :, :3]
             img_np = img_np[:, :, ::-1] # RGB to BGR
 
@@ -5304,7 +5350,9 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
     """
     try:
         source_bytes = b64_to_bytes(req.image_b64)
-        source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+        source_img = open_image_bytes(source_bytes, mode="RGB", label="mask preview image")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image/payload: {exc}")
 

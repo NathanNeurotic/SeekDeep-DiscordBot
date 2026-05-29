@@ -121,6 +121,8 @@ The handler also wires:
 
 img2img uses `AutoPipelineForImage2Image.from_pipe()` on the Python server to share existing SDXL weights — zero extra model download. Upscale defaults to PIL Lanczos with a mild configurable unsharp mask (`SEEKDEEP_UPSCALE_*`); Real-ESRGAN is scaffolded for future opt-in.
 
+Python image endpoints decode through a shared byte/pixel guard: base64 payloads are capped by `LOCAL_AI_MAX_IMAGE_BYTES` / `LOCAL_AI_MAX_B64_CHARS`, and decoded dimensions are capped by `LOCAL_AI_MAX_IMAGE_PIXELS` before PIL `load()` / `convert()` or Real-ESRGAN upscaling.
+
 ## Conversation Search (v10.23)
 
 **Purpose**: Full-text keyword search across recent channel messages.
