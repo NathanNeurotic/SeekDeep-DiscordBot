@@ -1714,14 +1714,9 @@ def register_gui_endpoints(
     # uptime: best-effort, derived from PID file mtime when the process
     #         was spawned via launcher.bat (we don't have a started_at
     #         for in-process spawns without psutil).
-    @app.get("/launchers/status")
-    def get_launchers_status():
+    def _compute_launchers_status_payload() -> dict:
         services_out = {}
         for svc in sorted(ALLOWED_SERVICES):
-            # _service_state is the single source of truth — returns
-            # {state, pid, count, source, transitioning}. Augmented here
-            # with the schema callers already depend on (ok, service,
-            # uptime_seconds, started_at, last_error, last_error_log).
             info = _service_state(svc, _log_dir)
             pid = info["pid"]
             uptime_s = None
@@ -1828,13 +1823,21 @@ def register_gui_endpoints(
             "generated_at": _now_iso(),
         }
 
+    @app.get("/launchers/status")
+    async def get_launchers_status():
+        # async + to_thread so the per-service WMI / psutil scan inside
+        # _service_state doesn't queue behind /chat or /image when the
+        # sync threadpool is busy. The UI's 5s status poll was the single
+        # biggest "every card flips OFFLINE" trigger; this is the fix.
+        import asyncio as _asyncio_ls
+        return await _asyncio_ls.to_thread(_compute_launchers_status_payload)
+
     # ----- GET /system/firstrun -----
     # Discovers what's missing for a fresh install and returns a checklist
     # the GUI can render as a "do these N things first" banner. Replaces
     # the previous experience where a user with no .env / no models / no
     # Discord token saw a bunch of empty panes with no clear next step.
-    @app.get("/system/firstrun")
-    def get_system_firstrun():
+    def _compute_system_firstrun_payload() -> dict:
         checks: list[dict[str, Any]] = []
         env = _read_env_kv(_env_path) if _env_path.is_file() else {}
         # 1. .env exists at all
@@ -2164,14 +2167,21 @@ def register_gui_endpoints(
             "generated_at": _now_iso(),
         }
 
+    @app.get("/system/firstrun")
+    async def get_system_firstrun():
+        # subprocess.run + socket.create_connection in here can total 3-10s on
+        # slow boxes. async + to_thread keeps the event loop free so concurrent
+        # /health / /launchers/status polls don't time out.
+        import asyncio as _asyncio_fr
+        return await _asyncio_fr.to_thread(_compute_system_firstrun_payload)
+
     # ----- GET /system/runtime -----
     # Probe-only check for Node + Python + Git versions on PATH. Replaces
     # the installer page's "server up implies node ok" placeholder — that
     # told you the AI server was running but nothing about whether the
     # supplied Node/Python actually meet the minimum versions. This runs
     # locally only (loopback server already implies trust on this box).
-    @app.get("/system/runtime")
-    def get_system_runtime():
+    def _compute_system_runtime_payload() -> dict:
         out: dict[str, dict] = {}
         # Node — "node --version" → v20.11.0
         try:
@@ -2266,6 +2276,11 @@ def register_gui_endpoints(
             out["disk"] = {"error": str(exc)[:160]}
         return {"ok": True, "runtime": out, "generated_at": _now_iso()}
 
+    @app.get("/system/runtime")
+    async def get_system_runtime():
+        import asyncio as _asyncio_rt
+        return await _asyncio_rt.to_thread(_compute_system_runtime_payload)
+
     # ----- GET /system/docker -----
     # Probe-only Docker check. Spawns `docker info` then `docker --version`
     # to distinguish:
@@ -2276,8 +2291,7 @@ def register_gui_endpoints(
     # Docker state from SearXNG reachability — which lied because SearXNG
     # being down doesn't tell you anything about Docker (the user might have
     # Docker running but never started the SearXNG container).
-    @app.get("/system/docker")
-    def get_system_docker():
+    def _compute_system_docker_payload() -> dict:
         # `docker info` can take 10-15s on a fresh Docker Desktop boot
         # (WSL2 backend negotiates with the Linux VM). 3s was too tight
         # and produced "daemon unresponsive" false-positives during normal
@@ -2320,6 +2334,13 @@ def register_gui_endpoints(
                     "client_version": (r2.stdout or "").strip()[:80] or None}
         return {"ok": True, "state": "not_installed",
                 "detail": "`docker --version` exited non-zero"}
+
+    @app.get("/system/docker")
+    async def get_system_docker():
+        # subprocess.run(docker info) blocks up to 12s on cold Docker Desktop.
+        # async + to_thread keeps the event loop free.
+        import asyncio as _asyncio_dk
+        return await _asyncio_dk.to_thread(_compute_system_docker_payload)
 
     # ----- POST /docker/start-searxng -----
     # Start the SearXNG container with the same flags seekdeep_launcher.bat
@@ -3066,8 +3087,7 @@ def register_gui_endpoints(
     # they ran setup_local.ps1 there. We surface it here so the wizard
     # can auto-set SEEKDEEP_PYTHON and skip the "Install ML libraries"
     # download entirely.
-    @app.get("/system/detect-venv")
-    def get_detect_venv():
+    def _compute_detect_venv_payload() -> dict:
         import subprocess
         candidates: list[dict] = []
         seen: set[str] = set()
@@ -3176,6 +3196,14 @@ def register_gui_endpoints(
             "candidates": candidates,
             "current": _current_python_status(),
         }
+
+    @app.get("/system/detect-venv")
+    async def get_detect_venv():
+        # Spawns ~10 subprocess.run() calls (8s timeout each) to probe each
+        # venv's torch/CUDA. Sync execution would block the event loop for
+        # many seconds. async + to_thread keeps the loop free.
+        import asyncio as _asyncio_dv
+        return await _asyncio_dv.to_thread(_compute_detect_venv_payload)
 
     def _current_python_status() -> dict:
         # Inline because gui_endpoints lives in a tight import scope.
@@ -3468,25 +3496,28 @@ def register_gui_endpoints(
     # ----- POST /model/warm -----
     @app.post("/model/warm", dependencies=[Depends(_require_gui_token)])
     async def post_model_warm(req: WarmRequest):
+        # async + to_thread: handler() loads model weights (30+s, holds GIL via
+        # CUDA calls). Calling it directly from async blocks the event loop —
+        # every other endpoint queues. Offload to the default executor so the
+        # loop stays responsive for /health, /launchers/status, /events.
+        import asyncio as _asyncio_mw
         role = (req.role or "default_chat").strip().lower() or "default_chat"
         if not warmup_handlers:
             return {"ok": True, "role": role, "loaded": False, "stub": True,
                     "note": "no warmup handlers wired; pass warmup_handlers=... to register_gui_endpoints"}
-        # Dispatch: image/vision are categorical; everything else is a chat role.
         try:
             if role == "image":
                 handler = warmup_handlers.get("image")
                 if not handler: return {"ok": False, "role": role, "error": "no image handler"}
-                result = handler()
+                result = await _asyncio_mw.to_thread(handler)
             elif role == "vision":
                 handler = warmup_handlers.get("vision")
                 if not handler: return {"ok": False, "role": role, "error": "no vision handler"}
-                result = handler()
+                result = await _asyncio_mw.to_thread(handler)
             else:
                 handler = warmup_handlers.get("chat")
                 if not handler: return {"ok": False, "role": role, "error": "no chat handler"}
-                result = handler(role)
-            # Loaders return implementation-specific objects; just stringify a hint.
+                result = await _asyncio_mw.to_thread(handler, role)
             return {"ok": True, "role": role, "loaded": True,
                     "result": str(result)[:200] if result is not None else None}
         except Exception as e:
@@ -4040,8 +4071,11 @@ def register_gui_endpoints(
         return out
 
     @app.get("/stats/snapshot")
-    def get_stats_snapshot():
-        return _compute_stats_snapshot()
+    async def get_stats_snapshot():
+        # async + to_thread: HF scan + bot-stats file read + day-bucket
+        # aggregation shouldn't block the event loop or queue with /chat.
+        import asyncio as _aio_st
+        return await _aio_st.to_thread(_compute_stats_snapshot)
 
     # Auto-wire stats.tick provider so the WS bus broadcasts a fresh snapshot
     # every TICK_CADENCE_SEC["stats"] without callers having to pass it.
@@ -4812,7 +4846,14 @@ def register_gui_endpoints(
     # restart. Wired to the Quick Actions "Reload .env" button. Returns
     # the list of keys that changed so the GUI can toast a summary.
     @app.post("/config/reload", dependencies=[Depends(_require_gui_token)])
-    def post_config_reload():
+    async def post_config_reload():
+        # async + to_thread: disk I/O + env mutation doesn't fight the sync
+        # threadpool for a slot when /chat is mid-load. Was the "Reload .env
+        # failed to fetch" toast the user kept seeing.
+        import asyncio as _aio_cfg
+        return await _aio_cfg.to_thread(_post_config_reload_inner)
+
+    def _post_config_reload_inner():
         changed: list[str] = []
         added: list[str] = []
         try:
@@ -4933,8 +4974,7 @@ def register_gui_endpoints(
     # importable. Wired to the Quick Actions "Smoke test" button so the
     # user gets a single click → results modal instead of a "run this in a
     # terminal" instruction. Times out after 30s; safe to run repeatedly.
-    @app.post("/system/smoke", dependencies=[Depends(_require_gui_token)])
-    def post_system_smoke():
+    def _run_system_smoke_inner() -> dict:
         import importlib.util
         smoke_path = root / "scripts" / "smoke_gui_endpoints.py"
         if not smoke_path.is_file():
@@ -4999,6 +5039,16 @@ def register_gui_endpoints(
             "output": buf.getvalue()[-4000:],
             "exit_code": rc,
         }
+
+    @app.post("/system/smoke", dependencies=[Depends(_require_gui_token)])
+    async def post_system_smoke():
+        # The smoke suite hits ~50 endpoints sequentially with curl; cold-cache
+        # it takes 10-30s. Sync execution blocks every other endpoint —
+        # /health, /launchers/status, the whole UI freezes.
+        # async + to_thread keeps the event loop responsive; progress is still
+        # streamed via the smoke.line / smoke.progress events.
+        import asyncio as _asyncio_sm
+        return await _asyncio_sm.to_thread(_run_system_smoke_inner)
 
     # ----- Live-tick producer (replaces client-side polling) -----
     # Cadence per topic. Picked to be roughly twice as frequent as the

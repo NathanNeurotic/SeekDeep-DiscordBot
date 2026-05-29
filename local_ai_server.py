@@ -3494,10 +3494,12 @@ def warmup_vision_endpoint():
 
 
 @app.get("/gpu")
-def gpu_endpoint():
-    """Focused GPU stats endpoint. Lighter than /health; safe to poll
-    every few seconds for live-tail monitoring without spam."""
-    stats = gpu_stats()
+async def gpu_endpoint():
+    """Focused GPU stats endpoint. async def + asyncio.to_thread so the
+    nvidia-smi subprocess inside gpu_stats() doesn't queue behind /chat
+    or /image when they're holding the sync threadpool."""
+    import asyncio as _asyncio_gpu
+    stats = await _asyncio_gpu.to_thread(gpu_stats)
     stats["vram_budget"] = {
         "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
         "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
