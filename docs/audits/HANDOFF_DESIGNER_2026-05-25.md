@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
+> Archived from the repo root (audit DOC-4). Figures here (endpoint
+> counts, LOC, "unverified" flags) reflect the date in the filename
+> and contradict the live code. Kept for provenance only; do not cite
+> as current state.
+
 # Designer Hand-off — 2026-05-25 (Phase 2 + Phase 4 ready to start)
 
 Everything in the backend / Claude Code lane that your 2026-05-25 audit surfaced is now landed on `main`. This doc summarizes what changed and what's queued on your plate.

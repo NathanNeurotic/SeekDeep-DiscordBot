@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
+> Archived from the repo root (audit DOC-4). Figures here (endpoint
+> counts, LOC, "unverified" flags) reflect the date in the filename
+> and contradict the live code. Kept for provenance only; do not cite
+> as current state.
+
 # Handoff · backend → GUI work (for Claude Designer)
 
 Hand this file to Claude Designer along with the repo. Mirrors `HANDOFF_CLAUDE_CODE.md` but going the other direction: this is what Claude Code shipped while you were away, and the GUI work that's now unblocked because of it.

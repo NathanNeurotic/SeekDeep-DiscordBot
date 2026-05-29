@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
+> Archived from the repo root (audit DOC-4). Figures here (endpoint
+> counts, LOC, "unverified" flags) reflect the date in the filename
+> and contradict the live code. Kept for provenance only; do not cite
+> as current state.
+
 # SeekDeep Repo Audit · Agent Task List · 2026-05-27
 
 **Author:** Claude (Opus 4.7), session `c33cbb0b-fc38-4f56-a9f8-985386a2b92b`

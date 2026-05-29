@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
+> Archived from the repo root (audit DOC-4). Figures here (endpoint
+> counts, LOC, "unverified" flags) reflect the date in the filename
+> and contradict the live code. Kept for provenance only; do not cite
+> as current state.
+
 # Designer Hand-off — 2026-05-26 (full-GUI consistency pass)
 
 The unified single-file Tauri experience is now end-to-end functional. Last audit response was [`AUDIT_DESIGNER_2026-05-25.md`](AUDIT_DESIGNER_2026-05-25.md); your Phase 2 + Phase 4 work landed in zip 41 and is on `main`. Several new surfaces have been added since — this hand-off asks you to do a **comprehensive consistency audit** across the whole GUI, not just chat.html.

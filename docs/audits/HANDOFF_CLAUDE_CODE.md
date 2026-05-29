@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
+> Archived from the repo root (audit DOC-4). Figures here (endpoint
+> counts, LOC, "unverified" flags) reflect the date in the filename
+> and contradict the live code. Kept for provenance only; do not cite
+> as current state.
+
 # Handoff · GUI → backend work (for Claude Code)
 
 This document captures the work the GUI side has prepared, and the backend changes that need to land for it to come alive. Hand this file to Claude Code along with the repo.
