@@ -70,9 +70,40 @@ jobs:
         # 200 the smoke test asserts on.
         run: python -m pip install --upgrade pip && python -m pip install 'fastapi>=0.115.0' 'httpx>=0.27.0' 'pydantic>=2.10.0' 'python-dotenv>=1.0.0' 'Pillow>=10.0.0' 'huggingface_hub>=0.24.0'
 
-      - name: Run preflight (js + py + smoke + gui-smoke)
+      - name: Run preflight (js + html-js + py + smoke + gui-smoke + docs)
         env:
           # smoke_test.mjs reads CI to skip anything GPU/network-bound.
           # SEEKDEEP_TEST_MODE is set by smoke_test.mjs itself.
           CI: '1'
+        # The `rust` stage skips-with-warn here (no cargo on this runner);
+        # the dedicated `rust` job below does the real cargo check.
         run: npm run preflight
+
+  # SEC-2: type-check the Tauri/Rust desktop shell on its own runner so a
+  # broken sidecar.rs / lib.rs is caught at PR time, not at MSI-build time.
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install Tauri Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml

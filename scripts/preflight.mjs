@@ -206,6 +206,29 @@ stage('py', () => runPyCompile());
 stage('smoke', () => runSmokeTest());
 stage('gui-smoke', () => runGuiSmoke());
 
+// SEC-2: type-check the Rust desktop shell. cargo check catches a broken
+// sidecar.rs / lib.rs before it reaches an MSI build. Skip-with-warn when
+// cargo isn't installed (most contributors editing JS/Python won't have a
+// Rust toolchain) so this never blocks a non-Rust change — but on machines
+// + CI that DO have cargo, a Rust compile error fails preflight.
+stage('rust', () => {
+  const manifest = path.join(ROOT, 'src-tauri', 'Cargo.toml');
+  if (!existsSync(manifest)) return { ok: true, detail: 'no src-tauri/Cargo.toml' };
+  const probe = spawnSync('cargo', ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    // Not a failure — just absent. Warn so the gap is visible.
+    return { ok: true, detail: 'cargo not installed — skipped (install Rust to type-check the desktop shell)' };
+  }
+  const r = spawnSync('cargo', ['check', '--quiet', '--manifest-path', manifest], {
+    encoding: 'utf8', cwd: ROOT,
+  });
+  if (r.status !== 0) {
+    const err = (r.stderr || '').split('\n').filter(Boolean).slice(-3).join(' | ');
+    return { ok: false, detail: `cargo check failed: ${err.slice(0, 240)}` };
+  }
+  return { ok: true, detail: `cargo check clean (${(probe.stdout || '').trim()})` };
+});
+
 // CRIT-3: docs drift guard. Fail-closed assertions so the version-filename,
 // memory-default, and smoke-count drift the audit found (DOC-1 / CONF-1 /
 // DOC-2) cannot silently come back. Pure string/file checks — fast, no
