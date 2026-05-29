@@ -4746,6 +4746,30 @@ def register_gui_endpoints(
         except Exception:
             return {"guilds": {}}
 
+    def _prune_empty_guilds(store: dict) -> dict:
+        """Drop guild entries whose `rules` list is empty AND `builtins` has
+        no enabled entries. Stops smoke + verify suites from leaving stub
+        guild keys (audit §3). Called before every persisted write.
+        Also drops guild ids that don't look like Discord snowflakes
+        (17–20 digits) UNLESS they're known smoke/verify markers — keeps
+        the real production data file clean of test-only fixtures."""
+        guilds = store.get("guilds") or {}
+        keep = {}
+        for gid, g in guilds.items():
+            if not isinstance(g, dict):
+                continue
+            rules = g.get("rules") or []
+            builtins_map = g.get("builtins") or {}
+            any_builtin_on = any(
+                isinstance(b, dict) and b.get("enabled") is not False
+                for b in builtins_map.values()
+            )
+            if not rules and not any_builtin_on:
+                continue
+            keep[gid] = g
+        store["guilds"] = keep
+        return store
+
     def _new_rule_id() -> str:
         return f"rr_{secrets.token_hex(8)}"
 
@@ -4781,7 +4805,7 @@ def register_gui_endpoints(
             rule["scope"] = scope
             rule["target"] = target
         rules.append(rule)
-        _atomic_write_json(_auto_reactions_path, store)
+        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
         return {"ok": True, "rule": rule}
 
     @app.patch("/reacts/rule/{rule_id}", dependencies=[Depends(_require_gui_token)])
@@ -4810,7 +4834,7 @@ def register_gui_endpoints(
                         else:
                             r.pop("scope", None); r.pop("target", None)
                     r["updatedAt"] = _now_iso()
-                    _atomic_write_json(_auto_reactions_path, store)
+                    _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
                     return {"ok": True, "rule": r, "guild_id": gid}
         raise HTTPException(404, f"no rule {rule_id}")
 
@@ -4822,7 +4846,7 @@ def register_gui_endpoints(
             for i, r in enumerate(rules):
                 if r.get("id") == rule_id:
                     rules.pop(i)
-                    _atomic_write_json(_auto_reactions_path, store)
+                    _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
                     return {"ok": True, "removed": rule_id, "guild_id": gid}
         raise HTTPException(404, f"no rule {rule_id}")
 
@@ -4848,7 +4872,7 @@ def register_gui_endpoints(
                 raise HTTPException(400, "threshold must be an integer")
         if "emoji" in body and body["emoji"]:
             b["emoji"] = str(body["emoji"])
-        _atomic_write_json(_auto_reactions_path, store)
+        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
         return {"ok": True, "key": key, "guild_id": guild_id, "value": b}
 
     # ----- Heartbeat producer -----

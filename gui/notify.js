@@ -523,8 +523,39 @@
     document.body.appendChild(toastStack);
     return toastStack;
   }
+  // TTL-by-tone defaults so the audit §4 cadence is consistent across the
+  // ~50 call sites. Callers can still pass an explicit ttl to override.
+  // Bad/warn linger longer so error context isn't lost; info disappears
+  // quickly so the UI doesn't pile up while polling.
+  const TTL_BY_TONE = { info: 4000, good: 5000, warn: 8000, bad: 10000, neutral: 4000 };
+
+  // Dedupe window: identical title+body+tone within 800ms is suppressed.
+  // The 5s /launchers/status poll could fire three OFFLINE toasts during
+  // a single restart window before this; now they collapse to one.
+  const recentToasts = new Map();
+  const DEDUPE_WINDOW_MS = 800;
+  function toastKey(opts) {
+    return (opts.tone || 'info') + '\x00' + (opts.title || '') + '\x00' + (opts.body || '');
+  }
+  function isDuplicate(opts) {
+    if (opts.allowDuplicate) return false;
+    const key = toastKey(opts);
+    const now = Date.now();
+    const last = recentToasts.get(key);
+    if (last && (now - last) < DEDUPE_WINDOW_MS) return true;
+    recentToasts.set(key, now);
+    // Prune entries older than the window so the map doesn't grow forever.
+    if (recentToasts.size > 64) {
+      for (const [k, ts] of recentToasts.entries()) {
+        if (now - ts > DEDUPE_WINDOW_MS) recentToasts.delete(k);
+      }
+    }
+    return false;
+  }
+
   function toast(opts) {
     opts = opts || {};
+    if (isDuplicate(opts)) return { close: () => {}, el: null, deduped: true };
     const stack = ensureToastStack();
     const el = document.createElement('div');
     el.className = 'sdn-toast tone-' + (opts.tone || 'info');
@@ -537,9 +568,61 @@
       </div>
     `;
     stack.appendChild(el);
-    const ttl = opts.ttl == null ? 4000 : opts.ttl;
+    // Tone-driven TTL when caller didn't specify. Explicit 0 still means
+    // "sticky"; callers occasionally need that for long-running flows.
+    const ttl = opts.ttl == null ? (TTL_BY_TONE[opts.tone || 'info'] || 4000) : opts.ttl;
     if (ttl > 0) setTimeout(() => { el.style.transition = 'opacity 0.25s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 260); }, ttl);
     return { close: () => el.remove(), el };
+  }
+
+  // Paired start→end toast for "click button → fire op → show result"
+  // workflows. Closes audit §4: previously every Quick Action either
+  // toasted on click-then-silenced-on-success (so the user never knew
+  // the operation finished) or toasted on failure only (so launcher.js's
+  // 16-bad-6-good imbalance made it feel like the launcher only ever
+  // failed). Now every operation announces start + outcome.
+  //
+  // Usage:
+  //   SeekDeepNotify.operation({
+  //     label: 'Restart AI server',
+  //     successTitle: 'AI server back online',   // optional
+  //     errorTitle:   'Restart failed',           // optional
+  //     run: async () => { ... return resultBody?; }
+  //   })
+  //
+  // The `run` thunk's resolved value (if a string) is used as the
+  // success-toast body. Rejections become bad-tone toasts whose body is
+  // the error message. Returns the same promise so callers can chain.
+  function operation(opts) {
+    opts = opts || {};
+    const label = opts.label || 'Working';
+    const successTitle = opts.successTitle || (label + ' · done');
+    const errorTitle   = opts.errorTitle   || (label + ' · failed');
+    // Start toast: short (info), can be force-closed when end-toast lands.
+    const startToast = toast({
+      tone: 'info',
+      title: label + '…',
+      body: opts.startBody || '',
+      ttl: opts.startTtl == null ? 3000 : opts.startTtl,
+      allowDuplicate: true, // pair-uniqueness handled below, not via dedupe
+    });
+    const run = typeof opts.run === 'function' ? opts.run : () => Promise.resolve();
+    return Promise.resolve()
+      .then(() => run())
+      .then((result) => {
+        if (startToast && typeof startToast.close === 'function') startToast.close();
+        const body = (opts.successBody != null)
+          ? opts.successBody
+          : (typeof result === 'string' ? result : '');
+        toast({ tone: 'good', title: successTitle, body });
+        return result;
+      })
+      .catch((err) => {
+        if (startToast && typeof startToast.close === 'function') startToast.close();
+        const body = String(err?.message || err || 'unknown error').slice(0, 280);
+        toast({ tone: 'bad', title: errorTitle, body });
+        throw err;
+      });
   }
 
   // Brand-styled drop-in replacement for window.confirm(). Returns a Promise
@@ -590,7 +673,7 @@
   }
 
   window.SeekDeepNotify = {
-    banner, dismiss, modal, toast, confirm,
+    banner, dismiss, modal, toast, confirm, operation,
     // Allow tests / hosts to nudge the offset after layout shifts.
     _syncOffset: syncBannerOffset,
   };

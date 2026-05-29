@@ -615,7 +615,7 @@
     <a href="roadmap.html">Roadmap</a>
   </div>
   <div class="row">
-    <span class="pill" data-version><span class="dot"></span><span data-version>v10.35.6</span> · LOCAL</span>
+    <span class="pill" data-version><span class="dot"></span><span data-version>v—</span> · LOCAL</span>
   </div>
 </nav>
 
@@ -678,7 +678,7 @@
         Server stats
       </a>
 
-      <div class="grp" style="margin-top:auto; padding-top: 24px;"><span data-version>v10.35.6</span></div>
+      <div class="grp" style="margin-top:auto; padding-top: 24px;"><span data-version>v—</span></div>
     </nav>
 
     <!-- MAIN PANES -->
@@ -1422,42 +1422,56 @@
               </summary>
               <div class="sec-body">
                 <div class="tiny muted" style="margin-bottom: 12px; font-family: var(--font-mono); letter-spacing: 0.1em;">▸ The three reaction features (<span style="color:var(--cyan-1)">FORCE_REACT</span>, <span style="color:var(--cyan-1)">EMOJI_VAULT</span>, <span style="color:var(--cyan-1)">AUTO_REACT</span>) <strong style="color:var(--warn)">default off</strong> so SeekDeep doesn't fight demonbot in shared servers.</div>
+                <!-- Cards now carry data-key + an empty .save span so the
+                     generic markDirty/save handlers see them as proper
+                     config rows (audit §1). No initial `on` class — every
+                     toggle is hydrated by loadFromDisk() reading /config
+                     on first paint. -->
                 <div class="cards-4" style="margin-top: 4px;">
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
-                    <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">IMG2IMG</span><div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_IMG2IMG" style="display:flex; flex-direction: column; gap: 8px;">
+                    <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">IMG2IMG</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Transform attached / replied images.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">INSTRUCT_PIX2PIX</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Edit-by-instruction · pulls extra model.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_INPAINT" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">INPAINT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">CLIPSeg-masked SDXL fill.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_UPSCALE_REALESRGAN" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">UPSCALE_REALESRGAN</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Heavier upscale path · requires model.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_NSFW_GATE" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">NSFW_GATE</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Hard refusal on NSFW prompts.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_TTS_VOICE" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">TTS_VOICE</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Voice replies in voice channels.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_EMOJI_VAULT" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">EMOJI_VAULT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">@SeekDeep emoji backup/import/count/list.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_FORCE_REACT" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">FORCE_REACT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Manual react via paginated emoji picker.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="card-mini" style="display:flex; flex-direction: column; gap: 8px;">
+                  <div class="card-mini cfg-feature" data-key="SEEKDEEP_FEATURE_AUTO_REACT" style="display:flex; flex-direction: column; gap: 8px;">
                     <div class="row" style="justify-content: space-between;"><span class="mono" style="font-size:12px; color: var(--cyan-1);">AUTO_REACT</span><div class="toggle" onclick="this.classList.toggle('on'); markDirty(this)"></div></div>
                     <div class="tiny muted">Per-message rule scan · <span class="mono">@SeekDeep reactrule</span> admin.</div>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
                 </div>
               </div>
@@ -3229,8 +3243,13 @@ const SEEKDEEP_BASE = (function() {
   });
 
   // ===== Config: dirty tracking =====
+  // Audit §1: include .cfg-feature[data-key] cards alongside .config-row.
+  // Same dirty marker, same save badge, same /config POST path — just a
+  // different DOM shape so the existing dirty/save code can find them.
+  const CFG_ROW_SELECTOR = '.config-row, .cfg-feature[data-key]';
+  const CFG_SAVE_SELECTOR = '.config-row .save, .cfg-feature[data-key] .save';
   window.markDirty = function(el) {
-    const row = el.closest('.config-row, .card-mini');
+    const row = el.closest(CFG_ROW_SELECTOR);
     if (row) {
       const save = row.querySelector('.save');
       if (save) { save.textContent = 'DIRTY'; save.style.color = 'var(--warn)'; }
@@ -3238,22 +3257,16 @@ const SEEKDEEP_BASE = (function() {
     recountDirty();
   };
   function recountDirty() {
-    // Section-agnostic: any .config-row .save inside any cfg-section.
-    // Was an explicit per-section list that missed paths/remote/features/
-    // personas (no DIRTY tags painted for those, no save dispatch).
-    const allSaves = document.querySelectorAll('.cfg-section .config-row .save');
+    const allSaves = document.querySelectorAll('.cfg-section ' + CFG_SAVE_SELECTOR);
     const dirtyCount = [...allSaves].filter(s => s.textContent.includes('DIRTY')).length;
     const counter = document.getElementById('cfg-dirty-count');
     if (counter) counter.textContent = dirtyCount;
-    // Per-section dirty tags — populate the .sec-dirty span inside each
-    // section's <summary> so the user can see at a glance which collapsed
-    // section has the unsaved changes (instead of hardcoded "2 dirty" /
-    // "1 dirty" that lied on cold start).
     document.querySelectorAll('details.cfg-section').forEach(sec => {
       const tag = sec.querySelector('summary > .sec-dirty');
       if (!tag) return;
-      const n = sec.querySelectorAll('.config-row .save')
-        ? [...sec.querySelectorAll('.config-row .save')].filter(s => s.textContent.includes('DIRTY')).length
+      const sectionSaves = sec.querySelectorAll(CFG_SAVE_SELECTOR);
+      const n = sectionSaves
+        ? [...sectionSaves].filter(s => s.textContent.includes('DIRTY')).length
         : 0;
       tag.textContent = n > 0 ? (n + ' dirty') : '';
     });
@@ -3356,16 +3369,33 @@ const SEEKDEEP_BASE = (function() {
         const data = await r.json();
         const env = (data && data.env) || {};
         let populated = 0, redacted = 0;
-        document.querySelectorAll('.config-row').forEach(row => {
-          const keyEl = row.querySelector('.key');
-          if (!keyEl) return;
-          const key = keyEl.textContent.trim();
-          if (!(key in env)) return;
+        // Helper: pull the env-var key for a row, whether it's an
+        // input-style .config-row (with a <span class="key">) or a
+        // .cfg-feature card (data-key="..."). Audit §1 fix.
+        function rowKey(row) {
+          if (row.dataset && row.dataset.key) return row.dataset.key.trim();
+          const k = row.querySelector('.key');
+          return k ? k.textContent.trim() : null;
+        }
+        document.querySelectorAll('.config-row, .cfg-feature[data-key]').forEach(row => {
+          const key = rowKey(row);
+          if (!key || !(key in env)) return;
+          const v = env[key];
+          // Toggle rows (feature flags + any future on/off card): set
+          // .toggle.on based on /env value. "on"/"true"/"1"/"yes" → on.
+          const tgl = row.querySelector('.toggle');
+          if (tgl && !row.querySelector('input, select')) {
+            const onish = ['1','true','yes','on'].includes(String(v || '').toLowerCase());
+            tgl.classList.toggle('on', onish);
+            const save = row.querySelector('.save');
+            if (save) { save.textContent = 'SAVED'; save.style.color = ''; }
+            populated++;
+            return;
+          }
+          // Input/select rows: existing behavior.
           const input = row.querySelector('input, select');
           if (!input) return;
-          const v = env[key];
           if (v === '*****') {
-            // Secret — leave the input empty so the placeholder shows
             input.value = '';
             redacted++;
           } else {
@@ -3438,16 +3468,20 @@ const SEEKDEEP_BASE = (function() {
       setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 4000);
       return;
     }
-    const dirtyRows = [...document.querySelectorAll('.config-row .save')]
+    // Audit §1: include .cfg-feature[data-key] cards in the dirty sweep.
+    const dirtyRows = [...document.querySelectorAll('.config-row .save, .cfg-feature[data-key] .save')]
       .filter(s => s.textContent.includes('DIRTY'))
-      .map(s => s.closest('.config-row'));
+      .map(s => s.closest('.config-row, .cfg-feature[data-key]'));
 
     // Collect updates: { ENV_KEY: value }
     const updates = {};
     dirtyRows.forEach(row => {
-      const keyEl = row.querySelector('.key');
-      if (!keyEl) return;
-      const key = keyEl.textContent.trim();
+      // Dual key source: data-key attribute (feature cards) or
+      // <span class="key"> text (config rows). Either is fine.
+      const key = (row.dataset && row.dataset.key)
+        ? row.dataset.key.trim()
+        : (row.querySelector('.key')?.textContent.trim());
+      if (!key) return;
       let val;
       const input = row.querySelector('input, select');
       if (input) {
@@ -3490,7 +3524,8 @@ const SEEKDEEP_BASE = (function() {
     // Only flip row markers to SAVED when the POST actually succeeded.
     // On failure, keep dirty markers so the user knows nothing was written.
     if (liveOk) {
-      document.querySelectorAll('.config-row .save').forEach(s => {
+      // Audit §1: include .cfg-feature[data-key] saves in the SAVED sweep.
+      document.querySelectorAll('.config-row .save, .cfg-feature[data-key] .save').forEach(s => {
         s.textContent = 'SAVED';
         s.style.color = '';
       });

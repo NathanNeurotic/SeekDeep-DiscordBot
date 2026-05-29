@@ -1,0 +1,134 @@
+{
+  "$comment": "Single source of truth for optional features. The Control Center renders cards from this manifest. Adding a new feature is a one-file edit: append an entry here, ship the corresponding .env line, wire the bot/server handler. UI generation lives in gui/app.html's feature-section renderer.",
+  "version": 1,
+  "features": [
+    {
+      "key": "SEEKDEEP_FEATURE_IMG2IMG",
+      "label": "Image-to-image",
+      "category": "image",
+      "summary": "Transform attached or replied-to images via SDXL img2img.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#img2img",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX",
+      "label": "Instruct-Pix2Pix",
+      "category": "image",
+      "summary": "Edit-by-instruction · pulls an extra model on first use.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#instruct-pix2pix",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_INPAINT",
+      "label": "Inpaint",
+      "category": "image",
+      "summary": "CLIPSeg builds an auto-mask from the target; SDXL fills it.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#inpaint",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_UPSCALE_REALESRGAN",
+      "label": "Real-ESRGAN upscale",
+      "category": "image",
+      "summary": "Heavier upscale path · requires the Real-ESRGAN model.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#upscale",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_NSFW_GATE",
+      "label": "NSFW gate",
+      "category": "image",
+      "summary": "Hard refusal on NSFW prompts before they reach the image pipeline.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#nsfw-gate",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_TTS_VOICE",
+      "label": "TTS voice replies",
+      "category": "voice",
+      "summary": "Voice replies in voice channels.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#tts",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_EMOJI_VAULT",
+      "label": "Emoji vault",
+      "category": "react",
+      "summary": "@SeekDeep emoji backup / import / count / list.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#emoji-vault",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_FORCE_REACT",
+      "label": "Force-react picker",
+      "category": "react",
+      "summary": "Manual react via paginated emoji picker.",
+      "default": "off",
+      "target": null,
+      "docs": "docs.html#force-react",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_FEATURE_AUTO_REACT",
+      "label": "Auto-react rules",
+      "category": "react",
+      "summary": "Per-message rule scan — see Auto-react rules tab for the rule editor.",
+      "default": "off",
+      "target": null,
+      "docs": "app.html#auto-react",
+      "config_page": "app.html#auto-react",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_DAILY_DIGEST",
+      "label": "Daily digest",
+      "category": "ops",
+      "summary": "Once-a-day summary of bot activity per server. Channel set via @SeekDeep digest channel here (admin).",
+      "default": "off",
+      "target": {
+        "type": "channel",
+        "key": null,
+        "hint": "Set per-server via the @SeekDeep digest channel-here admin command."
+      },
+      "extra_env": [
+        { "key": "SEEKDEEP_DAILY_DIGEST_HOUR", "label": "Send at hour (0–23)", "default": "9", "kind": "number" }
+      ],
+      "docs": "docs.html#daily-digest",
+      "watch_event": null
+    },
+    {
+      "key": "SEEKDEEP_MEMBER_LOG_CHANNEL_ID",
+      "label": "Member join/leave log",
+      "category": "ops",
+      "summary": "Posts a Member Joined / Member Left embed to the configured channel. Requires the GuildMembers privileged intent enabled in Discord Developer Portal.",
+      "default": "",
+      "kind": "channel_id",
+      "target": {
+        "type": "channel",
+        "key": "SEEKDEEP_MEMBER_LOG_CHANNEL_ID",
+        "hint": "Paste the channel ID. Right-click any text channel in Discord (Developer Mode) → Copy Channel ID."
+      },
+      "extra_env": [
+        { "key": "SEEKDEEP_MEMBER_LOG_JOINS",  "label": "Post joins",  "default": "on", "kind": "toggle" },
+        { "key": "SEEKDEEP_MEMBER_LOG_LEAVES", "label": "Post leaves", "default": "on", "kind": "toggle" }
+      ],
+      "docs": "docs.html#member-log",
+      "watch_event": null,
+      "privileged_intent": "GuildMembers"
+    }
+  ]
+}

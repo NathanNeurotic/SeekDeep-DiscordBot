@@ -783,7 +783,7 @@
       <div class="sd-jump-list" id="sdJumpList"></div>
       <div class="sd-jump-foot">
         <span><kbd>⌘K</kbd> open · <kbd>Esc</kbd> close · <kbd>↵</kbd> jump</span>
-        <span><span data-version>v10.35.6</span> · LOCAL</span>
+        <span><span data-version>v—</span> · LOCAL</span>
       </div>
     </div>
   `;
@@ -1400,6 +1400,12 @@
     }
     inject('events.js',  'SeekDeepEvents');
     inject('version.js', 'SeekDeepVersion');
+    // fetch.js · resilient fetch with exponential backoff + visibility
+    // recovery. Closes audit §5 — every bare fetch() with a one-shot
+    // timeout that leaves stale data on screen when the sidecar is
+    // mid-respawn. Load BEFORE any consumer (launcher.js, app.html
+    // inline blocks) so window.SeekDeepFetch is available everywhere.
+    inject('fetch.js', 'SeekDeepFetch');
     // fix-action.js · shared retry/watch_events/hint helper used by both
     // app.html's launcher fix-button and setup-wizard.html's runFix. Single
     // source of truth so the .subscribe-vs-.on class of bug (Phase 1) can't

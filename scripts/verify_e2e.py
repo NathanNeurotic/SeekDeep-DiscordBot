@@ -85,8 +85,12 @@ call("GET", "/stats/snapshot", expect=200)
 call("GET", "/data/auto-reactions.json", expect=200)
 
 # ---- Auto-react rules CRUD (writes) ----------------------------------------
+# Audit §3: verify-guild-001 looked like a stub Discord ID and survived
+# in the user's Auto-react rules pane. "smoke-verify-guild" cannot
+# collide with any real Discord snowflake (non-digit chars) and gets
+# pruned by _prune_empty_guilds once the rule is deleted below.
 created = call("POST", "/reacts/rule", body={
-    "guild_id": "verify-guild-001",
+    "guild_id": "smoke-verify-guild",
     "emoji": "🧪",
     "pattern": "verify-pattern",
     "enabled": True,

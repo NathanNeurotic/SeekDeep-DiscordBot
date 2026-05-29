@@ -653,7 +653,13 @@ def main() -> int:
     # routed every change through @SeekDeep reactrule). Token-gated CRUD
     # on auto-reactions.json + per-guild builtin toggles.
     # =====================================================================
-    SMOKE_REACT_GUILD = "777000777000777000"
+    # SMOKE_REACT_GUILD: deliberately NOT a Discord snowflake (digits-only,
+    # 17-20 chars). Audit §3: the previous "777000777000777000" looked like
+    # a real guild ID and survived test runs as a stub entry the user's
+    # Auto-react rules pane displayed forever. The "smoke-test-" prefix is
+    # impossible to collide with a real Discord guild AND gets auto-pruned
+    # by _prune_empty_guilds the moment the test cleans up.
+    SMOKE_REACT_GUILD = "smoke-test-guild"
 
     r = c.post("/reacts/rule", json={"guild_id": SMOKE_REACT_GUILD, "emoji": ":star:", "pattern": "test"})
     check("POST /reacts/rule without token -> 401",
@@ -708,6 +714,14 @@ def main() -> int:
         r = c.delete(f"/reacts/rule/{rule_id}", headers={_TOKEN_HEADER: token})
         check("DELETE /reacts/rule/{id} second time -> 404",
               r.status_code == 404, f"got {r.status_code}")
+
+        # Audit §3 cleanup: disable the builtin so _prune_empty_guilds drops
+        # the SMOKE_REACT_GUILD entry from auto-reactions.json. Without this
+        # every smoke run left a stub `{rules:[], builtins:{long_message:{
+        # enabled:true,...}}}` entry behind that polluted the user's
+        # Control Center → Auto-react rules pane forever.
+        c.post("/reacts/builtin/long_message", headers={_TOKEN_HEADER: token},
+               json={"guild_id": SMOKE_REACT_GUILD, "enabled": False})
 
     # ---- GET /config (Item F: redacted env map for dynamic-facts IIFE) ----
     r = c.get("/config")
