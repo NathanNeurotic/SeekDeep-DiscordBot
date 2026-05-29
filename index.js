@@ -1539,19 +1539,27 @@ const client = new Client({
     timeout: Math.max(15000, Number(process.env.DISCORD_REST_TIMEOUT_MS || 120000)),
     retries: Math.max(0, Number(process.env.DISCORD_REST_RETRIES || 3)),
   },
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
-    // GuildMembers is a privileged intent — bot owner must enable it in the
-    // Discord Developer Portal under Bot → Privileged Gateway Intents. Used
-    // by the member-log feature (guildMemberAdd / guildMemberRemove). The
-    // intent is requested unconditionally so a user who toggles the feature
-    // on later doesn't have to restart the bot to start receiving events;
-    // the feature itself is gated by SEEKDEEP_MEMBER_LOG_CHANNEL_ID.
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: (function buildIntents() {
+    const base = [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMessageReactions,
+    ];
+    // GuildMembers is a privileged intent. Requesting it without the
+    // matching toggle in the Discord Developer Portal (Bot → Privileged
+    // Gateway Intents → Server Members Intent) gets the gateway to slam
+    // the connection with WS code 4014 "Disallowed intent" and the bot
+    // enters an infinite respawn loop. Gate the request on the same env
+    // that gates the feature so users who don't use the member log
+    // never hit the 4014 trap; users who do can flip the dev-portal
+    // toggle once and the next restart picks up both ends together.
+    const memberLogChannel = (process.env.SEEKDEEP_MEMBER_LOG_CHANNEL_ID || '').trim();
+    if (memberLogChannel) {
+      base.push(GatewayIntentBits.GuildMembers);
+    }
+    return base;
+  })(),
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 });
 
@@ -9461,6 +9469,39 @@ process.on('uncaughtException', (err) => {
 
 client.on('error', (err) => {
   console.error('Discord client error:', err);
+});
+
+// Detect Discord's "Disallowed intent" close code (4014). Happens when the
+// bot requests a privileged intent (GuildMembers / MessageContent / Presence)
+// without the matching toggle in the Developer Portal. Without this guard,
+// the gateway slams the connection, the process exits beforeExit, the bot
+// watchdog respawns it, gateway slams it again — infinite loop that
+// generates Discord API rate-limit pressure and burns CPU.
+//
+// We log an actionable message and exit with a non-restart code so the
+// watchdog stops respawning. The user fixes the dev-portal toggle (or
+// unsets SEEKDEEP_MEMBER_LOG_CHANNEL_ID to drop the intent request) and
+// manually restarts the bot once the gate is open.
+client.on('shardDisconnect', (event, shardId) => {
+  const code = event && typeof event.code === 'number' ? event.code : null;
+  if (code === 4014) {
+    console.error(
+      `[SeekDeep] FATAL · shard ${shardId} closed with code 4014 (Disallowed intent). ` +
+      `The bot is requesting the GuildMembers privileged intent because ` +
+      `SEEKDEEP_MEMBER_LOG_CHANNEL_ID is set, but the Server Members Intent ` +
+      `is OFF in the Discord Developer Portal. Fix one of: ` +
+      `(a) enable it at discord.com/developers/applications -> your bot -> ` +
+      `Bot -> Privileged Gateway Intents -> Server Members Intent, OR ` +
+      `(b) unset SEEKDEEP_MEMBER_LOG_CHANNEL_ID in .env to disable the ` +
+      `member-log feature. Exiting with code 42 so the bot watchdog stops ` +
+      `respawn-looping; restart the bot manually after fixing.`
+    );
+    // 42 is arbitrary — anything non-zero non-1 the watchdog can recognize
+    // as "fatal config error, do not respawn". The bot watchdog in
+    // local_ai_server's bot-watchdog already treats unexpected exits as
+    // crashes; this gives it an explicit signal to bail out of the loop.
+    process.exit(42);
+  }
 });
 
 // SEEKDEEP_MEMBER_LOG_START
