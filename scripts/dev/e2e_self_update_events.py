@@ -1,4 +1,9 @@
-"""Second-pass progress probe: self-update + dry-run installers.
+"""Self-update + dry-run-installer event probe (manual / dev-only).
+
+DEAD-2: renamed from e2e_progress_events_v2.py — this is NOT a "v2" of the
+progress probe; it tests an entirely different surface (the self-update +
+installer event wiring), so e2e_progress_events.py is still current, not
+obsolete. Run by hand; not wired into preflight or CI.
 
 Real /system/self-update would actually fetch from GitHub and patch the live
 tree — too destructive for an unattended probe. Instead we connect WS, hit
@@ -24,13 +29,17 @@ try:
 except Exception:
     pass
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent  # scripts/dev/ -> repo root (DEAD-1 move)
 BASE = "http://127.0.0.1:7865"
 WS_BASE = "ws://127.0.0.1:7865"
 
 
 def _token() -> str:
     env = ROOT / ".env"
+    # DEAD-2: restore the is_file() guard v1 has — without it the probe
+    # raises FileNotFoundError the moment it runs without a .env.
+    if not env.is_file():
+        return ""
     for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
         m = re.match(r"^SEEKDEEP_GUI_TOKEN=(.+)", line.strip())
         if m:

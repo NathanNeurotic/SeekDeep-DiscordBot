@@ -10,13 +10,13 @@ Layout (per WiX UI v3 / v4 spec — Mondo / Mondo2 themes):
   nsis-header.bmp  150 x 57   NSIS top banner    -> brand LEFT, blank RIGHT
   nsis-sidebar.bmp 164 x 314  NSIS welcome side  -> full brand panel (sidebar only)
 
-Run from repo root:  .venv/Scripts/python.exe scripts/gen_installer_images.py
+Run from repo root:  .venv/Scripts/python.exe scripts/dev/gen_installer_images.py
 """
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 
-ROOT      = Path(__file__).resolve().parent.parent
+ROOT      = Path(__file__).resolve().parent.parent.parent  # scripts/dev/ -> repo root (DEAD-1 move)
 SRC_ICON  = ROOT / "src-tauri" / "icons" / "icon.png"
 OUT_DIR   = ROOT / "src-tauri" / "installer"
 

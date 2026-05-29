@@ -20,7 +20,7 @@ try:
 except Exception:
     pass
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent  # scripts/dev/ -> repo root (DEAD-1 move)
 BASE = "http://127.0.0.1:7865"
 WS_BASE = "ws://127.0.0.1:7865"
 
