@@ -103,7 +103,15 @@ data/persona-overrides.json
 data/custom-personas.json
 data/auto-reactions.json
 data/bot-status.json
+data/system-state.json
 !data/.gitkeep
+
+# Playwright (audit §12) — local browser-driven Control Center smoke.
+test-results/
+playwright-report/
+.playwright/
+server.log
+server.pid
 
 # Personal scratch from AI/audit sessions — never publish.
 AUDIT*.md

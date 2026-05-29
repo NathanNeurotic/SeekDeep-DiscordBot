@@ -1477,6 +1477,48 @@
               </div>
             </details>
 
+            <!-- INTEGRATIONS · features that need a target (audit §10b) -->
+            <details class="cfg-section" id="sec-integrations">
+              <summary>
+                <span class="chev">▸</span>
+                <span class="sec-title">Integrations <em>channel-targeted features</em></span>
+                <span class="sec-dirty"></span>
+                <span class="sec-count">1</span>
+              </summary>
+              <div class="sec-body">
+                <div class="tiny muted" style="margin-bottom: 12px; font-family: var(--font-mono); letter-spacing: 0.1em;">▸ Features that post to a specific channel. Save here writes <span class="mono" style="color:var(--cyan-1)">.env</span>; click <span class="mono">⟳ Reload .env</span> in Launcher to apply.</div>
+
+                <!-- Member join/leave log -->
+                <div class="card-mini" style="display:flex; flex-direction: column; gap: 10px; padding: 14px;">
+                  <div class="row" style="justify-content: space-between; align-items: center;">
+                    <span class="mono" style="font-size:13px; color: var(--cyan-1);">Member join/leave log</span>
+                    <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
+                  </div>
+                  <div class="tiny muted">Posts a Member Joined / Member Left embed (avatar · mention · account age · ID) to the channel below. Requires the <strong>GuildMembers</strong> privileged intent — enable it at discord.com/developers/applications → your bot → Bot → Privileged Gateway Intents → Server Members.</div>
+                  <div class="config-row" style="display:flex; flex-direction: column; gap: 4px;">
+                    <div class="row" style="justify-content: space-between;">
+                      <span class="key" style="font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);">SEEKDEEP_MEMBER_LOG_CHANNEL_ID</span>
+                      <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
+                    </div>
+                    <input class="mono" id="memberLogChannel" placeholder="channel ID · right-click a channel → Copy Channel ID" style="font-size:12px;" />
+                  </div>
+                  <div class="row" style="gap: 18px; flex-wrap: wrap;">
+                    <div class="cfg-feature" data-key="SEEKDEEP_MEMBER_LOG_JOINS" style="display:flex; align-items:center; gap:8px;">
+                      <span class="mono" style="font-size:11px; color: var(--hull-2);">post joins</span>
+                      <div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div>
+                      <span class="save" style="display:none;">SAVED</span>
+                    </div>
+                    <div class="cfg-feature" data-key="SEEKDEEP_MEMBER_LOG_LEAVES" style="display:flex; align-items:center; gap:8px;">
+                      <span class="mono" style="font-size:11px; color: var(--hull-2);">post leaves</span>
+                      <div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div>
+                      <span class="save" style="display:none;">SAVED</span>
+                    </div>
+                    <button class="btn btn-ghost" id="memberLogTestBtn" style="font-size:11px; margin-left:auto;">▸ Test post</button>
+                  </div>
+                </div>
+              </div>
+            </details>
+
             <!-- PERSONAS -->
             <details class="cfg-section" id="sec-personas">
               <summary>
@@ -3393,20 +3435,27 @@ const SEEKDEEP_BASE = (function() {
         }
         document.querySelectorAll('.config-row, .cfg-feature[data-key]').forEach(row => {
           const key = rowKey(row);
-          if (!key || !(key in env)) return;
-          const v = env[key];
+          if (!key) return;
+          const present = (key in env);
+          const v = present ? env[key] : '';
           // Toggle rows (feature flags + any future on/off card): set
           // .toggle.on based on /env value. "on"/"true"/"1"/"yes" → on.
+          // A feature flag ABSENT from .env is not "unknown" — the bot/server
+          // treat an unset SEEKDEEP_FEATURE_* as off. So hydrate absent
+          // toggles to off + badge SAVED instead of leaving them stuck on
+          // UNKNOWN forever (audit §1 follow-up surfaced by the e2e suite).
           const tgl = row.querySelector('.toggle');
           if (tgl && !row.querySelector('input, select')) {
-            const onish = ['1','true','yes','on'].includes(String(v || '').toLowerCase());
+            const onish = present && ['1','true','yes','on'].includes(String(v || '').toLowerCase());
             tgl.classList.toggle('on', onish);
             const save = row.querySelector('.save');
             if (save) { save.textContent = 'SAVED'; save.style.color = ''; }
             populated++;
             return;
           }
-          // Input/select rows: existing behavior.
+          // Input/select rows: only populate when the key is actually present
+          // (absent input keys keep their placeholder — empty is meaningful).
+          if (!present) return;
           const input = row.querySelector('input, select');
           if (!input) return;
           if (v === '*****') {
@@ -3459,6 +3508,42 @@ const SEEKDEEP_BASE = (function() {
       a.addEventListener('click', () => setTimeout(autoload, 60))
     );
     autoload();  // in case Config is the active pane on page load
+  })();
+
+  // Member-log "Test post" button (audit §10b). A real Discord post can
+  // only come from the bot (the AI server can't post; the bot has no HTTP
+  // listener), so this validates the preconditions and tells the user what
+  // to expect rather than faking an event. Uses operation() for a clean
+  // start→result toast pair.
+  (function wireMemberLogTest() {
+    const btn = document.getElementById('memberLogTestBtn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const sdn = window.SeekDeepNotify;
+      if (!sdn || typeof sdn.operation !== 'function') return;
+      sdn.operation({
+        label: 'Member-log preflight',
+        successTitle: 'Member log is ready',
+        errorTitle: 'Member log not ready',
+        run: async () => {
+          const chan = (document.getElementById('memberLogChannel')?.value || '').trim();
+          if (!/^\d{17,20}$/.test(chan)) {
+            throw new Error('Set a valid channel ID (17–20 digits) and Save first.');
+          }
+          // Read the canonical status file (§8) to confirm the bot is online.
+          const getJson = (window.SeekDeepFetch && window.SeekDeepFetch.json)
+            ? (u) => window.SeekDeepFetch.json(u, { attemptTimeoutMs: 4000, maxAttempts: 3 })
+            : async (u) => { const r = await fetch(u, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+          let state;
+          try { state = await getJson(SEEKDEEP_BASE + '/data/system-state.json'); } catch (_) { state = null; }
+          const bot = state && state.data && state.data.bot;
+          if (!bot || !bot.ready) {
+            throw new Error('Bot is not connected to Discord yet — start it and wait for READY, then test.');
+          }
+          return 'Config looks good. Have an alt account join/leave the channel\'s server to confirm the embed posts. (A real post can only be triggered by an actual Discord join/leave event.)';
+        },
+      }).catch(() => {});
+    });
   })();
 
   // Save button — POST /config with dirty values, fall back to local-only "saved" on offline

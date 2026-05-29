@@ -13,6 +13,7 @@
     "tauri:build": "tauri build",
     "test": "node smoke_test.mjs",
     "smoke": "node smoke_test.mjs",
+    "test:e2e": "playwright test",
     "preflight": "node scripts/preflight.mjs",
     "doctor": "node scripts/doctor.mjs",
     "setup:models": ".venv\\Scripts\\python.exe warmup_local_cache.py",
@@ -31,6 +32,7 @@
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2.0.0"
   },
   "engines": {

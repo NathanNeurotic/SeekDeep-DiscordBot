@@ -5384,9 +5384,65 @@ def register_gui_endpoints(
             if os.getenv("SEEKDEEP_DEBUG"):
                 print(f"[SeekDeep] bot watchdog error: {exc}")
 
+    # Audit §8 (P2): one canonical status file. Three processes (AI server,
+    # bot, Tauri tray) previously each polled a different source and
+    # disagreed about "is the bot online" / "is the AI loaded". Now the AI
+    # server writes data/system-state.json once per second with EVERY status
+    # field, and every reader (UI poll, bot, tray) reads only this file.
+    # Bot already POSTs its half via data/bot-status.json which we fold in.
+    _system_state_path = _data_dir / "system-state.json"
+
+    def _compute_system_state() -> dict:
+        state: dict = {"generated_at": _now_iso(), "schema": 1}
+        # --- AI server self-report (we ARE the AI server) ---
+        ai: dict = {"state": "running", "pid": os.getpid()}
+        try:
+            if tick_providers and tick_providers.get("health"):
+                h = tick_providers["health"]() or {}
+                ai["version"] = h.get("version")
+                ai["cuda_available"] = h.get("cuda_available")
+                ai["loaded_task"] = h.get("loaded_task")
+                ai["loaded_chat_model_id"] = h.get("loaded_chat_model_id")
+        except Exception:
+            pass
+        try:
+            if tick_providers and tick_providers.get("gpu"):
+                g = tick_providers["gpu"]() or {}
+                ai["vram_used_mb"] = g.get("used_mb")
+                ai["vram_total_mb"] = g.get("total_mb")
+                ai["device_name"] = g.get("device_name")
+        except Exception:
+            pass
+        state["ai_server"] = ai
+        # --- Bot (fold in its own heartbeat file) ---
+        try:
+            state["bot"] = _read_bot_discord_status()
+        except Exception:
+            state["bot"] = {"ready": False, "present": False}
+        # --- SearXNG (port probe; cheap, 0.4s) ---
+        searxng_state = "unknown"
+        try:
+            port_str = (os.getenv("SEARXNG_PORT") or "").strip() or "8080"
+            port = int(port_str) if port_str.isdigit() else 8080
+            with socket.create_connection(("127.0.0.1", port), timeout=0.4):
+                searxng_state = "running"
+        except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError):
+            searxng_state = "not-running"
+        except Exception:
+            searxng_state = "unknown"
+        state["searxng"] = {"state": searxng_state}
+        return state
+
+    def _write_system_state() -> None:
+        try:
+            _atomic_write_json(_system_state_path, _compute_system_state())
+        except Exception:
+            pass
+
     async def _tick_loop():
         next_due = {topic: 0.0 for topic in TICK_CADENCE_SEC}
         next_watchdog = 0.0
+        next_state_write = 0.0
         while True:
             try:
                 await asyncio.sleep(1.0)
@@ -5396,6 +5452,13 @@ def register_gui_endpoints(
                 if now >= next_watchdog:
                     next_watchdog = now + 5.0
                     _bot_discord_watchdog_check()
+                # Canonical status file (§8): written every 1s regardless of
+                # subscribers — the tray + bot read it even with no GUI open.
+                # The compute is cheap (one bot-status.json read + a 0.4s
+                # searxng probe + provider dict reads) so 1Hz is fine.
+                if now >= next_state_write:
+                    next_state_write = now + 1.0
+                    await asyncio.to_thread(_write_system_state)
                 if event_bus.subscriber_count <= 0:
                     continue
                 if now >= next_due["gpu"]:
