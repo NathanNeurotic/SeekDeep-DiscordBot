@@ -93,4 +93,18 @@ test.describe('Control Center', () => {
     const real = errors.filter(e => !/AbortError|Failed to fetch|NetworkError/i.test(e));
     expect(real, real.join('\n')).toHaveLength(0);
   });
+
+  test('boot-sequence panel does not falsely say "start the AI server" while server is up', async ({ page }) => {
+    // Regression guard: the bootSeqLog panel fetches the token-gated
+    // /logs/tail. A one-shot fetch that 401'd before nav.js installed its
+    // token interceptor used to freeze on "unreachable — start the AI server"
+    // even though the server was healthy. With retry, it must recover.
+    await page.goto('/gui/app.html');
+    const wrap = page.locator('#bootSeqLog');
+    await expect(wrap).toBeAttached({ timeout: 10_000 });
+    // Give the retry loop (4 attempts) time to ride out the token-interceptor
+    // window, then assert the alarming false message is not stuck on screen.
+    await page.waitForTimeout(6000);
+    await expect(wrap).not.toContainText('start the AI server', { timeout: 8_000 });
+  });
 });

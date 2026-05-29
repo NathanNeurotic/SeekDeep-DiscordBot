@@ -2105,7 +2105,7 @@
       if (loaded) return;
       loaded = true;
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/data/server-stats.json', { signal: AbortSignal.timeout(3000) });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/data/server-stats.json', { timeout: 3000, attempts: 2 });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const wrap = await r.json();
         const data = wrap.data || wrap;
@@ -2176,7 +2176,7 @@
       if (loaded) return;
       loaded = true;
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/data/auto-reactions.json', { signal: AbortSignal.timeout(3000) });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/data/auto-reactions.json', { timeout: 3000, attempts: 2 });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const wrap = await r.json();
         const data = wrap.data || wrap;
@@ -2670,7 +2670,7 @@
     async function load() {
       if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '⏳ Loading…'; }
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/data/archive-snapshot.json', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/data/archive-snapshot.json', { timeout: 5000, attempts: 2 });
         if (r.status === 401) throw new Error('unauthorized · refresh page so nav.js can inject the token');
         if (r.status === 404 || (r.ok && (await (async () => { const j = await r.clone().json().catch(() => null); return j && j.empty; })()))) {
           // Empty snapshot (bot hasn't written one yet)
@@ -4627,7 +4627,7 @@ const SEEKDEEP_BASE = (function() {
 
     async function load() {
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/system/firstrun', { signal: AbortSignal.timeout(4000), cache: 'no-store' });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/system/firstrun', { timeout: 4000, attempts: 2 });
         if (!r.ok) return;
         const data = await r.json();
         const checks = Array.isArray(data.checks) ? data.checks : [];
@@ -4768,7 +4768,13 @@ const SEEKDEEP_BASE = (function() {
 
     async function load() {
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/logs/tail?lines=200', { signal: AbortSignal.timeout(3500), cache: 'no-store' });
+        // §5b (missed in the first sweep): retry instead of one-shot. This
+        // panel fetches the TOKEN-GATED /logs/tail; on initial paint nav.js's
+        // token interceptor may not be installed yet, so the first call 401s.
+        // A one-shot then froze on "unreachable — start the AI server" — a
+        // flat contradiction of the HEALTHY cards next to it. Retry rides out
+        // the token-interceptor + boot window.
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/logs/tail?lines=200', { timeout: 3500, attempts: 4 });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const data = await r.json();
         const lines = Array.isArray(data.lines) ? data.lines : [];
@@ -4791,7 +4797,15 @@ const SEEKDEEP_BASE = (function() {
           wrap.appendChild(el);
         });
       } catch (err) {
-        wrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--warn); font-style:italic;">▸ /logs/tail unreachable — start the AI server</div>';
+        // Honest message: don't tell the user to "start the AI server" — the
+        // service cards next to this panel already prove whether it's up.
+        // A failure here is almost always a transient log-tail read (token
+        // not ready, log briefly locked); the 30s refresh + retry recovers it.
+        const status = String(err && err.message || '').match(/HTTP (\d+)/);
+        const detail = status && status[1] === '401'
+          ? 'log tail needs the GUI token (still loading) — refreshing automatically'
+          : 'log tail unavailable (server warming up or log locked) — refreshing automatically';
+        wrap.innerHTML = `<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ ${detail}. See the Logs pane for the full tail.</div>`;
       }
     }
     // Refresh whenever the launcher pane becomes active + every 30s.
