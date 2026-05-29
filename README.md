@@ -279,10 +279,10 @@ Relevant knobs (defaults shown — `.env.default` may differ from the running `.
 
 ```text
 SEEKDEEP_MEMORY_MODE=rolling
-MAX_CONTEXT_MESSAGES=80
-MAX_CONTEXT_CHARS=48000
-SEEKDEEP_MEMORY_RECENT_ENTRIES=60
-SEEKDEEP_MEMORY_CONTEXT_CHARS=36000
+MAX_CONTEXT_MESSAGES=50
+MAX_CONTEXT_CHARS=36000
+SEEKDEEP_MEMORY_RECENT_ENTRIES=40
+SEEKDEEP_MEMORY_CONTEXT_CHARS=28000
 ```
 
 Set `SEEKDEEP_MEMORY_MODE=followup` to return to conservative follow-up-only memory, or `off` to disable memory injection.
@@ -540,10 +540,10 @@ LOCAL_CHAT_QUANT=4bit                     # options: 4bit | 8bit | none
 LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat   # roles that skip quant (8B models)
 
 # Context / output
-MAX_CONTEXT_MESSAGES=80                   # rolling memory turns kept
-MAX_CONTEXT_CHARS=48000                   # rolling memory chars kept
-SEEKDEEP_MEMORY_RECENT_ENTRIES=60         # injected context turns
-SEEKDEEP_MEMORY_CONTEXT_CHARS=36000       # injected context chars
+MAX_CONTEXT_MESSAGES=50                   # rolling memory turns kept (store)
+MAX_CONTEXT_CHARS=36000                   # rolling memory chars kept (store)
+SEEKDEEP_MEMORY_RECENT_ENTRIES=40         # injected context turns (render)
+SEEKDEEP_MEMORY_CONTEXT_CHARS=28000       # injected context chars (render)
 CHAT_MAX_NEW_TOKENS=1024                  # default max output tokens for askChat
 CHAT_TEMPERATURE=0.7                      # default chat creativity
 

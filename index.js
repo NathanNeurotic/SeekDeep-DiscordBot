@@ -18111,8 +18111,12 @@ function remember(key, role, value) {
   const clean = normalizeUserText(value || '');
   if (!key || !clean) return;
 
-  const maxEntries = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_MESSAGES', 'SEEKDEEP_MEMORY_MAX_ENTRIES'], 28, 8, 120);
-  const maxChars = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_CHARS', 'SEEKDEEP_MEMORY_MAX_CHARS'], 14000, 3000, 80000);
+  // CONF-1: fallbacks match the canonical defaults in .env.default (the file
+  // setup_local.ps1 copies first, so real installs always set these and never
+  // hit the fallback). Store layer = 50 entries / 36000 chars; the render
+  // layer below stays <= these so rendering is never capped by the store.
+  const maxEntries = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_MESSAGES', 'SEEKDEEP_MEMORY_MAX_ENTRIES'], 50, 8, 120);
+  const maxChars = seekdeepMemoryNumberFromEnv(['MAX_CONTEXT_CHARS', 'SEEKDEEP_MEMORY_MAX_CHARS'], 36000, 3000, 80000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_ENTRY_MAX_CHARS', 1800, 600, 5000);
   const existing = SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || [];
 
@@ -18133,8 +18137,8 @@ function remember(key, role, value) {
 const SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE = /^(?:Queued image locally for:|Prepared image prompt choices for:|Generated image locally for:|Regenerating latest cached image|Posted recent images|What should I generate an image of|Queued pending image subject|Using recent context as image subject|Bare confirmation with no pending image subject)/i;
 
 function getRecentContext(key) {
-  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 80);
-  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 60000);
+  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 40, 4, 80);
+  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 28000, 2000, 60000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_RENDER_ENTRY_MAX_CHARS', 1400, 500, 3000);
   let entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []).slice(-maxEntries);
   // Filter out image workflow status messages — they serve image-subject
@@ -18176,8 +18180,8 @@ function getRecentContext(key) {
 // flat text blob crammed into a single user message.
 function getConversationTurns(key) {
   if (!key) return [];
-  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 18, 4, 80);
-  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 12000, 2000, 60000);
+  const maxEntries = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_RECENT_ENTRIES', 'MAX_CONTEXT_MESSAGES'], 40, 4, 80);
+  const maxChars = seekdeepMemoryNumberFromEnv(['SEEKDEEP_MEMORY_CONTEXT_CHARS', 'MAX_CONTEXT_CHARS'], 28000, 2000, 60000);
   const entryChars = seekdeepMemoryNumberFromEnv('SEEKDEEP_MEMORY_RENDER_ENTRY_MAX_CHARS', 1400, 500, 3000);
   let entries = (SEEKDEEP_MEMORY_COMPAT_STORE_V13.get(key) || []).slice(-maxEntries);
   entries = entries.filter(e => !(e.role === 'assistant' && SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE.test(e.text)));
