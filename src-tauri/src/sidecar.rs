@@ -521,6 +521,21 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
         runtime.join(".venv").join("bin").join("python"),
         runtime.join(".venv").join("bin").join("python3"),
     ];
+    // Two-pass: prefer a venv whose torch already loads. Stops the boot-window
+    // race where install creates the venv shell at T=0, ML install fills in
+    // torch at T=15min, and the AI server boots at T=5min with the torchless
+    // venv (deps_present passes for the boot deps; torch is just missing).
+    // Without this preference the watchdog would keep re-electing the same
+    // torchless interpreter every respawn.
+    for c in &venv_candidates {
+        if c.is_file() && torch_present(c) {
+            return Some(c.clone());
+        }
+    }
+    // Pass 2: if no torch-capable venv exists yet, fall back to whichever
+    // venv exists at all — the user is mid-install and the wizard's ML step
+    // will trigger install_ml_deps which kills + respawns the sidecar, at
+    // which point pass 1 will find the now-torch-capable venv.
     for c in &venv_candidates {
         if c.is_file() {
             return Some(c.clone());
@@ -678,6 +693,26 @@ pub fn deps_present(python: &Path) -> bool {
     let out = quiet_command(python)
         .arg("-c")
         .arg("import fastapi, uvicorn, pydantic, dotenv, PIL")
+        .output();
+    matches!(out, Ok(o) if o.status.success())
+}
+
+/// Distinct from `deps_present`: true iff the candidate Python has a working
+/// torch import. Used by `find_python` to prefer a torch-capable interpreter
+/// over a torch-less one, even when both pass the bare `deps_present` check.
+///
+/// The boot bug this guards: install creates `<runtime>/.venv` with fastapi
+/// + uvicorn (the bootstrap deps) at T=0, but torch only lands at T=15min
+/// after `install_ml_deps` finishes. Between T=0 and T=15min, the .venv
+/// passes `deps_present` so the AI server boots torch-less and CUDA is
+/// permanently invisible in that PID even after torch lands. Re-electing
+/// the venv on the basis of torch presence (not just boot deps) makes the
+/// next watchdog respawn pick a Python that can actually load torch, and
+/// makes a torch-less system Python LOSE to a torch-having one elsewhere.
+pub fn torch_present(python: &Path) -> bool {
+    let out = quiet_command(python)
+        .arg("-c")
+        .arg("import torch")
         .output();
     matches!(out, Ok(o) if o.status.success())
 }

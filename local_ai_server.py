@@ -1993,6 +1993,26 @@ def unload_all(force: bool = False) -> None:
         })
 
 
+class TorchUnavailableError(Exception):
+    """Raised when an HF-backed model load is requested but PyTorch can't be
+    imported / can't see CUDA. Distinct from VRAMPressureError because the
+    user fix is different: install ML deps or switch the role to Ollama,
+    not free VRAM. Surfacing this as 'VRAM pressure: 0MB free' (which is
+    what fell out before — torch absent → cuda_available=False →
+    vram_total_mb()=0 → VRAMPressureError) led users to chase the GPU when
+    the real problem was a torch-less Python interpreter."""
+
+    def __init__(self, detail: str = ""):
+        self.detail = detail
+        super().__init__(
+            "PyTorch is not loaded in this AI server process. Either ML deps "
+            "aren't installed yet (Installer → Install ML libraries), the "
+            ".venv the sidecar picked is incomplete (set SEEKDEEP_PYTHON in "
+            ".env to a working venv), or the installed torch wheel doesn't "
+            "match your GPU's CUDA version. " + (detail if detail else "")
+        )
+
+
 class VRAMPressureError(Exception):
     """Raised by _evict_for_budget when an upcoming load would spill into
     shared memory and SEEKDEEP_VRAM_PRESSURE_MODE='fallback' is set.
@@ -2021,6 +2041,18 @@ def _evict_for_budget(task: str, role: str = "") -> None:
 
     Falls through silently if CUDA is unavailable or budget check is N/A."""
     global image_pipe, vision_model, vision_processor, vision_tokenizer
+
+    # Distinguish "torch can't even import" from real VRAM pressure. Without
+    # this guard, a torch-less Python yields cuda_available=False →
+    # vram_total_mb=0 → vram_can_fit reports "needs 5500MB, 0MB free" and
+    # raises VRAMPressureError. The user then chases the GPU when the real
+    # fix is installing torch (or pointing SEEKDEEP_PYTHON at a working
+    # venv). Raise an accurate exception so the bot + UI surface the right
+    # remediation.
+    try:
+        import torch as _torch_probe  # noqa: F401
+    except Exception as _torch_exc:
+        raise TorchUnavailableError(f"({type(_torch_exc).__name__}: {_torch_exc})")
 
     fits, available, estimated = vram_can_fit(task, role)
     if fits:
@@ -3932,6 +3964,8 @@ def _classify_chat_load_failure(exc: Exception) -> str:
     """Return a short, log-friendly reason string for known recoverable failures."""
     name = type(exc).__name__
     msg = str(exc).lower()
+    if name == "TorchUnavailableError":
+        return "torch-unavailable"
     if _is_remote_chat_transport_failure(exc):
         return "remote-chat-transport"
     if "out of memory" in msg or "cuda oom" in msg or "outofmemory" in name.lower():
@@ -4230,7 +4264,17 @@ def chat(req: ChatRequest):
         # Tailor the message for the cases the user can actually fix without
         # reading the log. VRAMPressureError means "your GPU is full" — the
         # user can free it via POST /unload or by closing other CUDA apps.
-        if reason == "chat-load-error:VRAMPressureError":
+        if reason == "torch-unavailable":
+            clean_msg = ("PyTorch isn't loaded in this AI server process. The .venv "
+                         "the sidecar booted with is missing torch (or has a wheel "
+                         "incompatible with your GPU). Fix one of: "
+                         "(a) Installer → Install ML libraries, "
+                         "(b) Installer → Detect venv → Use detected .venv to point "
+                         "SEEKDEEP_PYTHON at a torch-capable interpreter, "
+                         "(c) switch this chat role to an Ollama backend in Bot Config. "
+                         "The 'VRAM 0MB' you may have seen elsewhere was a downstream "
+                         "symptom — torch absence makes torch.cuda.mem_get_info() return 0.")
+        elif reason == "chat-load-error:VRAMPressureError":
             clean_msg = ("Out of VRAM — the model couldn't fit. Free GPU memory: "
                          "click 'Flush model cache' in the Control Center (or POST /unload), "
                          "close other CUDA apps, or pick a smaller quantization in Config.")
