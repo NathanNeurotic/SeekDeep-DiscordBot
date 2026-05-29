@@ -2922,6 +2922,24 @@ class _HfDownloadProgressTqdm:
         { filename, bytes, total, percent, unit, done? }
     The GUI (gui/model-install.js) subscribes via SeekDeepEvents.on and
     paints a real progress bar instead of just a spinner."""
+
+    # huggingface_hub calls tqdm_class.get_lock() at class level for thread
+    # safety before any instance is constructed. Without these, the install
+    # raises "_HfDownloadProgressTqdm has no attribute 'get_lock'" and the
+    # whole download fails. Mirror real tqdm: shared threading.RLock.
+    import threading as _threading
+    _lock = _threading.RLock()
+
+    @classmethod
+    def get_lock(cls):
+        return cls._lock
+
+    @classmethod
+    def set_lock(cls, lock):
+        cls._lock = lock
+
+    monitor_interval = 10  # tqdm class attribute hf_hub probes
+
     def __init__(self, *args, **kwargs):
         self.desc = kwargs.get('desc') or ''
         self.total = kwargs.get('total') or 0
