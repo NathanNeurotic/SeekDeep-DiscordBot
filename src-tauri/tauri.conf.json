@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http://127.0.0.1:7865 ws://127.0.0.1:7865 http://localhost:7865 ws://localhost:7865"
     }
   },
   "bundle": {
