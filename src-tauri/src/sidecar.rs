@@ -38,6 +38,15 @@ use std::time::Duration;
 // sessions without nuking the user's intentionally-running bot mid-session.
 static FIRST_SPAWN_DONE: AtomicBool = AtomicBool::new(false);
 
+// Run the pre-spawn orphan-reap pass exactly once per Tauri launch. The
+// watchdog calls boot_sequence on every crash respawn; we don't want each
+// respawn to nuke node.exe processes that were validly started AFTER the
+// initial boot (the user may have started the bot from the launcher card
+// mid-session). The first boot_sequence call of a launch flips this to
+// true; subsequent calls skip the reap and rely on the targeted
+// kill_listener_on_7865 + boot_in_progress guard.
+static LAUNCH_REAPED: AtomicBool = AtomicBool::new(false);
+
 // Windows: CREATE_NO_WINDOW (0x08000000) prevents spawned console apps
 // from opening a black cmd-window alongside the Tauri shell. Without it,
 // every python.exe / pip.exe call pops a stray terminal that floats on
@@ -249,6 +258,35 @@ pub fn kill_orphan_bots() {
         let _ = std::process::Command::new("sh")
             .arg("-c")
             .arg("pgrep -f 'node.*index.js' | xargs -r kill -9")
+            .status();
+    }
+}
+
+/// Kill every python interpreter whose command line names local_ai_server.py.
+/// Catches the case where a prior Tauri session crashed (or was force-quit
+/// before its CloseRequested handler could fire) and left the AI server
+/// python.exe alive but de-listening, OR a parallel SeekDeep install spawned
+/// a second python.exe that still has port 7865 — `kill_listener_on_7865`
+/// only kills the one currently bound to the port; this catches the rest.
+///
+/// Same scope rule as kill_orphan_bots: matches by cmdline contains
+/// "local_ai_server.py". The script name is specific enough that we won't
+/// nuke an unrelated python project.
+pub fn kill_orphan_ai_servers() {
+    #[cfg(windows)]
+    {
+        let ps = "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" \
+                  | Where-Object { $_.CommandLine -like '*local_ai_server.py*' } \
+                  | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        let _ = quiet_command_str("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("pgrep -f 'python.*local_ai_server.py' | xargs -r kill -9")
             .status();
     }
 }
@@ -1199,6 +1237,29 @@ pub fn boot_sequence(app: AppHandle) {
         fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); }
     }
     let _guard = BootGuard(&state.boot_in_progress);
+
+    // First-call-of-this-launch orphan reap. Catches stale processes left
+    // behind by a prior Tauri crash, force-quit, or installer over-install
+    // where the old python.exe / node.exe wasn't shut down cleanly.
+    // kill_listener_on_7865 below only kills the one process currently
+    // bound to the port; this sweeps the rest by cmdline match so a wedged
+    // python.exe that lost the port (or never bound it) also goes away.
+    // Runs exactly once per launch — watchdog respawns skip it so the
+    // user's intentionally-started bot survives across server respawns.
+    if !LAUNCH_REAPED.swap(true, Ordering::SeqCst) {
+        let _ = app.emit(
+            "sidecar:status",
+            serde_json::json!({
+                "code": "FRESH_BOOT_REAP",
+                "detail": "killing stale SeekDeep python/node processes from a prior session before spawning fresh",
+            }),
+        );
+        kill_orphan_ai_servers();
+        kill_orphan_bots();
+        // Give Windows a moment to release handles on the .py / .js files
+        // and on port 7865 before find_python / spawn_server runs.
+        std::thread::sleep(Duration::from_millis(500));
+    }
 
     // Stale-server guard. Previously this was a raw TCP probe — "if :7865
     // accepts a connection, assume it's our server and reuse it". That
