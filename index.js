@@ -14,6 +14,7 @@ import {
   ButtonStyle,
   Client,
   ContextMenuCommandBuilder,
+  EmbedBuilder,
   GatewayIntentBits,
   MessageFlags,
   ModalBuilder,
@@ -1543,6 +1544,13 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
+    // GuildMembers is a privileged intent — bot owner must enable it in the
+    // Discord Developer Portal under Bot → Privileged Gateway Intents. Used
+    // by the member-log feature (guildMemberAdd / guildMemberRemove). The
+    // intent is requested unconditionally so a user who toggles the feature
+    // on later doesn't have to restart the bot to start receiving events;
+    // the feature itself is gated by SEEKDEEP_MEMBER_LOG_CHANNEL_ID.
+    GatewayIntentBits.GuildMembers,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 });
@@ -9454,6 +9462,107 @@ process.on('uncaughtException', (err) => {
 client.on('error', (err) => {
   console.error('Discord client error:', err);
 });
+
+// SEEKDEEP_MEMBER_LOG_START
+// Optional join/leave logger. Posts an embed similar to Dyno's "Member Joined"
+// card in the configured channel whenever a member joins or leaves.
+//
+// Configuration (all optional, all in .env):
+//   SEEKDEEP_MEMBER_LOG_CHANNEL_ID — channel where embeds go. Empty/unset
+//                                    disables the feature. Must be a text
+//                                    channel the bot can post in. The
+//                                    channel's guild is the only one
+//                                    monitored (cross-guild posts are
+//                                    rejected to avoid leaking joins from
+//                                    server A into server B).
+//   SEEKDEEP_MEMBER_LOG_JOINS      — "on" (default) or "off". Suppresses
+//                                    just the join half.
+//   SEEKDEEP_MEMBER_LOG_LEAVES     — "on" (default) or "off". Suppresses
+//                                    just the leave half.
+//
+// Requires the GuildMembers privileged intent to be enabled in the Discord
+// Developer Portal (Bot → Privileged Gateway Intents → Server Members).
+// Without it, guildMemberAdd / guildMemberRemove never fire and the bot
+// reports a clear startup warning so the user knows to flip the toggle.
+function seekdeepMemberLogToggle(envKey, defaultOn) {
+  const raw = (process.env[envKey] || '').trim().toLowerCase();
+  if (!raw) return defaultOn;
+  return ['1', 'true', 'yes', 'on'].includes(raw);
+}
+
+function seekdeepMemberLogChannelId() {
+  return (process.env.SEEKDEEP_MEMBER_LOG_CHANNEL_ID || '').trim();
+}
+
+function seekdeepFormatAccountAge(createdTs) {
+  const ms = Math.max(0, Date.now() - Number(createdTs || 0));
+  const day = 24 * 60 * 60 * 1000;
+  const days = Math.floor(ms / day);
+  const years = Math.floor(days / 365);
+  const remDays = days - years * 365;
+  const months = Math.floor(remDays / 30);
+  const tailDays = remDays - months * 30;
+  const parts = [];
+  parts.push(`${years} year${years === 1 ? '' : 's'}`);
+  parts.push(`${months} month${months === 1 ? '' : 's'}`);
+  parts.push(`${tailDays} day${tailDays === 1 ? '' : 's'}`);
+  return parts.join(', ');
+}
+
+async function seekdeepPostMemberEmbed(kind, member) {
+  const channelId = seekdeepMemberLogChannelId();
+  if (!channelId) return;
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) return;
+    // Cross-guild guard: only post when the event's guild is the channel's
+    // guild. Stops a misconfigured channel ID from leaking joins from one
+    // server into another.
+    if (!channel.guildId || channel.guildId !== member.guild?.id) return;
+    const user = member.user || member;
+    const username = user?.username || user?.tag || '(unknown)';
+    const userId = user?.id || member.id || '(unknown)';
+    const mention = userId !== '(unknown)' ? `<@${userId}>` : '';
+    const isJoin = kind === 'join';
+    const embed = new EmbedBuilder()
+      .setTitle(isJoin ? 'Member Joined' : 'Member Left')
+      .setColor(isJoin ? 0x2ecc71 : 0xed4245)
+      .setDescription([mention, username].filter(Boolean).join(' · '))
+      .addFields(
+        {
+          name: 'Account Age',
+          value: seekdeepFormatAccountAge(user?.createdTimestamp),
+          inline: false,
+        },
+        { name: 'ID', value: String(userId), inline: true },
+      )
+      .setTimestamp(new Date());
+    try {
+      const url = (typeof user?.displayAvatarURL === 'function')
+        ? user.displayAvatarURL({ size: 128 })
+        : null;
+      if (url) embed.setThumbnail(url);
+    } catch {}
+    await channel.send({ embeds: [embed] }).catch((err) => {
+      console.warn(`[SeekDeep MemberLog] post ${kind} failed:`, err?.message || err);
+    });
+  } catch (err) {
+    console.warn(`[SeekDeep MemberLog] ${kind} handler error:`, err?.message || err);
+  }
+}
+
+client.on('guildMemberAdd', (member) => {
+  if (!seekdeepMemberLogChannelId()) return;
+  if (!seekdeepMemberLogToggle('SEEKDEEP_MEMBER_LOG_JOINS', true)) return;
+  seekdeepPostMemberEmbed('join', member);
+});
+
+client.on('guildMemberRemove', (member) => {
+  if (!seekdeepMemberLogChannelId()) return;
+  if (!seekdeepMemberLogToggle('SEEKDEEP_MEMBER_LOG_LEAVES', true)) return;
+  seekdeepPostMemberEmbed('leave', member);
+});
+// SEEKDEEP_MEMBER_LOG_END
 
 
 async function safeDefer(interaction) {

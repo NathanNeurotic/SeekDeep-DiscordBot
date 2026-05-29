@@ -57,38 +57,80 @@
     document.querySelectorAll('[data-version]').forEach(applyTo);
   }
 
-  async function fetchVersion() {
-    if (state.fetched) return state.version;
-    state.fetched = true;
-    // Resolver lives in nav.js; falls back to inline detection that
-    // accounts for Tauri 2 on Windows (http://tauri.localhost origin).
-    const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function')
-      ? window.SeekDeepResolveBase()
-      : ((typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost'))
-          ? 'http://127.0.0.1:7865'
-          : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
+  function resolveBase() {
+    if (typeof window === 'undefined') return 'http://127.0.0.1:7865';
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+    return 'http://127.0.0.1:7865';
+  }
+
+  async function fetchOnce() {
+    const base = resolveBase();
     try {
       const r = await fetch(base + '/health', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
       if (r.ok) {
         const j = await r.json();
         if (j && typeof j.version === 'string') {
           state.version = j.version;
+          state.fetched = true;
           applyAll();
-          return state.version;
+          return true;
         }
       }
     } catch {}
-    // Fall through: leave the hardcoded fallback text in place.
-    return null;
+    return false;
+  }
+
+  // Persistent retry loop. The previous one-shot fetch left the hardcoded
+  // fallback in every pill for the rest of the session when /health was
+  // unreachable at page-load time (common case: AI server is mid-respawn
+  // during the install→launch transition). Backoff 1s → 2s → 4s → 8s → 16s,
+  // cap 30s; resets to 1s on document.visibilitychange so the version pill
+  // refreshes the moment the user comes back to the window after fixing
+  // whatever was wrong with the sidecar.
+  let attempt = 0;
+  let timer = null;
+  function nextDelay() {
+    const base = Math.min(30, Math.pow(2, attempt));
+    attempt += 1;
+    return base * 1000;
+  }
+  function scheduleRetry() {
+    if (state.fetched) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(async () => {
+      timer = null;
+      const ok = await fetchOnce();
+      if (!ok) scheduleRetry();
+    }, nextDelay());
+  }
+  async function kick() {
+    if (state.fetched) return;
+    attempt = 0;
+    if (timer) { clearTimeout(timer); timer = null; }
+    const ok = await fetchOnce();
+    if (!ok) scheduleRetry();
   }
 
   window.SeekDeepVersion = {
     get: () => state.version,
-    refresh: () => { state.fetched = false; return fetchVersion(); },
+    refresh: () => { state.fetched = false; attempt = 0; return kick(); },
     applyAll,
   };
 
-  // Defer slightly so [data-version] elements added late by other scripts
-  // also get caught.
-  setTimeout(fetchVersion, 100);
+  // Kick off slightly after page load so [data-version] elements added late
+  // by other scripts get caught.
+  setTimeout(kick, 100);
+
+  // Refresh when the tab regains focus — covers the "I fixed the sidecar in
+  // another window, come back, why is the version still wrong" path.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !state.fetched) {
+        attempt = 0;
+        kick();
+      }
+    });
+  }
 })();
