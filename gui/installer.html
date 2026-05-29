@@ -1238,7 +1238,18 @@
                 const data = await r.json();
                 const parts = [];
                 parts.push(data.daemon_reachable ? '✓ daemon up' : '✕ daemon offline');
-                parts.push(data.api_key_set ? '✓ API key set' : 'no API key');
+                // The server reads OLLAMA_API_KEY from os.getenv (set from
+                // .env at AI-server boot). Typing into this field saves to
+                // wizard state, not .env — distinguish "saved & active" from
+                // "typed but not yet persisted" so the user isn't confused.
+                const typedKey = (key.value || '').trim();
+                if (data.api_key_set) {
+                  parts.push('✓ API key set');
+                } else if (typedKey) {
+                  parts.push('⚠ API key typed (finish wizard or click Save to apply)');
+                } else {
+                  parts.push('no API key');
+                }
                 parts.push(data.device_key_present ? '✓ device key' : 'no device key');
                 status.textContent = parts.join(' · ');
                 status.style.color = data.signed_in || data.daemon_reachable ? 'var(--good)' : 'var(--warn)';
