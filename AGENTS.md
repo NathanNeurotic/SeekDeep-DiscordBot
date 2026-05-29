@@ -397,6 +397,18 @@ Per-guild custom auto-reaction rules and built-in toggle overrides.
 
 Read: `seekdeepReadAutoReactions()` / Write: `seekdeepWriteAutoReactions(data)`
 
+## Desktop Sidecar / Watchdog
+
+**Purpose**: Tauri desktop shell process management for the local FastAPI server.
+
+**Key Rust Entry Points**:
+- `src-tauri/src/sidecar.rs::boot_sequence(app)` — one-at-a-time startup/respawn orchestrator. Handles stale listener checks, bundle extraction, Python selection, dependency probing, and `local_ai_server.py` spawn.
+- `src-tauri/src/sidecar.rs::spawn_server(python, runtime, log_dir)` — launches the Python sidecar with hidden Windows console flags and redirects stdout/stderr to runtime logs.
+- `src-tauri/src/sidecar.rs::start_crash_watchdog(app)` — polls the tracked child, backs off unexpected respawns, and uses `watchdog_generation` to retire stale watchdog threads.
+- `src-tauri/src/sidecar.rs::kill_child(state)` — intentional child stop used by restart/install/quit paths. It only arms the watchdog's `intentional_kill` suppressor when a tracked child handle was actually removed.
+- `src-tauri/src/sidecar.rs::shutdown_all(state)` — exit-time sweep for the tracked child plus orphan SeekDeep Python/bot processes.
+- `src-tauri/src/lib.rs::restart_sidecar(app)` — GUI/tray command: kill tracked child, sweep orphan AI servers, then re-run `boot_sequence`.
+
 ## Integration Points
 
 | Source | Path |

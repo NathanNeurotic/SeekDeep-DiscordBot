@@ -1134,14 +1134,18 @@ pub fn emit_status(app: &AppHandle, code: &str) {
 /// the crash-recovery watchdog knows not to respawn — only unexpected
 /// exits trigger auto-respawn.
 pub fn kill_child(state: &SidecarState) {
-    if let Ok(mut g) = state.intentional_kill.lock() {
-        *g = true;
-    }
     if let Ok(mut guard) = state.child.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        let Some(mut child) = guard.take() else {
+            return;
+        };
+
+        if let Ok(mut g) = state.intentional_kill.lock() {
+            *g = true;
         }
+
+        drop(guard);
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
