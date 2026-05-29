@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
-Set-Location "$env:USERPROFILE\SeekDeep-DiscordBot"
+# Anchor to this script's own folder so it edits the .env of the checkout it
+# ships with — not a hardcoded ~/SeekDeep-DiscordBot that may not exist or may
+# be a different clone (audit FIX-1). Mirrors setup_local.ps1's own anchoring.
+Set-Location -LiteralPath $PSScriptRoot
 
 function Set-DotEnvValue {
     param([string]$Key, [string]$Value)
