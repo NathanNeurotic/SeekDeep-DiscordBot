@@ -1491,7 +1491,44 @@ def register_gui_endpoints(
     """
     root = Path(repo_root or os.path.dirname(os.path.abspath(__file__))).resolve()
     _log_dir = (root / log_dir).resolve()
-    _data_dir = (root / data_dir).resolve()
+    # Data-dir canonicalization (Family B from the audit). The Discord bot
+    # writes every data/*.json (auto-reactions, prompt-templates, user-facts,
+    # memory-presets, persona-overrides, server-stats, archive-snapshot,
+    # archive-guild-config, archive-config, bot-status, custom-personas) to
+    # its own __dirname/data — which under Tauri is the repo path the bot
+    # was spawned from, NOT the AI server's runtime AppData. The GUI
+    # endpoints used to read/write from <runtime>/data, so any edit a user
+    # made through the Control Center wrote to a file the bot would never
+    # see ("Edit failed: no rule rr_…" on auto-reactions, persona overrides
+    # silently disappearing, etc.). Resolve to the bot's data/ directly so
+    # both ends share one source of truth. Falls back to <runtime>/data if
+    # the bot cwd is unresolvable (CI, headless smoke test).
+    _bot_cwd = _resolve_bot_cwd(root)
+    _bot_data_dir = (_bot_cwd / "data").resolve()
+    if (_bot_cwd / "index.js").is_file():
+        _data_dir = _bot_data_dir
+        # One-time migration: any *.json the user previously edited through
+        # the Control Center while _data_dir pointed at <runtime>/data is
+        # sitting in the AppData copy now. Copy it forward to bot_cwd/data
+        # if the bot doesn't have its own version, so the switch doesn't
+        # lose persona overrides / saved templates / custom-personas / etc.
+        # Only fires once per file because subsequent boots find the
+        # destination already populated.
+        try:
+            _legacy_data_dir = (root / data_dir).resolve()
+            if _legacy_data_dir.is_dir() and _legacy_data_dir != _data_dir:
+                _data_dir.mkdir(parents=True, exist_ok=True)
+                for legacy_file in _legacy_data_dir.glob("*.json"):
+                    dest = _data_dir / legacy_file.name
+                    if not dest.exists():
+                        try:
+                            shutil.copy2(legacy_file, dest)
+                        except OSError:
+                            pass
+        except Exception:
+            pass
+    else:
+        _data_dir = (root / data_dir).resolve()
     _env_path = (root / env_path).resolve()
 
     def _is_inside(child: Path, parent: Path) -> bool:
