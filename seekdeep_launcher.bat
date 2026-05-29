@@ -206,9 +206,12 @@ if "%VISION_PROVIDER%"=="" set "VISION_PROVIDER=nvidia-local"
 if "%WEB_SEARCH_PROVIDER%"=="" set "WEB_SEARCH_PROVIDER=searxng"
 if "%LOCAL_AI_BASE_URL%"=="" set "LOCAL_AI_BASE_URL=http://127.0.0.1:%LOCAL_AI_PORT%"
 if "%SEARXNG_BASE_URL%"=="" set "SEARXNG_BASE_URL=http://127.0.0.1:%SEARXNG_PORT%"
-if "%LOCAL_CHAT_MODEL_ID%"=="" set "LOCAL_CHAT_MODEL_ID=nvidia/Llama-3.1-Nemotron-Nano-8B-v1"
+REM DEAD-3: fallbacks must match .env.default's canonical IDs. setup copies
+REM .env.default first so these almost never apply, but a maintainer reading
+REM the launcher should see the real stack, not stale Nemotron/Sana IDs.
+if "%LOCAL_CHAT_MODEL_ID%"=="" set "LOCAL_CHAT_MODEL_ID=meta-llama/Llama-3.1-8B-Instruct"
 if "%LOCAL_VISION_MODEL_ID%"=="" set "LOCAL_VISION_MODEL_ID=Qwen/Qwen2.5-VL-3B-Instruct"
-if "%LOCAL_IMAGE_MODEL_ID%"=="" set "LOCAL_IMAGE_MODEL_ID=Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers"
+if "%LOCAL_IMAGE_MODEL_ID%"=="" set "LOCAL_IMAGE_MODEL_ID=Lykon/dreamshaper-xl-1-0"
 if "%LOCAL_MODEL_CACHE_DIR%"=="" set "LOCAL_MODEL_CACHE_DIR=./models/huggingface"
 exit /b 0
 
