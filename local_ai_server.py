@@ -4210,8 +4210,15 @@ def chat(req: ChatRequest):
     n_msgs = len(req.messages) if req.messages else 0
     print(f"[SeekDeep Local AI] /chat entry role={requested_role} msgs={n_msgs} prompt={req.prompt[:120]!r}", flush=True)
 
+    # Audit §6: one attempt_log threaded through every rung so a failure
+    # response names WHICH layer gave up instead of surfacing only the last
+    # rung's message. Each entry: {step, role, model_id?, ok, reason?}.
+    attempt_log: list[dict] = []
+
     try:
         answer, resolved_role, model_id = _run_chat_generation(req, requested_role)
+        attempt_log.append({"step": "primary", "role": resolved_role,
+                            "model_id": model_id, "ok": True})
         # Bump web-playground breakdowns so the Stats pane shows non-empty
         # persona/model usage even on installs that don't use the Discord bot.
         try:
@@ -4222,9 +4229,12 @@ def chat(req: ChatRequest):
             "text": answer or "(empty response)",
             "model_role": resolved_role,
             "model_id": model_id,
+            "attempt_log": attempt_log,
         }
     except Exception as exc:
         reason = _classify_chat_load_failure(exc)
+        attempt_log.append({"step": "primary", "role": requested_role,
+                            "ok": False, "reason": reason})
         print(f"[SeekDeep Local AI] chat generation failed role={requested_role} reason={reason}: {exc!r}", flush=True)
         traceback.print_exc()
 
@@ -4248,6 +4258,8 @@ def chat(req: ChatRequest):
                 try:
                     unload_chat_model()
                     answer, resolved_role, model_id = _run_chat_generation(req, "fallback_chat")
+                    attempt_log.append({"step": "fallback", "role": resolved_role,
+                                        "model_id": model_id, "ok": True})
                     return {
                         "text": answer or "(empty response)",
                         "model_role": resolved_role,
@@ -4255,11 +4267,20 @@ def chat(req: ChatRequest):
                         "fallback_used": True,
                         "fallback_reason": reason,
                         "failed_model_id": failed_model_id,
+                        "attempt_log": attempt_log,
                     }
                 except Exception as fb_exc:
                     fb_reason = _classify_chat_load_failure(fb_exc)
+                    attempt_log.append({"step": "fallback", "role": "fallback_chat",
+                                        "ok": False, "reason": fb_reason})
                     print(f"[SeekDeep Local AI] fallback chat also failed reason={fb_reason}: {fb_exc!r}", flush=True)
                     traceback.print_exc()
+            else:
+                attempt_log.append({"step": "fallback", "role": "fallback_chat",
+                                    "ok": False, "reason": "skipped-same-model-or-role"})
+        elif MODEL_AUTO_FALLBACK:
+            attempt_log.append({"step": "fallback", "role": "fallback_chat",
+                                "ok": False, "reason": "skipped-not-fallback-eligible"})
 
         # Tailor the message for the cases the user can actually fix without
         # reading the log. VRAMPressureError means "your GPU is full" — the
@@ -4324,6 +4345,7 @@ def chat(req: ChatRequest):
             "error": clean_msg,
             "reason": reason,
             "detail": raw_detail,
+            "attempt_log": attempt_log,
         })
 
 

@@ -2823,6 +2823,20 @@ const SEEKDEEP_BASE = (function() {
   return 'http://127.0.0.1:7865';
 })();
 
+  // Resilient GET for status polls (audit §5). Rides out a transient blip
+  // within one tick instead of leaving stale state on screen. Falls back to
+  // native fetch if fetch.js hasn't auto-loaded yet. ONLY for idempotent
+  // GETs — never wrap a side-effecting POST.
+  function sdPollFetch(url, { timeout = 4000, attempts = 2 } = {}) {
+    if (window.SeekDeepFetch && typeof window.SeekDeepFetch.retry === 'function') {
+      return window.SeekDeepFetch.retry(url, {
+        cache: 'no-store', attemptTimeoutMs: timeout,
+        maxAttempts: attempts, baseDelayMs: 400, maxDelayMs: 2000,
+      });
+    }
+    return fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(timeout) });
+  }
+
   // ===== LIVE BACKEND PROBE — fetches /health + /gpu every 5s =====
   // When the local AI server at :7865 is reachable, this swaps PROBING
   // placeholders with real GPU/model data and flips the LIVE pill on.
@@ -2844,7 +2858,7 @@ const SEEKDEEP_BASE = (function() {
         this.applyHealth(h);
         // Also pull /gpu for the richer GPU pane numbers
         try {
-          const gr = await fetch(SEEKDEEP_BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+          const gr = await sdPollFetch(SEEKDEEP_BASE + '/gpu', { timeout: 4000, attempts: 2 });
           if (gr.ok) this.applyGpu(await gr.json());
         } catch (err) { window.SeekDeepDebug?.warn('/gpu probe', err); }
       } catch (e) {
@@ -3152,7 +3166,7 @@ const SEEKDEEP_BASE = (function() {
     const grid = document.getElementById('persona-grid');
     if (!grid) return;
     try {
-      const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      const r = await sdPollFetch(SEEKDEEP_BASE + '/persona', { timeout: 3000, attempts: 2 });
       if (!r.ok) return;
       const d = await r.json();
       if (!Array.isArray(d.valid_personas)) return;
@@ -3186,7 +3200,7 @@ const SEEKDEEP_BASE = (function() {
       // Persona — /persona returns effective_global / global / env_default
       if (personaEl) {
         try {
-          const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+          const r = await sdPollFetch(SEEKDEEP_BASE + '/persona', { timeout: 3000, attempts: 2 });
           if (r.ok) {
             const d = await r.json();
             const slug = String(d.effective_global || d.global || d.env_default || '').trim();
@@ -3198,7 +3212,7 @@ const SEEKDEEP_BASE = (function() {
       // Web search backend — /launchers/status reports searxng state.
       if (webEl) {
         try {
-          const r = await fetch(SEEKDEEP_BASE + '/launchers/status', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+          const r = await sdPollFetch(SEEKDEEP_BASE + '/launchers/status', { timeout: 3000, attempts: 2 });
           if (r.ok) {
             const d = await r.json();
             const sx = (d && d.services && d.services.searxng) || {};
@@ -3364,7 +3378,7 @@ const SEEKDEEP_BASE = (function() {
       const orig = btn.textContent;
       if (!silent) { btn.disabled = true; btn.textContent = 'Loading…'; }
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/config', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/config', { timeout: 5000, attempts: 3 });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const data = await r.json();
         const env = (data && data.env) || {};
@@ -4784,7 +4798,7 @@ const SEEKDEEP_BASE = (function() {
     // own personas, not just the 4 built-ins.
     (async function loadCustomPersonas() {
       try {
-        const r = await fetch(SEEKDEEP_BASE + '/persona', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+        const r = await sdPollFetch(SEEKDEEP_BASE + '/persona', { timeout: 3000, attempts: 2 });
         if (!r.ok) return;
         const d = await r.json();
         const sel = document.getElementById('cpPersona');

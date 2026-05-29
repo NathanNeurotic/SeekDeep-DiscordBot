@@ -936,6 +936,27 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     # persists; disabling further emits."
     child_env = os.environ.copy()
     if service == "bot":
+        # Audit §2: lock the canonical bot cwd. _resolve_bot_cwd walks up to
+        # five candidate paths every boot; once we've successfully resolved
+        # the dir that actually has index.js, persist it as SEEKDEEP_BOT_CWD
+        # so every future _resolve_bot_cwd call (including the one that
+        # computes _data_dir at next boot) hits the env-override branch
+        # first and returns the SAME path deterministically. Converts the
+        # fragile heuristic into a guess-once-then-locked contract — the bot
+        # and the AI server's data dir can never diverge again on a box
+        # where the repo lives somewhere the heuristic wouldn't guess.
+        try:
+            cwd_abs = str(cwd.resolve())
+            child_env["SEEKDEEP_BOT_CWD"] = cwd_abs
+            os.environ["SEEKDEEP_BOT_CWD"] = cwd_abs  # this process agrees too
+            if (os.getenv("SEEKDEEP_BOT_CWD") or "").strip() != cwd_abs:
+                pass
+            try:
+                _merge_env(_env_path, {"SEEKDEEP_BOT_CWD": cwd_abs})
+            except Exception:
+                pass
+        except Exception:
+            pass
         try:
             tok = _current_token()
             if tok:

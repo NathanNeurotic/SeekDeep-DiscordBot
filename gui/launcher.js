@@ -37,6 +37,25 @@
 
   function notify() { return window.SeekDeepNotify || null; }
 
+  // Resilient GET for status polls (audit §5). Rides out a single transient
+  // blip within one poll tick instead of burning a miss → card-flip-to-OFFLINE.
+  // Falls back to native fetch if fetch.js hasn't auto-loaded yet (first
+  // tick can fire before nav.js finishes injecting siblings). ONLY for
+  // idempotent GETs — never wrap a side-effecting POST, since retry would
+  // double-fire it.
+  function pollFetch(url, { timeout = 3000, attempts = 2 } = {}) {
+    if (window.SeekDeepFetch && typeof window.SeekDeepFetch.retry === 'function') {
+      return window.SeekDeepFetch.retry(url, {
+        cache: 'no-store',
+        attemptTimeoutMs: timeout,
+        maxAttempts: attempts,
+        baseDelayMs: 400,
+        maxDelayMs: 2000,
+      });
+    }
+    return fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(timeout) });
+  }
+
   function fmtUptime(s) {
     if (s == null) return '—';
     if (s < 60) return s + 's';
@@ -113,7 +132,7 @@
     }
     let data;
     try {
-      const r = await fetch(BASE + '/launchers/status', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+      const r = await pollFetch(BASE + '/launchers/status', { timeout: 3000, attempts: 2 });
       if (!r.ok) throw new Error('http ' + r.status);
       data = await r.json();
       _launchStatusMisses = 0;
@@ -331,7 +350,7 @@
     let g = externalData;
     if (!g) {
       try {
-        const r = await fetch(BASE + '/gpu', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        const r = await pollFetch(BASE + '/gpu', { timeout: 3000, attempts: 2 });
         if (!r.ok) return;
         g = await r.json();
       } catch { return; }
@@ -364,7 +383,7 @@
       snap = externalData;
     } else {
       try {
-        const r = await fetch(BASE + '/stats/snapshot', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        const r = await pollFetch(BASE + '/stats/snapshot', { timeout: 5000, attempts: 2 });
         if (!r.ok) return;
         snap = await r.json();
       } catch { return; }
@@ -786,7 +805,7 @@
           // and rely on launcher endpoint's own handling.
           let botShouldRestart = true;
           try {
-            const r = await fetch(BASE + '/launchers/status', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            const r = await pollFetch(BASE + '/launchers/status', { timeout: 2000, attempts: 2 });
             if (r.ok) {
               const d = await r.json();
               const bot = (d && d.services && d.services.bot) || {};
@@ -840,7 +859,7 @@
       }
       async function pullLockState() {
         try {
-          const r = await fetch(BASE + '/health', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+          const r = await pollFetch(BASE + '/health', { timeout: 3000, attempts: 2 });
           if (!r.ok) return;
           const h = await r.json();
           if (typeof h.env_offline === 'boolean') {
@@ -1178,7 +1197,7 @@
       // Prefill from /config (server returns redacted env keys; SEEKDEEP_BOT_CWD is not secret).
       (async () => {
         try {
-          const r = await fetch(BASE + '/config', { cache: 'no-store' });
+          const r = await pollFetch(BASE + '/config', { timeout: 4000, attempts: 3 });
           if (!r.ok) return;
           const j = await r.json();
           const val = (j.env && j.env.SEEKDEEP_BOT_CWD) || (j.SEEKDEEP_BOT_CWD) || '';

@@ -116,6 +116,31 @@ pub struct SidecarState {
     pub watchdog_generation: AtomicU64,
 }
 
+/// Poll a boolean check until it passes or the budget expires (audit §9).
+/// The install→pip→bot chain has a window where a dependency is *becoming*
+/// ready (venv mid-creation, torch wheel still unpacking, port released but
+/// not yet rebound). A one-shot probe that fails during that window kicks
+/// the whole shell into a respawn loop or a hard "MISSING" error even though
+/// waiting two seconds would have succeeded. Wrap the transient probes in
+/// this so we only declare failure after genuinely giving the dependency
+/// time to settle.
+///
+/// `check` is called immediately, then every `interval` until it returns
+/// true or `budget` elapses. Returns true if it ever passed.
+fn poll_with_backoff<F: Fn() -> bool>(check: F, budget: Duration, interval: Duration) -> bool {
+    let start = std::time::Instant::now();
+    if check() {
+        return true;
+    }
+    while start.elapsed() < budget {
+        std::thread::sleep(interval);
+        if check() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Probe 127.0.0.1:7865 with a short connect timeout. True = some listener
 /// is on that port. Doesn't tell us WHO is listening — see server_identity()
 /// for the version-aware variant boot_sequence actually uses now.
@@ -1409,7 +1434,22 @@ pub fn boot_sequence(app: AppHandle) {
         }
     };
 
-    let python = match find_python(&runtime) {
+    // Audit §9: give python a moment to appear. On a fresh install the
+    // venv's python.exe can be mid-write when boot_sequence first runs
+    // (extraction + venv creation race). Poll up to 8s before declaring
+    // PYTHON_NOT_FOUND so a transient miss doesn't dead-end the loading
+    // screen on a button the user can't usefully click yet.
+    let mut python_opt = find_python(&runtime);
+    if python_opt.is_none() {
+        let runtime_for_poll = runtime.clone();
+        poll_with_backoff(
+            || find_python(&runtime_for_poll).is_some(),
+            Duration::from_secs(8),
+            Duration::from_millis(750),
+        );
+        python_opt = find_python(&runtime);
+    }
+    let python = match python_opt {
         Some(p) => p,
         None => {
             emit_status(&app, "PYTHON_NOT_FOUND");
@@ -1417,9 +1457,21 @@ pub fn boot_sequence(app: AppHandle) {
         }
     };
 
+    // Audit §9: deps can be mid-install (pip unpacking fastapi/uvicorn) when
+    // the first boot probe runs. Poll up to 10s before declaring DEPS_MISSING
+    // so the user doesn't get bounced to the "Install Python deps" button
+    // while the install they already kicked off is still finishing.
     if !deps_present(&python) {
-        emit_status(&app, "DEPS_MISSING");
-        return;
+        let py_for_poll = python.clone();
+        let settled = poll_with_backoff(
+            || deps_present(&py_for_poll),
+            Duration::from_secs(10),
+            Duration::from_millis(1000),
+        );
+        if !settled {
+            emit_status(&app, "DEPS_MISSING");
+            return;
+        }
     }
 
     // Write logs to <runtime>/logs/ (not %APPDATA%/SeekDeep/logs/) so they

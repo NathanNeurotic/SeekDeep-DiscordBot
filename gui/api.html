@@ -752,7 +752,11 @@ Object.entries(groups).forEach(([group, list]) => {
 // takes on a fully-loaded install.
 async function probeBackendReachable() {
   try {
-    const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+    // audit §5: retry via SeekDeepFetch when present (nav.js auto-loads it),
+    // else fall back to a single native fetch.
+    const r = (window.SeekDeepFetch && window.SeekDeepFetch.retry)
+      ? await window.SeekDeepFetch.retry(BASE + '/health', { cache: 'no-store', attemptTimeoutMs: 4000, maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 4000 })
+      : await fetch(BASE + '/health', { signal: AbortSignal.timeout(8000), cache: 'no-store' });
     return r.ok;
   } catch { return false; }
 }
