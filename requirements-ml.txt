@@ -37,11 +37,17 @@ torch==2.11.0+cu128 ; platform_system == "Windows"
 torchvision==0.26.0+cu128 ; platform_system == "Windows"
 torch ; platform_system != "Windows"
 torchvision ; platform_system != "Windows"
-accelerate>=1.2.0
-bitsandbytes>=0.45.0
-transformers>=4.51.0
-diffusers>=0.33.0
-safetensors>=0.5.0
+# FIX-3: upper bounds cap the major so a future breaking release can't
+# silently install on `pip install -r`. Bounds chosen to NOT exclude the
+# known-good versions running in the dev venv as of 2026-05 (transformers
+# 5.8.1, diffusers 0.39.0.dev0, accelerate 1.13.0, bitsandbytes 0.49.2) —
+# the audit's suggested transformers<5 / diffusers<0.40 would have
+# force-downgraded the working install, so cap at the next major instead.
+accelerate>=1.2.0,<2
+bitsandbytes>=0.45.0,<1.0
+transformers>=4.51.0,<6
+diffusers>=0.33.0,<1.0
+safetensors>=0.5.0,<1.0
 # Both sentencepiece + tiktoken: transformers needs ONE of these to
 # instantiate slow tokenizers when the fast (rust `tokenizers`) backend
 # can't parse a model's tokenizer.json. Different model families use
