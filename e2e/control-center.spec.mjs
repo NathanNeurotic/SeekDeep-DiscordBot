@@ -33,6 +33,11 @@ test.describe('Control Center', () => {
     await expect(cards.first()).toBeAttached({ timeout: 10_000 });
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(9); // 9 feature flags in the catalog
+    // Local developer/e2e environments may intentionally omit required setup
+    // keys; nav.js then opens the setup prompt over the page. Dismiss it so
+    // this test can exercise the config-tab hydration path it is meant to pin.
+    await page.evaluate(() => window.SeekDeepPrompt?.close?.(null));
+    await expect(page.locator('#sdPromptBack.open')).toHaveCount(0, { timeout: 2_000 });
     // Real user flow: the toggles hydrate when the Bot config tab is opened
     // (loadFromDisk autoloads on first config-pane activation, not on raw
     // page load). Click the nav item, then assert the .save badge flips off
