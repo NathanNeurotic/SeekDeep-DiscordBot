@@ -2558,7 +2558,17 @@
         const thumbUrl = e.thumbnail || e.proxy_thumbnail || '';
         const thumb = document.createElement('div');
         thumb.style.cssText = 'width:100%; aspect-ratio: 1; border-radius: 4px; background: linear-gradient(135deg, var(--abyss-3), var(--cyan-3)); background-size: cover; background-position: center; flex-shrink: 0;';
-        if (thumbUrl) thumb.style.backgroundImage = `url("${_escape(thumbUrl)}")`;
+        // Discord CDN URLs carry a signed `&hm=` token that's computed against
+        // the literal query string. _escape() (HTML-entity escape) turned `&`
+        // into `&amp;`, mangled the signature, and Discord rejected every
+        // request — gradient placeholder for the whole archive grid. Validate
+        // the origin so we still XSS-guard against snapshot tampering, then
+        // pass the URL through verbatim. For CSS url() inside a double-quoted
+        // string only `"` and `\` need escaping, and the trusted Discord
+        // origins never include either.
+        if (thumbUrl && /^https:\/\/(?:cdn\.discordapp\.com|media\.discordapp\.net)\//i.test(thumbUrl)) {
+          thumb.style.backgroundImage = `url("${thumbUrl}")`;
+        }
         card.appendChild(thumb);
         const promptEl = document.createElement('div');
         promptEl.style.cssText = 'font-size: 11px; color: var(--hull-2); line-height: 1.4; max-height: 56px; overflow: hidden; text-overflow: ellipsis;';
