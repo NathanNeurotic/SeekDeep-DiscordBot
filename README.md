@@ -161,7 +161,7 @@ Same story on macOS — the build is unsigned, so first launch you'll get *"Appl
 
 1. Install dependencies:
    ```powershell
-   setup_local.ps1
+   .\setup_local.ps1
    npm install
    ```
 
@@ -175,7 +175,7 @@ Same story on macOS — the build is unsigned, so first launch you'll get *"Appl
 
 3. Start the full local stack:
    ```powershell
-   seekdeep_launcher.bat
+   .\seekdeep_launcher.bat
    ```
 
 4. Choose launcher option `8` for a clean start of SearXNG, local AI server, and Discord bot.
@@ -202,9 +202,11 @@ A native desktop wrapper is auto-built on every push to `main` via GitHub Action
 
 | Platform | File |
 |---|---|
-| Windows | `SeekDeep_10.35.0_x64_en-US.msi` or `_x64-setup.exe` (NSIS) |
-| macOS   | `SeekDeep_10.35.0_universal.dmg` |
-| Linux   | `SeekDeep_10.35.0_amd64.AppImage`, `_amd64.deb`, or `_1.x86_64.rpm` |
+| Windows | `SeekDeep_<version>_x64_en-US.msi` or `_x64-setup.exe` (NSIS) |
+| macOS   | `SeekDeep_<version>_universal.dmg` |
+| Linux   | `SeekDeep_<version>_amd64.AppImage`, `_amd64.deb`, or `_1.x86_64.rpm` |
+
+`<version>` is the current `package.json` version (the nightly release always carries the latest). Patch releases (x.y.**Z**) are not separately changelogged — the changelog tracks minor (x.**Y**) headings; see `git log` / tags for per-patch detail.
 
 Double-click to install. On first launch the app spawns SeekDeep's Python AI server itself — no `.bat` file, no terminal, no setup script. The only required system dependency is **Python 3.11+** (the app will surface a "Get Python 3.11+" button in the loading overlay if it's missing). If you've configured any chat role to use the Ollama backend, the app will also offer a **"Get Ollama ↗"** button when the daemon isn't reachable. The Tauri bundle carries our code + the boot dependencies list, not a Python runtime, so the installer stays ~45 MB.
 
@@ -616,7 +618,7 @@ Full preflight (recommended after any source change):
 npm run preflight
 ```
 
-Runs `node --check` on the JS files, `python -m py_compile` on the Python files, and `npm run smoke` in one go. ~1 second total. Exit code 0 only when every stage passes.
+Runs five stages — `js` (node --check on shipped JS), `html-js` (node --check on every inline `<script>` block in `gui/*.html`), `py` (python -m py_compile), `smoke` (`node smoke_test.mjs`), and `gui-smoke` (`python scripts/smoke_gui_endpoints.py`) — in one go. Exit code 0 only when every stage passes. The `smoke` stage prints the live check total at the end of its run.
 
 Individual checks:
 
@@ -783,7 +785,7 @@ Deleted six passthrough wrappers (`seekdeepRememberSafeV13`, `seekdeepMemoryKeyF
 - 25 dead top-level functions deleted (~700 LOC).
 - New `SEEKDEEP_TEST_MODE=1` gate. When set, `index.js` skips `client.login()` and exposes whitelisted pure helpers on `globalThis.__seekdeepTest` so smoke tests can exercise the **real** functions instead of mirrored copies.
 - `smoke_test.mjs` refactored to import index.js with test mode and route checks through real helpers. 55 → 61 checks.
-- `scripts/preflight.mjs` + `npm run preflight` — runs `node --check` + `python -m py_compile` + smoke test in ~1 second.
+- `scripts/preflight.mjs` + `npm run preflight` — runs the js / html-js / py / smoke / gui-smoke stages in one go.
 - New `seekdeepFetchWithLimits(url, { timeoutMs, maxBytes })` helper. Replaces 3 raw `fetch(attachment.url)` calls (vision, reactrule import, emoji vault import) with timeout + Content-Length precheck. Env knobs: `SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS`, `SEEKDEEP_FETCH_DEFAULT_MAX_BYTES`.
 - 9 hardcoded `.slice(0, 1900)` → `.slice(0, MAX_DISCORD_CHARS)`; 2 duplicate hardcoded 5-min TTLs → `SEEKDEEP_EMERGENCY_SEEN_TTL_MS`.
 
@@ -834,11 +836,13 @@ The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/`
 git log --oneline
 git tag                 # v10.0-baseline tags the first commit
 git status              # see local changes
-npm run preflight       # node --check + py_compile + smoke test, ~1 second total
+npm run preflight       # 5 stages: js, html-js, py, smoke, gui-smoke
 npm run smoke           # smoke test only (no Discord, no model load)
 ```
 
 The smoke test imports `index.js` with `SEEKDEEP_TEST_MODE=1` so it can exercise real helpers (chunker, frustration filter, regex predicates, help text renderer, emoji-vault math, force-react picker math) instead of inline mirrors. See `globalThis.__seekdeepTest` in `index.js` for the whitelisted exports.
+
+> The current check total is whatever `npm run smoke` prints at the end of its run (`pass=N`). The `(N total)` figures in the changelog below are per-release snapshots from the date of each entry, not the live count.
 
 For internal component notes, see [AGENTS.md](AGENTS.md).
 For system requirements, see [REQUIREMENTS.md](REQUIREMENTS.md).
