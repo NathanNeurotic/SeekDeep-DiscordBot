@@ -262,6 +262,29 @@ pub fn kill_orphan_bots() {
     }
 }
 
+/// Tear down every SeekDeep-owned process in one call. Used by every exit
+/// path (window X, tray Quit, RunEvent::Exit) so no shutdown route can
+/// leak an orphan and accumulate duplicates the next launch has to clean
+/// up. Order matters: kill the bot first (it polls /health, so a dead AI
+/// server before a dead bot generates a thrash of "OFFLINE" toasts), then
+/// the AI server tracked child, then any orphan python.exe that ran
+/// local_ai_server.py from a previous boot.
+///
+/// Honors SEEKDEEP_TAURI_KEEP_BOT_ON_EXIT — the bot opt-out already
+/// guarded inside kill_orphan_bots — for users running remote-backend
+/// bots that should outlive the Tauri shell.
+pub fn shutdown_all(state: &SidecarState) {
+    kill_orphan_bots();
+    kill_child(state);
+    // After kill_child clears the tracked Popen, sweep any orphan
+    // local_ai_server.py interpreters (the case we kept hitting tonight:
+    // user installs over a running build, the old python.exe outlives
+    // its Tauri parent, the new launch finds two listeners fighting for
+    // :7865). Catches both halves of the Windows venv launcher pair
+    // because both processes carry "local_ai_server.py" in cmdline.
+    kill_orphan_ai_servers();
+}
+
 /// Kill every python interpreter whose command line names local_ai_server.py.
 /// Catches the case where a prior Tauri session crashed (or was force-quit
 /// before its CloseRequested handler could fire) and left the AI server

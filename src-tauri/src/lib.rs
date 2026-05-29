@@ -498,14 +498,19 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        // Set the quit-requested flag so the next CloseRequested
-                        // event actually exits instead of hiding. Then trigger
-                        // a close on the main window.
+                        // Set the quit-requested flag so any pending
+                        // CloseRequested event actually exits instead of
+                        // hiding to tray. Sweep all SeekDeep processes
+                        // synchronously BEFORE app.exit(0) — Exit handler
+                        // runs again as belt-and-suspenders but doing the
+                        // kill up front means the user doesn't watch the
+                        // tray icon disappear while node.exe is still
+                        // sitting in Task Manager.
                         let state = app.state::<SidecarState>();
                         if let Ok(mut g) = state.quit_requested.lock() {
                             *g = true;
                         }
-                        sidecar::kill_child(state.inner());
+                        sidecar::shutdown_all(state.inner());
                         app.exit(0);
                     }
                     _ => {}
@@ -570,21 +575,21 @@ pub fn run() {
                         let _ = w.hide();
                     }
                 } else {
-                    // Kill bot first, then AI server. Reverse order would
-                    // leave the bot as an orphan since it was spawned with
-                    // CREATE_NEW_PROCESS_GROUP and survives Tauri without
-                    // the explicit kill.
-                    sidecar::kill_orphan_bots();
-                    sidecar::kill_child(state.inner());
+                    // Full sweep: tracked AI child + every orphan python.exe
+                    // running local_ai_server.py + every node.exe running
+                    // index.js. Honors SEEKDEEP_TAURI_KEEP_BOT_ON_EXIT for
+                    // users who want the Discord bot to outlive Tauri.
+                    sidecar::shutdown_all(state.inner());
                 }
             }
             RunEvent::Exit => {
-                // Belt-and-suspenders kill on full app exit. kill_child is
-                // idempotent; the inner Option clears on first call. Same
-                // bot-then-sidecar ordering as the explicit-quit path above.
+                // Belt-and-suspenders sweep on full app exit. shutdown_all
+                // is idempotent (kill_child clears its tracked Option on
+                // first call; orphan sweeps no-op when there's nothing to
+                // kill) so re-running after CloseRequested is safe and
+                // catches anything the prior path missed.
                 let state = app.state::<SidecarState>();
-                sidecar::kill_orphan_bots();
-                sidecar::kill_child(state.inner());
+                sidecar::shutdown_all(state.inner());
             }
             _ => {}
         });
