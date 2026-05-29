@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "bot": "node index.js",
-    "start:standalone": ".venv\\Scripts\\python.exe local_ai_server.py",
+    "start:standalone": "node scripts/run-python.mjs local_ai_server.py",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
@@ -16,13 +16,13 @@
     "test:e2e": "playwright test",
     "preflight": "node scripts/preflight.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "setup:models": ".venv\\Scripts\\python.exe warmup_local_cache.py",
-    "setup:chat-models": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only",
-    "setup:models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --include-optional",
-    "setup:chat-models:optional": ".venv\\Scripts\\python.exe warmup_local_cache.py --chat-only --include-optional",
-    "audit:model-cache": ".venv\\Scripts\\python.exe warmup_local_cache.py --audit-cache --show-unused",
-    "prune:model-cache": ".venv\\Scripts\\python.exe warmup_local_cache.py --prune-unused --quarantine",
-    "purge:model-cache-quarantine": ".venv\\Scripts\\python.exe warmup_local_cache.py --purge-quarantine"
+    "setup:models": "node scripts/run-python.mjs warmup_local_cache.py",
+    "setup:chat-models": "node scripts/run-python.mjs warmup_local_cache.py --chat-only",
+    "setup:models:optional": "node scripts/run-python.mjs warmup_local_cache.py --include-optional",
+    "setup:chat-models:optional": "node scripts/run-python.mjs warmup_local_cache.py --chat-only --include-optional",
+    "audit:model-cache": "node scripts/run-python.mjs warmup_local_cache.py --audit-cache --show-unused",
+    "prune:model-cache": "node scripts/run-python.mjs warmup_local_cache.py --prune-unused --quarantine",
+    "purge:model-cache-quarantine": "node scripts/run-python.mjs warmup_local_cache.py --purge-quarantine"
   },
   "dependencies": {
     "discord.js": "^14.18.0",
