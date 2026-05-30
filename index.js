@@ -1554,8 +1554,11 @@ const client = new Client({
     // that gates the feature so users who don't use the member log
     // never hit the 4014 trap; users who do can flip the dev-portal
     // toggle once and the next restart picks up both ends together.
-    const memberLogChannel = (process.env.SEEKDEEP_MEMBER_LOG_CHANNEL_ID || '').trim();
-    if (memberLogChannel) {
+    // joinLeaveActive() is a hoisted function declaration from the
+    // JOIN_LEAVE_LOG block lower in this file; it returns true only when
+    // JOIN_LEAVE_CHANNEL_ID is set AND JOIN_LEAVE_LOGS_ENABLED is on, so the
+    // privileged intent is requested only when the logger will actually run.
+    if (joinLeaveActive()) {
       base.push(GatewayIntentBits.GuildMembers);
     }
     return base;
@@ -9480,7 +9483,7 @@ client.on('error', (err) => {
 //
 // We log an actionable message and exit with a non-restart code so the
 // watchdog stops respawning. The user fixes the dev-portal toggle (or
-// unsets SEEKDEEP_MEMBER_LOG_CHANNEL_ID to drop the intent request) and
+// unsets JOIN_LEAVE_CHANNEL_ID to drop the intent request) and
 // manually restarts the bot once the gate is open.
 client.on('shardDisconnect', (event, shardId) => {
   const code = event && typeof event.code === 'number' ? event.code : null;
@@ -9488,13 +9491,13 @@ client.on('shardDisconnect', (event, shardId) => {
     console.error(
       `[SeekDeep] FATAL · shard ${shardId} closed with code 4014 (Disallowed intent). ` +
       `The bot is requesting the GuildMembers privileged intent because ` +
-      `SEEKDEEP_MEMBER_LOG_CHANNEL_ID is set, but the Server Members Intent ` +
+      `JOIN_LEAVE_CHANNEL_ID is set, but the Server Members Intent ` +
       `is OFF in the Discord Developer Portal. Fix one of: ` +
       `(a) enable it at discord.com/developers/applications -> your bot -> ` +
       `Bot -> Privileged Gateway Intents -> Server Members Intent, OR ` +
-      `(b) unset SEEKDEEP_MEMBER_LOG_CHANNEL_ID in .env to disable the ` +
-      `member-log feature. Exiting with code 42 so the bot watchdog stops ` +
-      `respawn-looping; restart the bot manually after fixing.`
+      `(b) unset JOIN_LEAVE_CHANNEL_ID (or set JOIN_LEAVE_LOGS_ENABLED=false) ` +
+      `in .env to disable the join/leave logger. Exiting with code 42 so the ` +
+      `bot watchdog stops respawn-looping; restart the bot manually after fixing.`
     );
     // 42 is arbitrary — anything non-zero non-1 the watchdog can recognize
     // as "fatal config error, do not respawn". The bot watchdog in
@@ -9504,79 +9507,91 @@ client.on('shardDisconnect', (event, shardId) => {
   }
 });
 
-// SEEKDEEP_MEMBER_LOG_START
-// Optional join/leave logger. Posts an embed similar to Dyno's "Member Joined"
-// card in the configured channel whenever a member joins or leaves.
+// JOIN_LEAVE_LOG_START
+// Optional member join/leave logger. Posts a "Member Joined" / "Member Left"
+// embed (Dyno-style) in the configured channel on every guildMemberAdd /
+// guildMemberRemove for that channel's guild.
 //
-// Configuration (all optional, all in .env):
-//   SEEKDEEP_MEMBER_LOG_CHANNEL_ID — channel where embeds go. Empty/unset
-//                                    disables the feature. Must be a text
-//                                    channel the bot can post in. The
-//                                    channel's guild is the only one
-//                                    monitored (cross-guild posts are
-//                                    rejected to avoid leaking joins from
-//                                    server A into server B).
-//   SEEKDEEP_MEMBER_LOG_JOINS      — "on" (default) or "off". Suppresses
-//                                    just the join half.
-//   SEEKDEEP_MEMBER_LOG_LEAVES     — "on" (default) or "off". Suppresses
-//                                    just the leave half.
+// Configuration (all in .env, all optional):
+//   JOIN_LEAVE_CHANNEL_ID   — text channel the embeds go to. Empty/unset
+//                             disables the feature. The channel's guild is the
+//                             only one monitored (cross-guild posts are
+//                             rejected so a misconfigured ID can't leak joins
+//                             from server A into server B).
+//   JOIN_LEAVE_LOGS_ENABLED — master on/off. If unset, defaults to ON when
+//                             JOIN_LEAVE_CHANNEL_ID is present, OFF otherwise.
+//   JOIN_LEAVE_LOG_JOINS    — "on" (default) / "off". Suppresses just joins.
+//   JOIN_LEAVE_LOG_LEAVES   — "on" (default) / "off". Suppresses just leaves.
 //
-// Requires the GuildMembers privileged intent to be enabled in the Discord
-// Developer Portal (Bot → Privileged Gateway Intents → Server Members).
-// Without it, guildMemberAdd / guildMemberRemove never fire and the bot
-// reports a clear startup warning so the user knows to flip the toggle.
-function seekdeepMemberLogToggle(envKey, defaultOn) {
+// Requires the GuildMembers privileged intent (Discord Developer Portal -> Bot
+// -> Privileged Gateway Intents -> Server Members Intent). The intent is only
+// requested when the feature is active (see client construction above), so
+// users who don't use the logger never hit the 4014 "Disallowed intent" trap.
+// These are function declarations (hoisted) so the client-intent gate near the
+// top of the file can call joinLeaveActive() even though it's defined here.
+function joinLeaveEnvOn(envKey, defaultOn) {
   const raw = (process.env[envKey] || '').trim().toLowerCase();
   if (!raw) return defaultOn;
   return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
-function seekdeepMemberLogChannelId() {
-  return (process.env.SEEKDEEP_MEMBER_LOG_CHANNEL_ID || '').trim();
+function joinLeaveChannelId() {
+  return (process.env.JOIN_LEAVE_CHANNEL_ID || '').trim();
 }
 
-function seekdeepFormatAccountAge(createdTs) {
-  const ms = Math.max(0, Date.now() - Number(createdTs || 0));
-  const day = 24 * 60 * 60 * 1000;
-  const days = Math.floor(ms / day);
-  const years = Math.floor(days / 365);
-  const remDays = days - years * 365;
-  const months = Math.floor(remDays / 30);
-  const tailDays = remDays - months * 30;
-  const parts = [];
-  parts.push(`${years} year${years === 1 ? '' : 's'}`);
-  parts.push(`${months} month${months === 1 ? '' : 's'}`);
-  parts.push(`${tailDays} day${tailDays === 1 ? '' : 's'}`);
-  return parts.join(', ');
+// Master switch: an explicit JOIN_LEAVE_LOGS_ENABLED wins; otherwise default
+// ON only when a channel is configured (per spec: "default true only if
+// JOIN_LEAVE_CHANNEL_ID is present").
+function joinLeaveLogsEnabled() {
+  const raw = (process.env.JOIN_LEAVE_LOGS_ENABLED || '').trim().toLowerCase();
+  if (raw) return ['1', 'true', 'yes', 'on'].includes(raw);
+  return !!joinLeaveChannelId();
 }
 
-async function seekdeepPostMemberEmbed(kind, member) {
-  const channelId = seekdeepMemberLogChannelId();
+// Feature is "active" (and the privileged intent is therefore needed) only
+// when a channel is set AND the master switch is on.
+function joinLeaveActive() {
+  return !!joinLeaveChannelId() && joinLeaveLogsEnabled();
+}
+
+async function joinLeavePostEmbed(kind, member) {
+  const channelId = joinLeaveChannelId();
   if (!channelId) return;
   try {
     const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) return;
+    if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) {
+      console.warn(`[SeekDeep JoinLeave] channel ${channelId} missing / not text-sendable — skipping ${kind}.`);
+      return;
+    }
     // Cross-guild guard: only post when the event's guild is the channel's
     // guild. Stops a misconfigured channel ID from leaking joins from one
     // server into another.
     if (!channel.guildId || channel.guildId !== member.guild?.id) return;
     const user = member.user || member;
     const username = user?.username || user?.tag || '(unknown)';
+    const userTag = user?.tag || username;
     const userId = user?.id || member.id || '(unknown)';
     const mention = userId !== '(unknown)' ? `<@${userId}>` : '';
     const isJoin = kind === 'join';
+
+    // User (tag + ID) on both; Account Created (as a Discord timestamp so it
+    // localises and shows the exact date on hover) on joins only; current
+    // guild member count on both when available.
+    const fields = [{ name: 'User', value: `${userTag} (\`${userId}\`)`, inline: false }];
+    if (isJoin && Number(user?.createdTimestamp)) {
+      const sec = Math.floor(Number(user.createdTimestamp) / 1000);
+      fields.push({ name: 'Account Created', value: `<t:${sec}:R> (<t:${sec}:D>)`, inline: true });
+    }
+    const memberCount = member.guild?.memberCount;
+    if (Number.isFinite(memberCount)) {
+      fields.push({ name: 'Server Member Count', value: String(memberCount), inline: true });
+    }
+
     const embed = new EmbedBuilder()
       .setTitle(isJoin ? 'Member Joined' : 'Member Left')
       .setColor(isJoin ? 0x2ecc71 : 0xed4245)
-      .setDescription([mention, username].filter(Boolean).join(' · '))
-      .addFields(
-        {
-          name: 'Account Age',
-          value: seekdeepFormatAccountAge(user?.createdTimestamp),
-          inline: false,
-        },
-        { name: 'ID', value: String(userId), inline: true },
-      )
+      .setDescription(isJoin ? (mention || userTag) : userTag)
+      .addFields(fields)
       .setTimestamp(new Date());
     try {
       const url = (typeof user?.displayAvatarURL === 'function')
@@ -9585,25 +9600,37 @@ async function seekdeepPostMemberEmbed(kind, member) {
       if (url) embed.setThumbnail(url);
     } catch {}
     await channel.send({ embeds: [embed] }).catch((err) => {
-      console.warn(`[SeekDeep MemberLog] post ${kind} failed:`, err?.message || err);
+      console.warn(`[SeekDeep JoinLeave] post ${kind} failed:`, err?.message || err);
     });
   } catch (err) {
-    console.warn(`[SeekDeep MemberLog] ${kind} handler error:`, err?.message || err);
+    console.warn(`[SeekDeep JoinLeave] ${kind} handler error:`, err?.message || err);
   }
 }
 
 client.on('guildMemberAdd', (member) => {
-  if (!seekdeepMemberLogChannelId()) return;
-  if (!seekdeepMemberLogToggle('SEEKDEEP_MEMBER_LOG_JOINS', true)) return;
-  seekdeepPostMemberEmbed('join', member);
+  if (!joinLeaveActive()) return;
+  if (!joinLeaveEnvOn('JOIN_LEAVE_LOG_JOINS', true)) return;
+  joinLeavePostEmbed('join', member);
 });
 
 client.on('guildMemberRemove', (member) => {
-  if (!seekdeepMemberLogChannelId()) return;
-  if (!seekdeepMemberLogToggle('SEEKDEEP_MEMBER_LOG_LEAVES', true)) return;
-  seekdeepPostMemberEmbed('leave', member);
+  if (!joinLeaveActive()) return;
+  if (!joinLeaveEnvOn('JOIN_LEAVE_LOG_LEAVES', true)) return;
+  joinLeavePostEmbed('leave', member);
 });
-// SEEKDEEP_MEMBER_LOG_END
+
+// One-line startup notice: confirm when active; warn on the obvious
+// misconfiguration (logs enabled but no channel). Silent when the feature is
+// simply off, so users who don't use it aren't nagged on every boot.
+(function joinLeaveStartupNotice() {
+  const ch = joinLeaveChannelId();
+  if (joinLeaveActive()) {
+    console.log(`[SeekDeep JoinLeave] enabled -> channel ${ch} · requires the Server Members Intent (Discord Dev Portal -> Bot -> Privileged Gateway Intents).`);
+  } else if (joinLeaveLogsEnabled() && !ch) {
+    console.warn('[SeekDeep JoinLeave] JOIN_LEAVE_LOGS_ENABLED is on but JOIN_LEAVE_CHANNEL_ID is empty — join/leave messages are skipped. Set JOIN_LEAVE_CHANNEL_ID in .env.');
+  }
+})();
+// JOIN_LEAVE_LOG_END
 
 
 async function safeDefer(interaction) {

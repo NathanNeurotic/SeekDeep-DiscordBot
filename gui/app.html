@@ -1494,21 +1494,21 @@
                     <span class="mono" style="font-size:13px; color: var(--cyan-1);">Member join/leave log</span>
                     <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                   </div>
-                  <div class="tiny muted">Posts a Member Joined / Member Left embed (avatar · mention · account age · ID) to the channel below. Requires the <strong>GuildMembers</strong> privileged intent — enable it at discord.com/developers/applications → your bot → Bot → Privileged Gateway Intents → Server Members.</div>
+                  <div class="tiny muted">Posts a Member Joined / Member Left embed (avatar · mention · user tag + ID · account created · server member count) to the channel below. Set the channel ID in <span class="mono">JOIN_LEAVE_CHANNEL_ID</span> (.env). Requires the <strong>GuildMembers</strong> privileged intent — enable it at discord.com/developers/applications → your bot → Bot → Privileged Gateway Intents → Server Members.</div>
                   <div class="config-row" style="display:flex; flex-direction: column; gap: 4px;">
                     <div class="row" style="justify-content: space-between;">
-                      <span class="key" style="font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);">SEEKDEEP_MEMBER_LOG_CHANNEL_ID</span>
+                      <span class="key" style="font-family: var(--font-mono); font-size: 10px; color: var(--hull-3);">JOIN_LEAVE_CHANNEL_ID</span>
                       <span class="save" style="font-size:9px;letter-spacing:0.16em;opacity:0.7;">UNKNOWN</span>
                     </div>
                     <input class="mono" id="memberLogChannel" placeholder="channel ID · right-click a channel → Copy Channel ID" style="font-size:12px;" />
                   </div>
                   <div class="row" style="gap: 18px; flex-wrap: wrap;">
-                    <div class="cfg-feature" data-key="SEEKDEEP_MEMBER_LOG_JOINS" style="display:flex; align-items:center; gap:8px;">
+                    <div class="cfg-feature" data-key="JOIN_LEAVE_LOG_JOINS" style="display:flex; align-items:center; gap:8px;">
                       <span class="mono" style="font-size:11px; color: var(--hull-2);">post joins</span>
                       <div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div>
                       <span class="save" style="display:none;">SAVED</span>
                     </div>
-                    <div class="cfg-feature" data-key="SEEKDEEP_MEMBER_LOG_LEAVES" style="display:flex; align-items:center; gap:8px;">
+                    <div class="cfg-feature" data-key="JOIN_LEAVE_LOG_LEAVES" style="display:flex; align-items:center; gap:8px;">
                       <span class="mono" style="font-size:11px; color: var(--hull-2);">post leaves</span>
                       <div class="toggle on" onclick="this.classList.toggle('on'); markDirty(this)"></div>
                       <span class="save" style="display:none;">SAVED</span>

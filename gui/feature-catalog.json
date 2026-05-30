@@ -111,7 +111,7 @@
       "watch_event": null
     },
     {
-      "key": "SEEKDEEP_MEMBER_LOG_CHANNEL_ID",
+      "key": "JOIN_LEAVE_CHANNEL_ID",
       "label": "Member join/leave log",
       "category": "ops",
       "summary": "Posts a Member Joined / Member Left embed to the configured channel. Requires the GuildMembers privileged intent enabled in Discord Developer Portal.",
@@ -119,12 +119,12 @@
       "kind": "channel_id",
       "target": {
         "type": "channel",
-        "key": "SEEKDEEP_MEMBER_LOG_CHANNEL_ID",
+        "key": "JOIN_LEAVE_CHANNEL_ID",
         "hint": "Paste the channel ID. Right-click any text channel in Discord (Developer Mode) → Copy Channel ID."
       },
       "extra_env": [
-        { "key": "SEEKDEEP_MEMBER_LOG_JOINS",  "label": "Post joins",  "default": "on", "kind": "toggle" },
-        { "key": "SEEKDEEP_MEMBER_LOG_LEAVES", "label": "Post leaves", "default": "on", "kind": "toggle" }
+        { "key": "JOIN_LEAVE_LOG_JOINS",  "label": "Post joins",  "default": "on", "kind": "toggle" },
+        { "key": "JOIN_LEAVE_LOG_LEAVES", "label": "Post leaves", "default": "on", "kind": "toggle" }
       ],
       "docs": "docs.html#member-log",
       "watch_event": null,
