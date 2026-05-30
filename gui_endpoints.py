@@ -3893,6 +3893,139 @@ def register_gui_endpoints(
                 redacted[k] = v
         return {"ok": True, "env": redacted}
 
+    # ----- GET /config/schema -----
+    # Drives the all-settings page (gui/settings.html). Parses the bundled
+    # .env.default -- the canonical list of every supported key plus its inline
+    # comment as help text -- into ordered, typed, grouped fields. Current
+    # VALUES come separately from GET /config (secrets redacted there); this
+    # returns only key names, inferred types, template defaults, and docs, so
+    # it stays open (no token) like /config/status. Nothing here is sensitive.
+    _SCHEMA_SECTION_ORDER = [
+        "Discord & access", "Providers & endpoints", "Chat models & routing",
+        "VRAM & model cache", "Conversation memory", "Web search",
+        "Chat tuning", "Image generation", "Optional features",
+        "Member join/leave log", "Desktop, logging & advanced",
+    ]
+    _SCHEMA_ENUMS = {
+        "CHAT_PROVIDER": ["nvidia-local", "openai", "anthropic", "ollama"],
+        "IMAGE_PROVIDER": ["nvidia-local", "openai"],
+        "VISION_PROVIDER": ["nvidia-local", "openai"],
+        "WEB_SEARCH_PROVIDER": ["searxng", "none"],
+        "LOCAL_CHAT_QUANT": ["4bit", "8bit", "none"],
+        "MODEL_KEEP_MODE": ["task-lru", "all", "none"],
+        "SEEKDEEP_MEMORY_MODE": ["rolling", "off"],
+        "SEEKDEEP_MEMORY_SCOPE": ["user", "channel"],
+        "IMAGE_SCHEDULER": ["dpmsolver++", "default"],
+        "SEEKDEEP_UPSCALE_METHOD": ["lanczos", "realesrgan"],
+        "SEEKDEEP_UPSCALE_RESAMPLE": ["lanczos", "bicubic", "nearest"],
+    }
+    _SCHEMA_DESC_FALLBACK = {
+        "DISCORD_TOKEN": "Bot token from the Discord Developer Portal. Required.",
+        "CHAT_PROVIDER": "Provider for chat completions.",
+        "IMAGE_PROVIDER": "Provider for image generation.",
+        "VISION_PROVIDER": "Provider for vision / image understanding.",
+    }
+    _SCHEMA_BOOLISH = {"on", "off", "true", "false", "yes", "no"}
+
+    def _schema_section_for(k):
+        if k.startswith("JOIN_LEAVE_"):
+            return "Member join/leave log"
+        if k.startswith("SEEKDEEP_FEATURE_") or k.startswith("SEEKDEEP_DAILY_DIGEST"):
+            return "Optional features"
+        if k.startswith("SEEKDEEP_MEMORY_") or k.startswith("MAX_CONTEXT_") or k == "MAX_DISCORD_CHARS":
+            return "Conversation memory"
+        if k.startswith("WEB_"):
+            return "Web search"
+        if k.startswith(("IMAGE_", "SEEKDEEP_IMAGE_", "SEEKDEEP_UPSCALE_")):
+            return "Image generation"
+        if k.startswith("CHAT_") and k != "CHAT_PROVIDER":
+            return "Chat tuning"
+        if k in ("CHAT_PROVIDER", "IMAGE_PROVIDER", "VISION_PROVIDER",
+                 "WEB_SEARCH_PROVIDER", "LOCAL_AI_BASE_URL", "SEARXNG_BASE_URL",
+                 "HF_TOKEN") or k.startswith("OLLAMA_"):
+            return "Providers & endpoints"
+        if (k.startswith("VRAM_") or k.endswith("_KEEP_RESIDENT")
+                or k in ("LOCAL_MODEL_CACHE_DIR", "MODEL_KEEP_MODE",
+                         "LOCAL_CHAT_QUANT", "LOCAL_CHAT_QUANT_FULL_ROLES",
+                         "HF_LOCAL_FILES_ONLY", "HF_HUB_OFFLINE",
+                         "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")):
+            return "VRAM & model cache"
+        if (k.startswith("LOCAL_CHAT_") or k.startswith("MODEL_")
+                or k in ("LOCAL_VISION_MODEL_ID", "LOCAL_IMAGE_MODEL_ID")):
+            return "Chat models & routing"
+        if k.startswith("DISCORD_") or k in ("SEEKDEEP_ADMIN_IDS",
+                "SEEKDEEP_ALLOWED_CHANNELS", "SEEKDEEP_BLOCKED_CHANNELS",
+                "SEEKDEEP_DM_CHAT_ENABLED", "SEEKDEEP_BOT_CWD"):
+            return "Discord & access"
+        return "Desktop, logging & advanced"
+
+    def _schema_kind_for(k, val):
+        if _is_secret_key(k):
+            return "secret"
+        if k in _SCHEMA_ENUMS:
+            return "select"
+        v = (val or "").strip().lower()
+        if v in _SCHEMA_BOOLISH:
+            return "toggle"
+        if val and re.fullmatch(r"-?\d+(?:\.\d+)?", val.strip()):
+            return "number"
+        return "text"
+
+    @app.get("/config/schema")
+    def get_config_schema():
+        # The bundled template lives beside this module (resource dir in the
+        # packaged app, repo root in dev) -- independent of where the writable
+        # .env lives. Fall back to the data-root copy just in case.
+        candidates = [
+            Path(__file__).resolve().parent / ".env.default",
+            _env_path.parent / ".env.default",
+            root / ".env.default",
+        ]
+        tmpl = next((p for p in candidates if p.is_file()), None)
+        if tmpl is None:
+            return {"ok": False, "error": ".env.default not found", "sections": []}
+        fields = []
+        comment_buf = []
+        for line in tmpl.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = line.strip()
+            if not s:
+                comment_buf = []          # blank line ends a comment block
+                continue
+            if s.startswith("#"):
+                comment_buf.append(s.lstrip("#").strip())
+                continue
+            m = _ENV_LINE_RE.match(line)
+            if not m:
+                comment_buf = []
+                continue
+            key = m.group(1)
+            default = line.split("=", 1)[1].strip().strip('"').strip("'")
+            desc = " ".join(c for c in comment_buf if c).strip()
+            if not desc:
+                desc = _SCHEMA_DESC_FALLBACK.get(key, "")
+            field = {
+                "key": key,
+                "default": default,
+                "desc": desc,
+                "kind": _schema_kind_for(key, default),
+                "section": _schema_section_for(key),
+            }
+            if key in _SCHEMA_ENUMS:
+                field["options"] = _SCHEMA_ENUMS[key]
+            fields.append(field)
+            comment_buf = []
+        by_section = {}
+        for f in fields:
+            by_section.setdefault(f["section"], []).append(f)
+        sections = []
+        for title in _SCHEMA_SECTION_ORDER:
+            if by_section.get(title):
+                sections.append({"title": title, "keys": by_section[title]})
+        for title, ks in by_section.items():
+            if title not in _SCHEMA_SECTION_ORDER:
+                sections.append({"title": title, "keys": ks})
+        return {"ok": True, "template": str(tmpl), "count": len(fields), "sections": sections}
+
     # ----- /persona -----
     # Wraps data/persona-overrides.json (the bot's persona override store) over
     # HTTP so the chat.html persona pill + the Tweaks panel can change persona

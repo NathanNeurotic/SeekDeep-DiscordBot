@@ -493,6 +493,7 @@
     { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '13 · splash' },
     { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '14 · wizard · POST /model/install' },
     { id: 'setup_wizard', title: 'Setup Wizard',        path: 'setup-wizard.html', glyph: '◇', meta: '15 · zero-terminal first-run · auto-detect + auto-fix' },
+    { id: 'settings',     title: 'All Settings',        path: 'settings.html',     glyph: '⛭', meta: '16 · every .env key · typed + grouped' },
     // tts / landing / pitch / tour / mobile were removed from the jump
     // palette (2026-05-29 surface audit, docs/audits/SURFACES.md): they are
     // self-labeled design mocks / marketing pages with no live backend, so
@@ -1395,6 +1396,7 @@
   // ====================================================================
   (function injectMoreMenu() {
     const MORE_ITEMS = [
+      { title: 'All Settings', path: 'settings.html'  },
       { title: 'Memory',      path: 'memory.html'    },
       { title: 'Image A/B',   path: 'image-ab.html'  },
       { title: 'Prompts',     path: 'prompts.html'   },
