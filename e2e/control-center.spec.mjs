@@ -16,6 +16,21 @@ import { test, expect } from '@playwright/test';
 // For direct API assertions we fetch the token in-page.
 
 test.describe('Control Center', () => {
+  // CI boots the server with no .env, so /config/status returns
+  // needs_setup=true and nav.js auto-opens the "setup required" modal. Its
+  // full-screen backdrop (#sdPromptBack, z-index 10001) intercepts nav clicks —
+  // which broke the More-menu click test — and trips the "modal is closed"
+  // assertion in the feature-flag test. We're not exercising the setup flow
+  // here, so pre-seed the sessionStorage flag nav.js checks (set before any
+  // page script runs) so the modal never auto-opens. Locally (with a real
+  // .env) the modal wasn't appearing anyway, so this is behaviour-neutral
+  // there and only fixes the unconfigured CI environment.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      try { sessionStorage.setItem('sd-setup-prompted', '1'); } catch {}
+    });
+  });
+
   test('app.html loads + version pill resolves to a real version (not the hardcoded fallback)', async ({ page }) => {
     await page.goto('/gui/app.html');
     // version.js retries /health and paints every [data-version] cell. The
