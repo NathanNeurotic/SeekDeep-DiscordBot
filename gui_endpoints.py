@@ -3776,6 +3776,34 @@ def register_gui_endpoints(
             "needs_setup": bool(missing_required),
         }
 
+    # ----- GET /config/features -----
+    # On/off state of every optional feature flag the GUI exposes as a toggle
+    # (the Docs page's inline switches + Bot config). Booleans only — no secrets
+    # — read from the SAME .env that POST /config writes, so a Docs toggle
+    # round-trips correctly. The keys are the catalog keys (SEEKDEEP_FEATURE_*
+    # without the _ENABLED suffix), which is the actual env var the bot reads.
+    # Open (no token) like /config/status; nothing returned here is sensitive.
+    @app.get("/config/features")
+    async def get_config_features():
+        env = _read_env_kv(_env_path)
+        def _on(v) -> bool:
+            return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+        out: dict[str, bool] = {}
+        # Every SEEKDEEP_FEATURE_* present in .env...
+        for k, v in env.items():
+            if k.startswith("SEEKDEEP_FEATURE_"):
+                out[k] = _on(v)
+        # ...plus the known toggleable keys (reported false when absent), so the
+        # Docs switches always have a defined state to render.
+        for k in ("SEEKDEEP_FEATURE_IMG2IMG", "SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX",
+                  "SEEKDEEP_FEATURE_INPAINT", "SEEKDEEP_FEATURE_UPSCALE_REALESRGAN",
+                  "SEEKDEEP_FEATURE_NSFW_GATE", "SEEKDEEP_FEATURE_TTS_VOICE",
+                  "SEEKDEEP_FEATURE_EMOJI_VAULT", "SEEKDEEP_FEATURE_FORCE_REACT",
+                  "SEEKDEEP_FEATURE_AUTO_REACT", "SEEKDEEP_DM_CHAT_ENABLED",
+                  "JOIN_LEAVE_LOGS_ENABLED"):
+            out.setdefault(k, _on(env.get(k)))
+        return {"ok": True, "features": out}
+
     # ----- GET /config -----
     # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
     # the Models / Search / Runtime cells against live config. Secret-tagged

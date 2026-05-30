@@ -317,6 +317,23 @@
     margin-top: 2px;
     padding-top: 4px;
     border-top: 1px dashed rgba(255,184,77,0.3);
+    display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  }
+  /* Live feature toggle on the Docs page — writes the real .env flag. */
+  .ff-toggle {
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.16em;
+    text-transform: uppercase; cursor: pointer; white-space: nowrap;
+    padding: 3px 11px; border-radius: 3px;
+    border: 1px solid rgba(125,146,184,0.4);
+    background: rgba(0,0,0,0.32); color: var(--hull-3, #7d92b8);
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .ff-toggle:hover { border-color: rgba(45,212,255,0.5); }
+  .ff-toggle:disabled { opacity: 0.55; cursor: wait; }
+  .cmd-flag[data-on="1"] .ff-toggle {
+    color: var(--good, #58e6a1);
+    border-color: color-mix(in oklab, var(--good, #58e6a1) 50%, transparent);
+    background: color-mix(in oklab, var(--good, #58e6a1) 14%, transparent);
   }
 
   /* No results */
@@ -786,7 +803,7 @@ DATA.forEach(sec => {
         </div>
       </div>
       <div class="cmd-desc">${c.desc}</div>
-      ${c.flag ? `<div class="cmd-flag">▸ FLAG · <span class="mono">${c.flag}</span></div>` : ''}
+      ${c.flag ? `<div class="cmd-flag" data-flag-key="${String(c.flag).split('=')[0].trim()}"><span class="mono">▸ ${String(c.flag).split('=')[0].trim()}</span><button type="button" class="ff-toggle" aria-pressed="false" title="Toggle this feature in .env (restart the bot to apply)">···</button></div>` : ''}
     `;
     grid.appendChild(card);
   });
@@ -852,5 +869,58 @@ document.addEventListener('keydown', e => {
 applyFilter();
 </script>
 <script src="nav.js" defer></script>
+<script defer>
+  // ---- Docs as a control surface: live feature toggles -------------------
+  // Each command with a `flag` renders an on/off switch wired to the REAL .env
+  // via /config — the same catalog key the bot reads, so it actually takes
+  // effect (restart the bot to apply). Runs AFTER nav.js so window.fetch is
+  // already token-patched (POST /config is token-gated) and the base resolver
+  // exists. Read endpoint (/config/features) is open; only the write is gated.
+  (function wireDocsFeatureToggles() {
+    function base() {
+      if (window.SeekDeepResolveBase) return window.SeekDeepResolveBase();
+      if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+      return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+    }
+    const cells = [...document.querySelectorAll('.cmd-flag[data-flag-key]')];
+    if (!cells.length) return;
+    function paint(cell, on) {
+      cell.dataset.on = on ? '1' : '0';
+      const btn = cell.querySelector('.ff-toggle');
+      if (btn) { btn.setAttribute('aria-pressed', on ? 'true' : 'false'); btn.textContent = on ? 'ENABLED' : 'DISABLED'; }
+    }
+    async function load() {
+      try {
+        const r = await fetch(base() + '/config/features', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        if (!r.ok) return;
+        const f = ((await r.json()) || {}).features || {};
+        cells.forEach(cell => paint(cell, !!f[cell.dataset.flagKey]));
+      } catch (_) { /* server not up yet — leave toggles in the '···' state */ }
+    }
+    async function toggle(cell) {
+      const key = cell.dataset.flagKey;
+      const next = cell.dataset.on === '1' ? 'off' : 'on';
+      const prev = cell.dataset.on === '1';
+      const btn = cell.querySelector('.ff-toggle');
+      if (btn) { btn.disabled = true; btn.textContent = '···'; }
+      try {
+        const r = await fetch(base() + '/config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: { [key]: next } }), signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        paint(cell, next === 'on');
+        window.SeekDeepNotify?.toast?.({ tone: next === 'on' ? 'good' : 'info', title: key, body: (next === 'on' ? 'enabled' : 'disabled') + ' · restart the bot to apply', ttl: 4000 });
+      } catch (e) {
+        paint(cell, prev);
+        window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Toggle failed', body: String((e && e.message) || e), ttl: 6000 });
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    cells.forEach(cell => cell.querySelector('.ff-toggle')?.addEventListener('click', () => toggle(cell)));
+    load();
+  })();
+</script>
 </body>
 </html>
