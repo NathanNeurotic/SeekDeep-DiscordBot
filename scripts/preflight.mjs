@@ -219,12 +219,32 @@ stage('rust', () => {
     // Not a failure — just absent. Warn so the gap is visible.
     return { ok: true, detail: 'cargo not installed — skipped (install Rust to type-check the desktop shell)' };
   }
+  // On Linux, Tauri's webview links GTK/webkit/glib via pkg-config. When those
+  // system libs are absent — the lightweight CI preflight runner (ubuntu-latest
+  // ships cargo but NOT the GTK stack), or a contributor without them — cargo
+  // check fails on a -sys crate with a pkg-config/gobject error: an ENVIRONMENT
+  // gap, not a code error. Skip-with-warn; the dedicated `rust` CI job installs
+  // the libs and runs the real check. (Windows/macOS Tauri don't use GTK, so the
+  // probe is Linux-only and local cargo check still runs there.)
+  if (process.platform === 'linux') {
+    const pk = spawnSync('pkg-config', ['--exists', 'gtk+-3.0'], { encoding: 'utf8' });
+    if (pk.error || pk.status !== 0) {
+      return { ok: true, detail: 'Tauri GTK/webkit system libs absent — skipped (the dedicated rust CI job runs the real cargo check)' };
+    }
+  }
   const r = spawnSync('cargo', ['check', '--quiet', '--manifest-path', manifest], {
     encoding: 'utf8', cwd: ROOT,
   });
   if (r.status !== 0) {
-    const err = (r.stderr || '').split('\n').filter(Boolean).slice(-3).join(' | ');
-    return { ok: false, detail: `cargo check failed: ${err.slice(0, 240)}` };
+    const err = (r.stderr || '');
+    // Belt-and-suspenders: a missing system library (GTK/webkit/glib/gobject)
+    // is an environment gap, not a code error — skip rather than fail. A real
+    // Rust compile error has none of these markers and still fails preflight.
+    if (/pkg-config|gobject-2\.0|gtk\+?-3\.0|webkit2?gtk|could not find system library/i.test(err)) {
+      return { ok: true, detail: 'Tauri system libs absent (pkg-config/GTK) — skipped; dedicated rust CI job runs the real check' };
+    }
+    const tail = err.split('\n').filter(Boolean).slice(-3).join(' | ');
+    return { ok: false, detail: `cargo check failed: ${tail.slice(0, 240)}` };
   }
   return { ok: true, detail: `cargo check clean (${(probe.stdout || '').trim()})` };
 });
