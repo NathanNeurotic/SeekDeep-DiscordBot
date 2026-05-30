@@ -556,19 +556,19 @@ pub fn run() {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } => {
-                // Default: X-button quits (kills bot + AI server). The user
-                // has repeatedly said they want "every launch into a clean
-                // environment" — the previous hide-to-tray default left bots
-                // orphaned which read to them as "Bots still online when the
-                // program is closed." Opt back into tray behavior via
-                // SEEKDEEP_CLOSE_HIDES_TO_TRAY=1 in .env for users who want
-                // the bot serving Discord while Tauri is closed.
+                // Default: close-to-tray. The X button HIDES the window and the
+                // app keeps serving Discord in the background (standard Slack /
+                // Discord behavior). The visible tray icon signals it's still
+                // running; right-click the tray icon -> "Quit SeekDeep" does the
+                // full shutdown (kills bot + AI server). Opt out — make the X
+                // fully quit and sweep everything — with
+                // SEEKDEEP_CLOSE_HIDES_TO_TRAY=0 (or false/off) in .env.
                 let state = app.state::<SidecarState>();
                 let quitting = state.quit_requested.lock().map(|g| *g).unwrap_or(false);
                 let close_hides_to_tray = std::env::var("SEEKDEEP_CLOSE_HIDES_TO_TRAY")
                     .ok()
-                    .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-                    .unwrap_or(false);
+                    .map(|s| !matches!(s.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+                    .unwrap_or(true);
                 if !quitting && close_hides_to_tray {
                     api.prevent_close();
                     if let Some(w) = app.get_webview_window("main") {
