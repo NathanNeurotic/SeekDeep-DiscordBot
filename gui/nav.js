@@ -490,14 +490,15 @@
     { id: 'memory',       title: 'Memory',              path: 'memory.html',       glyph: '⌗', meta: '10 · user-facts · live' },
     { id: 'image_ab',     title: 'Image A/B',           path: 'image-ab.html',     glyph: '▩', meta: '11 · 4 pipelines side-by-side' },
     { id: 'prompts',      title: 'Prompts',             path: 'prompts.html',      glyph: '◩', meta: '12 · #prompts channel marketplace' },
-    { id: 'tts',          title: 'TTS preview',         path: 'tts.html',          glyph: '♪', meta: '13 · mock · Piper voices' },
-    { id: 'landing',      title: 'Landing',             path: 'landing.html',      glyph: '◐', meta: '14 · marketing' },
-    { id: 'pitch',        title: 'Pitch deck',          path: 'pitch.html',        glyph: '◊', meta: '15 · 9 slides' },
-    { id: 'tour',         title: 'Tour',                path: 'tour.html',         glyph: '⊕', meta: '16 · guided' },
-    { id: 'mobile',       title: 'Mobile',              path: 'mobile.html',       glyph: '▢', meta: '17 · phone mocks' },
-    { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '18 · splash' },
-    { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '19 · wizard · POST /model/install' },
-    { id: 'setup_wizard', title: 'Setup Wizard',        path: 'setup-wizard.html', glyph: '◇', meta: '20 · zero-terminal first-run · auto-detect + auto-fix' },
+    { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '13 · splash' },
+    { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '14 · wizard · POST /model/install' },
+    { id: 'setup_wizard', title: 'Setup Wizard',        path: 'setup-wizard.html', glyph: '◇', meta: '15 · zero-terminal first-run · auto-detect + auto-fix' },
+    // tts / landing / pitch / tour / mobile were removed from the jump
+    // palette (2026-05-29 surface audit, docs/audits/SURFACES.md): they are
+    // self-labeled design mocks / marketing pages with no live backend, so
+    // jumping to them from ⌘K landed users on dead surfaces. The files remain
+    // in-repo (and bundled) for the web/marketing context — they're just no
+    // longer offered as in-app navigation targets.
   ];
 
   // Detect current page from URL filename
