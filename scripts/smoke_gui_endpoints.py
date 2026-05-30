@@ -842,7 +842,11 @@ def main() -> int:
     body = r.json() if r.status_code == 200 else {}
     check("  ...returns {ok, valid_personas, env_default, global, effective_global, channels_count, guilds_count}",
           body.get("ok") is True
-          and set(body.get("valid_personas") or []) == {"neurotic", "unsettling", "clinical", "chaotic"}
+          # valid_personas == built-ins UNION user-defined slugs (custom-personas.json),
+          # so assert the four built-ins are always present rather than exact-equality —
+          # the endpoint deliberately surfaces custom personas (e.g. a user's 'ebonics'),
+          # which made the old `== {4 built-ins}` check fail on any populated data dir.
+          and {"neurotic", "unsettling", "clinical", "chaotic"}.issubset(set(body.get("valid_personas") or []))
           and isinstance(body.get("env_default"), str)
           and isinstance(body.get("effective_global"), str)
           and isinstance(body.get("channels_count"), int)
