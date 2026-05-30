@@ -1577,6 +1577,10 @@ const client = new Client({
     const base = [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
+      // DirectMessages delivers typed DMs to the bot. It is NOT privileged
+      // (no Dev-Portal toggle, no 4014 risk) — unlike GuildMembers below — so
+      // it's safe to request unconditionally.
+      GatewayIntentBits.DirectMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMessageReactions,
     ];
@@ -18437,9 +18441,21 @@ client.on('messageCreate', async (message) => {
 
   if (message.author?.bot || !client.user) return;
 
+  // DM support: a typed DM carries no @mention, so the address-check further
+  // down would otherwise drop it, and the channel allowlist (a guild concept)
+  // would silence it. Treat a 1:1 DM as implicitly addressed + allowlist-exempt
+  // so it flows through the SAME /chat + image + memory pipeline as a guild
+  // @mention. The DirectMessages gateway intent on the client delivers these.
+  const seekdeepIsDM = !message.guild;
+  const seekdeepDmChatEnabled = !['0', 'false', 'no', 'off'].includes(
+    String(process.env.SEEKDEEP_DM_CHAT_ENABLED ?? 'on').trim().toLowerCase());
+
   // Auto-reactions fire on every non-bot human message in the channel, even when
   // the bot isn't otherwise addressed. Channel allowlist still applies.
-  if (typeof seekdeepIsChannelAllowed === 'function' && !seekdeepIsChannelAllowed(message.channel?.id)) {
+  // The channel allowlist is a guild concept — never let it silence a 1:1 DM
+  // the user explicitly opened with the bot (when DM chat is enabled).
+  if (!(seekdeepIsDM && seekdeepDmChatEnabled)
+      && typeof seekdeepIsChannelAllowed === 'function' && !seekdeepIsChannelAllowed(message.channel?.id)) {
     return;
   }
   // Fire-and-forget. Don't await. Gated by SEEKDEEP_FEATURE_AUTO_REACT so the
@@ -18457,6 +18473,9 @@ client.on('messageCreate', async (message) => {
   let seekdeepMessageAddressesBot = typeof seekdeepMessageMentionsBot === 'function'
     ? seekdeepMessageMentionsBot(message)
     : Boolean(message.mentions?.has(client.user));
+
+  // A 1:1 DM is inherently addressed to the bot — no @mention required.
+  if (seekdeepIsDM && seekdeepDmChatEnabled) seekdeepMessageAddressesBot = true;
 
   // Reply-to-bot: treat Discord replies to bot messages as addressed, even
   // without an @mention.  This lets users hold a conversation by replying
