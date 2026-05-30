@@ -2400,6 +2400,136 @@ def register_gui_endpoints(
         import asyncio as _asyncio_dk
         return await _asyncio_dk.to_thread(_compute_system_docker_payload)
 
+    # ----- Docker Desktop + SearXNG auto-start (cold boot) -----
+    # On a cold boot Docker Desktop is often installed but the daemon is
+    # stopped, so SearXNG (web search) never comes up and the user has to
+    # babysit Docker. Best-effort: if SearXNG isn't reachable, ensure the
+    # Docker daemon (launch Docker Desktop if it's down), wait for it, then
+    # start the SearXNG container. Gated by SEEKDEEP_AUTO_START_SEARXNG
+    # (default on); runs ONCE in a background thread; never blocks boot.
+    def _seekdeep_searxng_reachable(timeout: float = 1.5) -> bool:
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", 8080), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def _seekdeep_docker_daemon_up() -> bool:
+        try:
+            r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"],
+                               capture_output=True, text=True, timeout=12)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _seekdeep_find_docker_desktop() -> "str | None":
+        import sys as _sys
+        if os.name == "nt":
+            for c in (
+                os.path.expandvars(r"%ProgramFiles%\Docker\Docker\Docker Desktop.exe"),
+                os.path.expandvars(r"%ProgramW6432%\Docker\Docker\Docker Desktop.exe"),
+                os.path.expandvars(r"%LocalAppData%\Docker\Docker Desktop.exe"),
+            ):
+                if c and os.path.isfile(c):
+                    return c
+            return None
+        if _sys.platform == "darwin":
+            return "Docker"  # launched via `open -a Docker`
+        return None
+
+    def _seekdeep_launch_docker_desktop() -> bool:
+        import sys as _sys
+        exe = _seekdeep_find_docker_desktop()
+        if not exe:
+            return False
+        try:
+            if os.name == "nt":
+                subprocess.Popen([exe], close_fds=True,
+                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+            elif _sys.platform == "darwin":
+                subprocess.Popen(["open", "-a", "Docker"])
+            else:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _seekdeep_run_searxng_container() -> dict:
+        # Same command as POST /docker/start-searxng — duplicated deliberately
+        # so the boot path can never break the working "Start SearXNG" endpoint.
+        try:
+            subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+                           capture_output=True, text=True, timeout=10)
+        except Exception:
+            pass
+        try:
+            searxng_dir = (root / "searxng").resolve()
+            searxng_dir.mkdir(parents=True, exist_ok=True)
+            vol = f"{searxng_dir}:/etc/searxng:rw"
+            r = subprocess.run([
+                "docker", "run", "-d", "--name", "seekdeep-searxng",
+                "--restart", "unless-stopped", "-p", "8080:8080",
+                "-e", "BASE_URL=http://localhost:8080/",
+                "-e", "INSTANCE_NAME=SeekDeep",
+                "-v", vol, "searxng/searxng:latest",
+            ], capture_output=True, text=True, timeout=90)
+            if r.returncode != 0:
+                return {"ok": False, "error": (r.stderr or r.stdout or "docker run failed").strip()[:300]}
+            return {"ok": True, "container_id": (r.stdout or "").strip()[:12]}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:300]}
+
+    def _seekdeep_ensure_searxng_stack():
+        # Never auto-launch Docker in CI / tests / smoke / lite boots — only in a
+        # real app/standalone boot. (GitHub Actions sets CI=true on every step,
+        # so this covers both the preflight and e2e CI jobs.)
+        if (os.environ.get("CI") or os.environ.get("SEEKDEEP_TEST_MODE")
+                or os.environ.get("SEEKDEEP_LOCAL_AI_BOOT_LITE")
+                or os.environ.get("PYTEST_CURRENT_TEST")):
+            return
+        flag = (os.environ.get("SEEKDEEP_AUTO_START_SEARXNG", "1") or "").strip().lower()
+        if flag in ("0", "false", "no", "off"):
+            return
+        try:
+            if _seekdeep_searxng_reachable():
+                return  # already up — nothing to do
+            if not _seekdeep_docker_daemon_up():
+                if not _seekdeep_launch_docker_desktop():
+                    print("[SeekDeep] auto-start: Docker daemon down + Docker Desktop not found — "
+                          "skipping SearXNG. Install/launch Docker Desktop, or set "
+                          "SEEKDEEP_AUTO_START_SEARXNG=0 to silence.", flush=True)
+                    return
+                print("[SeekDeep] auto-start: launched Docker Desktop; waiting up to 120s for the daemon…", flush=True)
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    time.sleep(4)
+                    if _seekdeep_docker_daemon_up():
+                        break
+                else:
+                    print("[SeekDeep] auto-start: Docker daemon didn't answer in 120s — "
+                          "leaving SearXNG for manual start.", flush=True)
+                    return
+            if _seekdeep_searxng_reachable():
+                return
+            res = _seekdeep_run_searxng_container()
+            if res.get("ok"):
+                print(f"[SeekDeep] auto-start: SearXNG container started ({res.get('container_id', '')}); "
+                      "it answers in ~5-15s.", flush=True)
+            else:
+                print(f"[SeekDeep] auto-start: SearXNG start failed: {res.get('error', '')}", flush=True)
+        except Exception as exc:
+            print(f"[SeekDeep] auto-start: ensure SearXNG errored: {exc!r}", flush=True)
+
+    # Kick it once, in the background, at registration (boot). The app.state
+    # guard prevents a double-spawn if registration ever runs twice.
+    try:
+        if not getattr(app.state, "seekdeep_searxng_autostart_spawned", False):
+            app.state.seekdeep_searxng_autostart_spawned = True
+            threading.Thread(target=_seekdeep_ensure_searxng_stack, daemon=True).start()
+    except Exception:
+        pass
+
     # ----- POST /docker/start-searxng -----
     # Start the SearXNG container with the same flags seekdeep_launcher.bat
     # uses, so the GUI can offer a "Start SearXNG" button instead of asking

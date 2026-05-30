@@ -37,9 +37,16 @@ Usage:
 """
 
 from __future__ import annotations
+import os
 import sys
 import re
 from pathlib import Path
+
+# Never let the smoke's in-process registration trigger the Docker/SearXNG
+# auto-start — it would probe Docker and could launch Docker Desktop on a
+# developer's machine during preflight. FORCE off (a test must never launch
+# Docker), set BEFORE register_gui_endpoints ever runs.
+os.environ["SEEKDEEP_AUTO_START_SEARXNG"] = "0"
 
 # Project root = parent of scripts/
 ROOT = Path(__file__).resolve().parent.parent
