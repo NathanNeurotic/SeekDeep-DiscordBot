@@ -873,10 +873,12 @@ applyFilter();
   // ---- Docs as a control surface: live feature toggles -------------------
   // Each command with a `flag` renders an on/off switch wired to the REAL .env
   // via /config — the same catalog key the bot reads, so it actually takes
-  // effect (restart the bot to apply). Runs AFTER nav.js so window.fetch is
-  // already token-patched (POST /config is token-gated) and the base resolver
-  // exists. Read endpoint (/config/features) is open; only the write is gated.
-  (function wireDocsFeatureToggles() {
+  // effect (restart the bot to apply). Gated on DOMContentLoaded, which fires
+  // AFTER deferred scripts (nav.js) have run — so window.fetch is token-patched
+  // (POST /config is token-gated) and SeekDeepResolveBase exists. This matters:
+  // an inline <script defer> IGNORES `defer` and would otherwise execute mid-
+  // parse, before nav.js. Read endpoint (/config/features) is open; write gated.
+  function wireDocsFeatureToggles() {
     function base() {
       if (window.SeekDeepResolveBase) return window.SeekDeepResolveBase();
       if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
@@ -920,7 +922,12 @@ applyFilter();
     }
     cells.forEach(cell => cell.querySelector('.ff-toggle')?.addEventListener('click', () => toggle(cell)));
     load();
-  })();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireDocsFeatureToggles, { once: true });
+  } else {
+    wireDocsFeatureToggles();
+  }
 </script>
 </body>
 </html>
