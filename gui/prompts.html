@@ -572,7 +572,8 @@ The user wants information density, not company.`,
   // Hydrate from /data/prompt-templates.json on load. Token-gated; nav.js's
   // patchedFetch auto-injects X-SeekDeep-Token on this path. Falls back to
   // the in-page demo seed if the server is unreachable.
-  async function hydrateFromBackend() {
+  async function hydrateFromBackend(attempt) {
+    attempt = attempt || 0;
     try {
       const r = await fetch(SEEKDEEP_BASE + '/data/prompt-templates.json', {
         signal: AbortSignal.timeout(4000),
@@ -614,8 +615,14 @@ The user wants information density, not company.`,
       }
       if (!TEMPLATES.length) {
         paintBackendTag('empty');
-        // Render a single placeholder card so the viewer doesn't look broken
+        // Render a single placeholder card so the viewer doesn't look broken.
+        // Push it into TEMPLATES so renderList shows the card AND select('_empty')
+        // can find it — previously `active` was set to a non-member object, so
+        // select() reset active to undefined (empty list) and threw on
+        // active.name, dropping the page into a false "OFFLINE" state for any
+        // user with zero saved templates.
         active = { id: '_empty', name: '(no templates yet)', source: 'own', vars: [], uses: 0, lastUsed: '—', author: '—', shared: null, body: '▸ No templates saved yet.\n\nIn Discord, run:\n  @SeekDeep template save <name>: <prompt body with {{variables}}>\n\nExample:\n  @SeekDeep template save tldr: Summarize {{text}} in 3 bullets, no filler.' };
+        TEMPLATES.push(active);
         renderList('');
         select('_empty');
         return;
@@ -625,8 +632,18 @@ The user wants information density, not company.`,
       select(active.id);
       paintBackendTag('live');
     } catch (err) {
+      // This inline init runs BEFORE the deferred nav.js installs its token
+      // interceptor, so the first fetch to the token-gated templates file
+      // 401s; sidecar respawns cause transient blips too. Retry across that
+      // window before falling back to the labeled offline demo seed — that's
+      // what used to make the sample @offline-demo rows show as "the
+      // marketplace" on every normal load (mirrors the bootSeqLog fix).
+      if (attempt < 4) {
+        setTimeout(() => hydrateFromBackend(attempt + 1), 250 * attempt + 250);
+        return;
+      }
       paintBackendTag('offline');
-      // Demo seed already loaded — leave it. renderList runs below on init.
+      // Genuine offline after retries — keep the in-page demo seed (labeled).
     }
   }
 
@@ -657,16 +674,24 @@ The user wants information density, not company.`,
 
   function select(id) {
     active = TEMPLATES.find(t => t.id === id) || TEMPLATES[0];
+    if (!active) { renderList($('#filter').value); return; }  // empty list — nothing to paint (avoids undefined-active throw)
     renderList($('#filter').value);
     $('#vName').textContent = active.name;
     $('#vSub').innerHTML = `▸ data/prompt-templates.json · ${active.source === 'own' ? 'local · authored here' : 'imported from #prompts'}`;
-    // Edit button only enabled for OWN templates (imported ones round-trip thru re-share locally).
+    // Edit button only enabled for OWN templates (imported ones round-trip thru
+    // re-share locally); never for the '(no templates yet)' placeholder, which
+    // would otherwise let a save create a junk template.
     const editBtn = $('#vEdit');
     if (editBtn) {
-      editBtn.disabled = active.source !== 'own';
-      editBtn.style.opacity = active.source === 'own' ? '' : '0.35';
-      editBtn.style.pointerEvents = active.source === 'own' ? '' : 'none';
-      editBtn.title = active.source === 'own' ? 'Edit body / re-share' : 'Imported templates are read-only here — duplicate to fork.';
+      const editable = active.source === 'own' && active.id !== '_empty';
+      editBtn.disabled = !editable;
+      editBtn.style.opacity = editable ? '' : '0.35';
+      editBtn.style.pointerEvents = editable ? '' : 'none';
+      editBtn.title = editable
+        ? 'Edit body / re-share'
+        : (active.id === '_empty'
+            ? 'No templates yet — author one in Discord: @SeekDeep template save'
+            : 'Imported templates are read-only here — duplicate to fork.');
     }
     // XSS-safe: every user-controlled field (vars list, guild name, author)
     // flows through escapeHtml before interpolation.

@@ -133,4 +133,24 @@ test.describe('Control Center', () => {
       await expect(page.locator(`.sd-jump-item[href="${href}"]`)).toHaveCount(0);
     }
   });
+
+  test('prompts.html resolves to the live/empty state, not the @offline-demo seed (SURFACES.md)', async ({ page }) => {
+    // The inline init runs before the deferred nav.js patches fetch with the
+    // token interceptor, so the first /data/prompt-templates.json fetch 401s.
+    // hydrateFromBackend now retries across that window; it must land on the
+    // LIVE (populated or empty) state rather than the offline demo seed, and
+    // the empty-state must render its placeholder card without throwing.
+    // (Requires a server serving the CURRENT gui/ — a long-running dev server
+    // that cached an old nav.js/prompts.html will read OFFLINE; restart it.)
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('/gui/prompts.html');
+    const tag = page.locator('#tplBackendTag');
+    await expect(tag).not.toContainText('OFFLINE', { timeout: 12_000 });
+    await expect(tag).toContainText('LIVE', { timeout: 12_000 });
+    // The fake @offline-demo sample rows must never be what a connected user sees.
+    await expect(page.locator('#tplList')).not.toContainText('cli-reviewer');
+    const real = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
+    expect(real, real.join('\n')).toHaveLength(0);
+  });
 });
