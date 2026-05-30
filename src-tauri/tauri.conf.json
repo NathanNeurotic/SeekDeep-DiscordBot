@@ -27,7 +27,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*",
+      "dangerousDisableAssetCspModification": ["script-src", "style-src"]
     }
   },
   "bundle": {
