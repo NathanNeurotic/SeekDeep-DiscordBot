@@ -107,4 +107,30 @@ test.describe('Control Center', () => {
     await page.waitForTimeout(6000);
     await expect(wrap).not.toContainText('start the AI server', { timeout: 8_000 });
   });
+
+  test('nav "More" menu surfaces the hidden-but-real features; Cmd-K drops the mocks (SURFACES.md)', async ({ page }) => {
+    await page.goto('/gui/index.html');
+
+    // nav.js injects a "More v" trigger into the standard topnav so the real
+    // but secondary surfaces (Memory, Image A/B, Prompts, Add a Model) are
+    // reachable from every page — not only via Cmd-K.
+    const moreBtn = page.locator('.topnav .links a.sd-more-btn');
+    await expect(moreBtn).toBeVisible({ timeout: 10_000 });
+
+    const panel = page.locator('.topnav .links .sd-more-panel');
+    await expect(panel).toBeHidden();
+    await moreBtn.click();
+    await expect(panel).toBeVisible();
+    for (const href of ['memory.html', 'image-ab.html', 'prompts.html', 'add-model.html']) {
+      await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
+    }
+
+    // The Cmd-K jump palette must no longer offer the cut mock/marketing pages.
+    // Assert a known survivor first so the absence checks below aren't vacuous.
+    await page.locator('#sdJumpBtn').click();
+    await expect(page.locator('.sd-jump-item[href="app.html"]')).toHaveCount(1, { timeout: 5_000 });
+    for (const href of ['tts.html', 'landing.html', 'pitch.html', 'tour.html', 'mobile.html']) {
+      await expect(page.locator(`.sd-jump-item[href="${href}"]`)).toHaveCount(0);
+    }
+  });
 });

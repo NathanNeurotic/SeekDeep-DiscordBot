@@ -1381,6 +1381,137 @@
     }
   })();
 
+  // ====================================================================
+  // "More" nav dropdown — surface real-but-secondary features.
+  // The per-page topnav lists the 8 primary surfaces; several real, wired
+  // features (Memory, Image A/B, Prompts, Add a Model, Changelog) were only
+  // reachable via Cmd-K, so users never found them (docs/audits/SURFACES.md).
+  // Inject a compact "More v" dropdown into .topnav .links on every page that
+  // has the standard nav. Purely additive — no per-page edits. The trigger is
+  // a real <a> so it inherits the page's own ".topnav .links a" styling; the
+  // panel rules are scoped under ".topnav .links" so they win specificity over
+  // the base link colour. Runs AFTER mobileMenuToggle so the injected trigger
+  // doesn't pick up the drawer's "close on link click" handler.
+  // ====================================================================
+  (function injectMoreMenu() {
+    const MORE_ITEMS = [
+      { title: 'Memory',      path: 'memory.html'    },
+      { title: 'Image A/B',   path: 'image-ab.html'  },
+      { title: 'Prompts',     path: 'prompts.html'   },
+      { title: 'Add a Model', path: 'add-model.html' },
+      { title: 'Changelog',   path: 'changelog.html' },
+    ];
+    const moreCSS = `
+      .topnav .links .sd-more { position: relative; display: inline-flex; align-items: center; }
+      .topnav .links a.sd-more-btn { cursor: pointer; }
+      .topnav .links a.sd-more-btn .sd-more-caret { font-size: 0.8em; margin-left: 4px; opacity: 0.7; }
+      .topnav .links .sd-more-panel {
+        position: absolute; top: calc(100% + 9px); right: 0; z-index: 9996;
+        min-width: 196px; padding: 6px;
+        background: linear-gradient(180deg, rgba(10,26,48,0.98), rgba(6,18,31,0.99));
+        border: 1px solid rgba(45,212,255,0.45); border-radius: 8px;
+        box-shadow: 0 18px 50px rgba(0,0,0,0.6), 0 0 36px rgba(45,212,255,0.18);
+        display: none; flex-direction: column; gap: 1px;
+        text-align: left;
+      }
+      .topnav .links .sd-more.open .sd-more-panel { display: flex; }
+      .topnav .links .sd-more-panel a {
+        display: block; padding: 8px 12px; margin: 0; border-radius: 5px;
+        color: var(--hull-2, #c7d6f0); border: 1px solid transparent;
+        white-space: nowrap; text-align: left;
+      }
+      .topnav .links .sd-more-panel a::after { content: none !important; }
+      .topnav .links .sd-more-panel a:hover,
+      .topnav .links .sd-more-panel a.here {
+        background: rgba(45,212,255,0.10);
+        border-color: rgba(45,212,255,0.30);
+        color: var(--cyan-1, #2dd4ff);
+      }
+      /* In the mobile hamburger drawer the links stack vertically; render the
+         panel inline (indented) instead of as a floating popover. */
+      @media (max-width: 760px) {
+        .topnav .links .sd-more { display: block; width: 100%; }
+        .topnav .links .sd-more-panel {
+          position: static; display: flex; box-shadow: none; border: 0;
+          padding: 0 0 0 12px; background: transparent; min-width: 0;
+        }
+      }
+    `;
+    const st = document.createElement('style');
+    st.textContent = moreCSS;
+    document.head.appendChild(st);
+
+    function attach() {
+      const links = document.querySelector('.topnav .links');
+      if (!links || links.querySelector('.sd-more')) return true; // absent or already done
+      const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+      const onMore = MORE_ITEMS.some((it) => it.path === here);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'sd-more';
+
+      const btn = document.createElement('a');
+      btn.className = 'sd-more-btn' + (onMore ? ' active' : '');
+      btn.href = '#';
+      btn.setAttribute('role', 'button');
+      btn.setAttribute('tabindex', '0');
+      btn.setAttribute('aria-haspopup', 'true');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.innerHTML = 'More<span class="sd-more-caret" aria-hidden="true">▾</span>';
+
+      const panel = document.createElement('div');
+      panel.className = 'sd-more-panel';
+      panel.setAttribute('role', 'menu');
+      MORE_ITEMS.forEach((it) => {
+        const a = document.createElement('a');
+        a.href = it.path;
+        a.textContent = it.title;
+        a.setAttribute('role', 'menuitem');
+        if (it.path === here) a.classList.add('here');
+        panel.appendChild(a);
+      });
+
+      wrap.appendChild(btn);
+      wrap.appendChild(panel);
+      links.appendChild(wrap);
+
+      function setOpen(open) {
+        wrap.classList.toggle('open', open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(!wrap.classList.contains('open'));
+      });
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setOpen(!wrap.classList.contains('open'));
+        } else if (e.key === 'Escape') {
+          setOpen(false);
+        }
+      });
+      // Close on outside click + Esc (panel item clicks navigate away).
+      document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) setOpen(false);
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setOpen(false);
+      });
+      return true;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', attach, { once: true });
+    } else {
+      attach();
+    }
+    // Retry in case the topnav mounts late on some pages.
+    setTimeout(attach, 300);
+    setTimeout(attach, 1200);
+  })();
+
   // Auto-load sibling helper scripts (events.js + version.js + playground.js)
   // via dynamic <script> appends so designer-shipped HTMLs only need to
   // include nav.js — they get window.SeekDeepEvents, window.SeekDeepVersion,
