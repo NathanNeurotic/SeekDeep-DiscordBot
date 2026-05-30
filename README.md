@@ -173,6 +173,8 @@ Same story on macOS — the build is unsigned, so first launch you'll get *"Appl
    LOCAL_IMAGE_MODEL_ID=Lykon/dreamshaper-xl-1-0
    ```
 
+   > **Setting up the Discord side?** Follow **[docs/DISCORD_SETUP.md](docs/DISCORD_SETUP.md)** — the full Developer-Portal walkthrough: creating the app, the **required** Message Content Intent, scopes + permissions, the join/leave logger's Server Members Intent, DM support, and the 4014 "Disallowed intent" fix.
+
 3. Start the full local stack:
    ```powershell
    .\seekdeep_launcher.bat
