@@ -396,6 +396,40 @@ function seekdeepWriteBotStatus(patch) {
   }
 }
 
+// ===== Startup-resilience state (loud failures + single-instance guard) =====
+// seekdeepReachedReady — set true once the gateway is READY; lets the exit
+//   safety-net distinguish "died before connecting" from "lost an established
+//   connection". seekdeepExitReasonLogged — set by any path that already
+//   printed a FATAL reason, so the process.on('exit') catch-all doesn't
+//   double-log. seekdeepHeartbeatTimer — periodic bot-status refresh so the
+//   guard + launcher pill see a LIVE connection.
+let seekdeepReachedReady = false;
+let seekdeepExitReasonLogged = false;
+let seekdeepHeartbeatTimer = null;
+
+// Discord allows exactly ONE gateway session per bot token. If a second
+// instance logs in, Discord knocks one offline and it exits — the "bot
+// randomly went offline" failure. This detects a DIFFERENT, live, connected
+// instance via data/bot-status.json so we can refuse to start a duplicate.
+// Returns {pid,user_tag,ageSec} when another instance is genuinely live, else
+// null (no file / our own pid / cleanly exited / never ready / stale heartbeat
+// / dead pid → safe to start).
+function seekdeepAnotherInstanceLive() {
+  try {
+    if (!fs.existsSync(SEEKDEEP_BOT_STATUS_PATH)) return null;
+    const st = JSON.parse(fs.readFileSync(SEEKDEEP_BOT_STATUS_PATH, 'utf8')) || {};
+    const otherPid = Number(st.pid);
+    if (!otherPid || otherPid === process.pid) return null;
+    if (st.exited === true || st.ready !== true) return null;
+    const hb = Date.parse(st.heartbeat_at || '');
+    const ageMs = Number.isFinite(hb) ? (Date.now() - hb) : Infinity;
+    if (ageMs > 45000) return null;            // heartbeat stale -> previous instance is gone
+    try { process.kill(otherPid, 0); }         // signal 0 = liveness probe, kills nothing
+    catch { return null; }                      // ESRCH -> pid dead -> stale lock, ok to start
+    return { pid: otherPid, user_tag: st.user_tag || null, ageSec: Math.round(ageMs / 1000) };
+  } catch { return null; }
+}
+
 function seekdeepClassifyRequestKind(target) {
   // Best-effort tag so the GUI can colour-code request lifecycle events.
   try {
@@ -9195,6 +9229,18 @@ client.once('clientReady', async () => {
     });
   } catch (_) {}
 
+  seekdeepReachedReady = true;
+  if (!seekdeepHeartbeatTimer) {
+    // Refresh the heartbeat every 15s so bot-status.json freshness reflects a
+    // LIVE Discord connection — both the launcher pill and the single-instance
+    // guard depend on it. unref() so this timer alone never keeps the process
+    // alive (the gateway socket does that while we're actually connected).
+    seekdeepHeartbeatTimer = setInterval(() => {
+      try { seekdeepWriteBotStatus({ ready: true, guild_count: client.guilds?.cache?.size || 0 }); } catch (_) {}
+    }, 15000);
+    if (typeof seekdeepHeartbeatTimer.unref === 'function') seekdeepHeartbeatTimer.unref();
+  }
+
   try {
     await client.application.commands.set(commands);
   } catch (err) {
@@ -9452,6 +9498,24 @@ process.on('SIGINT',  () => { _seekdeepMarkExited('SIGINT');  process.exit(0); }
 process.on('SIGTERM', () => { _seekdeepMarkExited('SIGTERM'); process.exit(0); });
 process.on('beforeExit', () => { _seekdeepMarkExited('beforeExit'); });
 
+// Exit safety-net: GUARANTEE the bot never dies silently. A bare event-loop
+// drain (e.g. the gateway gave up after a lost session race, or login rejected
+// with nothing keeping the loop alive) would otherwise leave exit code 1 and
+// zero output — the "it just went offline with no error" mystery. Any path
+// that already printed its own FATAL reason sets seekdeepExitReasonLogged so we
+// don't double-log. Must stay synchronous (no async work in an 'exit' handler).
+process.on('exit', (code) => {
+  if (code === 0 || code === 42 || seekdeepExitReasonLogged) return;
+  const phase = seekdeepReachedReady
+    ? 'AFTER it was connected (lost the gateway — likely another instance took the session, or a fatal gateway close)'
+    : 'BEFORE it ever connected (login failure or a lost one-session-per-token race)';
+  console.error(
+    `[SeekDeep] bot process exiting with code ${code} ${phase}. ` +
+    `If this was unexpected: verify DISCORD_TOKEN, the privileged-intent toggles in the Developer ` +
+    `Portal, and that no other SeekDeep bot is already running with the same token.`
+  );
+});
+
 process.on('unhandledRejection', (err) => {
   if (seekdeepIsDiscordAbortError(err)) {
     seekdeepLogDiscordAbort('Unhandled Discord REST abort', err);
@@ -9503,6 +9567,20 @@ client.on('shardDisconnect', (event, shardId) => {
     // as "fatal config error, do not respawn". The bot watchdog in
     // local_ai_server's bot-watchdog already treats unexpected exits as
     // crashes; this gives it an explicit signal to bail out of the loop.
+    seekdeepExitReasonLogged = true;
+    process.exit(42);
+  } else if (code === 4004 || code === 4013) {
+    // Other fatal, non-recoverable gateway closes — reconnecting can't fix
+    // these, so fail loud and exit 42 (no respawn) like the 4014 case rather
+    // than letting discord.js spin on a doomed reconnect.
+    const why = code === 4004
+      ? 'Authentication failed — the DISCORD_TOKEN is invalid or was reset. Put a valid bot token in .env'
+      : 'Invalid gateway intents — the bot requested an intent the application is not approved for';
+    console.error(
+      `[SeekDeep] FATAL · shard ${shardId} closed with code ${code}: ${why}. ` +
+      `Exiting with code 42 so the bot watchdog stops respawn-looping; fix it and restart manually.`
+    );
+    seekdeepExitReasonLogged = true;
     process.exit(42);
   }
 });
@@ -22250,7 +22328,41 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {
-  client.login(TOKEN);
+  // Single-instance guard — Discord allows only ONE gateway session per token,
+  // so refuse to start when another live bot already holds it. Without this a
+  // second launch knocks the first offline and one of them exits (the lost-
+  // session race).
+  const other = seekdeepAnotherInstanceLive();
+  if (other) {
+    console.error(
+      `[SeekDeep] FATAL · another SeekDeep bot is already running and connected ` +
+      `(PID ${other.pid}${other.user_tag ? `, ${other.user_tag}` : ''}, heartbeat ${other.ageSec}s ago). ` +
+      `Discord allows only ONE gateway session per token; starting a second instance would knock the ` +
+      `first offline and one of them would exit. Refusing to start. If that process is actually dead, ` +
+      `wait ~45s for its heartbeat to expire (or delete data/bot-status.json), then retry. ` +
+      `Exiting 42 (duplicate instance — watchdog should not respawn).`
+    );
+    seekdeepExitReasonLogged = true;
+    process.exit(42);
+  }
+  // Loud login-failure handling — never exit silently on a bad token, missing
+  // network, or a privileged intent that's enabled in code but OFF in the
+  // portal. discord.js retries transient network internally, so a rejection
+  // here is usually fatal config.
+  client.login(TOKEN).catch((err) => {
+    const msg = String(err?.message || err || 'unknown error');
+    const authFatal = err?.code === 'TokenInvalid'
+      || /token|unauthor|401|disallowed intent|privileged intent|invalid .*intent/i.test(msg);
+    console.error(
+      `[SeekDeep] FATAL · Discord login failed: ${msg}. ` +
+      `Common causes: an invalid/expired DISCORD_TOKEN, no network, or a privileged intent that's ` +
+      `enabled in code but OFF in the Developer Portal (Server Members / Message Content / Presence). ` +
+      `Exiting ${authFatal ? '42 (fatal config — fix and restart)' : '1 (transient — the watchdog may retry)'}.`
+    );
+    seekdeepExitReasonLogged = true;
+    _seekdeepMarkExited('login-failed');
+    process.exit(authFatal ? 42 : 1);
+  });
 }
 
 // SEEKDEEP_PROMPT_CHOICE_EMERGENCY_START
