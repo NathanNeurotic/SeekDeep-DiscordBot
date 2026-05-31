@@ -369,9 +369,9 @@ pub fn app_log_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// We deliberately copy file-by-file (not recursive blat) so the user's
 /// gitignored data/ + logs/ + outputs/ subdirs aren't wiped on update.
 fn installed_version_for_diagnostic(stamp: &Path) -> Option<String> {
-    // Returns the previously-installed version string if a stamp exists.
-    // Currently unused for gating (we always re-extract) but kept around
-    // so a future cache-aware extraction can reuse it cheaply.
+    // Returns the version recorded by the previous boot's extraction, if a
+    // stamp exists. Used to decide whether a fresh bundle (newer CARGO_PKG_VERSION)
+    // should supersede a sticky .self-updated skip-list — see maybe_extract_resources.
     std::fs::read_to_string(stamp).ok().map(|s| s.trim().to_string())
 }
 
@@ -441,13 +441,34 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     // .self-updated). Without this carve-out, a user who self-updates
     // through the GUI loses the patch on every Tauri restart because
     // the stale bundle clobbers it.
-    let _ = installed_version_for_diagnostic(&stamp);
-    let skip_list: Vec<String> = match fs::read_to_string(&self_updated) {
-        Ok(s) => s.lines()
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| l.trim().to_string())
-            .collect(),
-        Err(_) => Vec::new(),
+    // A fresh .msi install bumps CARGO_PKG_VERSION above the version recorded
+    // in the stamp from the previous boot's extraction. When that happens the
+    // newly-bundled files SUPERSEDE any prior GUI self-update, so the skip-list
+    // must be dropped: honoring it across a version change permanently shadows
+    // every updated bundled file. A one-time "Self-update from GitHub" lists
+    // ~every runtime file in .self-updated, so without this a single self-update
+    // freezes gui_endpoints.py / nav.js / package.json forever and every later
+    // MSI update silently never applies (exactly the bug that hid /config/schema
+    // behind a stale runtime). Only preserve the carve-out across SAME-version
+    // Tauri restarts, where re-extracting would needlessly clobber a hot-patch
+    // the user just pulled at the current version.
+    let prev_stamp = installed_version_for_diagnostic(&stamp);
+    let bundle_supersedes = prev_stamp.as_deref() != Some(bundled_version);
+    if bundle_supersedes {
+        // Newer/different bundle wins — clear the sticky skip-list so the
+        // file-by-file copy below overwrites the stale self-updated runtime.
+        let _ = fs::remove_file(&self_updated);
+    }
+    let skip_list: Vec<String> = if bundle_supersedes {
+        Vec::new()
+    } else {
+        match fs::read_to_string(&self_updated) {
+            Ok(s) => s.lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|l| l.trim().to_string())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     };
     let should_skip = |rel: &str| -> bool {
         skip_list.iter().any(|p| p == rel)
