@@ -322,6 +322,14 @@ IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Lykon/dreamshaper-xl-1-0")
 
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
+# Security (audit P0-4): trust_remote_code lets a Hugging Face repo execute its
+# OWN Python at load time. A few models genuinely need it (custom tokenizer /
+# model code), but combined with arbitrary /model/install it is an RCE-shaped
+# footgun — installing an untrusted model_id would run its code in the server.
+# Default ON to preserve existing behavior for the known-good configured models;
+# flip to off (All Settings) to harden against malicious repos. When off, models
+# that require remote code will fail to load loudly rather than executing it.
+SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "on").lower() in {"1", "true", "yes", "on"}
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
 # Opt-in pins to keep specific models resident in VRAM across task switches.
@@ -3785,7 +3793,7 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
 
     tokenizer_kwargs = {
         "cache_dir": str(MODEL_CACHE_DIR),
-        "trust_remote_code": True,
+        "trust_remote_code": SEEKDEEP_TRUST_REMOTE_CODE,
         "token": HF_TOKEN,
         "local_files_only": HF_LOCAL_FILES_ONLY,
     }
