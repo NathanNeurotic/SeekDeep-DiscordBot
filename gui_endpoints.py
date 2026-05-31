@@ -395,6 +395,14 @@ def _ensure_gui_token(env_path: Path) -> tuple[str, bool]:
 _ENV_LINE_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)\s*=")
 
 
+# Audit P2-2: the SearXNG container image. Defaults to :latest to preserve the
+# existing launcher behavior; set SEEKDEEP_SEARXNG_IMAGE to pin a specific tag
+# or digest (e.g. searxng/searxng@sha256:...) for reproducible web search. Read
+# at launch time so a /config edit + restart takes effect without a code change.
+def _seekdeep_searxng_image() -> str:
+    return os.environ.get("SEEKDEEP_SEARXNG_IMAGE", "").strip() or "searxng/searxng:latest"
+
+
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
@@ -2494,7 +2502,7 @@ def register_gui_endpoints(
                 "--restart", "unless-stopped", "-p", "8080:8080",
                 "-e", "BASE_URL=http://localhost:8080/",
                 "-e", "INSTANCE_NAME=SeekDeep",
-                "-v", vol, "searxng/searxng:latest",
+                "-v", vol, _seekdeep_searxng_image(),
             ], capture_output=True, text=True, timeout=90)
             if r.returncode != 0:
                 return {"ok": False, "error": (r.stderr or r.stdout or "docker run failed").strip()[:300]}
@@ -2584,7 +2592,7 @@ def register_gui_endpoints(
                     "-e", "BASE_URL=http://localhost:8080/",
                     "-e", "INSTANCE_NAME=SeekDeep",
                     "-v", vol,
-                    "searxng/searxng:latest",
+                    _seekdeep_searxng_image(),
                 ],
                 capture_output=True, text=True, timeout=60,
             )
@@ -3127,7 +3135,7 @@ def register_gui_endpoints(
                     "--restart", "unless-stopped", "-p", "8080:8080",
                     "-e", "BASE_URL=http://localhost:8080/",
                     "-e", "INSTANCE_NAME=SeekDeep",
-                    "-v", vol, "searxng/searxng:latest",
+                    "-v", vol, _seekdeep_searxng_image(),
                 ], capture_output=True, text=True, timeout=60)
                 results["searxng"] = {"ok": r.returncode == 0,
                                        "container_id": (r.stdout or "").strip()[:12],
@@ -5954,7 +5962,7 @@ def register_gui_endpoints(
                     "--restart", "unless-stopped", "-p", "8080:8080",
                     "-e", "BASE_URL=http://localhost:8080/",
                     "-e", "INSTANCE_NAME=SeekDeep",
-                    "-v", vol, "searxng/searxng:latest",
+                    "-v", vol, _seekdeep_searxng_image(),
                 ], capture_output=True, text=True, timeout=60)
                 if rr.returncode == 0:
                     cid = (rr.stdout or "").strip()[:12]
