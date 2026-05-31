@@ -7983,7 +7983,8 @@ function seekdeepHelpText(source = null) {
       prefix + ' reactrule add <emoji> for @user',
       prefix + ' reactrule remove <id>',
       prefix + ' reactrule toggle <id>',
-      prefix + ' reactrule builtin long_message|forwarded|code_block|image_only|link_only on|off',
+      prefix + ' reactrule builtin <name> on|off   (names: long_message|forwarded|code_block|image_only|link_only)',
+      prefix + ' reactrule builtin <name> emoji <emoji>   (change a built-in’s reaction emoji)',
       prefix + ' reactrule export   (attaches JSON; use as a save slot)',
       prefix + ' reactrule import   (attach a JSON file to your message)',
       '```',
@@ -9151,10 +9152,15 @@ const commands = [
       .addStringOption((o) => o.setName('id').setDescription('Rule ID').setRequired(true)))
     .addSubcommand((s) => s.setName('toggle').setDescription('Enable / disable a rule by ID.')
       .addStringOption((o) => o.setName('id').setDescription('Rule ID').setRequired(true)))
-    .addSubcommand((s) => s.setName('builtin').setDescription('Toggle a built-in stacking rule.')
-      .addStringOption((o) => o.setName('name').setDescription('Built-in rule name').setRequired(true))
-      .addStringOption((o) => o.setName('state').setDescription('on or off').setRequired(true)
-        .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })))
+    .addSubcommand((s) => s.setName('builtin').setDescription('Toggle a built-in rule on/off, or change its emoji.')
+      .addStringOption((o) => o.setName('name').setDescription('Built-in rule name').setRequired(true)
+        .addChoices(
+          { name: 'long_message', value: 'long_message' }, { name: 'forwarded', value: 'forwarded' },
+          { name: 'code_block', value: 'code_block' }, { name: 'image_only', value: 'image_only' },
+          { name: 'link_only', value: 'link_only' }))
+      .addStringOption((o) => o.setName('state').setDescription('on or off').setRequired(false)
+        .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }))
+      .addStringOption((o) => o.setName('emoji').setDescription('New reaction emoji (paste it; overrides state)').setRequired(false)))
     .addSubcommand((s) => s.setName('export').setDescription('Attach a JSON of the current rules.')),
   new SlashCommandBuilder()
     .setName('emoji')
@@ -16386,12 +16392,32 @@ function seekdeepBuildReactToggleComponents(guild, data) {
     if (emoji) { try { btn.setEmoji(emoji); } catch {} }
     return btn;
   });
+  // "Edit emoji" select: pick a built-in → opens a modal to type the new emoji.
+  const emojiSelect = new StringSelectMenuBuilder()
+    .setCustomId('seekdeep:rt:emojisel')
+    .setPlaceholder('✏️ Change a built-in’s emoji…')
+    .setMinValues(1)
+    .setMaxValues(1);
+  for (const key of Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT)) {
+    const b = bucket.builtins[key] || {};
+    const cur = b.emoji || SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key]?.emoji;
+    const opt = new StringSelectMenuOptionBuilder()
+      .setLabel(SEEKDEEP_REACT_TOGGLE_PRETTY[key] || key)
+      .setValue(key)
+      .setDescription(`currently ${cur || '(none)'}`.slice(0, 100));
+    if (cur && !String(cur).includes('<')) { try { opt.setEmoji(cur); } catch {} }
+    emojiSelect.addOptions(opt);
+  }
   const actions = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('seekdeep:rt:all:on').setLabel('All on').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('seekdeep:rt:all:off').setLabel('All off').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('seekdeep:rt:close').setLabel('Close').setStyle(ButtonStyle.Danger),
   );
-  return [new ActionRowBuilder().addComponents(...toggleButtons), actions];
+  return [
+    new ActionRowBuilder().addComponents(...toggleButtons),
+    new ActionRowBuilder().addComponents(emojiSelect),
+    actions,
+  ];
 }
 
 function seekdeepReactToggleOpenPayload(guild, { ephemeral = false } = {}) {
@@ -16453,6 +16479,27 @@ async function seekdeepHandleReactToggleComponent(interaction) {
   const action = parts[2];
   const arg = parts[3];
 
+  // Emoji-edit select → open a modal pre-filled with the current emoji.
+  if (action === 'emojisel') {
+    const key = String(interaction.values?.[0] || '');
+    if (!SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key]) { try { await interaction.deferUpdate(); } catch {} return true; }
+    let cur = SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key]?.emoji || '';
+    try { cur = seekdeepGetGuildReactionsBucket(seekdeepReadAutoReactions(), String(guild.id)).builtins[key]?.emoji || cur; } catch {}
+    const input = new TextInputBuilder()
+      .setCustomId('emoji')
+      .setLabel('New emoji (paste it, or :name: / <:name:id>)')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(100);
+    if (cur) { try { input.setValue(String(cur)); } catch {} }
+    const modal = new ModalBuilder()
+      .setCustomId(`seekdeep:rt:emojimodal:${key}`)
+      .setTitle(`Emoji · ${SEEKDEEP_REACT_TOGGLE_PRETTY[key] || key}`.slice(0, 45))
+      .addComponents(new ActionRowBuilder().addComponents(input));
+    try { await interaction.showModal(modal); } catch (err) { console.error('[react-toggle] showModal failed:', err?.message || err); }
+    return true;
+  }
+
   if (action === 'close') {
     try { await interaction.update({ content: '⚡ Auto-Reactions menu closed. Run `/reacttoggle` to reopen.', embeds: [], components: [], attachments: [] }); } catch {}
     return true;
@@ -16481,6 +16528,43 @@ async function seekdeepHandleReactToggleComponent(interaction) {
     console.error('[react-toggle] update failed:', err?.message || err);
   }
   return true;
+}
+
+// Modal submit for the "Edit emoji" select (customId seekdeep:rt:emojimodal:<key>).
+async function seekdeepHandleReactToggleEmojiModal(interaction) {
+  const key = String(interaction?.customId || '').split(':')[3] || '';
+  const guild = interaction.guild;
+  if (!guild || !SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key]) {
+    try { await interaction.reply({ content: 'Could not apply that emoji.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  if (!seekdeepInteractionCanManageReactions(interaction)) {
+    try { await interaction.reply({ content: 'You need **Manage Server** (or Manage Messages) to change auto-reactions.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  const rawEmoji = String(interaction.fields?.getTextInputValue?.('emoji') || '').trim();
+  if (!seekdeepResolveEmojiForReact(rawEmoji, guild)) {
+    try { await interaction.reply({ content: `Couldn't use ${rawEmoji ? `\`${rawEmoji}\`` : 'that'} as a reaction. Use a standard emoji (paste it), or a server custom emoji as \`:name:\` / \`<:name:id>\`.`, flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  const data = seekdeepReadAutoReactions();
+  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
+  if (bucket.builtins[key]) bucket.builtins[key].emoji = rawEmoji;
+  seekdeepWriteAutoReactions(data);
+  // Re-render the original menu in place (no `files` → GIF does not restart).
+  try {
+    if (interaction.isFromMessage?.()) {
+      await interaction.update({
+        embeds: [seekdeepBuildReactToggleEmbed(guild, data)],
+        components: seekdeepBuildReactToggleComponents(guild, data),
+      });
+    } else {
+      await interaction.reply({ content: `\`${key}\` now reacts with ${rawEmoji}.`, flags: MessageFlags.Ephemeral });
+    }
+  } catch (err) {
+    console.error('[react-toggle] emoji modal apply failed:', err?.message || err);
+    try { await interaction.reply({ content: `\`${key}\` now reacts with ${rawEmoji}.`, flags: MessageFlags.Ephemeral }); } catch {}
+  }
 }
 
 function seekdeepCompileReactionPattern(pattern = '') {
@@ -16655,6 +16739,7 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
     lines.push('  @SeekDeep reactrule remove <id>');
     lines.push('  @SeekDeep reactrule toggle <id>');
     lines.push('  @SeekDeep reactrule builtin <key> on|off');
+    lines.push('  @SeekDeep reactrule builtin <key> emoji <emoji>   (change its reaction emoji)');
     lines.push('  @SeekDeep reactrule export   (attaches JSON)');
     lines.push('  @SeekDeep reactrule import   (attach a JSON file to your message)');
     await message.reply({ content: lines.join('\n'), allowedMentions: { repliedUser: false } });
@@ -16729,6 +16814,27 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
     bucket.builtins[key].enabled = onOff;
     seekdeepWriteAutoReactions(data);
     await message.reply({ content: `Builtin \`${key}\` is now ${onOff ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  // reactrule builtin <key> emoji <emoji>  — change a built-in's reaction emoji
+  const builtinEmojiMatch = subcommand.match(/^builtin\s+(\w+)\s+emoji\s+(.+)$/i);
+  if (builtinEmojiMatch) {
+    const key = builtinEmojiMatch[1].toLowerCase();
+    const rawEmoji = builtinEmojiMatch[2].trim();
+    if (!bucket.builtins[key]) {
+      await message.reply({ content: `Unknown builtin "${key}". Valid: ${Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT).join(', ')}`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    // Validate it can actually be used as a reaction in THIS guild before saving.
+    const resolved = seekdeepResolveEmojiForReact(rawEmoji, message.guild);
+    if (!resolved) {
+      await message.reply({ content: `Couldn't use ${rawEmoji ? `\`${rawEmoji}\`` : 'that'} as a reaction. Use a standard emoji (paste it directly), or a server custom emoji as \`:name:\` or \`<:name:id>\`.`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    bucket.builtins[key].emoji = rawEmoji;
+    seekdeepWriteAutoReactions(data);
+    await message.reply({ content: `Builtin \`${key}\` now reacts with ${rawEmoji}.`, allowedMentions: { repliedUser: false } });
     return true;
   }
 
@@ -21868,6 +21974,11 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction?.isModalSubmit && interaction.isModalSubmit()) {
       const customId = String(interaction.customId || '');
+      if (customId.startsWith('seekdeep:rt:emojimodal:')) {
+        try { await seekdeepHandleReactToggleEmojiModal(interaction); }
+        catch (err) { console.error('React toggle emoji modal failed:', err?.stack || err?.message || err); }
+        return;
+      }
       if (customId.startsWith('seekdeep:force-react:')) {
         try {
           await interaction.reply({
@@ -22137,7 +22248,10 @@ client.on('interactionCreate', async (interaction) => {
       } else if (sub === 'remove' || sub === 'toggle') {
         raw = `reactrule ${sub} ${String(interaction.options.getString('id') || '').trim()}`;
       } else if (sub === 'builtin') {
-        raw = `reactrule builtin ${String(interaction.options.getString('name') || '').trim()} ${String(interaction.options.getString('state') || 'on').trim()}`;
+        const bname = String(interaction.options.getString('name') || '').trim();
+        const bemoji = String(interaction.options.getString('emoji') || '').trim();
+        const bstate = String(interaction.options.getString('state') || '').trim();
+        raw = bemoji ? `reactrule builtin ${bname} emoji ${bemoji}` : `reactrule builtin ${bname} ${bstate || 'on'}`;
       }
       try {
         let captured = '';
