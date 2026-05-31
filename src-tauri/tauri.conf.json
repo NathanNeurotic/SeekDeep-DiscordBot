@@ -54,6 +54,7 @@
       "../requirements-local.txt",
       "../requirements-ml.txt",
       "../.env.default",
+      "../.env.example",
       "../gui/**/*",
       "../scripts/doctor.mjs",
       "../scripts/preflight.mjs",

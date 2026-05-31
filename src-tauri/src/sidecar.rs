@@ -490,6 +490,10 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         "requirements-local.txt",
         "requirements-ml.txt",
         ".env.default",
+        // .env.example is the FULL key reference (~126 keys). Bundled +
+        // extracted so the All Settings page (GET /config/schema) can surface
+        // every supported knob, not just the lean .env.default first-run set.
+        ".env.example",
         // scripts/doctor.mjs is run by the Installer's System check step
         // via `node scripts/doctor.mjs`. Without these copied into the
         // runtime dir, the spawn fails with Cannot find module — broke

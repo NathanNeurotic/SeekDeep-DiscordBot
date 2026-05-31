@@ -313,7 +313,11 @@
       let total = 0;
       for (const sec of (schema.sections || [])) {
         const det = document.createElement('details');
-        det.className = 'set-sec'; det.open = true;
+        det.className = 'set-sec';
+        // Collapse the big catch-all "…advanced" section by default so the page
+        // opens on the common settings; it's one click (or a search) away.
+        // Search force-opens any matching section (see applyFilter).
+        det.open = !/\badvanced\b/i.test(sec.title || '');
         const sum = document.createElement('summary');
         sum.innerHTML = `<span class="chev">▸</span><span class="set-sec-title"></span><span class="set-sec-dirty"></span><span class="set-sec-ct"></span>`;
         sum.querySelector('.set-sec-title').textContent = sec.title;

@@ -4026,47 +4026,69 @@ def register_gui_endpoints(
 
     @app.get("/config/schema")
     def get_config_schema():
-        # The bundled template lives beside this module (resource dir in the
-        # packaged app, repo root in dev) -- independent of where the writable
-        # .env lives. Fall back to the data-root copy just in case.
-        candidates = [
-            Path(__file__).resolve().parent / ".env.default",
-            _env_path.parent / ".env.default",
-            root / ".env.default",
-        ]
-        tmpl = next((p for p in candidates if p.is_file()), None)
-        if tmpl is None:
-            return {"ok": False, "error": ".env.default not found", "sections": []}
-        fields = []
-        comment_buf = []
-        for line in tmpl.read_text(encoding="utf-8", errors="replace").splitlines():
-            s = line.strip()
-            if not s:
-                comment_buf = []          # blank line ends a comment block
-                continue
-            if s.startswith("#"):
-                comment_buf.append(s.lstrip("#").strip())
-                continue
-            m = _ENV_LINE_RE.match(line)
-            if not m:
-                comment_buf = []
-                continue
-            key = m.group(1)
-            default = line.split("=", 1)[1].strip().strip('"').strip("'")
-            desc = " ".join(c for c in comment_buf if c).strip()
-            if not desc:
-                desc = _SCHEMA_DESC_FALLBACK.get(key, "")
-            field = {
-                "key": key,
-                "default": default,
-                "desc": desc,
-                "kind": _schema_kind_for(key, default),
-                "section": _schema_section_for(key),
-            }
-            if key in _SCHEMA_ENUMS:
-                field["options"] = _SCHEMA_ENUMS[key]
-            fields.append(field)
+        # The bundled templates live beside this module (resource dir in the
+        # packaged app, repo root in dev). We MERGE two sources so the page
+        # surfaces every supported knob without dropping any:
+        #   .env.default  — lean curated first-run set (authoritative on overlap)
+        #   .env.example  — full ~126-key reference (adds everything else)
+        # .env.default is parsed first so its (maintained) defaults win; the
+        # example then contributes only keys .env.default doesn't already have.
+        # Either file missing is fine — whichever exists is used.
+        def _first(name):
+            for base in (Path(__file__).resolve().parent, _env_path.parent, root):
+                p = base / name
+                if p.is_file():
+                    return p
+            return None
+        df_path = _first(".env.default")
+        ex_path = _first(".env.example")
+        if df_path is None and ex_path is None:
+            return {"ok": False, "error": ".env.default / .env.example not found", "sections": []}
+
+        def _parse(path):
+            out = []
             comment_buf = []
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                s = line.strip()
+                if not s:
+                    comment_buf = []          # blank line ends a comment block
+                    continue
+                if s.startswith("#"):
+                    comment_buf.append(s.lstrip("#").strip())
+                    continue
+                m = _ENV_LINE_RE.match(line)
+                if not m:
+                    comment_buf = []
+                    continue
+                key = m.group(1)
+                default = line.split("=", 1)[1].strip().strip('"').strip("'")
+                desc = " ".join(c for c in comment_buf if c).strip()
+                if not desc:
+                    desc = _SCHEMA_DESC_FALLBACK.get(key, "")
+                field = {
+                    "key": key,
+                    "default": default,
+                    "desc": desc,
+                    "kind": _schema_kind_for(key, default),
+                    "section": _schema_section_for(key),
+                }
+                if key in _SCHEMA_ENUMS:
+                    field["options"] = _SCHEMA_ENUMS[key]
+                out.append(field)
+                comment_buf = []
+            return out
+
+        fields = []
+        seen = set()
+        for src in (df_path, ex_path):   # default first → authoritative on overlap
+            if src is None:
+                continue
+            for f in _parse(src):
+                if f["key"] in seen:
+                    continue
+                seen.add(f["key"])
+                fields.append(f)
+
         by_section = {}
         for f in fields:
             by_section.setdefault(f["section"], []).append(f)
@@ -4077,7 +4099,8 @@ def register_gui_endpoints(
         for title, ks in by_section.items():
             if title not in _SCHEMA_SECTION_ORDER:
                 sections.append({"title": title, "keys": ks})
-        return {"ok": True, "template": str(tmpl), "count": len(fields), "sections": sections}
+        srcs = " + ".join(str(p) for p in (df_path, ex_path) if p)
+        return {"ok": True, "template": srcs, "count": len(fields), "sections": sections}
 
     # ----- /persona -----
     # Wraps data/persona-overrides.json (the bot's persona override store) over
