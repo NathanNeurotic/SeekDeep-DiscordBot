@@ -1728,6 +1728,10 @@ const SEEKDEEP_LEADING_NAME_RUN_RE = new RegExp('^\\s*(?:@?(?:' + _seekdeepLeadA
 // address-prefix stripper. The `\b` after the alias stops "seek deep" from
 // biting into "seek deeply".
 const SEEKDEEP_LEADING_ADDRESS_RE = new RegExp('^(?:\\s*(?:<@!?\\d+>|<@&\\d+>|@?(?:' + _seekdeepLeadAlt + ')\\b)[,;:!?-]?\\s*)+', 'i');
+// Address-prefix fragment SOURCE (mentions + aliases incl. spoken) for the
+// per-command "<prefix> <verb> <args>" matchers that capture the rest — they
+// interpolate this so they share one prefix definition (and gain spoken forms).
+const SEEKDEEP_ADDRESS_PREFIX_SRC = '(?:<@!?\\d+>|<@&\\d+>|@?(?:' + _seekdeepLeadAlt + ')\\b)';
 
 // Does this text name/address the bot? Solid name anywhere, OR a spoken form at
 // the start. (Callers handle real <@id> mention tags before reaching here.)
@@ -13450,7 +13454,7 @@ async function seekdeepSearchArchiveByPrompt(target = null, query = '', limit = 
 
 function seekdeepArchiveSearchQueryFromMessage(value = '') {
   const raw = String(value || '').toLowerCase();
-  const m = raw.match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)?\s*archive\s+search\s+(.+)$/i);
+  const m = raw.match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '?\\s*archive\\s+search\\s+(.+)$', 'i'));
   return m ? String(m[1] || '').trim() : '';
 }
 // SEEKDEEP_ARCHIVE_SEARCH_END
@@ -13551,7 +13555,7 @@ function seekdeepFormatConversationSearchResults(results, query) {
 }
 
 function seekdeepConversationSearchQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+search\s+(.+)$/i);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+search\\s+(.+)$', 'i'));
   return m ? String(m[1] || '').trim() : '';
 }
 // SEEKDEEP_CONVERSATION_SEARCH_END
@@ -13671,7 +13675,7 @@ function seekdeepUserCanChangePersona(message) {
 
 async function seekdeepHandlePersonaCommand(message, raw = '') {
   const p = String(raw || message?.content || '').trim();
-  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(p, '').trim();
 
   // Custom-persona subcommands. Handled before the standard switch so the
   // slug regex doesn't have to enumerate every user-defined name.
@@ -14128,7 +14132,7 @@ function seekdeepGetUserMemoryPresetsLines(userId = '') {
 
 async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
   const p = String(raw || message?.content || '').trim();
-  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(p, '').trim();
   // Patterns: "memory presets", "memory preset add brief", "memory preset remove brief",
   // "memory preset list", "memory preset clear"
   const showMatch = /^memory\s+presets?(?:\s+(?:list|show))?$/i.exec(stripped);
@@ -14257,7 +14261,7 @@ function seekdeepComposeUserSystemBlock(presetLines = [], factLines = []) {
 
 async function seekdeepHandleRememberCommand(message, raw = '') {
   const p = String(raw || message?.content || '').trim();
-  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(p, '').trim();
 
   const recallMatch = /^(?:recall|memories|facts|what\s+do\s+you\s+remember(?:\s+about\s+me)?)\s*$/i.exec(stripped);
   const rememberMatch = /^remember\s+(.+)$/is.exec(stripped);
@@ -14523,7 +14527,7 @@ function seekdeepTemplateNameSanitize(raw = '') {
 
 async function seekdeepHandleTemplateCommand(message, raw = '') {
   const p = String(raw || message?.content || '').trim();
-  const stripped = p.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(p, '').trim();
 
   // Must start with "template" or "templates"
   if (!/^templates?\b/i.test(stripped)) return false;
@@ -14939,7 +14943,7 @@ async function seekdeepPromptsBumpImportCounter(shareMessage) {
 async function seekdeepHandlePromptsChannelAdminCommand(message, raw = '') {
   // `@SeekDeep prompts channel here` (admin) -- sets the prompts channel for this server.
   // Pattern intentionally mirrors `archive channel here`.
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const m = stripped.match(/^prompts?\s+channel\s+(here|<#(\d+)>|#?(\S+))(?:\s|$)/i);
   if (!m) return false;
   if (!message?.guild?.id) {
@@ -14981,7 +14985,7 @@ async function seekdeepHandlePromptsChannelAdminCommand(message, raw = '') {
 async function seekdeepHandleTemplateShareCommand(message, raw = '') {
   // `@SeekDeep template share <name>` -- posts the named template as an
   // embed in the configured #prompts channel.
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const m = stripped.match(/^templates?\s+share\s+(.+)$/i);
   if (!m) return false;
   if (!message?.guild?.id) {
@@ -15060,7 +15064,7 @@ async function seekdeepHandleTemplateEditCommand(message, raw = '') {
   // (or tombstone-and-repost past the configured age threshold).
   // Distinct from `template save <name>: <body>` which auto-pushes shares
   // but doesn't surface the age decision back to the user.
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const m = stripped.match(/^templates?\s+edit\s+([a-zA-Z0-9_-]+)\s*[:\s]\s*(.+)$/is);
   if (!m) return false;
   if (!message?.guild?.id) {
@@ -15370,25 +15374,25 @@ async function seekdeepResolveSourceImage(target) {
 }
 
 function seekdeepImg2ImgQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+img2img(?:\s+(.+))?$/is);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+img2img(?:\\s+(.+))?$', 'is'));
   if (!m) return null;
   return String(m[1] || '').trim();
 }
 
 function seekdeepPix2PixQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+pix2pix(?:\s+(.+))?$/is);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+pix2pix(?:\\s+(.+))?$', 'is'));
   if (!m) return null;
   return String(m[1] || '').trim();
 }
 
 function seekdeepInpaintQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+inpaint(?:\s+(.+))?$/is);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+inpaint(?:\\s+(.+))?$', 'is'));
   if (!m) return null;
   return String(m[1] || '').trim();
 }
 
 function seekdeepInpaintPreviewQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+(?:inpaint|mask)\s+preview(?:\s+(.+))?$/is);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+(?:inpaint|mask)\\s+preview(?:\\s+(.+))?$', 'is'));
   if (!m) return null;
   return String(m[1] || '').trim();
 }
@@ -15400,7 +15404,7 @@ function seekdeepInpaintPreviewQueryFromStrippedPrompt(prompt = '') {
 }
 
 function seekdeepPromptDebugQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+prompt\s+debug(?:\s+last)?\s*$/i);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+prompt\\s+debug(?:\\s+last)?\\s*$', 'i'));
   return m ? true : false;
 }
 
@@ -15409,7 +15413,7 @@ function seekdeepPromptDebugQueryFromStrippedPrompt(prompt = '') {
 }
 
 function seekdeepUpscaleQueryFromMessage(raw = '') {
-  const m = String(raw || '').match(/^\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s+upscale\b\s*(.*)?$/is);
+  const m = String(raw || '').match(new RegExp('^\\s*' + SEEKDEEP_ADDRESS_PREFIX_SRC + '\\s+upscale\\b\\s*(.*)?$', 'is'));
   if (!m) return null;
   const body = String(m[1] || '').trim();
   const scaleMatch = body.match(/(\d)x/i);
@@ -15932,7 +15936,7 @@ async function seekdeepHandleStatsChart(target, guildId, guildName = '') {
 }
 
 async function seekdeepHandleStatsCommand(message, raw = '') {
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   // "stats chart" — render a 30-day activity chart.
   if (/^stats\s+chart\s*$/i.test(stripped)) {
     return seekdeepHandleStatsChart(message, message.guild?.id, message.guild?.name || '');
@@ -16002,7 +16006,7 @@ async function seekdeepPostDailyDigests() {
 }
 
 async function seekdeepHandleDigestChannelCommand(message, raw = '') {
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const m = /^digest\s+channel\s+(here|off|here\s+please)\s*$/i.exec(stripped);
   if (!m) return false;
   if (!seekdeepUserCanChangePersona(message)) {
@@ -16142,7 +16146,7 @@ async function seekdeepAutoTranslateMessage(message) {
 }
 
 async function seekdeepHandleAutoTranslateChannelCommand(message, raw = '') {
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const m = /^translate\s+channel\s+(here|off)\s*$/i.exec(stripped);
   if (!m) return false;
   if (!seekdeepUserCanChangePersona(message)) {
@@ -16439,7 +16443,7 @@ function seekdeepNewReactionRuleId() {
 }
 
 async function seekdeepHandleReactRuleCommand(message, raw = '') {
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   // Only react on commands that start with "reactrule" or "react rule".
   if (!/^react\s*rule\b/i.test(stripped)) return false;
 
@@ -16736,7 +16740,7 @@ async function seekdeepEmojiVaultBuildZip(emojis, { guildName = 'server', maxByt
 }
 
 async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   if (!/^emoji\s+(backup|export|import|restore|count|list)\b/i.test(stripped)) return false;
 
   // v10.4.3: feature-flagged off by default so we don't step on demonbot's
@@ -17513,7 +17517,7 @@ async function seekdeepHandleArchiveOptOutCommand(message, raw = '') {
   // `@SeekDeep archive opt-out` toggles the user's opt-out state.
   // `@SeekDeep archive opt-in` re-enables notifies for this user.
   // `@SeekDeep archive opt-out status` reports current state without changing it.
-  const stripped = String(raw || message?.content || '').replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@?seekdeep|@?seekotics)\s*)+/i, '').trim();
+  const stripped = seekdeepStripLeadingAddress(String(raw || message?.content || ''), '').trim();
   const optOutMatch = /^archive\s+opt[-\s]?out(?:\s+(status|on|off))?\s*$/i.exec(stripped);
   const optInMatch  = /^archive\s+opt[-\s]?in\s*$/i.exec(stripped);
   if (!optOutMatch && !optInMatch) return false;
