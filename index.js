@@ -16344,12 +16344,23 @@ async function seekdeepApplyAutoReactions(message) {
     // filter(Boolean) drops any undefined/empty emoji (e.g. a built-in whose
     // emoji somehow went missing) so we never call message.react(undefined).
     const emojiList = Array.from(toReact).filter(Boolean).slice(0, 5);
-    for (const emoji of emojiList) {
-      try {
-        const resolved = await seekdeepResolveEmojiForReact(emoji, message.guild);
-        await message.react(resolved);
-      } catch (err) {
-        // Custom emoji not in this guild, or unicode rejected: ignore quietly.
+    if (emojiList.length) {
+      const reacted = [];
+      const failed = [];
+      for (const emoji of emojiList) {
+        try {
+          const resolved = await seekdeepResolveEmojiForReact(emoji, message.guild);
+          await message.react(resolved);
+          reacted.push(String(emoji));
+        } catch (err) {
+          // A custom emoji from another guild legitimately can't be used, but a
+          // "Missing Permissions" / Add-Reactions failure is a real problem we
+          // were silently swallowing. Record both so it's actually debuggable.
+          failed.push(`${emoji}:${(err && err.message) || err}`);
+        }
+      }
+      if (reacted.length || failed.length) {
+        console.log(`[auto-react] guild=${message.guild.id} ch=${message.channel?.id || '?'} reacted=[${reacted.join(' ')}]${failed.length ? ` FAILED=[${failed.join(' ')}]` : ''}`);
       }
     }
   } catch (err) {
