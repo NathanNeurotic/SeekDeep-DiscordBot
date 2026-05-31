@@ -7809,6 +7809,7 @@ function seekdeepHelpText(source = null) {
   const folder = String.fromCodePoint(0x1F5C3);
   const counter = String.fromCodePoint(0x1F522);
   const clock = String.fromCodePoint(0x1F558);
+  const gear = String.fromCodePoint(0x2699);
   const bullet = '\u2022';
 
   return [
@@ -7969,6 +7970,18 @@ function seekdeepHelpText(source = null) {
     '/say text:<text> channel:<#chan> image_url:<url>   (admin anonymous post)',
     '```',
     'Admin-only: persona + digest + translate + /say.',
+    '',
+    '## ' + gear + ' Configuration',
+    'Every setting is editable in the SeekDeep desktop app → **All Settings** — searchable, grouped, typed, with a one-click **↻ Restart bot** to apply. No file editing, no terminal.',
+    '```text',
+    'Change these right here in Discord too:',
+    '  ' + prefix + ' reactrule menu   ·   /reacttoggle    (auto-reactions: on/off + emoji)',
+    '  ' + prefix + ' persona ...                          (personality)',
+    '  ' + prefix + ' digest channel here|off              (daily digest)',
+    '  ' + prefix + ' translate channel here|off           (auto-translate)',
+    '  ' + prefix + ' archive setup here                   (image archive)',
+    'Models, VRAM, web search, image-gen, feature flags, and the rest: App → All Settings.',
+    '```',
     '',
     // Auto-reactions block is gated by SEEKDEEP_FEATURE_AUTO_REACT (default
     // off) for the same demonbot-coexistence reason as the emoji vault. When
@@ -16033,7 +16046,7 @@ async function seekdeepHandleDigestChannelCommand(message, raw = '') {
   } else {
     overrides.guilds[guildId].digestChannelId = String(message.channel?.id || '');
     seekdeepWritePersonaOverrides(overrides);
-    await message.reply({ content: `Daily digest will post here. Set SEEKDEEP_DAILY_DIGEST=on in .env and restart to activate.`, allowedMentions: { repliedUser: false } });
+    await message.reply({ content: `Daily digest will post here once it’s enabled: SeekDeep app → All Settings (search “digest”) → turn it on → ↻ Restart bot.`, allowedMentions: { repliedUser: false } });
   }
   return true;
 }
@@ -19342,7 +19355,7 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
     if (inpaintPreviewTarget !== null) {
       if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('inpaint-preview', `remove="${inpaintPreviewTarget}"`);
       if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
-        await message.reply({ content: 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        await message.reply({ content: 'Inpainting isn’t enabled. Turn it on in the SeekDeep app → All Settings (search “inpaint”) → ↻ Restart bot.', allowedMentions: { repliedUser: false } });
         return true;
       }
       if (!inpaintPreviewTarget) {
@@ -19362,7 +19375,7 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
     const inpaintTarget = seekdeepInpaintQueryFromMessage(seekdeepArchiveOpenRawContent);
     if (inpaintTarget !== null) {
       if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
-        await message.reply({ content: 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.', allowedMentions: { repliedUser: false } });
+        await message.reply({ content: 'Inpainting isn’t enabled. Turn it on in the SeekDeep app → All Settings (search “inpaint”) → ↻ Restart bot.', allowedMentions: { repliedUser: false } });
         return true;
       }
       if (!inpaintTarget) {
@@ -19840,7 +19853,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
       if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('inpaint-preview', `remove="${strippedInpaintPreviewTarget}"`);
       if (!SEEKDEEP_FEATURE_INPAINT_ENABLED) {
         seekdeepSetResponseModel(message, seekdeepNoModelLabel());
-        await sendLongMessageReply(message, 'Inpainting is not enabled. Set `SEEKDEEP_FEATURE_INPAINT=on` in `.env` to enable it.');
+        await sendLongMessageReply(message, 'Inpainting isn’t enabled. Turn it on in the SeekDeep app → All Settings (search “inpaint”) → ↻ Restart bot.');
         return;
       }
       if (!strippedInpaintPreviewTarget) {
@@ -22257,7 +22270,7 @@ client.on('interactionCreate', async (interaction) => {
         let captured = '';
         const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
         const handled = await seekdeepHandleReactRuleCommand(adapter, raw);
-        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Auto-react rules are disabled on this bot (set SEEKDEEP_FEATURE_AUTO_REACT=on).')));
+        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Auto-react is disabled. Enable it in the SeekDeep app → All Settings (search “auto react”) → ↻ Restart bot.')));
       } catch (err) {
         try { await sendLongInteractionReply(interaction, asTextBlock(`reactrule failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
       }
@@ -22272,7 +22285,7 @@ client.on('interactionCreate', async (interaction) => {
         let captured = '';
         const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
         const handled = await seekdeepHandleEmojiVaultCommand(adapter, `emoji ${sub}`);
-        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Emoji vault is disabled on this bot (set SEEKDEEP_FEATURE_EMOJI_VAULT=on).')));
+        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Emoji vault is disabled. Enable it in the SeekDeep app → All Settings (search “emoji vault”) → ↻ Restart bot.')));
       } catch (err) {
         try { await sendLongInteractionReply(interaction, asTextBlock(`emoji failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
       }
