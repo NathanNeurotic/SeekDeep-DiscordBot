@@ -803,7 +803,7 @@ DATA.forEach(sec => {
         </div>
       </div>
       <div class="cmd-desc">${c.desc}</div>
-      ${c.flag ? `<div class="cmd-flag" data-flag-key="${String(c.flag).split('=')[0].trim()}"><span class="mono">▸ ${String(c.flag).split('=')[0].trim()}</span><button type="button" class="ff-toggle" aria-pressed="false" title="Toggle this feature in .env (restart the bot to apply)">···</button></div>` : ''}
+      ${c.flag ? `<div class="cmd-flag" data-flag-key="${String(c.flag).split('=')[0].trim()}"><span class="mono">▸ ${String(c.flag).split('=')[0].trim()}</span><button type="button" class="ff-toggle" aria-pressed="false" title="Toggle this feature — saved instantly; a one-click Restart bar appears to apply it">···</button></div>` : ''}
     `;
     grid.appendChild(card);
   });
@@ -899,6 +899,36 @@ applyFilter();
         cells.forEach(cell => paint(cell, !!f[cell.dataset.flagKey]));
       } catch (_) { /* server not up yet — leave toggles in the '···' state */ }
     }
+    // In-place "apply" affordance: a feature flag is an .env change, so it
+    // needs a bot restart — but the user shouldn't be told to go do it. After
+    // any toggle we surface a one-click Restart bar (same /launcher/bot/restart
+    // the All Settings page uses); rapid toggles reuse the one bar.
+    let _restartBar = null;
+    function showRestartBar() {
+      if (_restartBar) { _restartBar.style.display = 'flex'; return; }
+      const bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;gap:10px;align-items:center;background:var(--hull-1,#11151c);border:1px solid var(--good,#3ba55d);border-radius:8px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.45);font-size:12px;';
+      const label = document.createElement('span');
+      label.textContent = 'Feature change saved.';
+      const btn = document.createElement('button');
+      btn.className = 'btn'; btn.textContent = '↻ Restart bot to apply';
+      btn.style.cssText = 'padding:6px 12px;font-size:12px;cursor:pointer;';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '↻ Restarting…';
+        try {
+          const r = await fetch(base() + '/launcher/bot/restart', { method: 'POST', signal: AbortSignal.timeout(15000) });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          window.SeekDeepNotify?.toast?.({ tone: 'good', title: 'Bot restarting…', body: 'Your changes are being applied (~15s).', ttl: 6000 });
+          bar.style.display = 'none';
+        } catch (e) {
+          window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Restart request failed', body: String((e && e.message) || e) + '. Try again.', ttl: 6000 });
+          btn.disabled = false; btn.textContent = '↻ Restart bot to apply';
+        }
+      });
+      bar.appendChild(label); bar.appendChild(btn);
+      document.body.appendChild(bar);
+      _restartBar = bar;
+    }
     async function toggle(cell) {
       const key = cell.dataset.flagKey;
       const next = cell.dataset.on === '1' ? 'off' : 'on';
@@ -912,7 +942,8 @@ applyFilter();
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         paint(cell, next === 'on');
-        window.SeekDeepNotify?.toast?.({ tone: next === 'on' ? 'good' : 'info', title: key, body: (next === 'on' ? 'enabled' : 'disabled') + ' · restart the bot to apply', ttl: 4000 });
+        window.SeekDeepNotify?.toast?.({ tone: next === 'on' ? 'good' : 'info', title: key, body: (next === 'on' ? 'enabled' : 'disabled') + ' · click Restart to apply', ttl: 4000 });
+        showRestartBar();
       } catch (e) {
         paint(cell, prev);
         window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Toggle failed', body: String((e && e.message) || e), ttl: 6000 });

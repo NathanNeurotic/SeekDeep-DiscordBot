@@ -16369,7 +16369,7 @@ function seekdeepBuildReactToggleEmbed(guild, data) {
   const customCount = Array.isArray(bucket.rules) ? bucket.rules.length : 0;
   if (customCount) lines.push(`\n➕ **${customCount}** custom rule${customCount === 1 ? '' : 's'} — manage with \`/reactrule\``);
   if (!SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) {
-    lines.push('\n⚠️ Auto-React is **globally off** — toggles are saved, but nothing fires until `SEEKDEEP_FEATURE_AUTO_REACT=on` (Settings → restart).');
+    lines.push('\n⚠️ Auto-React is **globally off** — your choices here are saved, but nothing fires until it’s enabled in the SeekDeep app: **All Settings → search “auto react” → turn it on → ↻ Restart bot**.');
   }
   const embed = new EmbedBuilder()
     .setTitle('⚡ Auto-Reactions')
