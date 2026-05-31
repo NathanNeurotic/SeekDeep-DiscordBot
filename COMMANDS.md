@@ -252,10 +252,11 @@ Every task is reachable both conversationally (`@SeekDeep …`) and as a slash c
 | `/digest here\|off` | `@SeekDeep digest channel here\|off` | Admin |
 | `/translate text:<text>` | reply `@SeekDeep translate this` · right-click **Translate** | Everyone |
 | `/translate channel here\|off` | `@SeekDeep translate channel here\|off` | Admin |
-| `/archive status\|me\|shared\|user\|search\|count\|config\|setup` | `@SeekDeep archive …` | Everyone / Admin |
-| `/reactrule list\|add\|remove\|toggle\|builtin\|export` | `@SeekDeep reactrule …` | Manage Msgs |
+| `/archive status\|me\|shared\|user\|search\|count\|config\|setup\|clean` | `@SeekDeep archive …` | Everyone / Admin |
+| `/archive clean older_than:<age>` | `@SeekDeep archive clean older than <age>` → confirm | Everyone (own archive) |
+| `/reactrule list\|add\|remove\|toggle\|builtin\|export\|import` | `@SeekDeep reactrule …` | Manage Msgs |
 | `/reacttoggle` | `@SeekDeep reactrule menu` — interactive on/off buttons + GIF | Manage Msgs |
-| `/emoji backup\|count\|list` | `@SeekDeep emoji …` *(feature-flagged)* | Manage Msgs |
+| `/emoji backup\|count\|list\|import` | `@SeekDeep emoji …` *(feature-flagged)* | Manage Msgs |
 
 **Intentionally single-style** (a second style would defeat the command's purpose, so these are left as-is):
 
@@ -263,4 +264,4 @@ Every task is reachable both conversationally (`@SeekDeep …`) and as a slash c
 - 📥 / 🗑 / 🔁 reaction shortcuts — reaction-only by nature.
 - **Inspect (SeekDeep)** / **Compare with previous** — context-menu only; they act on a specific right-clicked message.
 
-**Deferred follow-ups:** `/archive clean` (destructive bulk-delete with a confirm-flow), the `import` sub-actions of `/reactrule` + `/emoji` (need an uploaded-file path), and an "Archive this" message context-menu.
+All previously-deferred follow-ups are now shipped: `/archive clean` (destructive bulk-delete with a button confirm-flow), the `import` sub-actions of `/reactrule` + `/emoji` (slash attachment option), and the **Archive (SeekDeep)** message context-menu.

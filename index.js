@@ -9151,7 +9151,9 @@ const commands = [
       .addIntegerOption((o) => o.setName('count').setDescription('New count').setRequired(true).setMinValue(0)))
     .addSubcommand((s) => s.setName('config').setDescription('Show archive configuration status (admin).'))
     .addSubcommand((s) => s.setName('setup').setDescription('Configure the server archive channel (admin).')
-      .addChannelOption((o) => o.setName('channel').setDescription('Channel to use (default: here)').setRequired(false))),
+      .addChannelOption((o) => o.setName('channel').setDescription('Channel to use (default: here)').setRequired(false)))
+    .addSubcommand((s) => s.setName('clean').setDescription('Delete your archived images older than a given age (with confirm).')
+      .addStringOption((o) => o.setName('older_than').setDescription('Age, e.g. 7d, 2w, 1m, 24h').setRequired(true))),
   new SlashCommandBuilder()
     .setName('reactrule')
     .setDescription('Auto-reaction rules for this server (Manage Messages).')
@@ -9174,13 +9176,17 @@ const commands = [
       .addStringOption((o) => o.setName('state').setDescription('on or off').setRequired(false)
         .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }))
       .addStringOption((o) => o.setName('emoji').setDescription('New reaction emoji (paste it; overrides state)').setRequired(false)))
-    .addSubcommand((s) => s.setName('export').setDescription('Attach a JSON of the current rules.')),
+    .addSubcommand((s) => s.setName('export').setDescription('Attach a JSON of the current rules.'))
+    .addSubcommand((s) => s.setName('import').setDescription('Replace rules from an exported JSON file.')
+      .addAttachmentOption((o) => o.setName('file').setDescription('A JSON file from reactrule export').setRequired(true))),
   new SlashCommandBuilder()
     .setName('emoji')
     .setDescription('Emoji vault (Manage Messages; requires SEEKDEEP_FEATURE_EMOJI_VAULT=on).')
     .addSubcommand((s) => s.setName('backup').setDescription('Create the emoji thread with previews + JSON + ZIP.'))
     .addSubcommand((s) => s.setName('count').setDescription('Quick count + animated/static split.'))
-    .addSubcommand((s) => s.setName('list').setDescription('Short text list of all custom emojis.')),
+    .addSubcommand((s) => s.setName('list').setDescription('Short text list of all custom emojis.'))
+    .addSubcommand((s) => s.setName('import').setDescription('Re-create emojis from a backup manifest or ZIP.')
+      .addAttachmentOption((o) => o.setName('file').setDescription('The JSON manifest or ZIP from emoji backup').setRequired(true))),
   new SlashCommandBuilder()
     .setName('recent')
     .setDescription('Show recent SeekDeep items.')
@@ -16111,6 +16117,10 @@ function seekdeepInteractionMessageAdapter(interaction, sink, opts = {}) {
   // "@user"-style handlers see the target.
   const mentionUsers = new Map();
   if (opts.mentionUser && opts.mentionUser.id) mentionUsers.set(String(opts.mentionUser.id), opts.mentionUser);
+  // Slash commands carry an attachment via an option, not message.attachments.
+  // Expose it Collection-style (.first()/.size) so handlers that read an
+  // uploaded file (reactrule/emoji import) work unchanged through the adapter.
+  const att = opts.attachment || null;
   return {
     author: interaction.user,
     member: interaction.member,
@@ -16118,6 +16128,7 @@ function seekdeepInteractionMessageAdapter(interaction, sink, opts = {}) {
     channel: interaction.channel || (interaction.channelId ? { id: interaction.channelId } : null),
     client: interaction.client,
     content: opts.content || '',
+    attachments: { first: () => att, size: att ? 1 : 0 },
     mentions: { users: mentionUsers, members: new Map(), roles: new Map(), everyone: false },
     reply: async (payload) => {
       try { sink(typeof payload === 'string' ? payload : (payload && payload.content) || ''); } catch { /* ignore */ }
@@ -19127,6 +19138,93 @@ client.on('messageCreate', async (message) => {
 // of whether @SeekDeep is mentioned. Returns true if a route handled the
 // message (caller should bail), false to continue to the address-gate phase.
 // Logic and error handling are byte-identical to the prior inline implementation.
+// Single source of truth for the destructive archive-clean delete (used by both
+// the conversational "archive clean confirm" and the /archive clean button).
+// Deletes the pending entries, rescans for the true count, saves the profile,
+// and renames the thread. Returns {deleted, failed}.
+async function seekdeepArchiveCleanRunDelete(pending, guildId, userId, subject) {
+  let deleted = 0;
+  let failed = 0;
+  for (const entry of pending.entries) {
+    try {
+      const msg = await pending.thread.messages.fetch(entry.id).catch(() => null);
+      if (msg) { await msg.delete(); deleted++; }
+      else failed++;
+    } catch { failed++; }
+  }
+  // Rescan the thread for the true post-deletion count (don't subtract from a
+  // possibly-inflated profile.count).
+  const scan = await seekdeepArchiveThreadCountExistingEntries(pending.thread);
+  const newCount = scan.ok ? scan.count : Math.max(0, (seekdeepArchiveThreadTrustedCount(seekdeepArchiveThreadGetUserProfile(guildId, userId)) || 0) - deleted);
+  seekdeepArchiveThreadSaveUserProfile(guildId, userId, {
+    count: newCount,
+    countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
+  });
+  try { await seekdeepMaybeRenameArchiveThread(pending.thread, seekdeepArchiveThreadBuildName(subject, newCount)); } catch {}
+  return { deleted, failed };
+}
+
+// /archive clean — slash form. Read-only preview (reuses the same scan/find
+// helpers as the conversational path) then a button confirm that calls the
+// shared delete helper. The conversational router stays untouched.
+async function seekdeepSlashArchiveCleanPreview(interaction, durationMs) {
+  const guildId = interaction.guild?.id || '';
+  const userId = interaction.user?.id || '';
+  if (!guildId) { await sendLongInteractionReply(interaction, asTextBlock('Archive clean only works in a server.')); return; }
+  if (!durationMs) { await sendLongInteractionReply(interaction, asTextBlock('Could not parse the age. Use e.g. 7d, 2w, 1m, 24h.')); return; }
+  const adapter = seekdeepInteractionMessageAdapter(interaction, () => {});
+  const config = seekdeepArchiveThreadReadConfig();
+  const guildConfig = seekdeepArchiveThreadEnsureGuildConfig(config, guildId);
+  const archiveChannelId = guildConfig?.archiveChannelId;
+  if (!archiveChannelId) { await sendLongInteractionReply(interaction, asTextBlock('No archive channel configured. Run `/archive setup` first.')); return; }
+  const channel = await client.channels.fetch(archiveChannelId).catch(() => null);
+  if (!channel) { await sendLongInteractionReply(interaction, asTextBlock('Could not access the archive channel.')); return; }
+  const profile = seekdeepArchiveThreadGetUserProfile(guildId, userId);
+  const member = await seekdeepArchiveThreadResolveMember(adapter, interaction.user);
+  const subject = member?.displayName || interaction.user?.globalName || interaction.user?.username || userId;
+  const thread = await seekdeepFindUserArchiveThreadWithoutCreate(channel, adapter, interaction.user, subject, profile);
+  if (!thread) { await sendLongInteractionReply(interaction, asTextBlock('Could not find your archive thread.')); return; }
+  const scan = await seekdeepArchiveCleanScan(thread, durationMs);
+  if (scan.error) { await sendLongInteractionReply(interaction, asTextBlock('Archive scan failed: ' + scan.error)); return; }
+  const daysLabel = Math.round(durationMs / 86400000);
+  if (!scan.entries.length) { await sendLongInteractionReply(interaction, asTextBlock(`No archive entries older than ${daysLabel} day(s) found (scanned ${scan.scanned}).`)); return; }
+  SEEKDEEP_ARCHIVE_CLEAN_PENDING.set(`${guildId}:${userId}`, { entries: scan.entries, thread, expiresAt: Date.now() + SEEKDEEP_ARCHIVE_CLEAN_TTL_MS });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('seekdeep:archiveclean:confirm').setLabel(`Delete ${scan.entries.length}`).setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('seekdeep:archiveclean:cancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary),
+  );
+  await interaction.editReply({ content: `Found **${scan.entries.length}** archive entries older than ${daysLabel} day(s). This **permanently deletes** them — confirm?`, components: [row] });
+}
+
+// Button handler for the /archive clean confirm/cancel (seekdeep:archiveclean:*).
+async function seekdeepHandleArchiveCleanButton(interaction) {
+  const customId = String(interaction?.customId || '');
+  if (!customId.startsWith('seekdeep:archiveclean:')) return false;
+  const action = customId.split(':')[2];
+  const guildId = interaction.guild?.id || '';
+  const userId = interaction.user?.id || '';
+  const key = `${guildId}:${userId}`;
+  if (action === 'cancel') {
+    SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(key);
+    try { await interaction.update({ content: 'Archive clean cancelled.', components: [] }); } catch {}
+    return true;
+  }
+  const pending = SEEKDEEP_ARCHIVE_CLEAN_PENDING.get(key);
+  if (!pending || Date.now() > pending.expiresAt) {
+    SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(key);
+    try { await interaction.update({ content: 'This confirmation expired. Run `/archive clean` again.', components: [] }); } catch {}
+    return true;
+  }
+  SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(key);
+  try { await interaction.update({ content: '🧹 Deleting…', components: [] }); } catch {}
+  const adapter = seekdeepInteractionMessageAdapter(interaction, () => {});
+  const member = await seekdeepArchiveThreadResolveMember(adapter, interaction.user);
+  const subject = member?.displayName || interaction.user?.globalName || interaction.user?.username || userId;
+  const { deleted, failed } = await seekdeepArchiveCleanRunDelete(pending, guildId, userId, subject);
+  try { await interaction.editReply({ content: `Archive clean complete: **${deleted}** entries deleted${failed ? `, ${failed} failed.` : '.'}`, components: [] }); } catch {}
+  return true;
+}
+
 async function seekdeepProcessPreAddressMessageRoutes(message) {
   try {
     const removedArchiveRawContent = String(message?.content || '');
@@ -19219,27 +19317,9 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
           return true;
         }
         SEEKDEEP_ARCHIVE_CLEAN_PENDING.delete(channelKey);
-        let deleted = 0;
-        let failed = 0;
-        for (const entry of pending.entries) {
-          try {
-            const msg = await pending.thread.messages.fetch(entry.id).catch(() => null);
-            if (msg) { await msg.delete(); deleted++; }
-            else failed++;
-          } catch { failed++; }
-        }
-        // Rescan the thread to get the true count after deletion, instead of
-        // subtracting from profile.count (which may already be inflated).
-        const scan = await seekdeepArchiveThreadCountExistingEntries(pending.thread);
-        const newCount = scan.ok ? scan.count : Math.max(0, (seekdeepArchiveThreadTrustedCount(seekdeepArchiveThreadGetUserProfile(guildId, userId)) || 0) - deleted);
-        seekdeepArchiveThreadSaveUserProfile(guildId, userId, {
-          count: newCount,
-          countSource: SEEKDEEP_ARCHIVE_COUNT_SOURCE,
-        });
         const member = await seekdeepArchiveThreadResolveMember(message, message.author);
         const subject = member?.displayName || message.author?.globalName || message.author?.username || userId;
-        const newName = seekdeepArchiveThreadBuildName(subject, newCount);
-        try { await seekdeepMaybeRenameArchiveThread(pending.thread, newName); } catch {}
+        const { deleted, failed } = await seekdeepArchiveCleanRunDelete(pending, guildId, userId, subject);
         await message.reply({ content: `Archive clean complete: **${deleted}** entries deleted` + (failed ? `, ${failed} failed.` : '.'), allowedMentions: { repliedUser: false } });
         return true;
       }
@@ -21999,6 +22079,22 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // /archive clean confirm/cancel buttons.
+  try {
+    if (interaction?.isButton?.() && String(interaction.customId || '').startsWith('seekdeep:archiveclean:')) {
+      const handled = await seekdeepHandleArchiveCleanButton(interaction);
+      if (handled) return;
+    }
+  } catch (err) {
+    console.error('Archive clean button handler failed:', err?.stack || err?.message || err);
+    try {
+      const payload = { content: 'Archive clean failed: ' + (err?.message || 'unknown error'), flags: MessageFlags.Ephemeral };
+      if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
+      else await interaction.reply(payload);
+    } catch {}
+    return;
+  }
+
   // Legacy modal route — kept for any in-flight `seekdeep:force-react:*`
   // modals dispatched before v10.4.1's picker rewrite landed. New code path
   // uses the paginated picker above; this branch will fall through cleanly
@@ -22236,6 +22332,12 @@ client.on('interactionCreate', async (interaction) => {
           await sendLongInteractionReply(interaction, asTextBlock(content));
           return;
         }
+        if (sub === 'clean') {
+          // Destructive — preview + button confirm (does its own reply).
+          const dur = seekdeepParseCleanDuration(String(interaction.options.getString('older_than') || '').trim());
+          await seekdeepSlashArchiveCleanPreview(interaction, dur);
+          return;
+        }
         const userOpt = interaction.options.getUser?.('user') || null;
         let captured = '';
         const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; }, { mentionUser: userOpt });
@@ -22287,7 +22389,8 @@ client.on('interactionCreate', async (interaction) => {
       }
       try {
         let captured = '';
-        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+        const importFile = sub === 'import' ? (interaction.options.getAttachment?.('file') || null) : null;
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; }, importFile ? { attachment: importFile } : {});
         const handled = await seekdeepHandleReactRuleCommand(adapter, raw);
         await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Auto-react is disabled. Enable it in the SeekDeep app → All Settings (search “auto react”) → ↻ Restart bot.')));
       } catch (err) {
@@ -22302,7 +22405,8 @@ client.on('interactionCreate', async (interaction) => {
       const sub = String(interaction.options.getSubcommand() || '').toLowerCase();
       try {
         let captured = '';
-        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+        const importFile = sub === 'import' ? (interaction.options.getAttachment?.('file') || null) : null;
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; }, importFile ? { attachment: importFile } : {});
         const handled = await seekdeepHandleEmojiVaultCommand(adapter, `emoji ${sub}`);
         await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Emoji vault is disabled. Enable it in the SeekDeep app → All Settings (search “emoji vault”) → ↻ Restart bot.')));
       } catch (err) {
