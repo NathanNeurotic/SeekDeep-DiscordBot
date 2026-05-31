@@ -16220,6 +16220,20 @@ function seekdeepReadAutoReactions() {
     const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, 'utf8'));
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
+    // Backfill default emoji/threshold onto any built-in that has state but is
+    // missing its emoji (e.g. enabled via a path that dropped it). Without this
+    // the apply loop adds `undefined`, the per-emoji catch swallows it, and an
+    // "enabled" built-in silently never fires. Read-only fill (not persisted).
+    for (const bucket of Object.values(parsed.guilds)) {
+      if (!bucket || !bucket.builtins || typeof bucket.builtins !== 'object') continue;
+      for (const [key, defaults] of Object.entries(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT)) {
+        const b = bucket.builtins[key];
+        if (b && typeof b === 'object') {
+          if (!b.emoji) b.emoji = defaults.emoji;
+          if (defaults.threshold != null && b.threshold == null) b.threshold = defaults.threshold;
+        }
+      }
+    }
     return parsed;
   } catch { return { guilds: {} }; }
 }
@@ -16327,7 +16341,9 @@ async function seekdeepApplyAutoReactions(message) {
     }
 
     // Cap at 5 reactions per message (Discord allows more but it gets noisy).
-    const emojiList = Array.from(toReact).slice(0, 5);
+    // filter(Boolean) drops any undefined/empty emoji (e.g. a built-in whose
+    // emoji somehow went missing) so we never call message.react(undefined).
+    const emojiList = Array.from(toReact).filter(Boolean).slice(0, 5);
     for (const emoji of emojiList) {
       try {
         const resolved = await seekdeepResolveEmojiForReact(emoji, message.guild);

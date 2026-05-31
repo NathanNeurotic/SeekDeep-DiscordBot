@@ -23,6 +23,15 @@ if (!process.env.SEEKDEEP_FEATURE_INPAINT) {
   process.env.SEEKDEEP_FEATURE_INPAINT = 'on';
 }
 
+// The reaction features (auto-react, emoji-vault, force-react) are asserted in
+// their OFF state below (the help-text "section omitted when off" guards). Force
+// them off here so the suite is deterministic regardless of the developer's .env
+// — index.js reads these flags at import, and dotenv won't override an
+// already-set var, so setting them before the import wins.
+process.env.SEEKDEEP_FEATURE_AUTO_REACT = 'off';
+process.env.SEEKDEEP_FEATURE_EMOJI_VAULT = 'off';
+process.env.SEEKDEEP_FEATURE_FORCE_REACT = 'off';
+
 import { spawnSync } from 'node:child_process';
 
 let pass = 0;
