@@ -6,6 +6,39 @@ Last full audit: 2026-05-24 (GUI + backend stack)
 
 ---
 
+## QA Feedback — GLP-2 Roooo session (2026-05-31)
+
+Live QA + ideation session with collaborator **GLP-2 Roooo** (credit their GitHub for the QA role). The raw chat was dictation-heavy; distilled below. Nothing here is a commitment — parking lot.
+
+**Validated (working well — recorded, no action):** auto-react fires cleanly on **links + forwarded** messages with good built-in emoji choices; the reaction-toggle menu "beats the tester's own bot"; GUI praised overall.
+
+### Concrete / near-term
+
+- **Reaction-toggle menu — loading GIF restarts on every timer update.** The live countdown re-renders the embed, which restarts the animated GIF each refresh (it was "smoother before the timer"). Fix: measure the GIF's exact loop length and align the timer-refresh cadence to the loop boundary (or update the countdown without re-sending the animated attachment) so the GIF only restarts when it naturally loops. *(Small, well-defined.)*
+- **Add `seek deep` + `sick deep` address prefixes.** Recognize the spaced "seek deep" and the phonetic "sick deep" as bot prefixes — specifically for voice-to-text / dictation users who say the name aloud. *(Small.)*
+- **GUI is "nice but over-complex" for new users.** Continue the simplification arc (reactrule-form examples panel + the All Settings page were steps). Audit for over-complexity; add progressive disclosure / inline guidance. Pairs with the new-user friction already seen on the reactrule form.
+
+### Asset hosting — move off GitHub onto the SeekDeep domain (Cloudflare)
+
+- **Host web + bot art assets on the domain, not GitHub.** Put emoji/expression art, animation frames, and site images in a domain `/resources` folder via Cloudflare Pages/Workers (`*.pages.dev` / a SeekDeep domain). Rationale (GLP): GitHub is public + messy, and a *private* repo needs an API key just to fetch an image; a domain folder is clean, stable, "legit attached to SeekDeep as a company," and trivial to manage (drop files in a deploy; remove by excluding + pruning old deployments).
+  - **Scope clarified with Nathan:** GitHub stays the **installer/source distribution** only; the AI API is **localized** (no change there). This is about the **website + Discord-side visual assets** so the chatbot UI "has all its resources right there and doesn't fetch anything." Prefer bundling assets **locally in the app** where possible (no runtime internet dependency); use the domain for the marketing site + any Discord emoji/GIF hosting.
+  - Sub-idea: upload custom emojis directly to the **bot's Discord application** (application emojis) rather than GitHub.
+
+### Creative / branding — medium-term
+
+- **Animated SeekDeep mascot that emotes.** SeekDeep already has many animation frames. (1) **Website:** a chat avatar whose **expression changes as it types / responds**, keyed to the sentiment/content of the output (cycles emotions while generating). (2) Landing: "three rotating SeekDeeps." (3) **Discord:** during long generations (image gen ~40s), cycle the "preparing/generating" art through expressions instead of one static GIF.
+- **Named expression library → auto-suggest personas / reaction-rules / bios.** Isolate + name every expression emoji, then feed the named set to a suggester so the bot proposes personas / reaction rules / bios to pick from (mirrors GLP's naming experience: name them, then the bot generates options to choose).
+
+### Aspirational — north-star, not near-term
+
+- **Own / fine-tuned model + paid tier + Neurotic branding.** Eventually train/own a model (heavy infra: multi-TB storage, worker nodes off domain storage) and monetize; brand it **Neuralotics / Neural-cotics**. Reality check (Nathan): today it's a high-quality **wrapper** over existing models; real training is weeks+ of intense work. The internet-access design means the wrapper "never goes stale," so this stays a north-star.
+
+### Marketing / community
+
+- **Credit GLP-2 Roooo's GitHub** (QA role) in the project. Address the discoverability gap ("really nice features, zero marketing") — "premium recommendation" positioning.
+
+---
+
 ## GUI / Backend Stack — Post-`5cd770b` Queue (2026-05-24)
 
 The "GUI shipped + backend wired" arc landed across ~40 commits ending at `5cd770b`. Token auth, WebSocket bridge, 7 live event topics, CI, version SoT, VRAM hardening, **all 5 chat backends (hf / ollama / openai-compat / anthropic / gemini)**, `POST /model/install`, telemetry disclaimer, etc. — all live.
