@@ -5048,6 +5048,27 @@ def register_gui_endpoints(
     import re as _re_for_vars
     _PROMPT_VAR_RE = _re_for_vars.compile(r"\{\{\s*([a-z0-9_-]{1,40})\s*\}\}", _re_for_vars.IGNORECASE)
 
+    # ----- GET /prompts/channels -----
+    # The #prompts channels admins have configured ("@SeekDeep prompts channel
+    # here"), read from the bot's archive-guild-config.json. Lets the Prompts page
+    # deep-link straight into the Discord desktop client
+    # (discord://-/channels/<guild>/<channel>) instead of telling the user to find
+    # the channel by hand. IDs only (not sensitive); open like /config/status.
+    @app.get("/prompts/channels")
+    def get_prompts_channels():
+        out = []
+        try:
+            p = _data_dir / "archive-guild-config.json"
+            if p.is_file():
+                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+                for gid, g in (data.get("guilds") or {}).items():
+                    cid = str((g or {}).get("promptsChannelId") or "").strip()
+                    if cid:
+                        out.append({"guild_id": str(gid), "channel_id": cid})
+        except Exception:
+            pass
+        return {"ok": True, "channels": out}
+
     @app.post("/prompts/template", dependencies=[Depends(_require_gui_token)])
     def post_prompt_template(body: dict):
         guild_id = str((body or {}).get("guild_id") or "").strip()

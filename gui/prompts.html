@@ -860,11 +860,41 @@ The user wants information density, not company.`,
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   });
 
-  $('#jumpChBtn').addEventListener('click', () => {
+  $('#jumpChBtn').addEventListener('click', async () => {
+    // Deep-link straight into the Discord desktop client. The bot stores the
+    // #prompts channel per guild (admin: "@SeekDeep prompts channel here"); we
+    // read it from /prompts/channels and open discord://-/channels/<g>/<c>,
+    // falling back to the https form (which the desktop app also handles).
+    function openDiscord(deepUrl, webUrl) {
+      try {
+        const t = window.__TAURI__;
+        if (t && t.core && typeof t.core.invoke === 'function') {
+          t.core.invoke('open_external', { url: deepUrl })
+            .catch(() => { try { window.open(webUrl, '_blank'); } catch (_) {} });
+          return;
+        }
+      } catch (_) {}
+      try { window.open(webUrl, '_blank'); } catch (_) {}
+    }
+    let channels = [];
+    try {
+      const r = await fetch(templateBase() + '/prompts/channels', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+      if (r.ok) channels = (((await r.json()) || {}).channels) || [];
+    } catch (_) { /* server not up — fall through to the hint */ }
+    if (channels.length) {
+      const wantGuild = (($('#tplGuildId') && $('#tplGuildId').value) || '').trim();
+      const target = channels.find((c) => c.guild_id === wantGuild) || channels[0];
+      openDiscord(
+        `discord://-/channels/${target.guild_id}/${target.channel_id}`,
+        `https://discord.com/channels/${target.guild_id}/${target.channel_id}`,
+      );
+      return;
+    }
+    // No channel configured yet — honest guidance (an admin must opt in once).
     showPromptDiscordHint(
       'Jump to #prompts',
-      `Open Discord → your server → #prompts`,
-      'No deep-link integration with the Discord desktop client yet. Switch to Discord and find the #prompts channel manually.',
+      `@SeekDeep prompts channel here`,
+      'No #prompts channel is configured yet. A server admin runs <span class="mono">@SeekDeep prompts channel here</span> once in the channel they want — then this button jumps you straight into it in the Discord desktop app.',
     );
   });
   $('#newBtn').addEventListener('click', () => {
