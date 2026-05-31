@@ -410,6 +410,7 @@
         window.__SD_SCHEMA = schema;
         emptyEl.style.display = 'none';
         render(schema);
+        jumpToKey();
       } catch (e) {
         emptyEl.textContent = 'Settings server not reachable. Start the AI server, then reload.';
       }
@@ -431,10 +432,36 @@
       }
     }
 
+    // Deep-link: settings.html#SEEKDEEP_X (or ?key=SEEKDEEP_X) opens straight to
+    // that setting — expands its section, scrolls, highlights, focuses it. Lets
+    // any page (docs, ⌘K, a description elsewhere) link to one exact knob.
+    function jumpToKey() {
+      let key = '';
+      try {
+        const h = (location.hash || '').replace(/^#/, '');
+        const q = new URLSearchParams(location.search).get('key') || '';
+        key = decodeURIComponent(h || q || '').trim();
+      } catch (_) {}
+      if (!key) return;
+      const sel = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+      const row = bodyEl.querySelector('.set-row[data-key="' + sel + '"]');
+      if (!row) return;
+      const det = row.closest('.set-sec');
+      if (det) det.open = true;
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const prevBg = row.style.backgroundColor;
+      row.style.transition = 'background-color .25s ease';
+      row.style.backgroundColor = 'rgba(59,165,93,0.18)';
+      setTimeout(() => { row.style.backgroundColor = prevBg || ''; }, 1600);
+      const inp = row.querySelector('input, select, textarea');
+      if (inp) { try { inp.focus({ preventScroll: true }); } catch (_) {} }
+    }
+
     searchEl.addEventListener('input', applyFilter);
     saveBtn.addEventListener('click', save);
     discardBtn.addEventListener('click', discard);
     restartBtn?.addEventListener('click', restartBot);
+    window.addEventListener('hashchange', jumpToKey);
     // Ctrl/Cmd+S saves
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); save(); }

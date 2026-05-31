@@ -803,7 +803,7 @@ DATA.forEach(sec => {
         </div>
       </div>
       <div class="cmd-desc">${c.desc}</div>
-      ${c.flag ? `<div class="cmd-flag" data-flag-key="${String(c.flag).split('=')[0].trim()}"><span class="mono">▸ ${String(c.flag).split('=')[0].trim()}</span><button type="button" class="ff-toggle" aria-pressed="false" title="Toggle this feature — saved instantly; a one-click Restart bar appears to apply it">···</button></div>` : ''}
+      ${c.flag ? `<div class="cmd-flag" data-flag-key="${String(c.flag).split('=')[0].trim()}"><a class="mono" href="settings.html#${String(c.flag).split('=')[0].trim()}" style="color:inherit;text-decoration:underline dotted;text-underline-offset:2px" title="Open this setting in All Settings">▸ ${String(c.flag).split('=')[0].trim()}</a><button type="button" class="ff-toggle" aria-pressed="false" title="Toggle this feature — saved instantly; a one-click Restart bar appears to apply it">···</button></div>` : ''}
     `;
     grid.appendChild(card);
   });
