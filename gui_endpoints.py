@@ -2691,6 +2691,15 @@ def register_gui_endpoints(
     def post_self_update(body: dict | None = None):
         import urllib.request, urllib.error
         ref = str((body or {}).get("ref") or "main").strip()
+        # P0-3: let operators disable remote self-update entirely. Default on
+        # (preserves behavior). SEEKDEEP_SELF_UPDATE_ENABLED=off refuses with 403
+        # — for locked-down installs that should update only via the signed MSI.
+        # This is the switch that turns off writing executable .py over the
+        # running install from a GitHub ref.
+        if str(os.environ.get("SEEKDEEP_SELF_UPDATE_ENABLED", "on")).strip().lower() in ("0", "false", "no", "off"):
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "self-update disabled (SEEKDEEP_SELF_UPDATE_ENABLED=off)"}})
+            raise HTTPException(403, "Self-update is disabled on this install (SEEKDEEP_SELF_UPDATE_ENABLED=off).")
         # Allowlist: main / a tag / a commit SHA. No arbitrary refs.
         if not (ref == "main" or ref.startswith("v") or (7 <= len(ref) <= 40 and all(c in "0123456789abcdef" for c in ref))):
             event_bus.publish_sync({"type": "self-update.failed",
