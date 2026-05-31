@@ -16629,6 +16629,17 @@ function seekdeepResolveEmojiForReact(emoji, guild) {
   return raw;                                                    // assume unicode
 }
 
+// A "GIF link" (Tenor/Giphy/gfycat, or a direct .gif/.png/.mp4/… URL) is media
+// posted AS a URL — Discord renders it inline as an image/animation. It should
+// count as an image, not a "link", so the link_only auto-react (🔗) skips it and
+// image_only (🖼️) claims it instead. (A user posting a GIF was getting 🔗.)
+function seekdeepUrlLooksLikeMedia(url = '') {
+  const u = String(url || '').toLowerCase();
+  if (/(?:tenor|giphy|gfycat)\.com/.test(u)) return true;
+  const pathPart = u.split(/[?#]/)[0];
+  return /\.(?:gif|gifv|png|jpe?g|webp|avif|bmp|mp4|webm|mov)$/.test(pathPart);
+}
+
 async function seekdeepApplyAutoReactions(message) {
   try {
     if (!message?.guild?.id || message.author?.bot) return;
@@ -16660,13 +16671,21 @@ async function seekdeepApplyAutoReactions(message) {
     if (builtins.code_block?.enabled && /```[\s\S]+?```/.test(content)) {
       toReact.add(builtins.code_block.emoji);
     }
+    const trimmedBody = content.trim();
+    const soleUrl = /^https?:\/\/\S+$/i.test(trimmedBody) ? trimmedBody : '';
+    const soleUrlIsMedia = soleUrl ? seekdeepUrlLooksLikeMedia(soleUrl) : false;
     if (builtins.image_only?.enabled) {
-      const hasImage = message.attachments?.some?.((a) => (a?.contentType || '').startsWith('image/'));
-      if (hasImage && !content.trim()) toReact.add(builtins.image_only.emoji);
+      const hasImageAttachment = message.attachments?.some?.((a) => (a?.contentType || '').startsWith('image/'));
+      // Image attachment with no text body, OR a GIF/image posted as a sole link
+      // (Tenor/Giphy/.gif) — both are "an image, no real text".
+      if ((hasImageAttachment && !trimmedBody) || soleUrlIsMedia) {
+        toReact.add(builtins.image_only.emoji);
+      }
     }
     if (builtins.link_only?.enabled) {
-      const trimmed = content.trim();
-      if (/^https?:\/\/\S+$/i.test(trimmed)) toReact.add(builtins.link_only.emoji);
+      // Sole URL → link reaction, but NOT when it's actually media (a GIF/image
+      // link is media, not a link — no 🔗 chain on a posted GIF).
+      if (soleUrl && !soleUrlIsMedia) toReact.add(builtins.link_only.emoji);
     }
 
     // Cap at 5 reactions per message (Discord allows more but it gets noisy).
@@ -22864,6 +22883,7 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     // Auto-reaction toggle menu builders (pure render from guild + data)
     seekdeepBuildReactToggleEmbed,
     seekdeepBuildReactToggleComponents,
+    seekdeepUrlLooksLikeMedia,
     // Help routing
     seekdeepHelpText,
     seekdeepHelpTopicSlice,
