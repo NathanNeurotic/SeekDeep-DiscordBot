@@ -1697,16 +1697,67 @@ function seekdeepBotMentionRegex() {
   return botId ? new RegExp('<@!?' + botId + '>', 'g') : null;
 }
 
+// ============================================================================
+// Canonical bot-name address detection (single source of truth)
+// ----------------------------------------------------------------------------
+// The "is this addressed to SeekDeep?" trigger and the "strip the bot's name
+// off the front of the prompt" cleanup used to be ~20 copy-pasted inline
+// regexes scattered through this file. Adding a new way to say the name meant
+// editing all of them, and they drifted (only one path knew neurabot/plugtalk).
+// New aliases now go in ONE place: the two arrays below.
+//
+//   SOLID  — unambiguous bot names; matched ANYWHERE (a bare "seekdeep"
+//            mid-sentence still engages, preserving prior behavior).
+//   SPOKEN — loose, common-word-ish dictation forms; matched at the START of a
+//            message ONLY, so "I want to seek deep truths" does NOT trigger but
+//            "seek deep, do X" (how a voice-to-text user opens) does.
+//            `seek\s*deep` also matches the solid "seekdeep" spelling.
+const SEEKDEEP_NAME_SOLID = ['seekdeep', 'seekotics', 'neurabot', 'plugtalk'];
+const SEEKDEEP_NAME_SPOKEN = ['seek\\s*deep', 'sick\\s*deep'];
+const _seekdeepSolidAlt = SEEKDEEP_NAME_SOLID.join('|');
+const _seekdeepLeadAlt = SEEKDEEP_NAME_SPOKEN.concat(SEEKDEEP_NAME_SOLID).join('|');
+// Solid name anywhere (test only — NOT global, so no lastIndex state).
+const SEEKDEEP_NAME_ANYWHERE_RE = new RegExp('\\b@?(?:' + _seekdeepSolidAlt + ')\\b', 'i');
+// Solid name tokens, global — for scrubbing the name out of prompt bodies.
+const SEEKDEEP_NAME_GLOBAL_RE = new RegExp('\\b@?(?:' + _seekdeepSolidAlt + ')\\b', 'gi');
+// One bot-name token at the very start (solid + spoken).
+const SEEKDEEP_LEADING_NAME_RE = new RegExp('^\\s*@?(?:' + _seekdeepLeadAlt + ')\\b', 'i');
+// A RUN of leading bot-name tokens, no @mention tags (e.g. "SeekDeep, hi").
+const SEEKDEEP_LEADING_NAME_RUN_RE = new RegExp('^\\s*(?:@?(?:' + _seekdeepLeadAlt + ')\\b[,;:!?-]?\\s*)+', 'i');
+// A RUN of leading @mentions / role-mentions / bot-name tokens — the canonical
+// address-prefix stripper. The `\b` after the alias stops "seek deep" from
+// biting into "seek deeply".
+const SEEKDEEP_LEADING_ADDRESS_RE = new RegExp('^(?:\\s*(?:<@!?\\d+>|<@&\\d+>|@?(?:' + _seekdeepLeadAlt + ')\\b)[,;:!?-]?\\s*)+', 'i');
+
+// Does this text name/address the bot? Solid name anywhere, OR a spoken form at
+// the start. (Callers handle real <@id> mention tags before reaching here.)
+function seekdeepTextAddressesBot(text) {
+  const s = String(text || '');
+  return SEEKDEEP_NAME_ANYWHERE_RE.test(s) || SEEKDEEP_LEADING_NAME_RE.test(s);
+}
+// Strip a leading run of @mentions + bot-name aliases. replacement defaults to
+// ' '; callers that previously stripped to '' pass ''.
+function seekdeepStripLeadingAddress(text, replacement = ' ') {
+  return String(text || '').replace(SEEKDEEP_LEADING_ADDRESS_RE, replacement);
+}
+// Strip a leading run of bot-name aliases only (does not consume @mention tags).
+function seekdeepStripLeadingNames(text, replacement = ' ') {
+  return String(text || '').replace(SEEKDEEP_LEADING_NAME_RUN_RE, replacement);
+}
+// Scrub solid bot-name tokens from anywhere in the text.
+function seekdeepStripNameTokens(text, replacement = ' ') {
+  return String(text || '').replace(SEEKDEEP_NAME_GLOBAL_RE, replacement);
+}
+// ============================================================================
+
 function stripBotMentions(content) {
   let text = String(content || '');
   const botMention = seekdeepBotMentionRegex();
   if (botMention) text = text.replace(botMention, ' ');
 
-  return text
-    .replace(/<@&\d+>/g, ' ')
-    .replace(/^\s*(?:@?(?:seekdeep|seekotics)\b[,:-]?\s*)+/i, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  text = text.replace(/<@&\d+>/g, ' ');
+  text = seekdeepStripLeadingNames(text, ' ');
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function buildSystem(system = '', useWeb = false, personaOverride = '') {
@@ -5571,8 +5622,7 @@ function seekdeepCleanArchiveConfigPrompt(value = '') {
   return String(value || '')
     .replace(/<@!?\d+>/g, ' ')
     .replace(/<@&\d+>/g, ' ')
-    .replace(/\bseekdeep\b/gi, ' ')
-    .replace(/\bseekotics\b/gi, ' ')
+    .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
     .replace(/^[@/\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -6217,8 +6267,7 @@ async function seekdeepArchiveThreadRecordPost(archiveInfo, target) {
 }
 
 function seekdeepArchiveCountPromptText(raw = '') {
-  const base = String(raw || '')
-    .replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, '')
+  const base = seekdeepStripLeadingAddress(String(raw || ''), '')
     .replace(/\s+/g, ' ')
     .trim();
   return base;
@@ -6303,7 +6352,7 @@ async function seekdeepHandleArchiveThreadTitleMessage(message, raw = '') {
   if (await seekdeepHandleArchiveCountMessage(message, prompt)) return true;
   const cleaned = typeof seekdeepCleanMessageCommandPrompt === 'function'
     ? String(seekdeepCleanMessageCommandPrompt(prompt) || '').replace(/\s+/g, ' ').trim().toLowerCase()
-    : prompt.replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    : seekdeepStripLeadingAddress(prompt, '').replace(/\s+/g, ' ').trim().toLowerCase();
   if (!/^archive\s+(?:thread\s+)?(?:title|name|brand|rename)\b/i.test(cleaned) && !/^archive\s+set\s+(?:thread\s+)?(?:title|name|brand)\b/i.test(cleaned)) return false;
   await message.reply({
     content: ['Archive thread titles are automatic now:', '`\u{1FA99} \u2022 Archive \u2022 current nickname \u2022 tracked archived-post count`', 'Use `archive count set 1` only to repair a corrupted count.'].join('\n'),
@@ -8369,8 +8418,7 @@ function seekdeepNormalizeCommandSuggestionInput(value = '') {
     : raw
         .replace(/<@!?\d+>/g, ' ')
         .replace(/<@&\d+>/g, ' ')
-        .replace(/\bseekdeep\b/gi, ' ')
-        .replace(/\bseekotics\b/gi, ' ')
+        .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
         .replace(/^[@/\s]+/g, ' ');
 
   return cleaned
@@ -8525,7 +8573,7 @@ function seekdeepIsEmptyImageCommandPromptV2(prompt = '') {
   const clean = normalizeUserText(String(prompt || '')
     .replace(/<@!?\d+>/g, ' ')
     .replace(/<@&\d+>/g, ' ')
-    .replace(/^\s*@?(?:seekdeep|seekotics)[,:]?\s+/i, ' ')
+    .replace(SEEKDEEP_LEADING_NAME_RUN_RE, ' ')
   ).toLowerCase();
 
   if (!clean) return false;
@@ -8544,7 +8592,7 @@ function seekdeepPendingImageSubjectCleanPromptV2(prompt = '') {
     clean = clean
       .replace(/<@!?\d+>/g, ' ')
       .replace(/<@&\d+>/g, ' ')
-      .replace(/^\s*(?:@?seekdeep|@?seekotics)[,:]?\s+/i, ' ');
+      .replace(SEEKDEEP_LEADING_NAME_RUN_RE, ' ');
   }
 
   if (typeof seekdeepExtractImagePrompt === 'function') {
@@ -8888,7 +8936,7 @@ function seekdeepCleanRemovedArchiveCommandLine(value = '') {
   return normalizeUserText(String(value || '')
     .replace(/<@!?\d+>/g, ' ')
     .replace(/<@&\d+>/g, ' ')
-    .replace(/\b@?(?:seekdeep|seekotics)\b[,:-]?/gi, ' ')
+    .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
     .replace(/^[@/\s]+/g, ' ')
   ).toLowerCase();
 }
@@ -10643,7 +10691,7 @@ function seekdeepExtractImagePrompt(text = '') {
 
   t = t.replace(/<@!?\d+>/g, ' ').replace(/<@&\d+>/g, ' ').trim();
   t = t.replace(/^(?:hey|yo|hi|hello)\s+/i, '');
-  t = t.replace(/^@?(?:seekdeep|seekotics|neurabot|plugtalk)[,:]?\s+/i, '');
+  t = t.replace(SEEKDEEP_LEADING_NAME_RUN_RE, '');
   t = t.replace(/^(?:please\s+)?(?:can you|could you|would you)\s+/i, '');
 
   if (typeof seekdeepIsEmptyImageCommandPromptV2 === 'function' && seekdeepIsEmptyImageCommandPromptV2(t)) {
@@ -10808,8 +10856,7 @@ function isNaturalStatusPrompt(prompt) {
 // SEEKDEEP_COMMAND_ADDRESSING_NORMALIZER_V8_START
 // SEEKDEEP_COMMAND_ADDRESSING_NORMALIZER_V8_START
 function seekdeepStripCommandAddressingForRouting(value = '') {
-  return normalizeUserText(value)
-    .replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)[,;:!?-]?\s*)+/i, ' ')
+  return seekdeepStripLeadingAddress(normalizeUserText(value), ' ')
     .replace(/^[@/\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -12237,7 +12284,7 @@ function seekdeepCleanResearchTopic(topic = '') {
   const original = seekdeepCompatResearchText(topic);
   const cleaned = original
     .replace(/<@!?\d+>/g, ' ')
-    .replace(/\b@?(?:seekdeep|seekotics)\b/gi, ' ')
+    .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
     .replace(/^(?:can\s+you|could\s+you|please|pls)\s+/i, '')
     .replace(/^(?:search|look\s+up|lookup|research|compare|comparison|make|create|show|give\s+me|build)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?/i, '')
     .replace(/^(?:table|chart|matrix|spreadsheet)\s+(?:of|for|about)?\s*/i, '')
@@ -12557,7 +12604,7 @@ function seekdeepCleanReplyContextPrompt(prompt = '') {
   let p = normalizeUserText(prompt);
   if (!p) return '';
   p = p.replace(/^\s*<@!?\d+>\s*/g, '');
-  p = p.replace(/^\s*(?:@seekotics|@seekdeep)\s*/ig, '');
+  p = p.replace(SEEKDEEP_LEADING_NAME_RUN_RE, '');
   p = p.replace(/^\s*(?:please\s+)?(?:generate|gen|image|draw|paint|render|create|make|show\s+me)\b\s*/ig, '');
   p = p.replace(/^\s*(?:for\s+me|of|an\s+image\s+of|a\s+picture\s+of)\b\s*/ig, '');
   p = p.replace(/^\s*[:,-]+\s*/g, '');
@@ -12910,8 +12957,7 @@ function seekdeepBuildChatPromptWithContextBlock(prompt = '', contextText = '', 
 // SEEKDEEP_REPLY_CONTEXT_IMAGE_PROMPT_END
 
 function seekdeepArchiveStatusCleanPrompt(value = '') {
-  return String(value || '')
-    .replace(/^(?:\s*(?:<@(?:!|&)?\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, ' ')
+  return seekdeepStripLeadingAddress(String(value || ''), ' ')
     .replace(/^[@/\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -13134,8 +13180,7 @@ function seekdeepNormalizeArchiveOpenPrompt(value = '') {
     // Treat only leading user/role mentions as command-addressing noise. Later user mentions are
     // preserved so "archive @user" still targets the requested user.
     .replace(/^\s*(?:<@(?:!|&)?\d+>\s*)+/g, ' ')
-    .replace(/\bseekotics\b/gi, ' ')
-    .replace(/\bseekdeep\b/gi, ' ')
+    .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
     .replace(/^[@/\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -13144,8 +13189,7 @@ function seekdeepNormalizeArchiveOpenPrompt(value = '') {
 
 function seekdeepIsArchiveOpenPrompt(value = '') {
   const raw = String(value || '').trim();
-  const stripLeadingArchiveAddress = (input = '') => String(input || '')
-    .replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, ' ')
+  const stripLeadingArchiveAddress = (input = '') => seekdeepStripLeadingAddress(String(input || ''), ' ')
     .replace(/^[/\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -13184,8 +13228,7 @@ async function seekdeepHandleArchiveOpenMessage(message, prompt = '') {
   const cleanBase = typeof seekdeepCleanMessageCommandPrompt === 'function'
     ? seekdeepCleanMessageCommandPrompt(raw)
     : raw;
-  const clean = String(cleanBase || '')
-    .replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, ' ')
+  const clean = seekdeepStripLeadingAddress(String(cleanBase || ''), ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -13453,7 +13496,7 @@ async function seekdeepSearchConversationHistory(channel, botId, query, maxPages
 
         // Match user messages addressed to the bot that contain all query words
         if (authorId !== botId && content.includes(botId.slice(-4)) || (authorId !== botId && words.every((w) => content.includes(w)))) {
-          const mentionsBot = msg.mentions?.users?.has?.(botId) || /seekdeep|seekotics/i.test(content);
+          const mentionsBot = msg.mentions?.users?.has?.(botId) || seekdeepTextAddressesBot(content);
           if (mentionsBot && words.every((w) => content.includes(w))) {
             matches.push({
               type: 'user',
@@ -16928,8 +16971,7 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
 function seekdeepIsNaturalArchiveImageFollowup(value = '') {
   const p = String(value || '').toLowerCase().trim();
   if (!p) return false;
-  const stripped = p
-    .replace(/^(?:\s*(?:<@!?\d+>|<@&\d+>|@seekdeep|@seekotics|seekdeep|seekotics)\s*)+/i, '')
+  const stripped = seekdeepStripLeadingAddress(p, '')
     .replace(/^[/\s]+/g, '')
     .trim();
   if (!stripped) return false;
@@ -17644,7 +17686,7 @@ function seekdeepCleanMessageCommandPrompt(value) {
   return normalizeUserText(String(value || '')
     .replace(/<@!?\d+>/g, ' ')
     .replace(/<@&\d+>/g, ' ')
-    .replace(/\b@?(?:seekdeep|seekotics)\b[,:-]?/gi, ' ')
+    .replace(SEEKDEEP_NAME_GLOBAL_RE, ' ')
     .replace(/^[@/\s]+/g, ' ')
   );
 }
@@ -18122,7 +18164,7 @@ async function seekdeepHandleArchiveStatusMessage(message, prompt = '') {
 function seekdeepIsArchiveSnapshotPrompt(value = '') {
   const cleaned = String(value || '')
     .replace(/^\s*(?:<@(?:!|&)?\d+>\s*)+/g, '')         // Discord <@123> ID-mention
-    .replace(/^\s*(?:@?(?:seekdeep|seekotics)\b[,:-]?\s*)+/i, '')  // bare name prefix
+    .replace(SEEKDEEP_LEADING_NAME_RUN_RE, '')  // bare name prefix (incl. spoken "seek deep")
     .trim()
     .toLowerCase();
   return /^(?:archive\s+)?(?:snapshot|rescan|refresh|reindex)$/.test(cleaned)
@@ -18271,7 +18313,7 @@ function seekdeepMessageMentionsBot(message = null) {
     }
   }
 
-  return /\b@?SEEKOTICS\b/i.test(content) || /\b@?SeekDeep\b/i.test(content);
+  return seekdeepTextAddressesBot(content);
 }
 
 function seekdeepRemovedArchiveCommandIsAddressed(message = null, raw = '') {
@@ -18282,7 +18324,7 @@ function seekdeepRemovedArchiveCommandIsAddressed(message = null, raw = '') {
 
   if (botId && seekdeepCountBotMentionTags(content) > 0) return true;
   if (botId && message.mentions?.users?.has?.(botId)) return true;
-  if (/^\s*@?(?:seekdeep|seekotics)\b/i.test(content)) return true;
+  if (SEEKDEEP_LEADING_NAME_RE.test(content)) return true;
   if (/^\s*(?:<@&\d+>\s*)+/.test(content)) return true;
 
   return false;
@@ -22487,6 +22529,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     splitDiscordText,
     seekdeepIsFrustrationPrompt,
     seekdeepCompileReactionPattern,
+    // Canonical bot-name address detection (centralized alias source)
+    seekdeepTextAddressesBot,
+    stripBotMentions,
+    seekdeepStripLeadingAddress,
+    seekdeepStripLeadingNames,
+    seekdeepStripNameTokens,
     // Help routing
     seekdeepHelpText,
     seekdeepHelpTopicSlice,
