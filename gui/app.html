@@ -1970,7 +1970,7 @@
             </div>
             <div>
               <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Target (channel/user ID)</div>
-              <input id="rrTarget" type="text" placeholder="optional · ignored if scope=any" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;" />
+              <input id="rrTarget" type="text" placeholder="raw ID or @mention · blank for 'any'" style="width:100%; padding:8px 10px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size:12px;" />
             </div>
             <div>
               <div class="tiny muted" style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4px;">Guild ID</div>
@@ -1983,6 +1983,21 @@
             </div>
           </div>
           <div id="rrAddStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-bottom:10px; min-height:14px;"></div>
+
+          <details open class="tiny muted" style="font-family:var(--font-mono); font-size:10.5px; line-height:1.65; margin:0 0 14px; padding:10px 12px; border:1px dashed rgba(45,212,255,0.2); border-radius:var(--r-sm); background:rgba(45,212,255,0.03);">
+            <summary style="cursor:pointer; color:var(--cyan-1); letter-spacing:0.1em;">HOW IT WORKS · EXAMPLES</summary>
+            <div style="margin-top:8px; color:var(--hull-2);">
+              <div style="margin-bottom:5px;"><b>Emoji</b> + <b>Pattern</b> are required. <b>Scope</b> limits where / who it fires for:</div>
+              <div>• <b>any</b> — every message in the server <span style="color:var(--hull-3)">(leave Target blank)</span></div>
+              <div>• <b>channel</b> — only in one channel <span style="color:var(--hull-3)">(Target = that channel's ID)</span></div>
+              <div>• <b>user</b> — only from one person <span style="color:var(--hull-3)">(Target = that user's ID)</span></div>
+              <div style="margin:7px 0 4px; color:var(--cyan-1);">EXAMPLES</div>
+              <div>🔥 · pattern <span class="mono" style="color:var(--hull-1)">based</span> · scope <b>any</b> → 🔥 on any message containing "based"</div>
+              <div>🎯 · pattern <span class="mono" style="color:var(--hull-1)">urgent</span> · scope <b>channel</b> · target <span class="mono" style="color:var(--hull-1)">1456178248688992339</span> → 🎯 on "urgent" in that channel</div>
+              <div>👀 · pattern <span class="mono" style="color:var(--hull-1)">/.*/</span> · scope <b>user</b> · target <span class="mono" style="color:var(--hull-1)">741414123711234048</span> → 👀 on every message from that user <span style="color:var(--hull-3)">(<span class="mono">/.*/</span> matches anything)</span></div>
+              <div style="margin-top:7px; color:var(--hull-3);"><b>Pattern</b>: plain text matches that whole word, case-insensitive; wrap in <span class="mono">/…/i</span> for regex. <b>Target&nbsp;ID</b>: turn on Discord → User Settings → Advanced → <b>Developer Mode</b>, then right-click a channel / user → <b>Copy ID</b> (pasting a <span class="mono">&lt;@id&gt;</span> mention also works now).</div>
+            </div>
+          </details>
 
           <div style="display: grid; grid-template-columns: 50px 1fr 200px 140px 100px auto; gap: 12px; padding: 12px 0; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; border-bottom: 1px solid var(--stroke);">
             <span>EMOJI</span><span>PATTERN</span><span>SCOPE</span><span>HITS</span><span>STATE</span><span></span>

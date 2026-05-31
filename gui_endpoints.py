@@ -5192,6 +5192,15 @@ def register_gui_endpoints(
         pattern = str((body or {}).get("pattern") or "").strip()
         scope = str((body or {}).get("scope") or "").strip().lower()
         target = str((body or {}).get("target") or "").strip()
+        # Accept a Discord mention (<@id>, <@!id>, <#id>, <@&id>) OR a raw ID and
+        # normalize to the bare numeric ID. Without this, a target pasted as
+        # "<@123>" (what you get by copying a mention) is stored verbatim and
+        # never matches — the matcher compares against the raw author/channel id,
+        # so the rule silently never fires.
+        if target:
+            _digits = re.sub(r"\D", "", target)
+            if _digits and 15 <= len(_digits) <= 21:
+                target = _digits
         enabled = (body or {}).get("enabled")
         if enabled is None: enabled = True
         if not guild_id or not emoji or not pattern:
