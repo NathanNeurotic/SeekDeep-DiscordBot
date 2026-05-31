@@ -126,10 +126,11 @@
         <span class="changed" id="changedCount">no changes</span>
         <button class="btn btn-ghost" id="discardBtn" disabled>Discard</button>
         <button class="btn" id="saveBtn" disabled>Save</button>
+        <button class="btn btn-ghost" id="restartBtn" title="Restart the bot so saved .env changes take effect — no terminal needed">↻ Restart bot</button>
       </div>
     </div>
     <div class="set-body" id="setBody">
-      <div class="set-note">Every supported key from <strong>.env.default</strong>, grouped and typed. Values write to your <strong>.env</strong> via <span class="mono">/config</span>. Secrets are never shown — type a new value only to replace one. <strong>Restart the bot</strong> (Control Center → Restart) for changes to take effect.</div>
+      <div class="set-note">Every supported key from <strong>.env.default</strong>, grouped and typed. Values write to your <strong>.env</strong> via <span class="mono">/config</span>. Secrets are never shown — type a new value only to replace one. Saved changes apply when you click <strong>↻ Restart bot</strong> (top-right) — no terminal needed.</div>
       <div class="set-empty" id="setEmpty">Loading settings…</div>
     </div>
   </div>
@@ -154,6 +155,7 @@
     const searchEl = document.getElementById('setSearch');
     const saveBtn = document.getElementById('saveBtn');
     const discardBtn = document.getElementById('discardBtn');
+    const restartBtn = document.getElementById('restartBtn');
     const changedEl = document.getElementById('changedCount');
     const kcountEl = document.getElementById('kcount');
 
@@ -373,7 +375,8 @@
         rows.forEach((_, k) => evaluate(k));
         updateBars();
         const saved = (j && Array.isArray(j.updated)) ? j.updated.length : count;
-        window.SeekDeepNotify?.toast?.({ tone: 'good', title: `Saved ${saved} setting${saved === 1 ? '' : 's'}`, body: 'Restart the bot (Control Center → Restart) to apply.', ttl: 5000 });
+        window.SeekDeepNotify?.toast?.({ tone: 'good', title: `Saved ${saved} setting${saved === 1 ? '' : 's'}`, body: 'Click ↻ Restart bot to apply.', ttl: 5000 });
+        if (restartBtn) restartBtn.style.boxShadow = '0 0 0 2px var(--good, #3ba55d)';
       } catch (e) {
         window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Save failed', body: String((e && e.message) || e), ttl: 6000 });
       } finally {
@@ -408,9 +411,26 @@
       }
     }
 
+    async function restartBot() {
+      if (!restartBtn) return;
+      const prev = restartBtn.textContent;
+      restartBtn.disabled = true; restartBtn.textContent = '↻ Restarting…';
+      try {
+        const r = await fetch(base() + '/launcher/bot/restart', { method: 'POST', signal: AbortSignal.timeout(15000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        restartBtn.style.boxShadow = '';
+        window.SeekDeepNotify?.toast?.({ tone: 'good', title: 'Bot restarting…', body: 'Your saved .env changes are being applied (~15s).', ttl: 6000 });
+      } catch (e) {
+        window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Restart request failed', body: String((e && e.message) || e) + '. Try again in a moment.', ttl: 7000 });
+      } finally {
+        restartBtn.disabled = false; restartBtn.textContent = prev;
+      }
+    }
+
     searchEl.addEventListener('input', applyFilter);
     saveBtn.addEventListener('click', save);
     discardBtn.addEventListener('click', discard);
+    restartBtn?.addEventListener('click', restartBot);
     // Ctrl/Cmd+S saves
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); save(); }
