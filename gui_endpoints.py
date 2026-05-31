@@ -901,6 +901,15 @@ def _resolve_bot_cwd(default_cwd: Path) -> Path:
     return default_cwd
 
 
+# Cache of paths resolved inside register_gui_endpoints that module-level helpers
+# (like _start_service, which runs later when the GUI spawns the bot) need.
+# Previously _start_service referenced a bare `_env_path` that only exists inside
+# register_gui_endpoints -> NameError every call, swallowed by the surrounding
+# try/except, so the SEEKDEEP_BOT_CWD data-dir lock and the GUI-token sync to the
+# bot's .env silently never happened. Mutating this dict needs no `global`.
+_GUI_RUNTIME_PATHS: dict = {}
+
+
 def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     if service in SELF_HOSTED_SERVICES:
         raise HTTPException(409,
@@ -960,7 +969,9 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
             if (os.getenv("SEEKDEEP_BOT_CWD") or "").strip() != cwd_abs:
                 pass
             try:
-                _merge_env(_env_path, {"SEEKDEEP_BOT_CWD": cwd_abs})
+                _managed_env = _GUI_RUNTIME_PATHS.get("env_path")
+                if _managed_env is not None:
+                    _merge_env(_managed_env, {"SEEKDEEP_BOT_CWD": cwd_abs})
             except Exception:
                 pass
         except Exception:
@@ -974,8 +985,9 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
             # value if/when this process-env one ever rotates mid-session.
             try:
                 bot_env_path = (cwd / ".env").resolve()
+                _managed_env = _GUI_RUNTIME_PATHS.get("env_path")
                 # Only sync if it's NOT the same file we already manage.
-                if tok and bot_env_path != _env_path.resolve():
+                if tok and (_managed_env is None or bot_env_path != _managed_env.resolve()):
                     _merge_env(bot_env_path, {"SEEKDEEP_GUI_TOKEN": tok})
             except Exception:
                 pass
@@ -1559,6 +1571,7 @@ def register_gui_endpoints(
     else:
         _data_dir = (root / data_dir).resolve()
     _env_path = (root / env_path).resolve()
+    _GUI_RUNTIME_PATHS["env_path"] = _env_path  # so module-level _start_service can reach it
 
     # Audit trail for destructive actions (config writes, dependency installs,
     # self-update, restarts). One line per action appended to data/audit.log.
