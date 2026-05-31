@@ -9083,6 +9083,30 @@ const commands = [
     .addSubcommand((s) => s.setName('setup').setDescription('Configure the server archive channel (admin).')
       .addChannelOption((o) => o.setName('channel').setDescription('Channel to use (default: here)').setRequired(false))),
   new SlashCommandBuilder()
+    .setName('reactrule')
+    .setDescription('Auto-reaction rules for this server (Manage Messages).')
+    .addSubcommand((s) => s.setName('list').setDescription("Show this server's auto-reaction rules + built-in toggles."))
+    .addSubcommand((s) => s.setName('add').setDescription('React with <emoji> when a message matches <pattern>.')
+      .addStringOption((o) => o.setName('emoji').setDescription('Emoji to react with').setRequired(true))
+      .addStringOption((o) => o.setName('pattern').setDescription('Substring, or /regex/flags').setRequired(true))
+      .addChannelOption((o) => o.setName('channel').setDescription('Restrict to a channel').setRequired(false))
+      .addUserOption((o) => o.setName('user').setDescription('Restrict to a user').setRequired(false)))
+    .addSubcommand((s) => s.setName('remove').setDescription('Remove a rule by ID.')
+      .addStringOption((o) => o.setName('id').setDescription('Rule ID').setRequired(true)))
+    .addSubcommand((s) => s.setName('toggle').setDescription('Enable / disable a rule by ID.')
+      .addStringOption((o) => o.setName('id').setDescription('Rule ID').setRequired(true)))
+    .addSubcommand((s) => s.setName('builtin').setDescription('Toggle a built-in stacking rule.')
+      .addStringOption((o) => o.setName('name').setDescription('Built-in rule name').setRequired(true))
+      .addStringOption((o) => o.setName('state').setDescription('on or off').setRequired(true)
+        .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })))
+    .addSubcommand((s) => s.setName('export').setDescription('Attach a JSON of the current rules.')),
+  new SlashCommandBuilder()
+    .setName('emoji')
+    .setDescription('Emoji vault (Manage Messages; requires SEEKDEEP_FEATURE_EMOJI_VAULT=on).')
+    .addSubcommand((s) => s.setName('backup').setDescription('Create the emoji thread with previews + JSON + ZIP.'))
+    .addSubcommand((s) => s.setName('count').setDescription('Quick count + animated/static split.'))
+    .addSubcommand((s) => s.setName('list').setDescription('Short text list of all custom emojis.')),
+  new SlashCommandBuilder()
     .setName('recent')
     .setDescription('Show recent SeekDeep items.')
     .addStringOption((o) =>
@@ -21804,6 +21828,48 @@ client.on('interactionCreate', async (interaction) => {
         await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
       } catch (err) {
         try { await sendLongInteractionReply(interaction, asTextBlock(`Archive command failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    if (commandName === 'reactrule') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const sub = String(interaction.options.getSubcommand() || '').toLowerCase();
+      let raw = `reactrule ${sub}`;
+      if (sub === 'add') {
+        const emoji = String(interaction.options.getString('emoji') || '').trim();
+        const pattern = String(interaction.options.getString('pattern') || '').trim();
+        const ch = interaction.options.getChannel?.('channel') || null;
+        const usr = interaction.options.getUser?.('user') || null;
+        raw = `reactrule add ${emoji} when ${pattern}${ch ? ` in <#${ch.id}>` : ''}${usr ? ` for <@${usr.id}>` : ''}`;
+      } else if (sub === 'remove' || sub === 'toggle') {
+        raw = `reactrule ${sub} ${String(interaction.options.getString('id') || '').trim()}`;
+      } else if (sub === 'builtin') {
+        raw = `reactrule builtin ${String(interaction.options.getString('name') || '').trim()} ${String(interaction.options.getString('state') || 'on').trim()}`;
+      }
+      try {
+        let captured = '';
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+        const handled = await seekdeepHandleReactRuleCommand(adapter, raw);
+        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Auto-react rules are disabled on this bot (set SEEKDEEP_FEATURE_AUTO_REACT=on).')));
+      } catch (err) {
+        try { await sendLongInteractionReply(interaction, asTextBlock(`reactrule failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    if (commandName === 'emoji') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const sub = String(interaction.options.getSubcommand() || '').toLowerCase();
+      try {
+        let captured = '';
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+        const handled = await seekdeepHandleEmojiVaultCommand(adapter, `emoji ${sub}`);
+        await sendLongInteractionReply(interaction, asTextBlock(captured || (handled ? 'Done.' : 'Emoji vault is disabled on this bot (set SEEKDEEP_FEATURE_EMOJI_VAULT=on).')));
+      } catch (err) {
+        try { await sendLongInteractionReply(interaction, asTextBlock(`emoji failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
       }
       return;
     }
