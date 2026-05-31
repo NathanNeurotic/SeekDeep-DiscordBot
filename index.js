@@ -15929,6 +15929,27 @@ function seekdeepLooksLikeNonLatin(text) {
   return SEEKDEEP_NON_LATIN_REGEX.test(clean);
 }
 
+// Run a "fire-and-forget" background task without losing its failures. A bare
+// `void fn(message)` swallows async rejections — they vanish silently because
+// there is no global unhandledRejection handler. This wraps the call (taking a
+// thunk so a synchronous throw is caught too) and logs any failure with route +
+// guild/channel/message context instead of dropping it. Still non-blocking: the
+// caller does not await. (Audit P1-5.)
+function seekdeepRunBackground(label, fn, ctx) {
+  let p;
+  try { p = fn(); }
+  catch (err) { p = Promise.reject(err); }
+  Promise.resolve(p).catch((err) => {
+    try {
+      console.warn(`[bg:${label}] failed`
+        + (ctx && ctx.guildId ? ` guild=${ctx.guildId}` : '')
+        + (ctx && ctx.channelId ? ` ch=${ctx.channelId}` : '')
+        + (ctx && ctx.messageId ? ` msg=${ctx.messageId}` : '')
+        + `: ${(err && err.message) || err}`);
+    } catch { /* logging must never throw */ }
+  });
+}
+
 // Cooldown per channel to avoid spamming translations on rapid-fire messages.
 const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN = new Map();
 const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS = 3000;
@@ -18461,12 +18482,16 @@ client.on('messageCreate', async (message) => {
   // Fire-and-forget. Don't await. Gated by SEEKDEEP_FEATURE_AUTO_REACT so the
   // per-message disk read for rules is skipped entirely when the feature is off.
   if (SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) {
-    try { if (typeof seekdeepApplyAutoReactions === 'function') void seekdeepApplyAutoReactions(message); } catch {}
+    if (typeof seekdeepApplyAutoReactions === 'function') {
+      seekdeepRunBackground('auto-react', () => seekdeepApplyAutoReactions(message),
+        { guildId: message.guild?.id, channelId: message.channel?.id, messageId: message.id });
+    }
   }
 
   // Auto-translate: fire-and-forget for non-Latin messages in the designated channel.
   // Runs before address-check so unaddressed foreign-language messages still get translated.
-  try { void seekdeepAutoTranslateMessage(message); } catch {}
+  seekdeepRunBackground('auto-translate', () => seekdeepAutoTranslateMessage(message),
+    { guildId: message.guild?.id, channelId: message.channel?.id, messageId: message.id });
 
   if (await seekdeepProcessPreAddressMessageRoutes(message)) return;
 
