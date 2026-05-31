@@ -1552,6 +1552,27 @@ def register_gui_endpoints(
         _data_dir = (root / data_dir).resolve()
     _env_path = (root / env_path).resolve()
 
+    # Audit trail for destructive actions (config writes, dependency installs,
+    # self-update, restarts). One line per action appended to data/audit.log.
+    # NEVER records token or secret material — only the action name and
+    # non-sensitive context (e.g. WHICH keys changed, not their values).
+    # Best-effort: auditing must never break or slow the action it records.
+    # (Audit P0-2: the single loopback GUI token is high-authority. Splitting it
+    # into per-scope tokens is over-engineering for a single-user GUI that
+    # legitimately needs every scope; making destructive use accountable via an
+    # append-only local log is the proportionate, low-risk hardening.)
+    def _seekdeep_audit(action: str, **fields) -> None:
+        try:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+            safe = " ".join(
+                f"{k}={v}" for k, v in fields.items()
+                if "token" not in k.lower() and "secret" not in k.lower()
+            )
+            with open(_data_dir / "audit.log", "a", encoding="utf-8") as fh:
+                fh.write(f"{ts} {action} {safe}".rstrip() + "\n")
+        except Exception:
+            pass
+
     def _is_inside(child: Path, parent: Path) -> bool:
         try:
             child.relative_to(parent)
@@ -1617,6 +1638,7 @@ def register_gui_endpoints(
         if not patch.updates:
             return {"ok": True, "updated": []}
         result = _merge_env(_env_path, patch.updates)
+        _seekdeep_audit("config.write", keys=",".join(list(patch.updates.keys())[:32]))
         # Routing/persona/model knobs are env-driven, so any /config write
         # might have changed how /chat resolves. Push route.changed so the
         # chat helper-row badge re-fetches /route/debug without polling.
@@ -2674,6 +2696,7 @@ def register_gui_endpoints(
             event_bus.publish_sync({"type": "self-update.failed",
                                     "data": {"error": "ref must be main|v*|<sha>"}})
             raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
+        _seekdeep_audit("self_update", ref=ref)
         REPO = "NathanNeurotic/SeekDeep-DiscordBot"
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
         single_files = [
@@ -4701,6 +4724,7 @@ def register_gui_endpoints(
         except Exception:
             _deps_install_lock.release()
             raise
+        _seekdeep_audit("deps.install", file=req_name)
         return {
             "ok": True,
             "started": True,
@@ -5296,6 +5320,7 @@ def register_gui_endpoints(
     # Actions "Force kill all" button.
     @app.post("/system/kill-all", dependencies=[Depends(_require_gui_token)])
     def post_system_kill_all():
+        _seekdeep_audit("system.kill_all")
         results: dict = {}
         # 1. Bot — reuse kill-all logic from above
         try:
