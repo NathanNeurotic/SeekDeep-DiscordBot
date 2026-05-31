@@ -9036,6 +9036,25 @@ const commands = [
     .setName('archivestatus')
     .setDescription('Show permanent image archive status.'),
   new SlashCommandBuilder()
+    .setName('memory')
+    .setDescription('Manage your conversation memory presets.')
+    .addSubcommand((s) => s.setName('add').setDescription('Layer a behavior preset on your replies.')
+      .addStringOption((o) => o.setName('preset').setDescription('Preset to add').setRequired(true)
+        .addChoices(
+          { name: 'brief', value: 'brief' }, { name: 'expert', value: 'expert' },
+          { name: 'no-emoji', value: 'no-emoji' }, { name: 'no-followup-questions', value: 'no-followup-questions' },
+          { name: 'formal', value: 'formal' }, { name: 'casual', value: 'casual' },
+        )))
+    .addSubcommand((s) => s.setName('list').setDescription('Show your active presets and the available keys.'))
+    .addSubcommand((s) => s.setName('remove').setDescription('Remove one of your presets.')
+      .addStringOption((o) => o.setName('preset').setDescription('Preset to remove').setRequired(true)
+        .addChoices(
+          { name: 'brief', value: 'brief' }, { name: 'expert', value: 'expert' },
+          { name: 'no-emoji', value: 'no-emoji' }, { name: 'no-followup-questions', value: 'no-followup-questions' },
+          { name: 'formal', value: 'formal' }, { name: 'casual', value: 'casual' },
+        )))
+    .addSubcommand((s) => s.setName('clear').setDescription('Clear all your presets.')),
+  new SlashCommandBuilder()
     .setName('recent')
     .setDescription('Show recent SeekDeep items.')
     .addStringOption((o) =>
@@ -21624,6 +21643,28 @@ client.on('interactionCreate', async (interaction) => {
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
       const wsPing = Math.max(0, Math.round(Number(client.ws?.ping ?? 0)));
       await sendLongInteractionReply(interaction, asTextBlock(`pong · online · WebSocket latency ${wsPing}ms`));
+      return;
+    }
+
+    if (commandName === 'memory') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const sub = String(interaction.options.getSubcommand() || '').toLowerCase();
+      const preset = String(interaction.options.getString('preset') || '').trim();
+      const raw = sub === 'list' ? 'memory preset list'
+        : sub === 'clear' ? 'memory preset clear'
+        : `memory preset ${sub} ${preset}`;
+      // Drive the existing message-based handler through a capture adapter: it
+      // only reads author.id and replies, so this reuses its exact logic with no
+      // change to the mention path and no duplication.
+      let captured = '';
+      const adapter = {
+        author: { id: interaction.user?.id || '' },
+        content: '',
+        reply: async (payload) => { captured = typeof payload === 'string' ? payload : (payload?.content || ''); },
+      };
+      await seekdeepHandleMemoryPresetCommand(adapter, raw);
+      await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
       return;
     }
 
