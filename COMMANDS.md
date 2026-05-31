@@ -238,3 +238,27 @@ React to a SeekDeep image message with:
 | 🔁 (counterclockwise) | Regenerate (refined). | Requester / Admin |
 
 Unsupported near-commands return a `Did you mean ...?` suggestion. Valid image commands are excluded from that suggestion route so they can reach image generation.
+
+## Slash / Conversation Parity
+
+Every task is reachable both conversationally (`@SeekDeep …`) and as a slash command. Slash commands added for parity (each routes into the exact same logic as its mention form):
+
+| Slash | Conversation equivalent | Permission |
+|-------|-------------------------|------------|
+| `/ping` | `@SeekDeep ping` | Everyone |
+| `/queue` | `@SeekDeep queue status` | Everyone |
+| `/memory add\|list\|remove\|clear` | `@SeekDeep memory preset add\|list\|remove\|clear` | Everyone |
+| `/digest here\|off` | `@SeekDeep digest channel here\|off` | Admin |
+| `/translate text:<text>` | reply `@SeekDeep translate this` · right-click **Translate** | Everyone |
+| `/translate channel here\|off` | `@SeekDeep translate channel here\|off` | Admin |
+| `/archive status\|me\|shared\|user\|search\|count\|config\|setup` | `@SeekDeep archive …` | Everyone / Admin |
+| `/reactrule list\|add\|remove\|toggle\|builtin\|export` | `@SeekDeep reactrule …` | Manage Msgs |
+| `/emoji backup\|count\|list` | `@SeekDeep emoji …` *(feature-flagged)* | Manage Msgs |
+
+**Intentionally single-style** (a second style would defeat the command's purpose, so these are left as-is):
+
+- `/say` — slash-only. Its value is anonymous posting *as the bot* with an ephemeral confirmation; a visible `@SeekDeep say` mention can't be anonymous.
+- 📥 / 🗑 / 🔁 reaction shortcuts — reaction-only by nature.
+- **Inspect (SeekDeep)** / **Compare with previous** — context-menu only; they act on a specific right-clicked message.
+
+**Deferred follow-ups:** `/archive clean` (destructive bulk-delete with a confirm-flow), the `import` sub-actions of `/reactrule` + `/emoji` (need an uploaded-file path), and an "Archive this" message context-menu.
