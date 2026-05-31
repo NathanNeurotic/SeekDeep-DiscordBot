@@ -189,6 +189,7 @@ Archive entries include an `Archive Key`. Repeated Archive/Shared Archive clicks
 | Command | Purpose | Permission |
 |---------|---------|------------|
 | `@SeekDeep reactrule list` | Show this guild's auto-reaction rules + built-in toggles. | Manage Msgs |
+| `@SeekDeep reactrule menu` | Interactive on/off button panel for the 5 built-in rules (loading GIF; same as `/reacttoggle`). | Manage Msgs |
 | `@SeekDeep reactrule add <emoji> when <pattern>` | Add a rule. Pattern is substring; use `/regex/flag` for regex. | Manage Msgs |
 | `@SeekDeep reactrule add <emoji> when <pattern> in #channel` | Restrict the rule to a channel. | Manage Msgs |
 | `@SeekDeep reactrule add <emoji> for @user` | Restrict the rule to a user. | Manage Msgs |
@@ -253,6 +254,7 @@ Every task is reachable both conversationally (`@SeekDeep …`) and as a slash c
 | `/translate channel here\|off` | `@SeekDeep translate channel here\|off` | Admin |
 | `/archive status\|me\|shared\|user\|search\|count\|config\|setup` | `@SeekDeep archive …` | Everyone / Admin |
 | `/reactrule list\|add\|remove\|toggle\|builtin\|export` | `@SeekDeep reactrule …` | Manage Msgs |
+| `/reacttoggle` | `@SeekDeep reactrule menu` — interactive on/off buttons + GIF | Manage Msgs |
 | `/emoji backup\|count\|list` | `@SeekDeep emoji …` *(feature-flagged)* | Manage Msgs |
 
 **Intentionally single-style** (a second style would defeat the command's purpose, so these are left as-is):

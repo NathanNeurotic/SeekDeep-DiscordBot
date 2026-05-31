@@ -7977,6 +7977,7 @@ function seekdeepHelpText(source = null) {
       '## Auto-reactions (admin / Manage Messages)',
       '```text',
       prefix + ' reactrule list',
+      prefix + ' reactrule menu                       (interactive on/off buttons + GIF, or /reacttoggle)',
       prefix + ' reactrule add <emoji> when <pattern>',
       prefix + ' reactrule add <emoji> when <pattern> in #channel',
       prefix + ' reactrule add <emoji> for @user',
@@ -9084,6 +9085,9 @@ const commands = [
   new SlashCommandBuilder()
     .setName('queue')
     .setDescription('Show the current image generation queue status.'),
+  new SlashCommandBuilder()
+    .setName('reacttoggle')
+    .setDescription('Open the auto-reaction toggle menu (Manage Server / Manage Messages).'),
   new SlashCommandBuilder()
     .setName('archivestatus')
     .setDescription('Show permanent image archive status.'),
@@ -16320,6 +16324,165 @@ function seekdeepUserCanManageReactions(message) {
   return false;
 }
 
+// ── Auto-reaction toggle menu (interactive buttons + loading GIF) ──────────
+// A slash (`/reacttoggle`) + conversational (`@SeekDeep reactrule menu`) UI to
+// flip the 5 built-in stacking rules without remembering the text command. The
+// loading GIF is attached ONCE when the menu opens; every toggle re-renders via
+// interaction.update() WITHOUT re-sending the file, so the animation never
+// restarts mid-session (the desync GLP-2 reported on his own timer-driven menu).
+const SEEKDEEP_REACT_TOGGLE_PRETTY = {
+  long_message: 'Long msg',
+  forwarded: 'Forwarded',
+  code_block: 'Code block',
+  image_only: 'Image only',
+  link_only: 'Link only',
+};
+
+function seekdeepInteractionCanManageReactions(interaction) {
+  try {
+    const adminSet = typeof seekdeepAdminIds === 'function' ? seekdeepAdminIds() : new Set();
+    if (adminSet.has(String(interaction?.user?.id || ''))) return true;
+    const perms = interaction?.memberPermissions;
+    if (perms?.has?.(PermissionFlagsBits.Administrator)) return true;
+    if (perms?.has?.(PermissionFlagsBits.ManageGuild)) return true;
+    if (perms?.has?.(PermissionFlagsBits.ManageMessages)) return true;
+  } catch {}
+  return false;
+}
+
+function seekdeepBuildReactToggleEmbed(guild, data) {
+  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
+  const lines = [];
+  for (const key of Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT)) {
+    const def = SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key] || {};
+    const b = bucket.builtins[key] || {};
+    const pretty = SEEKDEEP_REACT_TOGGLE_PRETTY[key] || key;
+    const desc = String(def.description || '').replace('{threshold}', String(b.threshold ?? def.threshold ?? ''));
+    lines.push(`${b.emoji || def.emoji || '•'} **${pretty}** — ${b.enabled ? '\u{1F7E2} on' : '⚪ off'}\n ${desc}`);
+  }
+  const customCount = Array.isArray(bucket.rules) ? bucket.rules.length : 0;
+  if (customCount) lines.push(`\n➕ **${customCount}** custom rule${customCount === 1 ? '' : 's'} — manage with \`/reactrule\``);
+  if (!SEEKDEEP_FEATURE_AUTO_REACT_ENABLED) {
+    lines.push('\n⚠️ Auto-React is **globally off** — toggles are saved, but nothing fires until `SEEKDEEP_FEATURE_AUTO_REACT=on` (Settings → restart).');
+  }
+  const embed = new EmbedBuilder()
+    .setTitle('⚡ Auto-Reactions')
+    .setDescription(lines.join('\n'))
+    .setColor(SEEKDEEP_FEATURE_AUTO_REACT_ENABLED ? 0x5865F2 : 0x99AAB5)
+    .setFooter({ text: `${guild.name} · changes save instantly` });
+  if (SEEKDEEP_LOADING_GIF_BUFFER) embed.setThumbnail('attachment://loading.gif');
+  return embed;
+}
+
+function seekdeepBuildReactToggleComponents(guild, data) {
+  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
+  const toggleButtons = Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT).map((key) => {
+    const b = bucket.builtins[key] || {};
+    const btn = new ButtonBuilder()
+      .setCustomId(`seekdeep:rt:toggle:${key}`)
+      .setLabel(SEEKDEEP_REACT_TOGGLE_PRETTY[key] || key)
+      .setStyle(b.enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+    const emoji = b.emoji || SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key]?.emoji;
+    if (emoji) { try { btn.setEmoji(emoji); } catch {} }
+    return btn;
+  });
+  const actions = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('seekdeep:rt:all:on').setLabel('All on').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('seekdeep:rt:all:off').setLabel('All off').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('seekdeep:rt:close').setLabel('Close').setStyle(ButtonStyle.Danger),
+  );
+  return [new ActionRowBuilder().addComponents(...toggleButtons), actions];
+}
+
+function seekdeepReactToggleOpenPayload(guild, { ephemeral = false } = {}) {
+  const data = seekdeepReadAutoReactions();
+  seekdeepGetGuildReactionsBucket(data, String(guild.id));
+  const gif = seekdeepLoadingGifAttachment();
+  const payload = {
+    embeds: [seekdeepBuildReactToggleEmbed(guild, data)],
+    components: seekdeepBuildReactToggleComponents(guild, data),
+  };
+  if (gif) payload.files = [gif];
+  if (ephemeral) payload.flags = MessageFlags.Ephemeral;
+  else payload.allowedMentions = { repliedUser: false };
+  return payload;
+}
+
+// Slash entry: /reacttoggle
+async function seekdeepOpenReactToggleMenu(interaction) {
+  if (!interaction?.guild) {
+    try { await interaction.reply({ content: 'Auto-reaction toggles only work inside a server.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  if (!seekdeepInteractionCanManageReactions(interaction)) {
+    try { await interaction.reply({ content: 'You need **Manage Server** (or Manage Messages) to change auto-reactions.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  try { await interaction.reply(seekdeepReactToggleOpenPayload(interaction.guild, { ephemeral: true })); }
+  catch (err) { console.error('[react-toggle] open failed:', err?.message || err); }
+}
+
+// Conversational entry: "@SeekDeep reactrule menu"
+async function seekdeepOpenReactToggleMenuForMessage(message) {
+  if (!message?.guild) { try { await message.reply('Auto-reaction toggles only work inside a server.'); } catch {} return true; }
+  if (!seekdeepUserCanManageReactions(message)) {
+    try { await message.reply({ content: 'You need **Manage Server** (or Manage Messages) to change auto-reactions.', allowedMentions: { repliedUser: false } }); } catch {}
+    return true;
+  }
+  try { await message.reply(seekdeepReactToggleOpenPayload(message.guild, { ephemeral: false })); }
+  catch (err) { console.error('[react-toggle] open (message) failed:', err?.message || err); }
+  return true;
+}
+
+// Button handler (seekdeep:rt:*). Returns true if it handled the interaction.
+async function seekdeepHandleReactToggleComponent(interaction) {
+  const customId = String(interaction?.customId || '');
+  if (!customId.startsWith('seekdeep:rt:')) return false;
+
+  const guild = interaction.guild;
+  if (!guild) {
+    try { await interaction.reply({ content: 'Auto-reaction toggles need a server.', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+  if (!seekdeepInteractionCanManageReactions(interaction)) {
+    try { await interaction.reply({ content: 'You need **Manage Server** (or Manage Messages) to change auto-reactions.', flags: MessageFlags.Ephemeral }); } catch {}
+    return true;
+  }
+
+  const parts = customId.split(':'); // ['seekdeep','rt',action,arg]
+  const action = parts[2];
+  const arg = parts[3];
+
+  if (action === 'close') {
+    try { await interaction.update({ content: '⚡ Auto-Reactions menu closed. Run `/reacttoggle` to reopen.', embeds: [], components: [], attachments: [] }); } catch {}
+    return true;
+  }
+
+  const data = seekdeepReadAutoReactions();
+  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
+  if (action === 'toggle' && arg && bucket.builtins[arg]) {
+    bucket.builtins[arg].enabled = !bucket.builtins[arg].enabled;
+  } else if (action === 'all') {
+    const want = arg === 'on';
+    for (const k of Object.keys(bucket.builtins)) {
+      if (bucket.builtins[k]) bucket.builtins[k].enabled = want;
+    }
+  }
+  seekdeepWriteAutoReactions(data);
+
+  // Re-render WITHOUT re-sending the GIF (no `files`) so the animation does not
+  // restart on every toggle.
+  try {
+    await interaction.update({
+      embeds: [seekdeepBuildReactToggleEmbed(guild, data)],
+      components: seekdeepBuildReactToggleComponents(guild, data),
+    });
+  } catch (err) {
+    console.error('[react-toggle] update failed:', err?.message || err);
+  }
+  return true;
+}
+
 function seekdeepCompileReactionPattern(pattern = '') {
   const raw = String(pattern || '').trim();
   if (!raw) return null;
@@ -16467,6 +16630,11 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
   const data = seekdeepReadAutoReactions();
   const bucket = seekdeepGetGuildReactionsBucket(data, String(message.guild.id));
 
+  // reactrule menu → interactive button panel (same UI as /reacttoggle)
+  if (/^(?:menu|toggles?|buttons?|panel)$/i.test(subcommand)) {
+    return await seekdeepOpenReactToggleMenuForMessage(message);
+  }
+
   // reactrule list
   if (!subcommand || /^list$/i.test(subcommand)) {
     const lines = [`Reaction rules for this server (${bucket.rules.length}):`];
@@ -16480,6 +16648,7 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       lines.push(`  ${b.enabled ? '[on] ' : '[off]'} ${key.padEnd(13, ' ')}  ${b.emoji}  ${b.description ? `- ${b.description.replace('{threshold}', String(b.threshold || ''))}` : ''}`);
     }
     lines.push('', 'Commands:');
+    lines.push('  @SeekDeep reactrule menu   (interactive on/off buttons + GIF — or /reacttoggle)');
     lines.push('  @SeekDeep reactrule add <emoji> when <pattern>');
     lines.push('  @SeekDeep reactrule add <emoji> when <pattern> in #channel');
     lines.push('  @SeekDeep reactrule add <emoji> for @user');
@@ -21673,6 +21842,25 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // Auto-reaction toggle menu (buttons). Also a MessageComponentInteraction,
+  // so it dispatches here in the main router (not a 6th listener — per the
+  // audit note above). interaction.update() inside re-renders without resending
+  // the GIF, so the animation never restarts on a toggle.
+  try {
+    if (interaction?.isMessageComponent?.() && String(interaction.customId || '').startsWith('seekdeep:rt:')) {
+      const handled = await seekdeepHandleReactToggleComponent(interaction);
+      if (handled) return;
+    }
+  } catch (err) {
+    console.error('React toggle component handler failed:', err?.stack || err?.message || err);
+    try {
+      const payload = { content: 'Auto-reaction toggle failed: ' + (err?.message || 'unknown error'), flags: MessageFlags.Ephemeral };
+      if (interaction?.deferred || interaction?.replied) await interaction.editReply(payload);
+      else await interaction.reply(payload);
+    } catch {}
+    return;
+  }
+
   // Legacy modal route — kept for any in-flight `seekdeep:force-react:*`
   // modals dispatched before v10.4.1's picker rewrite landed. New code path
   // uses the paginated picker above; this branch will fall through cleanly
@@ -21819,6 +22007,13 @@ client.on('interactionCreate', async (interaction) => {
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
       const wsPing = Math.max(0, Math.round(Number(client.ws?.ping ?? 0)));
       await sendLongInteractionReply(interaction, asTextBlock(`pong · online · WebSocket latency ${wsPing}ms`));
+      return;
+    }
+
+    if (commandName === 'reacttoggle') {
+      // Opens an ephemeral menu via interaction.reply() — do NOT safeDefer (the
+      // menu IS the reply, with components + the loading GIF attached once).
+      await seekdeepOpenReactToggleMenu(interaction);
       return;
     }
 
@@ -22539,6 +22734,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepStripLeadingAddress,
     seekdeepStripLeadingNames,
     seekdeepStripNameTokens,
+    // Auto-reaction toggle menu builders (pure render from guild + data)
+    seekdeepBuildReactToggleEmbed,
+    seekdeepBuildReactToggleComponents,
     // Help routing
     seekdeepHelpText,
     seekdeepHelpTopicSlice,
