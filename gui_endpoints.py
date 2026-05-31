@@ -4506,6 +4506,14 @@ def register_gui_endpoints(
     # That's safe (pip itself locks) but wasteful. The frontend should gate
     # its own button to prevent re-clicks; we don't enforce it server-side.
     _ALLOWED_REQUIREMENTS_FILES = {"requirements-ml.txt", "requirements-local.txt"}
+    # P0-5 hardening: serialize installs server-side. The frontend gates its
+    # button, but a stray double-POST (or a second client) would otherwise
+    # spawn a second pip against the same site-packages. pip self-locks so it's
+    # not corrupting, just wasteful — reject the duplicate up front instead of
+    # relying on the UI. Acquired non-blocking in the handler, released in
+    # run_install's finally (Python Locks are not owner-bound, so the daemon
+    # thread can release what the request thread acquired).
+    _deps_install_lock = threading.Lock()
 
     @app.post("/deps/install", dependencies=[Depends(_require_gui_token)])
     def post_deps_install(body: DepsInstallBody):
@@ -4674,8 +4682,25 @@ def register_gui_endpoints(
                         "detail": "\n".join(tail).strip()[-4000:],
                     },
                 })
+            finally:
+                # Release the single-install guard so the next install can run,
+                # whether pip succeeded, failed, or raised.
+                _deps_install_lock.release()
 
-        threading.Thread(target=run_install, daemon=True).start()
+        # Reject a concurrent install rather than spawn a second pip (P0-5).
+        if not _deps_install_lock.acquire(blocking=False):
+            return {
+                "ok": True,
+                "started": False,
+                "already_running": True,
+                "requirements_file": req_name,
+                "note": "a dependency install is already in progress; subscribe to /events for its progress",
+            }
+        try:
+            threading.Thread(target=run_install, daemon=True).start()
+        except Exception:
+            _deps_install_lock.release()
+            raise
         return {
             "ok": True,
             "started": True,
