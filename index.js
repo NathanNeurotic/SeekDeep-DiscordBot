@@ -9055,6 +9055,19 @@ const commands = [
         )))
     .addSubcommand((s) => s.setName('clear').setDescription('Clear all your presets.')),
   new SlashCommandBuilder()
+    .setName('digest')
+    .setDescription('Daily activity digest channel (admin).')
+    .addSubcommand((s) => s.setName('here').setDescription('Set this channel as the daily-digest destination.'))
+    .addSubcommand((s) => s.setName('off').setDescription('Disable the daily digest for this server.')),
+  new SlashCommandBuilder()
+    .setName('translate')
+    .setDescription('Translate text to English, or configure channel auto-translate.')
+    .addSubcommand((s) => s.setName('text').setDescription('Translate text to plain English.')
+      .addStringOption((o) => o.setName('text').setDescription('Text to translate').setRequired(true)))
+    .addSubcommand((s) => s.setName('channel').setDescription('Admin: auto-translate non-Latin messages in this channel.')
+      .addStringOption((o) => o.setName('mode').setDescription('Enable here or turn off').setRequired(true)
+        .addChoices({ name: 'here', value: 'here' }, { name: 'off', value: 'off' }))),
+  new SlashCommandBuilder()
     .setName('recent')
     .setDescription('Show recent SeekDeep items.')
     .addStringOption((o) =>
@@ -15975,6 +15988,25 @@ function seekdeepRunBackground(label, fn, ctx) {
   });
 }
 
+// Drive an existing message-based command handler (seekdeepHandleXxxCommand(
+// message, raw)) from a slash interaction without changing the handler. Maps the
+// interaction onto the message props these admin/config handlers actually read
+// (author, member.permissions, guild, channel) and captures the handler's reply
+// text via `sink`. Lets the parity slash commands reuse the exact mention-path
+// logic instead of duplicating it. (Slash/conversation parity.)
+function seekdeepInteractionMessageAdapter(interaction, sink) {
+  return {
+    author: interaction.user,
+    member: interaction.member,
+    guild: interaction.guild,
+    channel: interaction.channel || (interaction.channelId ? { id: interaction.channelId } : null),
+    content: '',
+    reply: async (payload) => {
+      try { sink(typeof payload === 'string' ? payload : (payload && payload.content) || ''); } catch { /* ignore */ }
+    },
+  };
+}
+
 // Cooldown per channel to avoid spamming translations on rapid-fire messages.
 const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN = new Map();
 const SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS = 3000;
@@ -21665,6 +21697,48 @@ client.on('interactionCreate', async (interaction) => {
       };
       await seekdeepHandleMemoryPresetCommand(adapter, raw);
       await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
+      return;
+    }
+
+    if (commandName === 'digest') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const sub = String(interaction.options.getSubcommand() || 'here').toLowerCase();
+      let captured = '';
+      const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+      await seekdeepHandleDigestChannelCommand(adapter, `digest channel ${sub}`);
+      await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
+      return;
+    }
+
+    if (commandName === 'translate') {
+      if (!(await safeDefer(interaction))) return;
+      const sub = String(interaction.options.getSubcommand() || 'text').toLowerCase();
+      if (sub === 'channel') {
+        seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+        const mode = String(interaction.options.getString('mode') || 'here').toLowerCase();
+        let captured = '';
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; });
+        await seekdeepHandleAutoTranslateChannelCommand(adapter, `translate channel ${mode}`);
+        await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
+        return;
+      }
+      const text = String(interaction.options.getString('text') || '').trim();
+      if (!text) { await sendLongInteractionReply(interaction, asTextBlock('Nothing to translate.')); return; }
+      const translatePrompt = [
+        'Translate the following text to English. If it is already English, translate it to plain modern English (decode slang/jargon/leetspeak/emoji-laden text into normal prose).',
+        'Return only the translation. No commentary, no "Sure, here is the translation:" preface, no quotes around the output.',
+        '',
+        'Text:',
+        text,
+      ].join('\n');
+      let answer = await askChat(translatePrompt, {
+        web: 'off',
+        system: 'You are SeekDeep translation mode. Return only the translated text in plain English. No headings, no quotes, no commentary.',
+        maxNewTokens: Math.min(1800, Math.max(200, text.length * 3)),
+      });
+      answer = String(answer || '').replace(/^\s*(translation|english|in english)\s*[:\-]\s*/i, '').trim();
+      await sendLongInteractionReply(interaction, asTextBlock('Translation:\n' + (answer || '(no output)')));
       return;
     }
 
