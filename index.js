@@ -16300,6 +16300,28 @@ function seekdeepRuleMatches(rule, message, content) {
   return rule._compiled.test(content);
 }
 
+// Resolve a stored rule emoji into something message.react() accepts. Handles:
+//   - unicode (💻, 🍉, ...)      -> returned as-is
+//   - <a:name:id> / <:name:id>  -> the live guild emoji object, else "name:id"
+//   - ":name:id:" / "name:id"   -> recovered id (some rules stored it malformed)
+//   - ":shortcode:"             -> a guild emoji matched by name, else null
+// Returns null when it can't be reacted with (caller logs + skips). This was
+// CALLED by the react loop but never defined, so every auto-reaction threw
+// "seekdeepResolveEmojiForReact is not defined" and was silently swallowed —
+// the real reason auto-reactions never fired.
+function seekdeepResolveEmojiForReact(emoji, guild) {
+  const raw = String(emoji || '').trim();
+  if (!raw) return null;
+  const cache = guild?.emojis?.cache;
+  let m = raw.match(/^<(a)?:([A-Za-z0-9_]+):(\d+)>$/);            // <a:name:id> / <:name:id>
+  if (m) return (cache?.get?.(m[3])) || `${m[2]}:${m[3]}`;
+  m = raw.match(/^:?([A-Za-z0-9_]+):(\d+):?$/);                  // name:id / :name:id / name:id:
+  if (m) return (cache?.get?.(m[2])) || `${m[1]}:${m[2]}`;
+  m = raw.match(/^:([A-Za-z0-9_]+):$/);                          // :shortcode: (no id)
+  if (m) return (cache?.find?.((e) => e?.name === m[1])) || null;
+  return raw;                                                    // assume unicode
+}
+
 async function seekdeepApplyAutoReactions(message) {
   try {
     if (!message?.guild?.id || message.author?.bot) return;
@@ -16349,7 +16371,8 @@ async function seekdeepApplyAutoReactions(message) {
       const failed = [];
       for (const emoji of emojiList) {
         try {
-          const resolved = await seekdeepResolveEmojiForReact(emoji, message.guild);
+          const resolved = seekdeepResolveEmojiForReact(emoji, message.guild);
+          if (!resolved) { failed.push(`${emoji}:unresolvable`); continue; }
           await message.react(resolved);
           reacted.push(String(emoji));
         } catch (err) {
