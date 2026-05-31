@@ -9068,6 +9068,21 @@ const commands = [
       .addStringOption((o) => o.setName('mode').setDescription('Enable here or turn off').setRequired(true)
         .addChoices({ name: 'here', value: 'here' }, { name: 'off', value: 'off' }))),
   new SlashCommandBuilder()
+    .setName('archive')
+    .setDescription('Personal / shared archive threads.')
+    .addSubcommand((s) => s.setName('status').setDescription('Show your archive status.'))
+    .addSubcommand((s) => s.setName('me').setDescription('Open or create your personal archive thread.'))
+    .addSubcommand((s) => s.setName('shared').setDescription('Open or create the shared archive thread.'))
+    .addSubcommand((s) => s.setName('user').setDescription("Open or create another user's archive thread.")
+      .addUserOption((o) => o.setName('user').setDescription('Target user').setRequired(true)))
+    .addSubcommand((s) => s.setName('search').setDescription('Text-search prompts in your archive thread.')
+      .addStringOption((o) => o.setName('query').setDescription('Search query').setRequired(true)))
+    .addSubcommand((s) => s.setName('count').setDescription('Manually set your archive thread count.')
+      .addIntegerOption((o) => o.setName('count').setDescription('New count').setRequired(true).setMinValue(0)))
+    .addSubcommand((s) => s.setName('config').setDescription('Show archive configuration status (admin).'))
+    .addSubcommand((s) => s.setName('setup').setDescription('Configure the server archive channel (admin).')
+      .addChannelOption((o) => o.setName('channel').setDescription('Channel to use (default: here)').setRequired(false))),
+  new SlashCommandBuilder()
     .setName('recent')
     .setDescription('Show recent SeekDeep items.')
     .addStringOption((o) =>
@@ -15994,13 +16009,22 @@ function seekdeepRunBackground(label, fn, ctx) {
 // (author, member.permissions, guild, channel) and captures the handler's reply
 // text via `sink`. Lets the parity slash commands reuse the exact mention-path
 // logic instead of duplicating it. (Slash/conversation parity.)
-function seekdeepInteractionMessageAdapter(interaction, sink) {
+function seekdeepInteractionMessageAdapter(interaction, sink, opts = {}) {
+  // interaction.channel / .guild / .member / .user / .client are the SAME real
+  // Discord objects a message carries, so thread creation, permission checks,
+  // etc. work unchanged. The only synthesized field is `mentions` (interactions
+  // have no message.mentions) — built from an optional resolved user option so
+  // "@user"-style handlers see the target.
+  const mentionUsers = new Map();
+  if (opts.mentionUser && opts.mentionUser.id) mentionUsers.set(String(opts.mentionUser.id), opts.mentionUser);
   return {
     author: interaction.user,
     member: interaction.member,
     guild: interaction.guild,
     channel: interaction.channel || (interaction.channelId ? { id: interaction.channelId } : null),
-    content: '',
+    client: interaction.client,
+    content: opts.content || '',
+    mentions: { users: mentionUsers, members: new Map(), roles: new Map(), everyone: false },
     reply: async (payload) => {
       try { sink(typeof payload === 'string' ? payload : (payload && payload.content) || ''); } catch { /* ignore */ }
     },
@@ -21739,6 +21763,48 @@ client.on('interactionCreate', async (interaction) => {
       });
       answer = String(answer || '').replace(/^\s*(translation|english|in english)\s*[:\-]\s*/i, '').trim();
       await sendLongInteractionReply(interaction, asTextBlock('Translation:\n' + (answer || '(no output)')));
+      return;
+    }
+
+    if (commandName === 'archive') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const sub = String(interaction.options.getSubcommand() || '').toLowerCase();
+      try {
+        if (sub === 'status') {
+          const content = typeof seekdeepBuildArchiveStatusReportV2 === 'function'
+            ? await seekdeepBuildArchiveStatusReportV2(interaction)
+            : 'Archive status is unavailable.';
+          await sendLongInteractionReply(interaction, asTextBlock(content));
+          return;
+        }
+        const userOpt = interaction.options.getUser?.('user') || null;
+        let captured = '';
+        const adapter = seekdeepInteractionMessageAdapter(interaction, (t) => { captured = t; }, { mentionUser: userOpt });
+        if (sub === 'config') {
+          await seekdeepHandleArchiveConfigMessage(adapter, 'archive config');
+        } else if (sub === 'setup') {
+          const ch = interaction.options.getChannel?.('channel') || null;
+          await seekdeepHandleArchiveConfigMessage(adapter, ch ? `archive setup <#${ch.id}>` : 'archive setup here');
+        } else if (sub === 'me') {
+          await seekdeepHandleArchiveOpenMessage(adapter, 'archive me');
+        } else if (sub === 'shared') {
+          await seekdeepHandleArchiveOpenMessage(adapter, 'archive shared');
+        } else if (sub === 'user') {
+          await seekdeepHandleArchiveOpenMessage(adapter, userOpt ? `archive <@${userOpt.id}>` : 'archive me');
+        } else if (sub === 'count') {
+          const n = Number(interaction.options.getInteger?.('count') ?? 0);
+          await seekdeepHandleArchiveCountMessage(adapter, `archive count set ${n}`);
+        } else if (sub === 'search') {
+          const q = String(interaction.options.getString('query') || '').trim();
+          captured = typeof seekdeepSearchArchiveByPrompt === 'function'
+            ? await seekdeepSearchArchiveByPrompt(adapter, q, 10)
+            : 'Archive search is unavailable.';
+        }
+        await sendLongInteractionReply(interaction, asTextBlock(captured || 'Done.'));
+      } catch (err) {
+        try { await sendLongInteractionReply(interaction, asTextBlock(`Archive command failed: ${(err && err.message) || err}`)); } catch { /* ignore */ }
+      }
       return;
     }
 
