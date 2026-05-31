@@ -9027,6 +9027,12 @@ const commands = [
     .setName('cachestatus')
     .setDescription('Show temp image cache status.'),
   new SlashCommandBuilder()
+    .setName('ping')
+    .setDescription('Lightweight bot availability check.'),
+  new SlashCommandBuilder()
+    .setName('queue')
+    .setDescription('Show the current image generation queue status.'),
+  new SlashCommandBuilder()
     .setName('archivestatus')
     .setDescription('Show permanent image archive status.'),
   new SlashCommandBuilder()
@@ -21553,13 +21559,14 @@ client.on('interactionCreate', async (interaction) => {
 
     const commandName = String(interaction.commandName || '').toLowerCase();
 
-    if (['help', 'cachestatus', 'archivestatus', 'recent'].includes(commandName)) {
+    if (['help', 'cachestatus', 'archivestatus', 'recent', 'queue'].includes(commandName)) {
       if (!(await safeDefer(interaction))) return;
       const key = memoryKeyFrom(interaction);
       let kind = commandName;
 
       if (commandName === 'cachestatus') kind = 'cache';
       if (commandName === 'archivestatus') kind = 'archive';
+      if (commandName === 'queue') kind = 'image-queue';
       if (commandName === 'recent') {
         const requested = interaction.options.getString('kind') || 'images';
         if (requested === 'prompts') kind = 'recent-prompts';
@@ -21609,6 +21616,14 @@ client.on('interactionCreate', async (interaction) => {
       const verbose = Boolean(interaction.options.getBoolean?.('verbose'));
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
       await sendLongInteractionReply(interaction, asTextBlock(await statusText(verbose)));
+      return;
+    }
+
+    if (commandName === 'ping') {
+      if (!(await safeDefer(interaction))) return;
+      seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
+      const wsPing = Math.max(0, Math.round(Number(client.ws?.ping ?? 0)));
+      await sendLongInteractionReply(interaction, asTextBlock(`pong · online · WebSocket latency ${wsPing}ms`));
       return;
     }
 
