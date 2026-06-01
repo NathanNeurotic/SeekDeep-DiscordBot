@@ -13711,10 +13711,22 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
   //   @SeekDeep persona create <slug> <tone description>
   //   @SeekDeep persona remove <slug>
   //   @SeekDeep persona list
-  const createMatch = stripped.match(/^persona\s+create\s+([a-z0-9_-]{2,32})\s+([\s\S]{2,280})\s*$/i);
-  if (createMatch) {
+  // "persona create <slug> <tone>". New users copy the help's "<slug> <tone>"
+  // placeholders verbatim — angle brackets and all — so we tolerate wrapping
+  // <>. Catching the `create` subcommand explicitly (before the persona switch)
+  // also means a bare/short "persona create" replies with usage instead of
+  // falling through and reporting "unknown persona 'create'". Tone cap is
+  // generous (2000) so real personality descriptions aren't truncated/rejected.
+  const createCmd = stripped.match(/^persona\s+create\b([\s\S]*)$/i);
+  if (createCmd) {
     if (!seekdeepUserCanChangePersona(message)) {
       await message.reply({ content: 'Only server admins / Manage Server / Manage Channels can manage personas.', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    const createArgs = createCmd[1].trim();
+    const createMatch = createArgs.match(/^<?\s*([a-z0-9_-]{2,32})\s*>?\s+<?\s*([\s\S]{2,2000}?)\s*>?\s*$/i);
+    if (!createMatch) {
+      await message.reply({ content: 'Usage: `@SeekDeep persona create <slug> <tone description>`\nExample: `@SeekDeep persona create slickback a profane, theatrical street philosopher who demands respect and turns every reply into a sermon`\n(No angle brackets needed — *slug* is 2–32 chars of letters/numbers/`_`/`-`, then a short personality description.)', allowedMentions: { repliedUser: false } });
       return true;
     }
     const slug = createMatch[1].toLowerCase();
