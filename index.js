@@ -16394,13 +16394,17 @@ function seekdeepInteractionCanManageReactions(interaction) {
 
 function seekdeepBuildReactToggleEmbed(guild, data) {
   const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
-  const lines = [];
+  // on/off + each emoji live on the buttons / dropdown, NOT in this text, so
+  // the embed is identical across toggles. That lets the handler update only
+  // `components` and never re-send the embed, so its attachment://loading.gif
+  // thumbnail never re-renders / restarts (QA: 'GIF restarts each interaction').
+  const lines = ['Tap a button to toggle it. Green = on, gray = off. Use the dropdown to change a built-in emoji.', ''];
   for (const key of Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT)) {
     const def = SEEKDEEP_BUILTIN_REACTIONS_DEFAULT[key] || {};
     const b = bucket.builtins[key] || {};
     const pretty = SEEKDEEP_REACT_TOGGLE_PRETTY[key] || key;
     const desc = String(def.description || '').replace('{threshold}', String(b.threshold ?? def.threshold ?? ''));
-    lines.push(`${b.emoji || def.emoji || '•'} **${pretty}** — ${b.enabled ? '\u{1F7E2} on' : '⚪ off'}\n ${desc}`);
+    lines.push(`• **${pretty}** — ${desc}`);
   }
   const customCount = Array.isArray(bucket.rules) ? bucket.rules.length : 0;
   if (customCount) lines.push(`\n➕ **${customCount}** custom rule${customCount === 1 ? '' : 's'} — manage with \`/reactrule\``);
@@ -16553,11 +16557,11 @@ async function seekdeepHandleReactToggleComponent(interaction) {
   }
   seekdeepWriteAutoReactions(data);
 
-  // Re-render WITHOUT re-sending the GIF (no `files`) so the animation does not
-  // restart on every toggle.
+  // Update ONLY the components — the new on/off state shows in the button colors
+  // (green = on). Omitting `embeds`/`files` leaves the existing embed + its
+  // loading.gif thumbnail untouched, so the animation never restarts on a toggle.
   try {
     await interaction.update({
-      embeds: [seekdeepBuildReactToggleEmbed(guild, data)],
       components: seekdeepBuildReactToggleComponents(guild, data),
     });
   } catch (err) {
@@ -16587,11 +16591,12 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
   const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
   if (bucket.builtins[key]) bucket.builtins[key].emoji = rawEmoji;
   seekdeepWriteAutoReactions(data);
-  // Re-render the original menu in place (no `files` → GIF does not restart).
+  // Components-only update: the new emoji shows on the button + dropdown; the
+  // static embed (and its loading.gif thumbnail) is left in place, so it doesn't
+  // restart. (Omitting `embeds`/`files` keeps the existing ones.)
   try {
     if (interaction.isFromMessage?.()) {
       await interaction.update({
-        embeds: [seekdeepBuildReactToggleEmbed(guild, data)],
         components: seekdeepBuildReactToggleComponents(guild, data),
       });
     } else {

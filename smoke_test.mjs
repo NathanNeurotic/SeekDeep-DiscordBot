@@ -2005,6 +2005,31 @@ check('context menu prompt extract: missing prompt line returns empty',
     T.seekdeepPromptsShareAgeDays({ posted_at: 'definitely-not-a-date' }) === null);
 }
 
+// ── Auto-react toggle menu: embed must be STATIC across on/off so the button
+//    handler can update components-only and the embed's loading.gif thumbnail
+//    never re-renders/restarts (QA: "GIF restarts on every interaction").
+if (typeof T.seekdeepBuildReactToggleEmbed === 'function' && typeof T.seekdeepBuildReactToggleComponents === 'function') {
+  const guild = { id: 'smoke-rt-guild', name: 'Smoke RT' };
+  const data = { guilds: {} };
+  T.seekdeepBuildReactToggleEmbed(guild, data); // seeds data.guilds[id] from defaults
+  const bucket = data.guilds[guild.id];
+  const keys = bucket && bucket.builtins ? Object.keys(bucket.builtins) : [];
+  check('reacttoggle: bucket builds from data', keys.length > 0);
+  if (keys.length) {
+    const k = keys[0];
+    const embedJSON = () => JSON.stringify(T.seekdeepBuildReactToggleEmbed(guild, data).toJSON());
+    const compsJSON = () => JSON.stringify(T.seekdeepBuildReactToggleComponents(guild, data).map((r) => r.toJSON()));
+    bucket.builtins[k].enabled = true;
+    const embOn = embedJSON(), compsOn = compsJSON();
+    bucket.builtins[k].enabled = false;
+    const embOff = embedJSON(), compsOff = compsJSON();
+    check('reacttoggle: embed is static across on/off (loading.gif never restarts)',
+      embOn === embOff, 'embed differs by toggle state — re-sending it would restart the GIF');
+    check('reacttoggle: button components reflect on/off state',
+      compsOn !== compsOff, 'buttons did not change with state — toggle state not conveyed');
+  }
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
