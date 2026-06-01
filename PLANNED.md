@@ -6,6 +6,24 @@ Last full audit: 2026-05-24 (GUI + backend stack)
 
 ---
 
+## NEXT FOCUSED PASS — unify the two config renderers (2026-05-31)
+
+**Decision (Nathan):** Control Center is the canonical config home; All Settings is its full-key subpage. Build shipped first; this consolidation is the next dedicated pass with fresh context + a real verification plan.
+
+**The problem.** Two config UIs render the same keys from two different code paths:
+- `gui/app.html` "Bot config" pane — **hand-coded** config rows (offline panel, toggles, text inputs) + rich tools (live model picker, token fields w/ validators, feature cards). Its own save/dirty/validation/hydration (`window.markDirty`, `CFG_VALIDATORS`, `#cfg-save`, restart prompts).
+- `gui/settings.html` "All Settings" — **schema-driven** render from `GET /config/schema` (all 143 keys), its own save + `↻ Restart bot` + search + `#KEY` deep-link.
+
+Both POST the same `/config`, so values can't *conflict* — but the hand-coded rows can **drift** from the schema (e.g. a new enum value won't appear in app.html's static `<select>`). That's the remaining duplication.
+
+**Target architecture.** One shared `gui/config-render.js` (extract from settings.html: `buildRow`, `boolVocab`, `isOn`, kind handling, hydrate, dirty). Both pages consume it — Control Center renders a *curated slice*, All Settings renders *all*. Each key is defined once; neither can drift. Keep the Control Center's genuinely-rich sections (model picker, token entry, feature management) as special sections above the shared rows. Retire the plain hand-coded duplicate panels (e.g. the 3-key offline panel).
+
+**The catch / why it's its own pass.** Must reconcile **two mature save/validation/hydration systems** + the live model-picker, and the GUI is token-gated (no full auto-verify). Plan: (1) extract `config-render.js`, have settings.html use it (behavior-preserving checkpoint); (2) wire it into app.html's Bot-config pane, unifying onto ONE save path; (3) drop the redundant hand-coded rows; (4) verify by driving both pages (browser) + preflight. Do step-by-step with a commit per step.
+
+**Done already (this session, shipped in 10.35.42):** All Settings covers all 143 keys (merged `.env.example`, bundled), every key documented, in-place ↻ Restart, deep-links, Control Center→All-Settings subpage framing, offline-flag labels/toggles, EMIT_LOG_LINES surfaced + pill deep-link, GIF→🖼️ fix, and the deferred slash parity (`/archive clean`, `/reactrule|/emoji import`).
+
+---
+
 ## QA Feedback — GLP-2 Roooo session (2026-05-31)
 
 Live QA + ideation session with collaborator **GLP-2 Roooo** (credit their GitHub for the QA role). The raw chat was dictation-heavy; distilled below. Nothing here is a commitment — parking lot.
