@@ -82,8 +82,13 @@
     overflow-y: auto;
     padding: 16px 0;
   }
-  .sidebar .grp { padding: 8px 18px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--hull-3); text-transform: uppercase; margin-top: 12px; }
-  .sidebar .grp:first-child { margin-top: 0; }
+  .sidebar .grp { padding: 11px 18px 5px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: color-mix(in oklab, var(--cyan-1) 50%, var(--hull-3)); text-transform: uppercase; margin-top: 10px; border-top: 1px solid color-mix(in oklab, var(--cyan-1) 9%, transparent); }
+  .sidebar .grp:first-child { margin-top: 0; border-top: 0; padding-top: 2px; }
+  /* First-run orientation strip (Launcher) — dismissible, remembered per browser. */
+  .first-run-hint { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin: 0 0 16px; padding: 10px 14px; border: 1px solid color-mix(in oklab, var(--cyan-1) 28%, transparent); border-radius: var(--r-md); background: color-mix(in oklab, var(--cyan-1) 7%, transparent); color: var(--hull-1); font-size: 13px; }
+  .first-run-hint b { color: var(--cyan-1); }
+  .first-run-hint button { flex: none; background: transparent; border: 0; color: var(--hull-3); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .first-run-hint button:hover { color: var(--hull-1); }
   .sidebar a {
     display: flex; align-items: center; gap: 12px;
     padding: 9px 18px;
@@ -717,6 +722,11 @@
             <button class="btn btn-ghost">Stop all</button>
             <button class="btn btn-primary">▸ Launch all</button>
           </div>
+        </div>
+
+        <div id="firstRunHint" class="first-run-hint">
+          <span>👋 <b>New here?</b> Hit <b>▸ Launch all</b> to start the stack, then open <b>Chat playground</b> from the sidebar to talk to SeekDeep.</span>
+          <button id="firstRunHintClose" type="button" aria-label="Dismiss" title="Dismiss">×</button>
         </div>
 
         <div class="launcher-grid">
@@ -1989,7 +1999,7 @@
           </div>
           <div id="rrAddStatus" class="tiny muted" style="font-family:var(--font-mono); font-size:11px; margin-bottom:10px; min-height:14px;"></div>
 
-          <details open class="tiny muted" style="font-family:var(--font-mono); font-size:10.5px; line-height:1.65; margin:0 0 14px; padding:10px 12px; border:1px dashed rgba(45,212,255,0.2); border-radius:var(--r-sm); background:rgba(45,212,255,0.03);">
+          <details class="tiny muted" style="font-family:var(--font-mono); font-size:10.5px; line-height:1.65; margin:0 0 14px; padding:10px 12px; border:1px dashed rgba(45,212,255,0.2); border-radius:var(--r-sm); background:rgba(45,212,255,0.03);">
             <summary style="cursor:pointer; color:var(--cyan-1); letter-spacing:0.1em;">HOW IT WORKS · EXAMPLES</summary>
             <div style="margin-top:8px; color:var(--hull-2);">
               <div style="margin-bottom:5px;"><b>Emoji</b> + <b>Pattern</b> are required. <b>Scope</b> limits where / who it fires for:</div>
@@ -3915,6 +3925,17 @@ const SEEKDEEP_BASE = (function() {
     if (actBtns[1]) actBtns[1].addEventListener('click', () => {
       launcherPane.querySelectorAll('.launcher-card .ctl button:first-child').forEach(b => b.click());
     });
+    // First-run orientation hint — dismissible, remembered per browser so it
+    // only nudges genuinely-new users and never nags after the first dismiss.
+    const frHint = document.getElementById('firstRunHint');
+    if (frHint) {
+      try { if (localStorage.getItem('sd-firstrun-hint-dismissed') === '1') frHint.style.display = 'none'; } catch (_) {}
+      const frClose = document.getElementById('firstRunHintClose');
+      if (frClose) frClose.addEventListener('click', () => {
+        frHint.style.display = 'none';
+        try { localStorage.setItem('sd-firstrun-hint-dismissed', '1'); } catch (_) {}
+      });
+    }
   }
 
   // ===== Image playground · live wiring (POST /image|/img2img|/instruct-pix2pix|/inpaint|/upscale) =====
