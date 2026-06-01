@@ -169,6 +169,7 @@
       const d = String(def == null ? '' : def).trim().toLowerCase();
       if (d === 'true' || d === 'false') return { on: 'true', off: 'false' };
       if (d === 'yes' || d === 'no') return { on: 'yes', off: 'no' };
+      if (d === '1' || d === '0') return { on: '1', off: '0' };   // numeric boolean (HF offline flags)
       return { on: 'on', off: 'off' };
     }
     // Baseline string a control is compared against to decide "dirty".

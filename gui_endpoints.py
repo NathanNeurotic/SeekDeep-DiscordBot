@@ -3979,6 +3979,12 @@ def register_gui_endpoints(
         "VISION_PROVIDER": "Provider for vision / image understanding.",
     }
     _SCHEMA_BOOLISH = {"on", "off", "true", "false", "yes", "no"}
+    # 0/1-valued boolean flags (HF / Transformers offline convention) — render as
+    # a toggle, not a raw "1"/"0" control (users found the bare numbers unclear).
+    # NOT every 0/1 key is boolean (e.g. SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD=0 is a
+    # real number), so this is an explicit allowlist rather than "treat all 0/1 as
+    # boolean". ON writes 1, OFF writes 0.
+    _SCHEMA_TOGGLE_01 = {"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"}
 
     def _schema_section_for(k):
         if k.startswith("JOIN_LEAVE_"):
@@ -4018,7 +4024,7 @@ def register_gui_endpoints(
         if k in _SCHEMA_ENUMS:
             return "select"
         v = (val or "").strip().lower()
-        if v in _SCHEMA_BOOLISH:
+        if v in _SCHEMA_BOOLISH or k in _SCHEMA_TOGGLE_01:
             return "toggle"
         if val and re.fullmatch(r"-?\d+(?:\.\d+)?", val.strip()):
             return "number"
