@@ -193,4 +193,39 @@ test.describe('Control Center', () => {
     const real = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
     expect(real, real.join('\n')).toHaveLength(0);
   });
+
+  test('Control Center selects render from the schema + save hook reads them (merge step 2c)', async ({ page }) => {
+    // app.html's hand-coded SELECT rows are reconciled through the shared
+    // renderer on config-pane load, so their options come from /config/schema
+    // and can't drift from All Settings. CHAT_PROVIDER's hand-coded list omitted
+    // 'ollama'; the schema enum has it — so its presence proves the reconcile
+    // ran. We read the converted control via the 2a save hook (_sdRead) directly
+    // rather than driving #cfg-save, so this never touches the real .env.
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('/gui/app.html');
+    await page.evaluate(() => window.SeekDeepPrompt?.close?.(null));
+    await page.locator('.sidebar a[data-mod="config"]').click();
+    // Against a served build that predates config-render.js in app.html (i.e. an
+    // installed build older than this merge), there's nothing to reconcile —
+    // skip rather than fail. CI serves the repo gui/, so it runs there.
+    const hasRenderer = await page.evaluate(() => !!(window.SeekDeepConfigRender && window.SeekDeepConfigRender.makeControl));
+    test.skip(!hasRenderer, 'served GUI predates config-render.js wiring in app.html (pre-2c build)');
+    const row = page.locator('.config-row').filter({ has: page.locator('.key', { hasText: 'CHAT_PROVIDER' }) });
+    const sel = row.locator('select').first();
+    await expect(sel).toBeAttached({ timeout: 12_000 });
+    await expect(sel.locator('option', { hasText: 'ollama' })).toHaveCount(1, { timeout: 8_000 });
+    await sel.selectOption('ollama');
+    const hooks = await page.evaluate(() => {
+      const r = [...document.querySelectorAll('.config-row')].find((x) => (x.querySelector('.key')?.textContent || '').trim() === 'CHAT_PROVIDER');
+      return {
+        sdRead: typeof r._sdRead === 'function' ? r._sdRead() : '(missing)',
+        hasHydrate: typeof r._sdHydrate === 'function',
+      };
+    });
+    expect(hooks.sdRead, 'save serializer reads the converted control via _sdRead').toBe('ollama');
+    expect(hooks.hasHydrate, 'hydrate hook (_sdHydrate) present on the converted row').toBe(true);
+    const real2 = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
+    expect(real2, real2.join('\n')).toHaveLength(0);
+  });
 });
