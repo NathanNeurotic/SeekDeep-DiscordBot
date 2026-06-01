@@ -1593,12 +1593,12 @@
               <div class="sec-body">
                 <div class="config-row">
                   <div><div class="key">HF_HUB_OFFLINE</div><div class="desc">Lock Hugging Face to local cache only · run after first warmup.</div></div>
-                  <select class="mono"><option>0</option><option>1</option></select>
+                  <select class="mono"><option value="0">0 · online — can fetch from the Hub</option><option value="1">1 · offline — local cache only</option></select>
                   <span class="save">—</span>
                 </div>
                 <div class="config-row">
                   <div><div class="key">TRANSFORMERS_OFFLINE</div><div class="desc">Lock Transformers to local cache · pairs with HF_HUB_OFFLINE.</div></div>
-                  <select class="mono"><option>0</option><option>1</option></select>
+                  <select class="mono"><option value="0">0 · online — can fetch from the Hub</option><option value="1">1 · offline — local cache only</option></select>
                   <span class="save">—</span>
                 </div>
                 <div class="config-row">
