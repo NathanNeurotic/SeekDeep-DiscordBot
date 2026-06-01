@@ -617,40 +617,51 @@ fn copy_dir_skipping(src: &Path, dst: &Path, skip: &[String], prefix: &str) -> R
 ///
 /// Returns None if we can't find anything usable.
 pub fn find_python(runtime: &Path) -> Option<PathBuf> {
-    // Honor SEEKDEEP_PYTHON override first. Users hitting the "Python
-    // 3.14 detected but no torch" trap (because their .venv lives in
-    // the cloned-repo dir, not the Tauri runtime dir) can point this at
-    // their working interpreter without us having to guess.
+    // Primary candidates in preference order: the explicit SEEKDEEP_PYTHON
+    // override, then the bundled venv(s). We do NOT blindly take the first that
+    // exists — we elect the BEST by torch capability, so the AI server is never
+    // run on a torch-less or CPU-only interpreter when a CUDA-capable one is
+    // right there (even if SEEKDEEP_PYTHON names the lesser one). Pointing
+    // SEEKDEEP_PYTHON at a working venv is a per-user bandaid; making the
+    // resolver prefer the GPU torch is the actual fix.
+    let mut primary: Vec<PathBuf> = Vec::new();
     if let Ok(env_py) = std::env::var("SEEKDEEP_PYTHON") {
         let p = PathBuf::from(env_py.trim());
         if p.is_file() {
-            return Some(p);
+            primary.push(p);
         }
     }
-    let venv_candidates = [
+    for c in [
         runtime.join(".venv").join("Scripts").join("python.exe"),
         runtime.join(".venv").join("bin").join("python"),
         runtime.join(".venv").join("bin").join("python3"),
-    ];
-    // Two-pass: prefer a venv whose torch already loads. Stops the boot-window
-    // race where install creates the venv shell at T=0, ML install fills in
-    // torch at T=15min, and the AI server boots at T=5min with the torchless
-    // venv (deps_present passes for the boot deps; torch is just missing).
-    // Without this preference the watchdog would keep re-electing the same
-    // torchless interpreter every respawn.
-    for c in &venv_candidates {
-        if c.is_file() && torch_present(c) {
+    ] {
+        if c.is_file() {
+            primary.push(c);
+        }
+    }
+    // Pass 1: a CUDA-capable torch wins. This is a GPU app — a stray system
+    // "torch (cpu)" must never beat the project's "+cuXXX" venv. Metadata-only
+    // probe (no torch import) so checking several candidates stays cheap.
+    for c in &primary {
+        if torch_cuda_present(c) {
             return Some(c.clone());
         }
     }
-    // Pass 2: if no torch-capable venv exists yet, fall back to whichever
-    // venv exists at all — the user is mid-install and the wizard's ML step
-    // will trigger install_ml_deps which kills + respawns the sidecar, at
-    // which point pass 1 will find the now-torch-capable venv.
-    for c in &venv_candidates {
-        if c.is_file() {
+    // Pass 2: any importable torch (a CPU build, or a CUDA build whose wheel
+    // tag we couldn't read). A working CPU server beats none.
+    for c in &primary {
+        if torch_present(c) {
             return Some(c.clone());
         }
+    }
+    // Pass 3: no torch anywhere yet (fresh install / ML wheels still
+    // downloading). Boot the first real interpreter so the server starts; the
+    // Installer's "Install ML libraries" step + the watchdog respawn re-run
+    // this resolver once torch lands, and pass 1/2 then elect it. (Preserves
+    // the prior boot-window behavior where a torchless venv still boots.)
+    if let Some(c) = primary.into_iter().next() {
+        return Some(c);
     }
 
     // Windows: prefer the `py` launcher over a bare `python.exe`. The MS
@@ -824,6 +835,21 @@ pub fn torch_present(python: &Path) -> bool {
     let out = quiet_command(python)
         .arg("-c")
         .arg("import torch")
+        .output();
+    matches!(out, Ok(o) if o.status.success())
+}
+
+/// Fast CUDA-torch probe. Reads torch's package metadata only — NO `import
+/// torch`, no CUDA init — so it's cheap to run across several candidate
+/// interpreters at boot. A CUDA wheel tags its version "+cuXXX" (e.g.
+/// "2.11.0+cu128"); the CPU wheel is "+cpu" or carries no local tag. Used to
+/// prefer the GPU interpreter over a stray CPU-only one. (If a CUDA build's
+/// metadata happened to omit the tag, torch_present() still elects it in the
+/// any-torch pass — this only governs the CUDA *preference*.)
+pub fn torch_cuda_present(python: &Path) -> bool {
+    let out = quiet_command(python)
+        .arg("-c")
+        .arg("import importlib.metadata as m, sys; v = m.version('torch'); sys.exit(0 if '+cu' in v else 1)")
         .output();
     matches!(out, Ok(o) if o.status.success())
 }
