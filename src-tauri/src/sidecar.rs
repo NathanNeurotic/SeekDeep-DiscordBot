@@ -521,7 +521,19 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         }
         for src in &candidates {
             if src.is_file() {
-                fs::copy(src, &dst).map_err(|e| format!("cp {src:?} -> {dst:?}: {e}"))?;
+                // Atomic per-file: copy to a temp sibling then rename over the
+                // destination, so an interrupted copy (crash / AV lock mid-write)
+                // can't leave a truncated runtime file that silently breaks boot.
+                // fs::rename replaces the destination on Windows (MoveFileEx).
+                let tmp = dst.with_file_name(format!(
+                    "{}.seekdeep-tmp",
+                    dst.file_name().and_then(|n| n.to_str()).unwrap_or("seekdeep")
+                ));
+                fs::copy(src, &tmp).map_err(|e| format!("cp {src:?} -> {tmp:?}: {e}"))?;
+                fs::rename(&tmp, &dst).map_err(|e| {
+                    let _ = fs::remove_file(&tmp);
+                    format!("mv {tmp:?} -> {dst:?}: {e}")
+                })?;
                 copied += 1;
                 break;
             }
@@ -594,8 +606,17 @@ fn copy_dir_skipping(src: &Path, dst: &Path, skip: &[String], prefix: &str) -> R
         if path.is_dir() {
             copy_dir_skipping(&path, &target, skip, &rel)?;
         } else {
-            fs::copy(&path, &target)
-                .map_err(|e| format!("cp {path:?} -> {target:?}: {e}"))?;
+            // Atomic per-file (see maybe_extract_resources): temp + rename so an
+            // interrupted copy can't leave a truncated gui asset.
+            let tmp = target.with_file_name(format!(
+                "{}.seekdeep-tmp",
+                target.file_name().and_then(|n| n.to_str()).unwrap_or("seekdeep")
+            ));
+            fs::copy(&path, &tmp).map_err(|e| format!("cp {path:?} -> {tmp:?}: {e}"))?;
+            fs::rename(&tmp, &target).map_err(|e| {
+                let _ = fs::remove_file(&tmp);
+                format!("mv {tmp:?} -> {target:?}: {e}")
+            })?;
         }
     }
     Ok(())
