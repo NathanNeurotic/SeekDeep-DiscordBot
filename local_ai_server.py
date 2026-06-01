@@ -2366,7 +2366,15 @@ class UpscaleRequest(BaseModel):
 import asyncio as _seekdeep_asyncio
 
 _SEEKDEEP_MODEL_REQUEST_LOCK = _seekdeep_asyncio.Lock()
-_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-pix2pix", "/inpaint", "/inpaint_mask_preview", "/upscale", "/unload"}
+_SEEKDEEP_LOCKED_PATHS = {"/chat", "/vision", "/image", "/img2img", "/instruct-pix2pix", "/inpaint", "/inpaint_mask_preview", "/upscale", "/unload",
+                          # Model loaders that mutate the same module globals
+                          # (chat_model/vision_model/image_pipe/loaded_*). Without
+                          # these, a /warmup/* or /model/warm (which runs the
+                          # loader in a threadpool) could race an in-flight /chat
+                          # → double-load / torn loaded_role / VRAM OOM. The
+                          # middleware holds the lock for the whole request, so it
+                          # covers the threadpool loader too.
+                          "/warmup/chat", "/warmup/image", "/warmup/vision", "/model/warm"}
 
 @app.middleware("http")
 async def seekdeep_singleflight_middleware(request, call_next):
