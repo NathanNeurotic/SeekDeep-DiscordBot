@@ -168,4 +168,29 @@ test.describe('Control Center', () => {
     const real = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
     expect(real, real.join('\n')).toHaveLength(0);
   });
+
+  test('All Settings renders typed controls via the shared config-render module', async ({ page }) => {
+    // settings.html now builds every row with the shared SeekDeepConfigRender
+    // module (config-render.js) instead of inline logic — the first step of
+    // unifying the two config UIs. Drive the real page: the module must load,
+    // the schema must render rows, and makeControl must produce a working
+    // toggle + select + input — with no uncaught error from the extraction.
+    // Assertions are by control TYPE (not specific keys) so they're robust to
+    // whatever /config/schema the server returns.
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('/gui/settings.html');
+    const hasModule = await page.evaluate(() =>
+      !!(window.SeekDeepConfigRender && typeof window.SeekDeepConfigRender.makeControl === 'function'));
+    expect(hasModule, 'SeekDeepConfigRender.makeControl must be loaded').toBe(true);
+    const rows = page.locator('.set-row[data-key]');
+    await expect(rows.first()).toBeAttached({ timeout: 12_000 });
+    expect(await rows.count(), 'schema should render many rows').toBeGreaterThanOrEqual(30);
+    // Each kind path in makeControl must produce its control.
+    expect(await page.locator('.set-row .toggle').count(), 'toggle path').toBeGreaterThanOrEqual(1);
+    expect(await page.locator('.set-row select').count(), 'select path').toBeGreaterThanOrEqual(1);
+    expect(await page.locator('.set-row input').count(), 'input path').toBeGreaterThanOrEqual(1);
+    const real = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
+    expect(real, real.join('\n')).toHaveLength(0);
+  });
 });

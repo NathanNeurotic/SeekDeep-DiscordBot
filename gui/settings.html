@@ -136,6 +136,7 @@
   </div>
 </div>
 
+<script src="config-render.js" defer></script>
 <script src="nav.js" defer></script>
 <script defer>
   // ===== All-settings page =====================================================
@@ -163,15 +164,11 @@
     const dirty = new Map();          // key -> new string value
     const rows = new Map();           // key -> { el, field, read, baseline, refresh }
 
-    const isOn = v => ['1', 'true', 'yes', 'on'].includes(String(v == null ? '' : v).trim().toLowerCase());
-    // Preserve the key's own boolean vocabulary so we never rewrite true->on etc.
-    function boolVocab(def) {
-      const d = String(def == null ? '' : def).trim().toLowerCase();
-      if (d === 'true' || d === 'false') return { on: 'true', off: 'false' };
-      if (d === 'yes' || d === 'no') return { on: 'yes', off: 'no' };
-      if (d === '1' || d === '0') return { on: '1', off: '0' };   // numeric boolean (HF offline flags)
-      return { on: 'on', off: 'off' };
-    }
+    // Shared renderer (config-render.js) — single source of truth for control
+    // rendering + boolean vocab, so All Settings and the Control Center can't drift.
+    const R = window.SeekDeepConfigRender;
+    const isOn = R.isOn;
+    const boolVocab = R.boolVocab;
     // Baseline string a control is compared against to decide "dirty".
     function baselineOf(f) {
       if (f.kind === 'secret') return '';   // never known; dirty only if user types
@@ -227,77 +224,15 @@
 
       const ctrl = document.createElement('div');
       ctrl.className = 'ctrl';
-      let read;
 
-      if (f.kind === 'toggle') {
-        const vocab = boolVocab(f.default);
-        const tog = document.createElement('div');
-        tog.className = 'toggle';
-        const valLabel = document.createElement('span');
-        valLabel.className = 'toggle-val';
-        const baseOn = isOn(baselineOf(f));
-        tog.classList.toggle('on', baseOn);
-        valLabel.textContent = baseOn ? vocab.on : vocab.off;
-        tog.addEventListener('click', () => {
-          tog.classList.toggle('on');
-          valLabel.textContent = tog.classList.contains('on') ? vocab.on : vocab.off;
-          evaluate(f.key);
-        });
-        read = () => tog.classList.contains('on') ? vocab.on : vocab.off;
-        ctrl.appendChild(valLabel);
-        ctrl.appendChild(tog);
-      } else if (f.kind === 'select') {
-        const sel = document.createElement('select');
-        const opts = (f.options && f.options.length) ? f.options.slice() : [];
-        const baseVal = baselineOf(f);
-        if (baseVal && !opts.includes(baseVal)) opts.unshift(baseVal);
-        for (const o of opts) {
-          const opt = document.createElement('option');
-          opt.value = o; opt.textContent = o;
-          if (o === baseVal) opt.selected = true;
-          sel.appendChild(opt);
-        }
-        sel.addEventListener('change', () => evaluate(f.key));
-        read = () => sel.value;
-        ctrl.appendChild(sel);
-      } else {
-        const inp = document.createElement('input');
-        if (f.kind === 'secret') {
-          inp.type = 'password';
-          inp.placeholder = (current[f.key] === '*****') ? '•••••• set · type to replace' : '(not set)';
-          inp.value = '';
-        } else if (f.kind === 'number') {
-          inp.type = 'text';            // text not number: avoids locale/step quirks; values are simple
-          inp.value = baselineOf(f);
-        } else {
-          inp.type = 'text';
-          inp.value = baselineOf(f);
-          inp.placeholder = f.default ? String(f.default) : '(empty)';
-        }
-        inp.spellcheck = false; inp.autocomplete = 'off';
-        inp.addEventListener('input', () => evaluate(f.key));
-        read = () => inp.value;
-        ctrl.appendChild(inp);
-      }
+      // Control rendering is shared with the Control Center via config-render.js
+      // so the two surfaces can't diverge on how a key renders.
+      const c = R.makeControl(f, { baseline: baselineOf(f), current, onChange: () => evaluate(f.key) });
+      c.nodes.forEach((n) => ctrl.appendChild(n));
 
       const reset = document.createElement('button');
       reset.className = 'reset'; reset.type = 'button'; reset.title = 'Reset to default'; reset.textContent = '↺';
-      reset.addEventListener('click', () => {
-        const def = String(f.default == null ? '' : f.default);
-        if (f.kind === 'toggle') {
-          const vocab = boolVocab(f.default);
-          const on = isOn(def);
-          const tog = ctrl.querySelector('.toggle');
-          const lbl = ctrl.querySelector('.toggle-val');
-          tog.classList.toggle('on', on);
-          if (lbl) lbl.textContent = on ? vocab.on : vocab.off;
-        } else if (f.kind === 'select') {
-          ctrl.querySelector('select').value = def;
-        } else {
-          ctrl.querySelector('input').value = def;
-        }
-        evaluate(f.key);
-      });
+      reset.addEventListener('click', () => { c.reset(); evaluate(f.key); });
       ctrl.appendChild(reset);
 
       const state = document.createElement('span');
@@ -305,7 +240,7 @@
       ctrl.appendChild(state);
 
       row.appendChild(ctrl);
-      rows.set(f.key, { el: row, field: f, read });
+      rows.set(f.key, { el: row, field: f, read: c.read });
       return row;
     }
 
