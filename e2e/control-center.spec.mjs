@@ -228,4 +228,35 @@ test.describe('Control Center', () => {
     const real2 = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
     expect(real2, real2.join('\n')).toHaveLength(0);
   });
+
+  test('Control Center toggles reconcile to the schema boolean vocabulary (merge step 2d)', async ({ page }) => {
+    // Bespoke toggles saved a fixed on/off; routed through the shared renderer
+    // they carry the schema's vocabulary (MODEL_AUTO_FALLBACK default 'true' →
+    // true/false, not on/off) plus a value label. Curated controls stay put: the
+    // offline flags are schema kind 'toggle' but a labeled <select>, so the
+    // kind-match skips them. Read via _sdRead — never writes .env.
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('/gui/app.html');
+    await page.evaluate(() => window.SeekDeepPrompt?.close?.(null));
+    await page.locator('.sidebar a[data-mod="config"]').click();
+    const hasRenderer = await page.evaluate(() => !!(window.SeekDeepConfigRender && window.SeekDeepConfigRender.makeControl));
+    test.skip(!hasRenderer, 'served GUI predates config-render.js wiring in app.html (pre-2c/2d build)');
+    const row = page.locator('.config-row').filter({ has: page.locator('.key', { hasText: 'MODEL_AUTO_FALLBACK' }) });
+    await expect(row.locator('.toggle-val')).toBeAttached({ timeout: 12_000 });
+    const label = (await row.locator('.toggle-val').textContent()).trim();
+    expect(['true', 'false'], `vocab label was "${label}"`).toContain(label);
+    // Curated offline flag stays a labeled <select>, not converted to a toggle.
+    const off = page.locator('.config-row').filter({ has: page.locator('.key', { hasText: 'HF_HUB_OFFLINE' }) });
+    await expect(off.locator('select')).toBeAttached();
+    await expect(off.locator('.toggle')).toHaveCount(0);
+    // _sdRead returns the vocab-aware value, tracking the toggle's on-state.
+    const hooks = await page.evaluate(() => {
+      const r = [...document.querySelectorAll('.config-row')].find((x) => (x.querySelector('.key')?.textContent || '').trim() === 'MODEL_AUTO_FALLBACK');
+      return { on: r.querySelector('.toggle').classList.contains('on'), read: typeof r._sdRead === 'function' ? r._sdRead() : '(missing)' };
+    });
+    expect(hooks.read).toBe(hooks.on ? 'true' : 'false');
+    const real3 = errors.filter((e) => !/AbortError|Failed to fetch|NetworkError/i.test(e));
+    expect(real3, real3.join('\n')).toHaveLength(0);
+  });
 });

@@ -324,6 +324,10 @@
   .toggle::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; background: var(--hull-3); border-radius: 50%; transition: 0.2s; }
   .toggle.on { background: var(--cyan-2); border-color: var(--cyan-1); }
   .toggle.on::after { left: 20px; background: var(--ink); }
+  /* Toggle rows reconciled through the shared renderer (config-render.js) gain a
+     value label; mirror All Settings' .ctrl/.toggle-val so they read the same. */
+  .config-row .cfg-ctrl-flex { display: flex; align-items: center; gap: 8px; }
+  .config-row .toggle-val { font-family: var(--font-mono); font-size: 11px; color: var(--hull-2); min-width: 26px; }
 
   /* Persona */
   .persona-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
@@ -3522,13 +3526,16 @@ const SEEKDEEP_BASE = (function() {
     }
     btn.addEventListener('click', () => loadFromDisk(false));
 
-    // Merge step 2c: route hand-coded SELECT rows through the shared renderer
-    // (config-render.js) so their options come from /config/schema and can't
-    // drift from All Settings (e.g. CHAT_PROVIDER's hand-coded list was missing
-    // 'ollama'). Phase 1 is SELECT-only + kind-match (schema kind 'select'):
-    // zero UX change, just schema-sourced options. Curated controls whose kind
-    // differs (e.g. the offline labeled-select, schema kind 'toggle') are left
-    // alone. Save (_sdRead) + hydrate (_sdHydrate) hooks landed in 2a/2b.
+    // Route hand-coded config controls through the shared renderer (config-
+    // render.js) so they can't drift from All Settings. SELECT rows get their
+    // options from the schema (2c — e.g. CHAT_PROVIDER's list was missing
+    // 'ollama'); TOGGLE rows get the schema's boolean vocabulary + a value label
+    // (2d — bespoke toggles saved a fixed on/off, so a true/false key like
+    // MODEL_AUTO_FALLBACK wrote KEY=on instead of KEY=true). Strict kind-match:
+    // a row is converted only when its existing control matches the schema kind,
+    // so curated controls survive (offline flags are schema kind 'toggle' but a
+    // labeled <select>; inputs keep their hand-written placeholders). Save
+    // (_sdRead) + hydrate (_sdHydrate) hooks landed in 2a/2b.
     async function reconcileConfigControlsFromSchema() {
       const R = window.SeekDeepConfigRender;
       if (!R || typeof R.makeControl !== 'function') return;
@@ -3548,12 +3555,30 @@ const SEEKDEEP_BASE = (function() {
         const key = row.querySelector('.key')?.textContent.trim();
         if (!key) return;
         const field = fields[key];
-        if (!field || field.kind !== 'select') return;    // phase 1: selects only
-        const sel = row.querySelector('select');
-        if (!sel) return;                                 // kind mismatch (curated) → skip
-        const c = R.makeControl(field, { baseline: sel.value, onChange: () => markDirty(row) });
-        if (c.nodes[0] && sel.className) c.nodes[0].className = sel.className;  // keep .mono styling
-        sel.replaceWith(...c.nodes);
+        if (!field) return;
+        // Kind-match: only convert a row whose EXISTING control matches the
+        // schema kind, so curated controls survive untouched — e.g. the offline
+        // flags are schema kind 'toggle' but rendered as a labeled <select>
+        // (no .toggle), so they're skipped here. Inputs stay bespoke too: their
+        // hand-written placeholders ("(empty · comma-separated)") beat generic.
+        let existing, keepClass = '', flexWrap = null, baseline = '';
+        if (field.kind === 'select') {
+          existing = row.querySelector('select');
+          if (!existing) return;
+          keepClass = existing.className;                 // keep .mono styling
+          baseline = existing.value;
+        } else if (field.kind === 'toggle') {
+          existing = row.querySelector('.toggle');
+          if (!existing) return;                          // curated <select> → skip
+          flexWrap = existing.parentElement;              // grid cell → flex (label + toggle)
+          baseline = existing.classList.contains('on') ? '1' : '';
+        } else {
+          return;                                         // inputs/secrets: left bespoke
+        }
+        const c = R.makeControl(field, { baseline: baseline, onChange: () => markDirty(row) });
+        if (keepClass && c.nodes[0]) c.nodes[0].className = keepClass;
+        existing.replaceWith(...c.nodes);
+        if (flexWrap) flexWrap.classList.add('cfg-ctrl-flex');
         row._sdRead = c.read;
         row._sdHydrate = c.hydrate;
       });
