@@ -142,6 +142,14 @@ check('reactrule compile: "sus" does NOT match "discuss"', susRx?.test('discuss'
 const lolRx = T.seekdeepCompileReactionPattern('/^lol$/i');
 check('reactrule compile: /^lol$/i matches "lol"', lolRx?.test('lol') === true);
 check('reactrule compile: /^lol$/i does NOT match "haha lol"', lolRx?.test('haha lol') === false);
+// ReDoS hardening: catastrophic-backtracking / oversized patterns must fail CLOSED
+// (compile to null) so a user-supplied /regex/ can't freeze the bot's event loop.
+check('reactrule ReDoS: /(a+)+$/ rejected → null', T.seekdeepCompileReactionPattern('/(a+)+$/') === null);
+check('reactrule ReDoS: /(.*a){25}/ rejected → null', T.seekdeepCompileReactionPattern('/(.*a){25}/') === null);
+check('reactrule ReDoS: /(\\d+)+/ rejected → null', T.seekdeepCompileReactionPattern('/(\\d+)+/') === null);
+check('reactrule ReDoS: 250-char pattern rejected → null', T.seekdeepCompileReactionPattern('/' + 'a'.repeat(250) + '/') === null);
+check('reactrule ReDoS: safe /bug.*report/i still compiles + matches', T.seekdeepCompileReactionPattern('/bug.*report/i')?.test('a bug report') === true);
+check('reactrule ReDoS: safe /(foo|bar)/ not falsely rejected', T.seekdeepCompileReactionPattern('/(foo|bar)/')?.test('bar') === true);
 
 console.log('10. Fence-aware chunker (real splitDiscordText).');
 const helpBlocks = [];

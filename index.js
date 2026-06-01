@@ -16608,16 +16608,46 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
   }
 }
 
+// Auto-react patterns are user-supplied and `.test()`'d against EVERY message in
+// the guild, so a `/regex/` with catastrophic backtracking (e.g. /(a+)+$/) would
+// freeze the whole single-threaded bot. We cap length, reject the exponential
+// nested-quantifier shapes, and FAIL CLOSED (a rejected/invalid non-empty pattern
+// matches nothing — see seekdeepRuleMatches).
+const SEEKDEEP_REACT_PATTERN_MAX = 200;
+function seekdeepReactPatternRedosRisk(src) {
+  return /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)   // (…+…)+  (…*…)*
+      || /\([^()]*[+*}][^()]*\)\s*\{/.test(src)      // (…+…){n,}
+      || /[+*]\)\s*[+*]/.test(src);                  // …+)+   …*)*
+}
+// Returns a human-readable reason if the pattern is unusable/dangerous, else null
+// (null also = an intentionally-empty "match everything in scope" pattern).
+function seekdeepReactPatternRejectReason(pattern = '') {
+  const raw = String(pattern || '').trim();
+  if (!raw) return null;
+  const rx = raw.match(/^\/(.+)\/([a-z]*)$/i);
+  const src = rx ? rx[1] : raw;
+  if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return `pattern too long (max ${SEEKDEEP_REACT_PATTERN_MAX} chars)`;
+  if (rx) {
+    if (seekdeepReactPatternRedosRisk(src)) return 'pattern has nested quantifiers that can hang the bot (rejected)';
+    try { new RegExp(src, rx[2].replace(/[^gimsuy]/g, '') || 'i'); }
+    catch (e) { return 'invalid regex: ' + (e?.message || e); }
+  }
+  return null;
+}
 function seekdeepCompileReactionPattern(pattern = '') {
   const raw = String(pattern || '').trim();
   if (!raw) return null;
-  // /regex/flags syntax for power users.
+  // /regex/flags syntax for power users — hardened against ReDoS.
   const rxMatch = raw.match(/^\/(.+)\/([a-z]*)$/i);
   if (rxMatch) {
-    try { return new RegExp(rxMatch[1], rxMatch[2].replace(/[^gimsuy]/g, '') || 'i'); }
+    const src = rxMatch[1];
+    if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return null;   // fail closed
+    if (seekdeepReactPatternRedosRisk(src)) return null;        // fail closed
+    try { return new RegExp(src, rxMatch[2].replace(/[^gimsuy]/g, '') || 'i'); }
     catch { return null; }
   }
   // Otherwise plain substring, case-insensitive, with word boundaries when sensible.
+  if (raw.length > SEEKDEEP_REACT_PATTERN_MAX) return null;
   const esc = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`\\b${esc}\\b`, 'i');
 }
@@ -16630,8 +16660,13 @@ function seekdeepRuleMatches(rule, message, content) {
   if (rule.scope === 'channel' && rule.target && String(rule.target) !== channelId) return false;
   if (rule.scope === 'user' && rule.target && String(rule.target) !== userId) return false;
   // Pattern check
-  if (!rule._compiled) rule._compiled = seekdeepCompileReactionPattern(rule.pattern);
-  if (!rule._compiled) return true; // empty pattern = match-all in scope
+  if (rule._compiled === undefined) rule._compiled = seekdeepCompileReactionPattern(rule.pattern);
+  if (!rule._compiled) {
+    // Empty pattern is an intentional match-all-in-scope; a NON-empty pattern
+    // that compiled to null was rejected (too long / ReDoS / invalid) → fail
+    // CLOSED so a bad rule reacts to nothing rather than to every message.
+    return !String(rule.pattern || '').trim();
+  }
   return rule._compiled.test(content);
 }
 
@@ -16815,6 +16850,11 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
     const userTarget = addMatch[4];
     const patternB = addMatch[5];
     const pattern = (patternA || patternB || '').trim();
+    const patReject = seekdeepReactPatternRejectReason(pattern);
+    if (patReject) {
+      await message.reply({ content: `⚠️ Rule not added — ${patReject}.`, allowedMentions: { parse: [] } });
+      return true;
+    }
     const rule = {
       id: seekdeepNewReactionRuleId(),
       emoji,
@@ -16923,8 +16963,18 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       const res = await seekdeepFetchWithLimits(attachment.url, { timeoutMs: 15000, maxBytes: 1024 * 1024 });
       const text = await res.text();
       const parsed = JSON.parse(text);
+      let droppedRules = 0;
       if (Array.isArray(parsed.rules)) {
-        bucket.rules = parsed.rules.map((r) => ({ ...r, id: r.id || seekdeepNewReactionRuleId() }));
+        const SEEKDEEP_REACT_RULES_MAX = 200;
+        const clean = [];
+        for (const r of parsed.rules.slice(0, SEEKDEEP_REACT_RULES_MAX)) {
+          // Reject ReDoS/oversized/invalid patterns at import — an imported rule
+          // is a persistent, restart-surviving event-loop bomb otherwise.
+          if (!r || typeof r !== 'object' || seekdeepReactPatternRejectReason(r.pattern)) { droppedRules++; continue; }
+          clean.push({ ...r, id: r.id || seekdeepNewReactionRuleId() });
+        }
+        droppedRules += Math.max(0, parsed.rules.length - SEEKDEEP_REACT_RULES_MAX);
+        bucket.rules = clean;
       }
       if (parsed.builtins && typeof parsed.builtins === 'object') {
         for (const [key, val] of Object.entries(parsed.builtins)) {
@@ -16932,7 +16982,7 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
         }
       }
       seekdeepWriteAutoReactions(data);
-      await message.reply({ content: `Imported ${bucket.rules.length} rule(s) + builtins.`, allowedMentions: { repliedUser: false } });
+      await message.reply({ content: `Imported ${bucket.rules.length} rule(s)${droppedRules ? ` (dropped ${droppedRules} unsafe/invalid)` : ''} + builtins.`, allowedMentions: { repliedUser: false } });
     } catch (err) {
       await message.reply({ content: 'Import failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
     }
