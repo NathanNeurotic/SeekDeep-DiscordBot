@@ -122,7 +122,7 @@
       secondary = { label: 'Dismiss', onClick: ({ close }) => close() };
     }
     sdn.banner({
-      id, tone, title,
+      id, tone, title, html: true,
       body: `<span style="font-family:var(--font-mono);font-size:12px;">${elapsed}${linesBit}</span>${lastBit}${progressBar}${hint}`,
       primary, secondary,
       dismissible: !!st.terminal,

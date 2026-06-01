@@ -88,7 +88,8 @@
         sdn.toast({
           tone: 'neutral',
           title: 'Update reminder muted for 24h',
-          body: '<a href="#" data-sd-skip-update>Skip v' + result.latest + ' permanently</a>',
+          body: '<a href="#" data-sd-skip-update>Skip v' + String(result.latest).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])) + ' permanently</a>',
+          html: true,
           ttl: 8000,
         });
       }

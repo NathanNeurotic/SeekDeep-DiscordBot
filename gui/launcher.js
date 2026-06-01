@@ -833,7 +833,7 @@
       } else if (label === '⟳ smoke test') {
         btn.addEventListener('click', () => {
           const sdn = notify();
-          if (sdn) sdn.toast({ tone: 'info', title: 'Smoke test', body: 'Run <code>npm run preflight</code> from the repo to validate the full stack.', ttl: 6000 });
+          if (sdn) sdn.toast({ tone: 'info', title: 'Smoke test', body: 'Run <code>npm run preflight</code> from the repo to validate the full stack.', html: true, ttl: 6000 });
         });
       }
     });
@@ -1096,6 +1096,7 @@
             sdn.banner({
               id: 'sd-smoke-results', tone, title,
               body: '<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:6px 0 0; max-height:240px; overflow:auto;">' + body.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</pre>',
+              html: true,
               primary: { label: 'Dismiss', onClick: ({ close }) => close() },
               dismissible: true, sticky: !j.ok,
             });

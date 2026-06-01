@@ -31,6 +31,11 @@
   'use strict';
   if (window.SeekDeepNotify) return;
 
+  // Escape user/server-derived text before it lands in innerHTML. Titles are
+  // always escaped; string bodies are escaped UNLESS the caller opts in with
+  // html:true (and is then responsible for escaping its own interpolations).
+  const sdnEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
   // ============================================================
   // Single shared stylesheet — variables come from styles.css
   // ============================================================
@@ -359,8 +364,8 @@
     el.dataset.id = id;
 
     const icon = opts.icon || ({ info: '▸', warn: '⚠', bad: '✕', good: '✓', neutral: '·' }[opts.tone || 'info']);
-    const titleHtml = opts.title ? `<span class="sdn-title">${opts.title}</span>` : '';
-    const bodyHtml  = opts.body  ? `<span class="sdn-body">${opts.body}</span>`   : '';
+    const titleHtml = opts.title ? `<span class="sdn-title">${sdnEsc(opts.title)}</span>` : '';
+    const bodyHtml  = opts.body  ? `<span class="sdn-body">${opts.html ? opts.body : sdnEsc(opts.body)}</span>` : '';
 
     el.innerHTML = `
       <span class="sdn-icon">${icon}</span>
@@ -442,7 +447,7 @@
       m.innerHTML = `
         <div class="sdn-modal-head">
           <div class="sdn-label"><span class="sdn-icon">${icon}</span>${label}</div>
-          <h3>${opts.title || ''}</h3>
+          <h3>${sdnEsc(opts.title || '')}</h3>
         </div>
         <div class="sdn-modal-body" data-sdn-body></div>
         <div class="sdn-modal-foot"></div>
@@ -459,10 +464,10 @@
         try { opts.render(bodyEl); } catch (e) { console.error('[notify] render error:', e); }
       } else if (opts.body instanceof Element) {
         bodyEl.appendChild(opts.body);
-      } else if (typeof opts.body === 'string' && opts.body.includes('<')) {
-        bodyEl.innerHTML = opts.body;
+      } else if (typeof opts.body === 'string' && opts.html) {
+        bodyEl.innerHTML = opts.body;   // caller opted into HTML + owns escaping
       } else if (typeof opts.body === 'string' && opts.body) {
-        bodyEl.textContent = opts.body;
+        bodyEl.textContent = opts.body; // default: safe text (no HTML injection)
       } else if (!opts.body && opts.render == null) {
         bodyEl.remove();
       }
@@ -563,8 +568,8 @@
     el.innerHTML = `
       <span class="sdn-icon">${icon}</span>
       <div>
-        ${opts.title ? `<div class="sdn-t-title">${opts.title}</div>` : ''}
-        ${opts.body ? `<div class="sdn-t-body">${opts.body}</div>` : ''}
+        ${opts.title ? `<div class="sdn-t-title">${sdnEsc(opts.title)}</div>` : ''}
+        ${opts.body ? `<div class="sdn-t-body">${opts.html ? opts.body : sdnEsc(opts.body)}</div>` : ''}
       </div>
     `;
     stack.appendChild(el);

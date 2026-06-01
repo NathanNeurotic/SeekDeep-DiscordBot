@@ -2340,7 +2340,7 @@
             const json = JSON.stringify(rule, null, 2);
             m.innerHTML = `
               <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:640px;color:var(--hull-2);font-family:var(--font-grotesk);">
-                <h3 style="margin:0 0 12px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">⌕ INSPECT · ${rule.emoji || '?'} · ${rule.pattern || ''}</h3>
+                <h3 style="margin:0 0 12px 0;color:var(--cyan-1);font-family:var(--font-mono);letter-spacing:0.1em;">⌕ INSPECT · ${escapeHtml(rule.emoji || '?')} · ${escapeHtml(rule.pattern || '')}</h3>
                 <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:11px;max-height:420px;overflow:auto;">${json.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</pre>
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
                   <button id="riClose" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>
@@ -3764,6 +3764,7 @@ const SEEKDEEP_BASE = (function() {
           tone: 'info',
           title: `Saved ${Object.keys(updates).length} value${Object.keys(updates).length === 1 ? '' : 's'} to .env`,
           body: 'Click <strong>⟳ Reload .env</strong> in the Launcher panel to restart the AI server + bot so they pick up the new values.',
+          html: true,
           ttl: 8000,
         });
       }
@@ -5809,7 +5810,7 @@ root.render(/*#__PURE__*/React.createElement(App, null));
           installedInfo = list.find(m => (m.id || m.model_id || m) === model) || null;
         }
       } catch {}
-      const cell = (k, v) => `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--stroke);"><div style="color:var(--hull-3);font-family:var(--font-mono);font-size:11px;">${k}</div><div style="font-family:var(--font-mono);font-size:12px;color:var(--hull-1);">${v}</div></div>`;
+      const cell = (k, v) => { const e = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); return `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--stroke);"><div style="color:var(--hull-3);font-family:var(--font-mono);font-size:11px;">${e(k)}</div><div style="font-family:var(--font-mono);font-size:12px;color:var(--hull-1);">${e(v)}</div></div>`; };
       const modal = document.createElement('div');
       modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
       modal.innerHTML = `
