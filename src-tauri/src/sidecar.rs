@@ -824,6 +824,39 @@ fn py_launcher_prefer_torch_compat() -> Option<PathBuf> {
     candidates.into_iter().next().map(|(_, p)| p)
 }
 
+/// Run a command for its exit status only, killing it after `secs` seconds. An
+/// `import torch` probe can hang for minutes on a broken CUDA/driver install,
+/// which would freeze boot on the loading screen with no signal; a timeout is
+/// treated as "probe failed" (false). Output is discarded (status only) so the
+/// child can't deadlock on a full stdout pipe while we poll.
+fn command_succeeds_within(mut cmd: std::process::Command, secs: u64) -> bool {
+    use std::time::{Duration, Instant};
+    let mut child = match cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
 /// Quick smoke test: does this Python have our minimum boot deps installed?
 /// If false, the user needs to run install_python_deps before we can spawn.
 ///
@@ -833,11 +866,9 @@ fn py_launcher_prefer_torch_compat() -> Option<PathBuf> {
 /// where httpx wasn't installed and triggered a needless pip install loop.
 /// fastapi + uvicorn + pydantic + dotenv + PIL is the actual minimum.
 pub fn deps_present(python: &Path) -> bool {
-    let out = quiet_command(python)
-        .arg("-c")
-        .arg("import fastapi, uvicorn, pydantic, dotenv, PIL")
-        .output();
-    matches!(out, Ok(o) if o.status.success())
+    let mut cmd = quiet_command(python);
+    cmd.arg("-c").arg("import fastapi, uvicorn, pydantic, dotenv, PIL");
+    command_succeeds_within(cmd, 15)
 }
 
 /// Distinct from `deps_present`: true iff the candidate Python has a working
@@ -853,11 +884,9 @@ pub fn deps_present(python: &Path) -> bool {
 /// next watchdog respawn pick a Python that can actually load torch, and
 /// makes a torch-less system Python LOSE to a torch-having one elsewhere.
 pub fn torch_present(python: &Path) -> bool {
-    let out = quiet_command(python)
-        .arg("-c")
-        .arg("import torch")
-        .output();
-    matches!(out, Ok(o) if o.status.success())
+    let mut cmd = quiet_command(python);
+    cmd.arg("-c").arg("import torch");
+    command_succeeds_within(cmd, 20)
 }
 
 /// Fast CUDA-torch probe. Reads torch's package metadata only — NO `import
@@ -868,11 +897,9 @@ pub fn torch_present(python: &Path) -> bool {
 /// metadata happened to omit the tag, torch_present() still elects it in the
 /// any-torch pass — this only governs the CUDA *preference*.)
 pub fn torch_cuda_present(python: &Path) -> bool {
-    let out = quiet_command(python)
-        .arg("-c")
-        .arg("import importlib.metadata as m, sys; v = m.version('torch'); sys.exit(0 if '+cu' in v else 1)")
-        .output();
-    matches!(out, Ok(o) if o.status.success())
+    let mut cmd = quiet_command(python);
+    cmd.arg("-c").arg("import importlib.metadata as m, sys; v = m.version('torch'); sys.exit(0 if '+cu' in v else 1)");
+    command_succeeds_within(cmd, 10)
 }
 
 /// Spawn `python local_ai_server.py` with cwd = runtime dir and stdout/stderr
