@@ -10,10 +10,10 @@
 <link rel="stylesheet" href="styles.css" />
 <style>
   body { overflow: hidden; height: 100vh; background: #000; }
-  .deck { position: fixed; inset: 0; display: grid; place-items: center; }
+  .deck { position: fixed; inset: 0; overflow: hidden; }
 
   /* ===== Slide system: 16:9 stage ===== */
-  .stage { width: 1920px; height: 1080px; position: relative; overflow: hidden; transform-origin: center center; background: var(--ink); }
+  .stage { width: 1920px; height: 1080px; position: absolute; top: 50%; left: 50%; overflow: hidden; transform-origin: center center; background: var(--ink); }
   .stage::before { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 64px 64px, linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 64px 64px, linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%); }
   .stage::after { content: ""; position: absolute; inset: 40px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 1px 36px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 36px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 36px no-repeat; filter: drop-shadow(0 0 8px rgba(109,240,255,0.6)); }
 
@@ -380,7 +380,9 @@ function fit() {
   const stage = document.getElementById('stage');
   const vw = window.innerWidth, vh = window.innerHeight;
   const scale = Math.min(vw / 1920, vh / 1080);
-  stage.style.transform = `scale(${scale})`;
+  // translate(-50%,-50%) centers the stage in the deck regardless of how grid
+  // would (mis)align an item wider than the viewport; scale fits it to size.
+  stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
 }
 fit();
 window.addEventListener('resize', fit);
