@@ -2842,6 +2842,50 @@ def register_gui_endpoints(
                 "errors": errors or ["no files were downloaded"],
                 "note": "Self-update failed before any file was applied. The live tree is untouched.",
             }
+        # Integrity gate (P0-3): verify EVERY staged file's content matches the
+        # git blob SHA GitHub publishes for this ref, BEFORE we write executable
+        # code over the live install. Catches a corrupted / truncated / MITM-
+        # altered fetch and a CDN serving an HTML error page in place of code.
+        # Fail CLOSED — if we can't verify, we don't commit. (This is content
+        # integrity vs. the published git tree; it does NOT by itself defend
+        # against a *compromised repo*, which needs code signing — the ref
+        # allowlist + HTTPS + token gate remain the mitigations there.)
+        def _git_blob_sha(data: bytes) -> str:
+            import hashlib
+            h = hashlib.sha1()
+            h.update(b"blob " + str(len(data)).encode() + b"\x00")
+            h.update(data)
+            return h.hexdigest()
+        blob_shas = None
+        try:
+            import json as _json
+            tree = _json.loads(_fetch(f"https://api.github.com/repos/{REPO}/git/trees/{ref}?recursive=1"))
+            blob_shas = {e["path"]: e["sha"] for e in tree.get("tree", [])
+                         if isinstance(e, dict) and e.get("type") == "blob" and e.get("path") and e.get("sha")}
+        except Exception as exc:
+            errors.append(f"integrity: could not fetch git tree: {str(exc)[:120]}")
+        bad_integrity = []
+        if blob_shas is None:
+            bad_integrity = ["<git tree unavailable — cannot verify>"]
+        else:
+            for item in staged:
+                rel = item["path"]
+                try:
+                    actual = _git_blob_sha((staging / rel).read_bytes())
+                except Exception:
+                    actual = None
+                if blob_shas.get(rel) != actual or actual is None:
+                    bad_integrity.append(rel)
+        if bad_integrity:
+            try: shutil.rmtree(staging, ignore_errors=True)
+            except Exception: pass
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "integrity check failed", "files": bad_integrity[:20]}})
+            raise HTTPException(409,
+                "Self-update aborted: file integrity check against GitHub failed (live tree untouched): "
+                + ", ".join(bad_integrity[:8]))
+        event_bus.publish_sync({"type": "self-update.line",
+                                "data": {"line": f"integrity ok: {len(staged)} file(s) match git SHAs"}})
         # Phase 2: commit. Each src.replace(target) is atomic on the same
         # volume (staging is a sibling so always same vol). Live tree only
         # transitions consistent old → consistent new per file.
