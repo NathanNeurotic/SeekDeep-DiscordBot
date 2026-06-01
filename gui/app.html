@@ -3454,6 +3454,16 @@ const SEEKDEEP_BASE = (function() {
           if (!key) return;
           const present = (key in env);
           const v = present ? env[key] : '';
+          // Shared-renderer rows (config-render.js) hydrate themselves — value
+          // + toggle label — via the hook the reconcile attached. No-op for
+          // rows still on the hand-coded path.
+          if (typeof row._sdHydrate === 'function') {
+            if (present) row._sdHydrate(v === '*****' ? '' : v);
+            const sv = row.querySelector('.save');
+            if (sv) { sv.textContent = 'SAVED'; sv.style.color = ''; }
+            if (present && v === '*****') redacted++; else populated++;
+            return;
+          }
           // Toggle rows (feature flags + any future on/off card): set
           // .toggle.on based on /env value. "on"/"true"/"1"/"yes" → on.
           // A feature flag ABSENT from .env is not "unknown" — the bot/server

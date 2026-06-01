@@ -44,7 +44,7 @@
     const current = opts.current || {};
     const defStr = String(field.default == null ? '' : field.default);
     const nodes = [];
-    let read, reset;
+    let read, reset, hydrate;
 
     if (field.kind === 'toggle') {
       const vocab = boolVocab(field.default);
@@ -66,6 +66,11 @@
         tog.classList.toggle('on', on);
         valLabel.textContent = on ? vocab.on : vocab.off;
       };
+      hydrate = (value) => {
+        const on = isOn(value);
+        tog.classList.toggle('on', on);
+        valLabel.textContent = on ? vocab.on : vocab.off;
+      };
       nodes.push(valLabel, tog);
     } else if (field.kind === 'select') {
       const sel = document.createElement('select');
@@ -80,6 +85,7 @@
       sel.addEventListener('change', onChange);
       read = () => sel.value;
       reset = () => { sel.value = defStr; };
+      hydrate = (value) => { sel.value = String(value == null ? '' : value); };
       nodes.push(sel);
     } else {
       const inp = document.createElement('input');
@@ -99,10 +105,11 @@
       inp.addEventListener('input', onChange);
       read = () => inp.value;
       reset = () => { inp.value = (field.kind === 'secret') ? '' : defStr; };
+      hydrate = (value) => { inp.value = (field.kind === 'secret') ? '' : String(value == null ? '' : value); };
       nodes.push(inp);
     }
 
-    return { nodes: nodes, read: read, reset: reset };
+    return { nodes: nodes, read: read, reset: reset, hydrate: hydrate };
   }
 
   window.SeekDeepConfigRender = { isOn: isOn, boolVocab: boolVocab, makeControl: makeControl };
