@@ -5868,8 +5868,18 @@ root.render(/*#__PURE__*/React.createElement(App, null));
   function setMode(mode) {
     liveMode = mode === 'live';
     pill.classList.remove('on', 'warn', 'cyan', 'bad');
-    if (mode === 'live') { pill.classList.add('cyan'); pill.innerHTML = '<span class="dot"></span>LIVE · /events'; pill.title = 'streaming from SeekDeepEvents.log.line'; }
-    else if (mode === 'poll') { pill.classList.add('warn'); pill.innerHTML = '<span class="dot"></span>POLL · /logs/tail'; pill.title = 'SEEKDEEP_EMIT_LOG_LINES=off — bus is silent, falling back to 3s poll on /logs/tail'; }
+    pill.style.cursor = ''; pill.onclick = null;
+    if (mode === 'live') { pill.classList.add('cyan'); pill.innerHTML = '<span class="dot"></span>LIVE · /events'; pill.title = 'Live log streaming is on — pushing each line as it happens.'; }
+    else if (mode === 'poll') {
+      // Live streaming needs the log bus on (SEEKDEEP_EMIT_LOG_LINES). Make the
+      // pill a one-click deep-link to that setting instead of just naming the
+      // env var — no "go edit your .env" dead-end.
+      pill.classList.add('warn');
+      pill.innerHTML = '<span class="dot"></span>POLL · /logs/tail';
+      pill.title = 'Live log streaming is off — click to turn it on in All Settings, then ↻ Restart bot. Until then, polling /logs/tail every 3s.';
+      pill.style.cursor = 'pointer';
+      pill.onclick = () => { location.href = 'settings.html#SEEKDEEP_EMIT_LOG_LINES'; };
+    }
     else { pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.title = 'no source available'; }
   }
   setMode('poll');
