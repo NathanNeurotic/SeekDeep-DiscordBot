@@ -140,6 +140,16 @@ def main() -> int:
           r.status_code == 403,
           f"got {r.status_code}; expected 403 (TestClient host should not be loopback)")
 
+    # ---- CORS: a foreign Origin must NOT get an Access-Control-Allow-Origin
+    # echo. The allowlist is the defense against a malicious web page driving
+    # 127.0.0.1:7865; a regression to allow_origins=["*"] or origin-echo would
+    # silently re-open that. ----
+    r = c.get("/health", headers={"Origin": "https://evil.example"})
+    acao = r.headers.get("access-control-allow-origin")
+    check("CORS: foreign Origin not allowed (no ACAO echo / wildcard)",
+          acao not in ("https://evil.example", "*"),
+          f"ACAO={acao!r} — allowlist may be too permissive")
+
     # ---- Auth: POST /config without header -> 401 ----
     r = c.post("/config", json={"updates": {}})
     check("POST /config without token -> 401",

@@ -304,8 +304,31 @@ stage('docs', () => {
     }
   }
 
+  // (d) Version-sync: package.json (the SoT _read_pkg_version reads), src-tauri/
+  // Cargo.toml (env!("CARGO_PKG_VERSION")), and the seekdeep entry in Cargo.lock
+  // must agree — drift makes the Rust shell report a different version than the
+  // bundled Python server, so the boot-time stale-server guard misfires every
+  // launch. (These three are bumped by hand each release; this catches a typo.)
+  const pkgPath = path.join(ROOT, 'package.json');
+  const cargoTomlPath = path.join(ROOT, 'src-tauri', 'Cargo.toml');
+  const cargoLockPath = path.join(ROOT, 'src-tauri', 'Cargo.lock');
+  if (existsSync(pkgPath) && existsSync(cargoTomlPath)) {
+    let pkgVer = null;
+    try { pkgVer = JSON.parse(readFileSync(pkgPath, 'utf8')).version; } catch { problems.push('package.json is not valid JSON'); }
+    const tomlVer = (readFileSync(cargoTomlPath, 'utf8').match(/^version\s*=\s*"([^"]+)"/m) || [])[1];
+    if (pkgVer && tomlVer && pkgVer !== tomlVer) {
+      problems.push(`version drift: package.json ${pkgVer} != src-tauri/Cargo.toml ${tomlVer}`);
+    }
+    if (pkgVer && existsSync(cargoLockPath)) {
+      const lockVer = (readFileSync(cargoLockPath, 'utf8').match(/name = "seekdeep"\r?\nversion = "([^"]+)"/) || [])[1];
+      if (lockVer && pkgVer !== lockVer) {
+        problems.push(`version drift: package.json ${pkgVer} != Cargo.lock seekdeep ${lockVer} (run cargo build to sync the lock)`);
+      }
+    }
+  }
+
   if (problems.length) return { ok: false, detail: problems.join(' · ') };
-  return { ok: true, detail: 'version-filenames placeholder · env memory caps aligned · smoke total live' };
+  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok' };
 });
 
 const failed = stages.filter((s) => !s.ok);
