@@ -18,7 +18,13 @@ Both POST the same `/config`, so values can't *conflict* — but the hand-coded 
 
 **Target architecture.** One shared `gui/config-render.js` (extract from settings.html: `buildRow`, `boolVocab`, `isOn`, kind handling, hydrate, dirty). Both pages consume it — Control Center renders a *curated slice*, All Settings renders *all*. Each key is defined once; neither can drift. Keep the Control Center's genuinely-rich sections (model picker, token entry, feature management) as special sections above the shared rows. Retire the plain hand-coded duplicate panels (e.g. the 3-key offline panel).
 
-**The catch / why it's its own pass.** Must reconcile **two mature save/validation/hydration systems** + the live model-picker, and the GUI is token-gated (no full auto-verify). Plan: (1) extract `config-render.js`, have settings.html use it (behavior-preserving checkpoint); (2) wire it into app.html's Bot-config pane, unifying onto ONE save path; (3) drop the redundant hand-coded rows; (4) verify by driving both pages (browser) + preflight. Do step-by-step with a commit per step.
+**The catch / why it's its own pass.** Must reconcile **two mature save/validation/hydration systems** + the live model-picker, and the GUI is token-gated (no full auto-verify). Plan, step-by-step (commit per step):
+- ✅ **(1) DONE (eb0cec3)** — extracted `gui/config-render.js` (makeControl + isOn + boolVocab); settings.html adopts it, behavior-preserving. Verified 18/18 Node DOM-stub + preflight; e2e added (control-center.spec, "shared config-render module") — runs once a server is up.
+- **(2) NEXT** — wire app.html's Bot-config pane onto the same `makeControl`, unifying onto ONE save path (the hard part: app.html's `#cfg-save`/`markDirty`/`CFG_VALIDATORS` vs settings.html's own save). Keep the rich sections (model picker, token fields, feature cards).
+- **(3)** drop app.html's hand-coded duplicate rows once (2) renders them via the shared path.
+- **(4)** verify by driving BOTH pages in the browser (start the AI server → `npm run test:e2e`) + preflight.
+
+Step 2 specifically needs a **running AI server** for e2e verification — don't ship it on syntax-only.
 
 **Done already (this session, shipped in 10.35.42):** All Settings covers all 143 keys (merged `.env.example`, bundled), every key documented, in-place ↻ Restart, deep-links, Control Center→All-Settings subpage framing, offline-flag labels/toggles, EMIT_LOG_LINES surfaced + pill deep-link, GIF→🖼️ fix, and the deferred slash parity (`/archive clean`, `/reactrule|/emoji import`).
 
