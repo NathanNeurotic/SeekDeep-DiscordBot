@@ -936,8 +936,44 @@ pub fn spawn_server(python: &Path, runtime: &Path, log_dir: &Path) -> Result<Chi
         .stderr(Stdio::from(log_clone))
         .spawn()
         .map_err(|e| format!("spawn python local_ai_server.py: {e}"))?;
+    bind_child_to_job(&child);
     Ok(child)
 }
+
+/// Bind a spawned child to a Win32 Job Object with KILL_ON_JOB_CLOSE so the OS
+/// tears the child down whenever THIS shell process dies — including Task-Manager
+/// "End task", a panic, or a hard crash, none of which fire our CloseRequested /
+/// Exit / tray-Quit handlers. The job handle is intentionally leaked
+/// (mem::forget): it then stays open for the shell's whole lifetime, and the
+/// kernel closes it on process death (any cause), triggering the kill. Cost is
+/// one small handle per spawn (respawns are rare). Best-effort — any failure
+/// just falls back to the prior behavior (orphan reaped on next launch) and
+/// never blocks boot.
+#[cfg(windows)]
+fn bind_child_to_job(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    let job = match win32job::Job::create() {
+        Ok(j) => j,
+        Err(e) => { eprintln!("[SeekDeep] job-object create failed (orphan-on-crash possible): {e:?}"); return; }
+    };
+    let mut info = match job.query_extended_limit_info() {
+        Ok(i) => i,
+        Err(e) => { eprintln!("[SeekDeep] job-object query failed: {e:?}"); return; }
+    };
+    info.limit_kill_on_job_close();
+    if let Err(e) = job.set_extended_limit_info(&mut info) {
+        eprintln!("[SeekDeep] job-object set-limit failed: {e:?}");
+        return;
+    }
+    if let Err(e) = job.assign_process(child.as_raw_handle() as _) {
+        eprintln!("[SeekDeep] job-object assign failed: {e:?}");
+        return;
+    }
+    std::mem::forget(job); // keep the handle open for the shell's lifetime
+}
+
+#[cfg(not(windows))]
+fn bind_child_to_job(_child: &Child) {}
 
 /// Run `python -m pip install -r requirements-local.txt` and capture
 /// combined output. Called from the install_python_deps Tauri command
