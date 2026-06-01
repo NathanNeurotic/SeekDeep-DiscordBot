@@ -371,22 +371,27 @@ def main() -> int:
               f"body={body}")
 
     # ---- /data/{file} normalizers ----
-    r = c.get("/data/server-stats.json")
-    if r.status_code == 200:
-        body = r.json()
-        check("GET /data/server-stats.json -> 200 (normalizer applied)",
-              body.get("normalized") is True,
-              "normalizer wired but not flagged in response" if not body.get("normalized") else "")
-        data = body.get("data", {})
-        check("  ...has totals.messages",
-              isinstance(data.get("totals", {}).get("messages"), int))
-        check("  ...has dayBuckets.messages list",
-              isinstance(data.get("dayBuckets", {}).get("messages"), list))
-        check("  ...has top contributors list",
-              isinstance(data.get("top"), list))
-    else:
-        check("GET /data/server-stats.json -> 200 (or empty fallback)",
-              False, f"got {r.status_code}; expected 200 if file exists or empty fallback")
+    # server-stats.json is now token-gated (per-user discord IDs + activity
+    # counts). Without token: 401. With token: 200 + normalizer applied.
+    check("GET /data/server-stats.json without token -> 401",
+          c.get("/data/server-stats.json").status_code == 401)
+    if token:
+        r = c.get("/data/server-stats.json", headers={"X-SeekDeep-Token": token})
+        if r.status_code == 200:
+            body = r.json()
+            check("GET /data/server-stats.json (token) -> 200 (normalizer applied)",
+                  body.get("normalized") is True,
+                  "normalizer wired but not flagged in response" if not body.get("normalized") else "")
+            data = body.get("data", {})
+            check("  ...has totals.messages",
+                  isinstance(data.get("totals", {}).get("messages"), int))
+            check("  ...has dayBuckets.messages list",
+                  isinstance(data.get("dayBuckets", {}).get("messages"), list))
+            check("  ...has top contributors list",
+                  isinstance(data.get("top"), list))
+        else:
+            check("GET /data/server-stats.json (token) -> 200 (or empty fallback)",
+                  False, f"got {r.status_code}; expected 200 if file exists or empty fallback")
 
     # auto-reactions.json: now token-gated (contains guild + creator IDs).
     # With token: empty-fallback. Without: 401.

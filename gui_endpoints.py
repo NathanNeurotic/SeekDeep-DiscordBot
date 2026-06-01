@@ -405,6 +405,17 @@ def _seekdeep_searxng_image() -> str:
 
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
+# Keys that must NOT be writable through the user-facing POST /config path — they
+# govern auth + self-update, so letting the config UI set them would turn a
+# leaked/borrowed GUI token into a persistent auth-off / RCE foothold. Internal
+# _merge_env callers (token sync at ~991, lock-cache) are unaffected; this gate
+# is applied only to the user-supplied /config patch.
+_CONFIG_PROTECTED_KEYS = frozenset({
+    "SEEKDEEP_GUI_TOKEN",
+    "SEEKDEEP_GUI_TOKEN_DISABLED",
+    "SEEKDEEP_SELF_UPDATE_ENABLED",
+})
+
 
 def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
     """Merge `updates` into the on-disk .env file, preserving comments and order.
@@ -1658,6 +1669,9 @@ def register_gui_endpoints(
     async def post_config(patch: ConfigPatch):
         if not patch.updates:
             return {"ok": True, "updated": []}
+        blocked = _CONFIG_PROTECTED_KEYS.intersection(patch.updates)
+        if blocked:
+            raise HTTPException(400, f"refusing to set protected key(s) via /config: {', '.join(sorted(blocked))}")
         result = _merge_env(_env_path, patch.updates)
         _seekdeep_audit("config.write", keys=",".join(list(patch.updates.keys())[:32]))
         # Routing/persona/model knobs are env-driven, so any /config write
@@ -3685,6 +3699,10 @@ def register_gui_endpoints(
         "archive-snapshot.json",   # per-thread entry metadata + prompts + thumbnails
         "prompt-templates.json",   # discord user IDs + saved prompt bodies
         "auto-reactions.json",     # guild IDs, channel IDs, creator IDs, patterns
+        "server-stats.json",       # per-user discord IDs + activity counts
+        "persona-overrides.json",  # guild/channel IDs + who set each override
+        "custom-personas.json",    # user-authored persona definitions
+        "bot-status.json",         # presence / runtime status
     }
 
     # ----- GET /data/{file} -----
