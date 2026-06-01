@@ -3598,12 +3598,21 @@ const SEEKDEEP_BASE = (function() {
         : (row.querySelector('.key')?.textContent.trim());
       if (!key) return;
       let val;
-      const input = row.querySelector('input, select');
-      if (input) {
-        val = input.value;
+      // Shared-renderer rows (config-render.js makeControl) attach a vocab-aware
+      // read() to the row as _sdRead — use it so a shared toggle saves the key's
+      // real value (e.g. "1"/"0" for HF offline flags) instead of a blind
+      // "on"/"off". Rows not yet on the shared renderer keep the original read
+      // path unchanged, so this is a no-op until a row opts in.
+      if (typeof row._sdRead === 'function') {
+        val = row._sdRead();
       } else {
-        const tgl = row.querySelector('.toggle');
-        if (tgl) val = tgl.classList.contains('on') ? 'on' : 'off';
+        const input = row.querySelector('input, select');
+        if (input) {
+          val = input.value;
+        } else {
+          const tgl = row.querySelector('.toggle');
+          if (tgl) val = tgl.classList.contains('on') ? 'on' : 'off';
+        }
       }
       if (val !== undefined) updates[key] = val;
     });
