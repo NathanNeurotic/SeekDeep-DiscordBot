@@ -16565,17 +16565,23 @@ async function seekdeepHandleReactToggleComponent(interaction) {
     return true;
   }
 
-  const data = seekdeepReadAutoReactions();
-  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
-  if (action === 'toggle' && arg && bucket.builtins[arg]) {
-    bucket.builtins[arg].enabled = !bucket.builtins[arg].enabled;
-  } else if (action === 'all') {
-    const want = arg === 'on';
-    for (const k of Object.keys(bucket.builtins)) {
-      if (bucket.builtins[k]) bucket.builtins[k].enabled = want;
+  // Serialize the read-modify-write through the per-guild async mutex so
+  // concurrent button clicks (multiple admins, or a toggle racing a /reactrule
+  // command) can't read the same baseline and clobber each other on write.
+  let data;
+  await seekdeepWithArchiveCountLock(`reacts:${guild.id}`, async () => {
+    data = seekdeepReadAutoReactions();
+    const b = seekdeepGetGuildReactionsBucket(data, String(guild.id));
+    if (action === 'toggle' && arg && b.builtins[arg]) {
+      b.builtins[arg].enabled = !b.builtins[arg].enabled;
+    } else if (action === 'all') {
+      const want = arg === 'on';
+      for (const k of Object.keys(b.builtins)) {
+        if (b.builtins[k]) b.builtins[k].enabled = want;
+      }
     }
-  }
-  seekdeepWriteAutoReactions(data);
+    seekdeepWriteAutoReactions(data);
+  });
 
   // Update ONLY the components — the new on/off state shows in the button colors
   // (green = on). Omitting `embeds`/`files` leaves the existing embed + its
