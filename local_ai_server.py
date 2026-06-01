@@ -2390,6 +2390,38 @@ async def seekdeep_singleflight_middleware(request, call_next):
 # SEEKDEEP_SINGLEFLIGHT_MIDDLEWARE_END
 
 
+# Structured errors for inference routes. /chat handles its own failures (rich
+# fallback), but the image/vision routes did not — an OOM or model-load failure
+# surfaced as a bare 500 + traceback. These app-level handlers give every
+# unhandled exception a structured JSON body: VRAM pressure / CUDA-OOM → 503
+# (retryable), anything else → 500 without leaking a traceback. HTTPException
+# (auth + 4xx) and request-validation errors keep their own handlers, and routes
+# that already return their own JSONResponse are unaffected (those don't raise).
+@app.exception_handler(VRAMPressureError)
+async def _seekdeep_vram_pressure_handler(request, exc):
+    return JSONResponse(status_code=503, content={
+        "ok": False,
+        "error": "GPU is out of free VRAM for this task — close other models or use a smaller one, then retry.",
+        "detail": str(exc)[:300],
+    })
+
+
+@app.exception_handler(Exception)
+async def _seekdeep_unhandled_handler(request, exc):
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    print(f"[SeekDeep Local AI] unhandled {name} on {request.url.path}: {str(exc)[:200]}", flush=True)
+    if "out of memory" in msg or "cuda oom" in msg or "outofmemory" in name.lower():
+        return JSONResponse(status_code=503, content={
+            "ok": False,
+            "error": "Ran out of GPU memory during generation — retry, or use a smaller model / lower resolution.",
+            "detail": str(exc)[:300],
+        })
+    return JSONResponse(status_code=500, content={
+        "ok": False, "error": "Internal error during the request.", "detail": str(exc)[:300],
+    })
+
+
 @app.get("/health")
 async def health():
     # async def so /health runs on the asyncio event loop instead of the sync
