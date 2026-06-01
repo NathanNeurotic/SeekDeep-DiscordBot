@@ -1251,12 +1251,23 @@ function splitDiscordText(value, limit = MAX_DISCORD_CHARS) {
     // If a single line exceeds the limit, hard-break it character-wise.
     if (line.length > limit) {
       flush(false);
+      // Hard-break an over-long line. If we're inside a fence, keep each piece in
+      // its own self-contained code block and reopen the fence in `cur` so the
+      // remainder + following lines stay fenced. Previously the pieces spilled
+      // outside the block AND the next flush emitted a stray closing ``` (because
+      // fenceOpen was still set but cur had no opening fence).
+      const sliceMax = fenceOpen ? Math.max(1, limit - fenceOpen.length - 8) : limit;
       let rest = line;
-      while (rest.length > limit) {
-        chunks.push(rest.slice(0, limit));
-        rest = rest.slice(limit);
+      while (rest.length > sliceMax) {
+        const piece = rest.slice(0, sliceMax);
+        chunks.push(fenceOpen ? `${fenceOpen}\n${piece}\n\`\`\`` : piece);
+        rest = rest.slice(sliceMax);
       }
-      if (rest) {
+      if (fenceOpen) {
+        cur.push(fenceOpen);
+        if (rest) cur.push(rest);
+        curLen = fenceOpen.length + (rest ? rest.length + 1 : 0);
+      } else if (rest) {
         cur.push(rest);
         curLen = rest.length;
       }
@@ -5956,8 +5967,17 @@ async function seekdeepMaybeRenameArchiveThread(thread, desiredName) {
     const name = seekdeepArchiveThreadClampName(desiredName);
     if (thread && name && thread.name !== name && typeof thread.setName === 'function') {
       const lastRenamed = SEEKDEEP_THREAD_RENAME_LAST.get(thread.id) || 0;
-      if (Date.now() - lastRenamed < SEEKDEEP_THREAD_RENAME_COOLDOWN_MS) return;
-      SEEKDEEP_THREAD_RENAME_LAST.set(thread.id, Date.now());
+      const nowTs = Date.now();
+      if (nowTs - lastRenamed < SEEKDEEP_THREAD_RENAME_COOLDOWN_MS) return;
+      // Prune past-cooldown entries when the map grows so it stays bounded by
+      // threads renamed within the cooldown window (was leaking one entry per
+      // distinct thread for the whole process lifetime).
+      if (SEEKDEEP_THREAD_RENAME_LAST.size > 256) {
+        for (const [tid, ts] of SEEKDEEP_THREAD_RENAME_LAST) {
+          if (nowTs - ts >= SEEKDEEP_THREAD_RENAME_COOLDOWN_MS) SEEKDEEP_THREAD_RENAME_LAST.delete(tid);
+        }
+      }
+      SEEKDEEP_THREAD_RENAME_LAST.set(thread.id, nowTs);
       await thread.setName(name, 'SeekDeep archive tracked-count name update');
     }
   } catch (err) {

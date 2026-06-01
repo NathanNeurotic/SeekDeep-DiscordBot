@@ -171,6 +171,18 @@ for (const c of helpChunks) {
   if (c.length > 600) overLimit++;
 }
 check('chunker: produces multiple chunks for long input', helpChunks.length >= 3, 'got ' + helpChunks.length);
+// Edge: a single over-limit line INSIDE a code block must stay fenced (each
+// slice its own block, fence reopened) with no stray/unbalanced ``` and no
+// chunk over the limit.
+const lifInput = '```js\n' + 'x'.repeat(1500) + '\nshort tail\n```\nprose after';
+const lifChunks = T.splitDiscordText(lifInput, 600);
+let lifUnbalanced = 0, lifOver = 0;
+for (const c of lifChunks) {
+  if ((c.match(/```/g) || []).length % 2 !== 0) lifUnbalanced++;
+  if (c.length > 600) lifOver++;
+}
+check('chunker: long line in fence -> all chunks fence-balanced', lifUnbalanced === 0, lifUnbalanced + ' unbalanced');
+check('chunker: long line in fence -> no chunk over limit', lifOver === 0, lifOver + ' over');
 check('chunker: every chunk has balanced ``` fences', unbalanced === 0, unbalanced + ' chunks had unbalanced fences');
 check('chunker: no chunk exceeds limit', overLimit === 0, overLimit + ' chunks over limit');
 const reopened = helpChunks.slice(1).filter((c) => c.startsWith('```text')).length;

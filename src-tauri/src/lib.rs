@@ -213,14 +213,23 @@ fn check_for_update() -> Result<serde_json::Value, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases")
         .to_string();
-    // Naive semver compare — current/latest are both "X.Y.Z" so str cmp
-    // works in 99% of cases. The "nightly" tag (no version, no .) is
-    // skipped explicitly. Compare as &str on both sides; PartialOrd
-    // between String and &str isn't blanket-implemented.
+    // Compare the dotted numeric components as integers — a plain string compare
+    // mis-orders unequal-width versions (lexically "10.35.5" < "10.35.46" and
+    // 10.40.0 vs 10.5.0 both invert). The "nightly" tag is skipped explicitly.
+    fn version_is_newer(latest: &str, current: &str) -> bool {
+        fn parts(s: &str) -> Vec<u64> {
+            s.split('.').map(|p| p.trim().parse::<u64>().unwrap_or(0)).collect()
+        }
+        let (a, b) = (parts(latest), parts(current));
+        for i in 0..a.len().max(b.len()) {
+            let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+            if x != y { return x > y; }
+        }
+        false
+    }
     let update_available = !latest_tag.is_empty()
         && latest_tag.as_str() != "nightly"
-        && latest_tag != current
-        && latest_tag.as_str() > current.as_str();
+        && version_is_newer(&latest_tag, &current);
     Ok(serde_json::json!({
         "current": current,
         "latest": latest_tag,
