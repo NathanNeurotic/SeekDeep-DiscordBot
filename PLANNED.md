@@ -6,9 +6,11 @@ Last full audit: 2026-05-24 (GUI + backend stack)
 
 ---
 
-## NEXT FOCUSED PASS — unify the two config renderers (2026-05-31)
+## ✅ DONE — unified the two config renderers (completed 2026-06-01)
 
 **Decision (Nathan):** Control Center is the canonical config home; All Settings is its full-key subpage. Build shipped first; this consolidation is the next dedicated pass with fresh context + a real verification plan.
+
+**STATUS: complete.** Every schema-backed SELECT + TOGGLE in the Control Center now renders through the shared `config-render.js`, so it can't drift from All Settings; curated controls intentionally preserved. See the step list below for the commit trail.
 
 **The problem.** Two config UIs render the same keys from two different code paths:
 - `gui/app.html` "Bot config" pane — **hand-coded** config rows (offline panel, toggles, text inputs) + rich tools (live model picker, token fields w/ validators, feature cards). Its own save/dirty/validation/hydration (`window.markDirty`, `CFG_VALIDATORS`, `#cfg-save`, restart prompts).
@@ -19,12 +21,12 @@ Both POST the same `/config`, so values can't *conflict* — but the hand-coded 
 **Target architecture.** One shared `gui/config-render.js` (extract from settings.html: `buildRow`, `boolVocab`, `isOn`, kind handling, hydrate, dirty). Both pages consume it — Control Center renders a *curated slice*, All Settings renders *all*. Each key is defined once; neither can drift. Keep the Control Center's genuinely-rich sections (model picker, token entry, feature management) as special sections above the shared rows. Retire the plain hand-coded duplicate panels (e.g. the 3-key offline panel).
 
 **The catch / why it's its own pass.** Must reconcile **two mature save/validation/hydration systems** + the live model-picker, and the GUI is token-gated (no full auto-verify). Plan, step-by-step (commit per step):
-- ✅ **(1) DONE (eb0cec3)** — extracted `gui/config-render.js` (makeControl + isOn + boolVocab); settings.html adopts it, behavior-preserving. Verified 18/18 Node DOM-stub + preflight; e2e added (control-center.spec, "shared config-render module") — runs once a server is up.
-- **(2) NEXT** — wire app.html's Bot-config pane onto the same `makeControl`, unifying onto ONE save path (the hard part: app.html's `#cfg-save`/`markDirty`/`CFG_VALIDATORS` vs settings.html's own save). Keep the rich sections (model picker, token fields, feature cards).
-- **(3)** drop app.html's hand-coded duplicate rows once (2) renders them via the shared path.
-- **(4)** verify by driving BOTH pages in the browser (start the AI server → `npm run test:e2e`) + preflight.
+- ✅ **(1) DONE (eb0cec3)** — extracted `gui/config-render.js` (makeControl + isOn + boolVocab); settings.html adopts it, behavior-preserving. Verified 18/18 Node DOM-stub + preflight; e2e added (control-center.spec, "shared config-render module").
+- ✅ **(2) DONE (fa414ab save, 8c8498f hydrate)** — app.html's save reads each row via `_sdRead` and hydrate fills via `_sdHydrate`, both vocab-aware, so a converted row round-trips through app.html's own `#cfg-save`/`markDirty` without the old fixed-on/off serializer.
+- ✅ **(3) DONE (29b80f7 selects, abd172b toggles)** — `reconcileConfigControlsFromSchema()` routes Control Center SELECT + TOGGLE rows through `makeControl` on pane-load. Selects get schema options (CHAT_PROVIDER → `ollama`, which the hand-coded list lacked); toggles get the schema's boolean vocabulary + a value label (MODEL_AUTO_FALLBACK → `true/false`, not `on/off`). **Strict kind-match preserves curated controls:** the offline flags are schema kind 'toggle' but a labeled `<select>` (no `.toggle`) → skipped; inputs keep their hand-written placeholders (`(empty · comma-separated)`); secrets untouched.
+- ✅ **(4) DONE** — verified against the **repo** gui/ via a throwaway static+stub server serving the real `/config/schema` (the running server serves the *installed* build, not repo edits, so e2e on :7865 can't see them). The committed `control-center.spec` 2c/2d tests **skip** on a pre-merge served build and **run** on a repo/CI build. Shipped in **10.35.44** (selects + 2a/2b); **toggles (2d) pending the next build**.
 
-Step 2 specifically needs a **running AI server** for e2e verification — don't ship it on syntax-only.
+App.html still keeps its genuinely-rich sections (live model picker, token fields w/ validators, feature cards) bespoke — those aren't plain schema rows. The "retire duplicate panels" idea is moot: the reconcile makes the inline rows authoritative-from-schema, so there's nothing to drift.
 
 **Done already (this session, shipped in 10.35.42):** All Settings covers all 143 keys (merged `.env.example`, bundled), every key documented, in-place ↻ Restart, deep-links, Control Center→All-Settings subpage framing, offline-flag labels/toggles, EMIT_LOG_LINES surfaced + pill deep-link, GIF→🖼️ fix, and the deferred slash parity (`/archive clean`, `/reactrule|/emoji import`).
 
@@ -38,8 +40,8 @@ Live QA + ideation session with collaborator **GLP-2 Roooo** (credit their GitHu
 
 ### Concrete / near-term
 
-- **Reaction-toggle menu — loading GIF restarts on every timer update.** The live countdown re-renders the embed, which restarts the animated GIF each refresh (it was "smoother before the timer"). Fix: measure the GIF's exact loop length and align the timer-refresh cadence to the loop boundary (or update the countdown without re-sending the animated attachment) so the GIF only restarts when it naturally loops. *(Small, well-defined.)*
-- **Add `seek deep` + `sick deep` address prefixes.** Recognize the spaced "seek deep" and the phonetic "sick deep" as bot prefixes — specifically for voice-to-text / dictation users who say the name aloud. *(Small.)*
+- ✅ **Reaction-toggle menu — loading GIF restart FIXED (78c03e5).** Not a timer as the report assumed — it was per button-click: the embed set its thumbnail to `attachment://loading.gif`, and every `interaction.update` re-sent that embed, so the client re-rendered the thumbnail and the GIF restarted. Fix (Option B): the buttons already convey state (green = on, gray = off) and the dropdown shows each emoji, so the embed's per-key on/off + emoji text was redundant — made the embed STATIC and both update sites (toggle/all + emoji modal) call `interaction.update({ components })` only, never re-sending the embed, so its GIF is untouched and never restarts. Verified: smoke +3 (565→568) — embed JSON identical across an on/off flip; button components DO change with state. Visual smoothness is mechanism-guaranteed; GLP to confirm live in Discord post-build.
+- ✅ **Add `seek deep` + `sick deep` address prefixes — DONE.** Centralized address detection (`SEEKDEEP_NAME_SPOKEN` start-only prefixes for voice/dictation users) recognizes the spaced "seek deep" and phonetic "sick deep" alongside the solid forms.
 - **GUI is "nice but over-complex" for new users.** Continue the simplification arc (reactrule-form examples panel + the All Settings page were steps). Audit for over-complexity; add progressive disclosure / inline guidance. Pairs with the new-user friction already seen on the reactrule form.
 
 ### Asset hosting — move off GitHub onto the SeekDeep domain (Cloudflare)
