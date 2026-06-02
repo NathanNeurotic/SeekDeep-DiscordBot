@@ -322,14 +322,16 @@ IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Lykon/dreamshaper-xl-1-0")
 
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
-# Security (audit P0-4): trust_remote_code lets a Hugging Face repo execute its
-# OWN Python at load time. A few models genuinely need it (custom tokenizer /
-# model code), but combined with arbitrary /model/install it is an RCE-shaped
+# Security (PYS-1 / deep audit): trust_remote_code lets a Hugging Face repo
+# execute its OWN Python at load time. A few models genuinely need it (custom
+# tokenizer / model code), but combined with /model/install it is an RCE-shaped
 # footgun — installing an untrusted model_id would run its code in the server.
-# Default ON to preserve existing behavior for the known-good configured models;
-# flip to off (All Settings) to harden against malicious repos. When off, models
-# that require remote code will fail to load loudly rather than executing it.
-SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "on").lower() in {"1", "true", "yes", "on"}
+# Default OFF (secure-by-default): the configured default models (Llama-3.1,
+# Qwen2.5-VL, Dreamshaper-XL, Granite/Mistral/Phi/Gemma) are all natively
+# supported by the pinned transformers and load fine without it. A model that
+# genuinely requires remote code now fails to load LOUDLY; set
+# SEEKDEEP_TRUST_REMOTE_CODE=on (All Settings) only after you trust that repo.
+SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "off").lower() in {"1", "true", "yes", "on"}
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
 # Opt-in pins to keep specific models resident in VRAM across task switches.
@@ -3243,6 +3245,18 @@ def model_install(req: ModelInstallRequest):
             ),
         }
     else:  # hf
+        # PYS-1: validate the HF repo-id SHAPE before downloading. Accept only
+        # `name` or `org/name` (alnum start, [A-Za-z0-9._-] body, at most one
+        # slash) and reject `..` — so /model/install can't be pointed at a local
+        # path, a URL, or a traversal string. Defense-in-depth alongside
+        # trust_remote_code now defaulting off.
+        if ".." in model_id or not re.match(r"^[A-Za-z0-9][\w.-]*(/[A-Za-z0-9][\w.-]*)?$", model_id):
+            _publish_model_event("model.install.failed", {
+                "model_id": model_id, "backend": "hf",
+                "role": (req.role or "").strip() or None,
+                "error": "invalid HF repo id",
+            })
+            raise HTTPException(400, "invalid HF repo id; expected 'name' or 'org/name' (letters/digits/._- only)")
         install_result = _hf_install(model_id, req.revision or "")
         install_result["backend"] = "hf"
 
