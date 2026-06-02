@@ -383,6 +383,9 @@ _VRAM_ESTIMATE_DEFAULTS: dict[str, int] = {
     "vision": 6500,
     "image": 7000,
     "instruct_pix2pix": 5000,
+    # GroundingDINO (~0.7GB) + SAM ViT-H (~2.5GB) loaded fp32 for high-fidelity
+    # inpaint masks; conservative so the budget gate errs toward CLIPSeg fallback.
+    "sam_segment": 4400,
 }
 
 def _load_vram_estimates() -> dict[str, int]:
@@ -3632,6 +3635,19 @@ async def gpu_endpoint():
         "safety_margin_mb": VRAM_SAFETY_MARGIN_MB,
         "available_for_models_mb": round(vram_budget_available_mb(), 0),
     }
+    # Per-feature fit hints so the GUI can disable a control before the user
+    # triggers an OOM. fits_now reflects the CURRENT budget (what's resident);
+    # the inpaint flow loads mask-first so the real check is more forgiving.
+    _sam_ok, _sam_reason = check_sam_available()
+    stats["feature_fit"] = {
+        "sam_segment": {
+            "enabled": sam_segment_enabled(),
+            "available": _sam_ok,
+            "reason": _sam_reason,
+            "estimated_mb": estimate_model_vram("sam_segment"),
+            "fits_now": vram_can_fit("sam_segment")[0],
+        },
+    }
     return stats
 
 
@@ -5326,10 +5342,173 @@ def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
     return mask_img
 
 
+# ---------- High-fidelity auto-mask: GroundingDINO + SAM (opt-in) ----------
+# Sharper alternative to CLIPSeg's 64x64 heatmap: GroundingDINO turns the text
+# target into bounding boxes, SAM turns those boxes into pixel-precise masks.
+# Both come from the transformers library (no custom CUDA extensions) via the
+# same HF cache CLIPSeg uses.
+#
+# GUARDRAIL: combined ~3.2 GB, so unlike CLIPSeg these are NOT loaded blindly.
+# generate_mask_sam() runs a VRAM budget check FIRST (_evict_for_budget →
+# honors SEEKDEEP_VRAM_PRESSURE_MODE), loads mask-first + frees BEFORE SDXL,
+# and on ANY failure (flag off, weights/deps missing, no CUDA, VRAM pressure,
+# nothing detected, runtime error) returns None so the caller degrades to
+# CLIPSeg → full mask. A jagged mask always beats an OOM. Default OFF.
+SAM_MODEL_ID = os.getenv("LOCAL_SAM_MODEL_ID", "facebook/sam-vit-huge")
+GROUNDING_DINO_MODEL_ID = os.getenv("LOCAL_GROUNDING_DINO_MODEL_ID", "IDEA-Research/grounding-dino-base")
+SAM_BOX_THRESHOLD = float(os.getenv("SEEKDEEP_SAM_BOX_THRESHOLD", "0.25") or "0.25")
+SAM_TEXT_THRESHOLD = float(os.getenv("SEEKDEEP_SAM_TEXT_THRESHOLD", "0.25") or "0.25")
+
+sam_model = None
+sam_processor = None
+gdino_model = None
+gdino_processor = None
+
+
+def sam_segment_enabled() -> bool:
+    return (os.getenv("SEEKDEEP_FEATURE_SAM_SEGMENT", "off") or "off").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def check_sam_available() -> tuple[bool, str]:
+    """(ok, reason) — mirrors check_realesrgan_available(). Gates the high-
+    fidelity mask path on: feature flag on, CUDA present (SAM on CPU is
+    impractically slow), and the transformers SAM/GroundingDINO classes
+    importable. Weights download on first use (like CLIPSeg) when
+    HF_LOCAL_FILES_ONLY is false; if absent + offline the load fails and the
+    caller falls back to CLIPSeg."""
+    if not sam_segment_enabled():
+        return False, "SAM segmentation flag (SEEKDEEP_FEATURE_SAM_SEGMENT) is not 'on'."
+    if not cuda_available():
+        return False, "SAM segmentation needs CUDA; CPU inference is impractically slow."
+    try:
+        from transformers import (  # noqa: F401
+            SamModel, SamProcessor, GroundingDinoForObjectDetection, AutoProcessor,
+        )
+    except Exception as exc:
+        return False, f"transformers SAM/GroundingDINO classes unavailable: {exc}"
+    return True, ""
+
+
+def _load_sam_models() -> None:
+    """Budget-gated load of GroundingDINO + SAM (fp32 — avoids fp16 input/weight
+    dtype mismatches; ~3.2 GB still fits the mask-first budget). Raises
+    VRAMPressureError (mode=fallback) or a load error when it can't fit / isn't
+    available, so generate_mask_sam can degrade to CLIPSeg."""
+    global sam_model, sam_processor, gdino_model, gdino_processor
+    if sam_model is not None and gdino_model is not None:
+        return
+    # Guardrail: make room (evict non-pinned, heaviest-first). In the default
+    # 'fallback' pressure mode this RAISES VRAMPressureError when even after
+    # eviction it won't fit — caught upstream → CLIPSeg.
+    _evict_for_budget("sam_segment")
+    from transformers import (
+        SamModel, SamProcessor, GroundingDinoForObjectDetection, AutoProcessor,
+    )
+    device = "cuda" if cuda_available() else "cpu"
+    print(f"[SeekDeep] loading GroundingDINO ({GROUNDING_DINO_MODEL_ID}) + SAM ({SAM_MODEL_ID}) for high-fidelity masks", flush=True)
+    if gdino_model is None:
+        gdino_processor = AutoProcessor.from_pretrained(
+            GROUNDING_DINO_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY)
+        gdino_model = GroundingDinoForObjectDetection.from_pretrained(
+            GROUNDING_DINO_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY).to(device)
+    if sam_model is None:
+        sam_processor = SamProcessor.from_pretrained(
+            SAM_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY)
+        sam_model = SamModel.from_pretrained(
+            SAM_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY).to(device)
+    _log_vram("after SAM+GroundingDINO load")
+
+
+def _unload_sam_models() -> None:
+    """Free GroundingDINO + SAM and reclaim VRAM. Called right after the mask
+    is produced so SDXL (the inpaint pipe) loads into a clean budget."""
+    global sam_model, sam_processor, gdino_model, gdino_processor
+    sam_model = None
+    sam_processor = None
+    gdino_model = None
+    gdino_processor = None
+    cleanup_cuda()
+
+
+def generate_mask_sam(image: Image.Image, target: str):
+    """High-fidelity binary mask for `target` via GroundingDINO → SAM. Returns
+    a PIL 'L' image, or None to signal the caller should fall back to CLIPSeg
+    (nothing detected / VRAM pressure / missing weights / any error). Always
+    frees the heavy models before returning (mask-first design)."""
+    import torch
+    from PIL import ImageFilter
+    try:
+        _load_sam_models()
+    except VRAMPressureError as exc:
+        print(f"[SeekDeep] SAM mask skipped (VRAM pressure): {exc} → CLIPSeg fallback", flush=True)
+        _unload_sam_models()
+        return None
+    except Exception as exc:
+        print(f"[SeekDeep] SAM/GroundingDINO load failed: {exc} → CLIPSeg fallback", flush=True)
+        _unload_sam_models()
+        return None
+
+    device = "cuda" if cuda_available() else "cpu"
+    try:
+        text = target.strip().lower()
+        if not text.endswith("."):
+            text += "."
+        gd_inputs = gdino_processor(images=image, text=text, return_tensors="pt").to(device)
+        with torch.no_grad():
+            gd_out = gdino_model(**gd_inputs)
+        # transformers 5.x: param is `threshold` (not `box_threshold`); returns
+        # {scores, boxes (xyxy px), labels, text_labels}. target_sizes is (h, w).
+        results = gdino_processor.post_process_grounded_object_detection(
+            gd_out,
+            input_ids=gd_inputs["input_ids"],
+            threshold=SAM_BOX_THRESHOLD,
+            text_threshold=SAM_TEXT_THRESHOLD,
+            target_sizes=[image.size[::-1]],
+        )[0]
+        boxes = results.get("boxes")
+        if boxes is None or len(boxes) == 0:
+            print(f"[SeekDeep] GroundingDINO found nothing for {target!r} → CLIPSeg fallback", flush=True)
+            return None
+        input_boxes = [[[float(c) for c in box] for box in boxes.tolist()]]
+        sam_inputs = sam_processor(image, input_boxes=input_boxes, return_tensors="pt").to(device)
+        with torch.no_grad():
+            sam_out = sam_model(**sam_inputs)
+        masks = sam_processor.post_process_masks(
+            sam_out.pred_masks.cpu(),
+            sam_inputs["original_sizes"].cpu(),
+            sam_inputs["reshaped_input_sizes"].cpu(),
+        )[0]
+        # Union every box's masks (SAM emits nested whole/part candidates).
+        m = masks.float()
+        while m.ndim > 2:
+            m = m.sum(dim=0)
+        union = ((m > 0).to(torch.uint8).numpy() * 255).astype("uint8")
+        mask_img = Image.fromarray(union, mode="L").resize(image.size, Image.LANCZOS)
+        # Light feathering, matching the CLIPSeg path's edge softening.
+        mask_img = mask_img.filter(ImageFilter.MaxFilter(15)).filter(ImageFilter.GaussianBlur(radius=6))
+        return mask_img
+    except Exception as exc:
+        print(f"[SeekDeep] SAM mask generation failed: {exc} → CLIPSeg fallback", flush=True)
+        return None
+    finally:
+        _unload_sam_models()
+
+
+def generate_mask(image: Image.Image, target: str) -> tuple[Image.Image, str]:
+    """Auto-mask dispatcher with graceful fallback. Tries SAM (high-fidelity)
+    when enabled + it fits; otherwise CLIPSeg. Returns (mask_image, backend)
+    where backend ∈ {'sam','clipseg'}. MASK-FIRST by design — call this BEFORE
+    load_image_pipe() so the detector isn't contending with SDXL for VRAM."""
+    ok, _reason = check_sam_available()
+    if ok:
+        mask = generate_mask_sam(image, target)
+        if mask is not None:
+            return mask, "sam"
+    return generate_mask_clipseg(image, target), "clipseg"
+
+
 @app.post("/inpaint", dependencies=[Depends(require_gui_token)])
 def inpaint_endpoint(req: InpaintRequest):
-    load_image_pipe()
-
     import torch
     from diffusers import AutoPipelineForInpainting
 
@@ -5343,12 +5522,16 @@ def inpaint_endpoint(req: InpaintRequest):
         height = height - (height % 8)
     source_img = source_img.resize((width, height), Image.LANCZOS)
 
+    # MASK-FIRST: build the mask BEFORE loading SDXL so a heavy SAM detector
+    # (when enabled) isn't resident at the same time as the diffusion pipe.
+    # generate_mask() is VRAM-budget-gated and degrades sam → clipseg → full.
     remove_target = req.remove_target.strip()
     if remove_target:
-        mask_img = generate_mask_clipseg(source_img, remove_target)
+        mask_img, mask_backend = generate_mask(source_img, remove_target)
     else:
-        mask_img = Image.new("L", (width, height), 255)
+        mask_img, mask_backend = Image.new("L", (width, height), 255), "full"
 
+    load_image_pipe()
     inpaint_pipe = AutoPipelineForInpainting.from_pipe(image_pipe)
 
     seed = req.seed
@@ -5384,6 +5567,7 @@ def inpaint_endpoint(req: InpaintRequest):
         "image_b64": image_to_b64_png(img),
         "prompt": req.prompt.strip(),
         "remove_target": remove_target,
+        "mask_backend": mask_backend,
         "filename": safe_name,
         **_maybe_debug_path(out_path),
         "strength": float(req.strength),
@@ -5417,11 +5601,13 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
         raise HTTPException(status_code=400, detail="remove_target must not be empty for mask preview.")
 
     try:
-        mask_img = generate_mask_clipseg(source_img, remove_target)
+        # Same SAM→CLIPSeg dispatcher as /inpaint so the preview matches what
+        # the real run will use; degrades gracefully, never OOMs.
+        mask_img, mask_backend = generate_mask(source_img, remove_target)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"CLIPSeg model/dependencies are unavailable: {exc}"
+            detail=f"Mask model/dependencies are unavailable: {exc}"
         )
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
@@ -5432,6 +5618,7 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
     return {
         "image_b64": image_to_b64_png(mask_img),
         "remove_target": remove_target,
+        "mask_backend": mask_backend,
         "filename": safe_name,
         **_maybe_debug_path(out_path),
     }

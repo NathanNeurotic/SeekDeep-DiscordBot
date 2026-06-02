@@ -1165,6 +1165,27 @@ def main() -> int:
 
     cl = TestClient(_lai.app)
 
+    # ---- SAM segmentation feature gate + VRAM guardrail wiring ----
+    # GPU-free checks: the flag gate, the budget estimate, and the /gpu fit map
+    # the GUI uses to disable the toggle. The live GroundingDINO+SAM inference
+    # is verified separately on a CUDA box (CI has no GPU). Default flag is off,
+    # so check_sam_available() short-circuits before touching CUDA/weights.
+    check("VRAM_ESTIMATES has sam_segment (positive int)",
+          isinstance(_lai.VRAM_ESTIMATES.get("sam_segment"), int) and _lai.VRAM_ESTIMATES["sam_segment"] > 0,
+          f"got {_lai.VRAM_ESTIMATES.get('sam_segment')!r}")
+    sam_ok, sam_reason = _lai.check_sam_available()
+    check("check_sam_available() -> (False, reason) when flag unset",
+          sam_ok is False and isinstance(sam_reason, str) and "SEEKDEEP_FEATURE_SAM_SEGMENT" in sam_reason,
+          f"got {(sam_ok, sam_reason)}")
+    r = cl.get("/gpu")
+    check("GET /gpu -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    gj = r.json() if r.status_code == 200 else {}
+    ff = (gj.get("feature_fit") or {}).get("sam_segment") or {}
+    check("  ...feature_fit.sam_segment carries {enabled, available, estimated_mb, fits_now}",
+          all(k in ff for k in ("enabled", "available", "estimated_mb", "fits_now"))
+          and ff.get("enabled") is False,
+          f"feature_fit={gj.get('feature_fit')}")
+
     # ---- GET /route/debug (no auth required) ----
     r = cl.get("/route/debug")
     check("GET /route/debug (no params) -> 200", r.status_code == 200,
