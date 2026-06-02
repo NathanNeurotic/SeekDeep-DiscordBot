@@ -409,9 +409,9 @@ Important defaults from `.env.default`:
 
 Feature flags:
 
-- `SEEKDEEP_FEATURE_IMG2IMG=on` in template.
-- `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=off` in template.
-- `SEEKDEEP_FEATURE_INPAINT=off` in template.
+- `SEEKDEEP_FEATURE_IMG2IMG=off` (code + `.env.default` default; `.env.example` flips it on as a feature demo).
+- `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=off` in `.env.default`.
+- `SEEKDEEP_FEATURE_INPAINT=off` in `.env.default`.
 - `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off`.
 - `SEEKDEEP_FEATURE_NSFW_GATE=off`.
 - `SEEKDEEP_FEATURE_TTS_VOICE=off`.
@@ -592,7 +592,7 @@ Image generation/edit changes:
 - Some docs say all data writes are atomic, but current observed write helpers use direct `fs.writeFileSync`. Verify if atomicity matters.
 - `archive-guild-config.json` is gitignored to keep Discord IDs out of the repo (current policy); only `archive-guild-config.sample.json` is tracked.
 - Feature flags affect command registration and help text. If a command appears missing, check `.env` and whether registration has propagated.
-- `.env.default` has `SEEKDEEP_FEATURE_IMG2IMG=on`, but pix2pix and inpaint default off even though v10.31 shipped their implementation.
+- `.env.default` defaults `SEEKDEEP_FEATURE_IMG2IMG=off` (code default in `index.js` is `off`); pix2pix and inpaint also default off even though v10.31 shipped their implementation. `.env.example` (the all-on reference) flips these on.
 - `LOCAL_CHAT_QUANT=4bit` is important on 24 GB laptop GPUs. Full precision 8B plus SDXL and overhead can push Windows into shared-memory thrashing.
 - `SEEKDEEP_TEST_MODE=1` avoids Discord login but still evaluates top-level module code.
 - `assets/loading.gif` is optional and cached at startup if present.

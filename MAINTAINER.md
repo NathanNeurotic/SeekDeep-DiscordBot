@@ -19,7 +19,7 @@ genuinely new pieces into it manually.
 
 | File | What our version contains that the designer's drops |
 |---|---|
-| `gui_endpoints.py` | Schema normalizers for `server-stats` / `auto-reactions`, PID-aware launcher (reads `logs/local-ai.pid` + `logs/bot.pid`), `ai-server` self-host guard (returns 409 instead of trying to kill itself), real `/model/warm` dispatch via `warmup_handlers={}` kwarg, `/config/status` with sensible REQUIRED/OPTIONAL classification, `/token` endpoint + `X-SeekDeep-Token` dependency on the three write routes |
+| `gui_endpoints.py` | Schema normalizers for `server-stats` / `auto-reactions`, PID-aware launcher (reads `logs/local-ai.pid` + `logs/bot.pid`), `ai-server` self-host guard (returns 409 instead of trying to kill itself), real `/model/warm` dispatch via `warmup_handlers={}` kwarg, `/config/status` with sensible REQUIRED/OPTIONAL classification, `/token` endpoint + `X-SeekDeep-Token` dependency on all write routes plus sensitive `/logs/*` and `/data/*.json` reads |
 | `INTEGRATION.md` § 4 | Archive bridge snippet rewritten to match `index.js` conventions: sync `fs` (not `fs/promises`), `writeJsonAtomic` helper, `seekdeepReadArchiveGuildConfig()`, `client.once('clientReady', ...)` (not `'ready'`). Designer's draft uses APIs that don't exist in the actual file. |
 | `local_ai_server.py` register block | Passes `warmup_handlers={chat,image,vision}` wired to the real loaders. The designer's docs say "add 2 lines" — adding 2 lines gives you a stub `/model/warm` that never loads anything. |
 | `local_ai_server.py` Ollama backend | `_resolve_chat_backend` + `_run_ollama_generation` + `_ollama_*` helpers + `warm_chat_role` + `chat_backends` / `ollama` keys in `/health`. Designer ships nothing about Ollama. Per-role HF↔Ollama dispatch lives here. See INTEGRATION.md §3.4. |
@@ -84,13 +84,18 @@ Set up automatically. You shouldn't have to do anything.
 - On first server boot, `gui_endpoints.py` checks `.env` for `SEEKDEEP_GUI_TOKEN`.
 - If absent, generates a 32-byte url-safe random token and appends it
   to `.env` (preserves existing content).
-- The three write endpoints — `POST /config`, `POST /launcher/{svc}/{action}`,
-  `POST /model/warm` — require `X-SeekDeep-Token: <token>` on every request.
-- Read endpoints (`/health`, `/gpu`, `/data/*`, `/logs/*`, `/config/status`)
-  stay open so the page renders without the token.
+- Mutating endpoints (`POST /config`, `POST /launcher/{svc}/{action}`,
+  `POST /model/warm`, and the other writes) require `X-SeekDeep-Token: <token>`.
+- Sensitive reads are tokened too: `GET /logs/tail`, `GET /logs/stream`, and the
+  sensitive `GET /data/*.json` files (`server-stats`, `auto-reactions`,
+  `archive-snapshot`, `prompt-templates`, …) carry Discord/guild/user IDs.
+  `/logs/stream` and the `/events` WebSocket take the token via `?token=` because
+  EventSource/WebSocket clients can't send headers.
+- Only non-sensitive status reads stay open so the page renders before the token
+  loads: `/health`, `/gpu`, `/config/status`.
 - The GUI's `nav.js` monkey-patches `window.fetch` to grab the token from
-  `GET /token` (loopback-only) and add the header to every same-origin POST
-  automatically. Designer-shipped HTMLs don't need to know about it.
+  `GET /token` (loopback-only) and attach the header to same-origin writes +
+  sensitive reads automatically. Designer-shipped HTMLs don't need to know.
 
 ### Operations
 

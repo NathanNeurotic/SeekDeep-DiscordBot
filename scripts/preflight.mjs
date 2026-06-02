@@ -327,8 +327,36 @@ stage('docs', () => {
     }
   }
 
+  // (e) AUD-005: canonical-doc drift guards. The code is safer than the docs
+  // were — and stale docs are how safer code gets "simplified" back into unsafe
+  // code. Fail-closed on the three drifts the audit found. Scoped to the
+  // maintainer/user docs that teach future agents; docs/audits/* legitimately
+  // QUOTE the stale phrases as evidence, so they are intentionally NOT scanned.
+  const CANON_DOCS = ['README.md', 'SECURITY.md', 'INTEGRATION.md', 'MAINTAINER.md', 'CODEX_REPO_BRIEF.md', 'AGENTS.md'];
+  for (const rel of CANON_DOCS) {
+    const p = path.join(ROOT, rel);
+    if (!existsSync(p)) continue;
+    const lines = readFileSync(p, 'utf8').split(/\r?\n/);
+    lines.forEach((line, i) => {
+      const ln = i + 1;
+      // AUD-005a: no doc may claim img2img is ON by default (code default is off).
+      if (/IMG2IMG/.test(line) && /\bon by default\b/i.test(line)) {
+        problems.push(`${rel}:${ln} claims IMG2IMG is "on by default" — code defaults off (AUD-005)`);
+      }
+      // AUD-005b: no doc may claim /logs/* or sensitive /data/* are OPEN reads
+      // (both are token-gated now).
+      if (/\/(logs|data)\/\*/.test(line) && /\bopen\b/i.test(line)) {
+        problems.push(`${rel}:${ln} claims '/logs/*' or '/data/*' is an open read — both are token-gated (AUD-005)`);
+      }
+      // AUD-005c: the snapshot file is singular (archive-snapshot.json).
+      if (/archive-snapshots\.json/.test(line)) {
+        problems.push(`${rel}:${ln} references 'archive-snapshots.json' — the file is singular 'archive-snapshot.json' (AUD-005)`);
+      }
+    });
+  }
+
   if (problems.length) return { ok: false, detail: problems.join(' · ') };
-  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok' };
+  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok' };
 });
 
 const failed = stages.filter((s) => !s.ok);

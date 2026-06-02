@@ -71,7 +71,12 @@ Restart the server. Done. All of the following are now live:
 
 ### Security — token auth is on by default
 
-The three write endpoints (`POST /config`, `POST /launcher/*`, `POST /model/warm`) require the `X-SeekDeep-Token` header. Read endpoints (`/health`, `/gpu`, `/data/*`, `/logs/*`, `/config/status`) stay open so the GUI can render without the token.
+The token model is broader than the original "three write routes". Current `gui_endpoints.py`:
+
+- **Writes are tokened** — `POST /config`, `POST /launcher/*`, `POST /model/warm`, and the other mutating routes require the `X-SeekDeep-Token` header.
+- **Sensitive reads are tokened** — `GET /logs/tail`, `GET /logs/stream`, and the sensitive `GET /data/*.json` files (e.g. `server-stats.json`, `auto-reactions.json`, `archive-snapshot.json`, `prompt-templates.json`) carry Discord/guild/user IDs and require the token. `/logs/stream` (and the `/events` WebSocket) accept the token via a `?token=` query param because EventSource/WebSocket clients cannot set request headers.
+- **Open reads** — only non-sensitive status endpoints stay open so the GUI can render before the token loads: `/health`, `/gpu`, `/config/status`.
+- **`/token`** is loopback/browser-origin guarded — a caller proxying port 7865 from off-box gets `403` even if it can reach everything else.
 
 **Bootstrap:**
 
@@ -514,7 +519,7 @@ Building on [§ 3.7-3.10](#37--persona-override-over-http-persona) (the loading 
 
 ## 4 · Archive browser bot bridge
 
-The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshots.json` endpoint — no browser-side Discord token, no auth gymnastics.
+The Archive pane in `app.html` reads `data/archive-snapshot.json`. The bot is the only process with Discord API access, so the bot writes that snapshot periodically and the GUI reads it via the existing `GET /data/archive-snapshot.json` endpoint — no browser-side Discord token, no auth gymnastics.
 
 > The earlier draft of this section assumed conventions that don't match SeekDeep's `index.js` (it used `fs/promises`, `client.once('ready')`, and an in-memory `seekdeepArchiveConfig` variable). The block below is a drop-in that matches the file as it actually exists.
 
@@ -532,20 +537,20 @@ The Archive pane in `app.html` reads `data/archive-snapshots.json`. The bot is t
    - `SEEKDEEP_ARCHIVE_BRIDGE_LOG=on` — log each snapshot write to console
 7. **Restart the bot** (`seekdeep_launcher.bat` option 8, or whichever path you normally use).
 8. **Verify**:
-   - After ~10 seconds you should see `data/archive-snapshots.json` appear (with `SEEKDEEP_ARCHIVE_BRIDGE_LOG=on`, a console line confirms it).
+   - After ~10 seconds you should see `data/archive-snapshot.json` appear (with `SEEKDEEP_ARCHIVE_BRIDGE_LOG=on`, a console line confirms it).
    - Open `http://127.0.0.1:7865/gui/app.html`, click the **Archive** pane in the sidebar. You should see one tab per archive thread + a `SHARED · N` aggregate tab.
 
 ### 4.2 · The snippet
 
 ```javascript
 // SEEKDEEP_ARCHIVE_BRIDGE_START
-// Writes data/archive-snapshots.json every few minutes so the GUI's
+// Writes data/archive-snapshot.json every few minutes so the GUI's
 // Control Center > Archive pane can render real thread contents.
 //
 // Uses the same conventions as the surrounding code: sync `fs`,
 // `writeJsonAtomic`, `seekdeepReadArchiveGuildConfig`, `client.once('clientReady', ...)`.
 
-const SEEKDEEP_ARCHIVE_SNAPSHOT_PATH = path.join(__dirname, 'data', 'archive-snapshots.json');
+const SEEKDEEP_ARCHIVE_SNAPSHOT_PATH = path.join(__dirname, 'data', 'archive-snapshot.json');
 
 async function seekdeepWriteArchiveSnapshot() {
   if (String(process.env.SEEKDEEP_ARCHIVE_BRIDGE || '').toLowerCase() === 'off') return;
@@ -639,7 +644,7 @@ client.once('clientReady', () => {
 
 ### 4.3 · How the GUI consumes it
 
-The Archive pane's wiring (in `gui/app.html`) calls `GET /data/archive-snapshots.json`. The `/data/{file}` endpoint in `gui_endpoints.py` reads the file from `data/` and returns it as `{ ok, file, data }`. No per-route normalization is applied to `archive-snapshots.json` — the bridge's output shape is what the GUI expects natively.
+The Archive pane's wiring (in `gui/app.html`) calls `GET /data/archive-snapshot.json`. The `/data/{file}` endpoint in `gui_endpoints.py` reads the file from `data/` and returns it as `{ ok, file, data }`. No per-route normalization is applied to `archive-snapshot.json` — the bridge's output shape is what the GUI expects natively.
 
 ### 4.4 · Removing the bridge
 
@@ -647,7 +652,7 @@ Either:
 - Delete the block between `SEEKDEEP_ARCHIVE_BRIDGE_START` and `SEEKDEEP_ARCHIVE_BRIDGE_END` markers in `index.js`, OR
 - Set `SEEKDEEP_ARCHIVE_BRIDGE=off` in `.env` and restart the bot (the snippet stays in place but no longer runs).
 
-Stop the snapshot file from accumulating: `data/archive-snapshots.json` can be safely deleted; the GUI will show the empty state until the next snapshot.
+Stop the snapshot file from accumulating: `data/archive-snapshot.json` can be safely deleted; the GUI will show the empty state until the next snapshot.
 
 ## 5 · How the GUI auto-detects the deployment
 
