@@ -252,6 +252,14 @@ def check_staged_against_manifest(manifest: dict, staging: Path, staged_items: l
     files = (manifest or {}).get("files") or {}
     if not isinstance(files, dict) or not files:
         return False, "manifest has no files map"
+    # Completeness (per PR review): every file the SIGNED manifest lists must be
+    # present in staging. Without this, a tampered/partial update could silently
+    # OMIT a manifest-listed file (e.g. drop a security fix) while every file that
+    # WAS staged still validates — a valid-looking but incomplete update.
+    staged_paths = {item.get("path") for item in staged_items if item.get("path")}
+    missing = [rel for rel in files if rel not in staged_paths]
+    if missing:
+        return False, "manifest files missing from staging: " + ", ".join(sorted(missing)[:8])
     bad: list[str] = []
     for item in staged_items:
         rel = item.get("path")

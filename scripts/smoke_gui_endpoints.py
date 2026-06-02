@@ -324,6 +324,19 @@ def _self_update_checks() -> None:
             r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
         check("self-update signed: require=off + no manifest -> 200 (unsigned tolerated)",
               r.status_code == 200 and (r.json() or {}).get("ok") is True, f"got {r.status_code}")
+
+        # (d5) completeness: a VALID signed manifest that lists a file which was
+        #      NOT staged must abort (silent-omission guard, per PR review).
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        man5 = {"schema": "seekdeep-release-manifest/v1", "ref": "v9.9.9", "algorithm": "sha256",
+                "files": {**{n: hashlib.sha256(c2_content).hexdigest() for n in single},
+                          "gui/never-staged.js": hashlib.sha256(b"x").hexdigest()}}
+        mb5 = _rsign.manifest_to_bytes(man5)
+        sig5 = _b64.b64encode(_rsign.ed25519_sign(mb5, eph_seed, eph_pub))
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree, mb5, sig5)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: manifest lists an unstaged file -> 409 (completeness)",
+              r.status_code == 409, f"got {r.status_code}")
     except Exception as e:
         check("self-update: route tests ran without harness error", False, repr(e))
     finally:

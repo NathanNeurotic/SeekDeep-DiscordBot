@@ -161,7 +161,11 @@ fn open_external_url_allowed(raw: &str) -> Result<(), String> {
         "docker.com",
         "nvidia.com",
     ];
-    let allowed = ALLOWED_HOSTS.iter().any(|&h| host == h || host.ends_with(&format!(".{h}")));
+    // Exact match, or a dot-boundary subdomain. strip_suffix avoids the
+    // per-call heap allocation `format!(".{h}")` would do (per PR review).
+    let allowed = ALLOWED_HOSTS.iter().any(|&h| {
+        host == h || host.strip_suffix(h).map_or(false, |prefix| prefix.ends_with('.'))
+    });
     if allowed {
         Ok(())
     } else {
