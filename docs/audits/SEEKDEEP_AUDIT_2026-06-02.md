@@ -601,3 +601,30 @@ Recommended order:
 - Docs no longer claim img2img is on by default, logs/data are open reads, or `archive-snapshots.json` is current.
 - Tauri `open_external` rejects non-HTTPS and unapproved hosts.
 
+## Closeout — 2026-06-02
+
+> Additive log of how each finding was resolved. The Findings text above is left
+> as written; this section records the fix, evidence, tests, and residual risk.
+> Every claim was re-verified against current code before the fix (the audit's
+> "66 gui routes" was found to be 67 by direct decorator grep — see AUD-006).
+
+**Verification (whole queue, after all fixes landed):**
+
+- `npm run preflight` → 8 ok · 0 fail (js, html-js, py, smoke=612, gui-smoke, rust, docs, coverage). `gui-smoke` self-skips in this worktree (no `.venv`); run directly with the main checkout's `.venv` python it is **223 ok, 0 fail** (incl. 23 new self-update checks).
+- `node smoke_test.mjs` → **pass=612 fail=0** (incl. 38 new SSRF checks).
+- `cargo test --manifest-path src-tauri/Cargo.toml open_external` → **5 passed**.
+- Temporary local server (main `.venv` python on the worktree tree) → `/health` 200; `python scripts/dev/verify_e2e.py` → **19/19 pass**; `npm run test:e2e` → **11 passed**. Server stopped, port 7865 released. (`/chat` returned a well-formed 503 — local Llama is a gated HF repo with no creds in this env — matching the original audit's baseline; not a code regression.)
+
+| ID | Status | Fix evidence | Tests | Residual risk |
+|---|---|---|---|---|
+| AUD-002 | Closed | `lib/url-fetch-policy.js` `seekdeepValidateFetchTarget`/`seekdeepClassifyBlockedIp`; `seekdeepFetchWithLimits` validates + follows redirects manually (re-validating each hop); default-deny via `SEEKDEEP_FETCH_ALLOW_PRIVATE=off`. Commit `ce8de7d` (extracted in `d40b19a`). | 38 smoke checks (classifier, validator accept/reject, allowPrivate opt-in, redirect re-validation). | DNS-rebinding between this lookup and the kernel's connect-time lookup is not fully closed (would need IP-pinned connections — node-fetch/undici differ); documented in SECURITY.md. Stops the realistic URL→localhost / URL→metadata cases. |
+| AUD-001 | Closed | `gui_endpoints.py`: `_SELF_UPDATE_LOCK` (409 on contention), `_self_update_ref_is_allowed` (strict tag/SHA policy), bounded `_fetch(max_bytes=…)`, corrected error text, route split into `_post_self_update_locked`. Commit `00dfab3`. | Mocked self-update suite in `scripts/smoke_gui_endpoints.py` (ref matrix, 401/403/400/409, integrity-mismatch 409 + live-tree-untouched, oversized cap, happy-path commit into temp root). | Integrity gate proves bytes match GitHub's published tree for the ref; it does **not** defend a compromised repo (needs code signing). Ref allowlist + HTTPS + token gate remain the mitigations. Strict ref policy may surprise "update from main" users → `SEEKDEEP_SELF_UPDATE_ALLOW_MAIN=on`. |
+| AUD-004 | Closed | `_self_update_checks()` added to `scripts/smoke_gui_endpoints.py`, wired into `npm run preflight`. Commit `00dfab3`. | Runs in gui-smoke (223 ok). Hermetic: temp repo root + mocked `urllib`, never touches the real tree. | Live GitHub-network update execution remains intentionally manual/out-of-CI. |
+| AUD-005 | Closed | `SECURITY.md`, `INTEGRATION.md`, `MAINTAINER.md`, `CODEX_REPO_BRIEF.md`, `gui/app.html` corrected (img2img off-by-default; real token model; `archive-snapshot.json` singular). Drift guards added to `scripts/preflight.mjs` docs stage. Commit `82d9f94`. | preflight `docs` stage; verified guards fire on the old phrasings and pass on the corrected text. | Guards are scoped to canonical docs (`docs/audits/*` excluded since they quote stale phrases). Over-tight wording guards could false-positive future prose — patterns are anchored to filename/`on by default` co-occurrence to minimize that. |
+| AUD-003 | Closed (open_external); CSP planned | `src-tauri/src/lib.rs` `open_external_url_allowed` (https host allowlist + first-party `discord:`; rejects http/file/javascript/data/custom). `docs/audits/CSP_TIGHTENING_PLAN.md` sequences the CSP rollout. Commit `cdb72cc`. | `cargo test open_external` → 5 (allow/deny incl. look-alike + suffix-append hosts). `npm run test:e2e` 11/11 confirms GUI external links still work. | CSP stays permissive (`unsafe-inline`/`unsafe-eval`/`withGlobalTauri`) until the staged page-by-page rollout; tracked in the plan doc. Host allowlist is deliberately narrow — expand per real link. |
+| AUD-006 | Closed | `scripts/audit_endpoint_coverage.mjs` → `docs/ENDPOINT_COVERAGE.md`; preflight `coverage` stage fails on drift. Commit `1970f12`. | preflight `coverage` (`--check`); live counts 67 gui + 23 local = 90 routes. | Dynamic GUI fetch targets (template strings) match loosely; 36 routes show no test reference (surfaced, not hidden) — some are tray-only/future-facing. The map is a drift signal, not a security spec; `/data/{file}` is labeled `token*` (conditional per-file gate). |
+| AUD-007 | Closed | `requirements-ml.txt`: non-Windows `torch>=2.4,<2.12` / `torchvision>=0.19,<0.27` + override guidance; Windows pins unchanged. Commit `7934209`. | All 18 requirement lines parse via `packaging.Requirement`. | Bounds can't be resolution-tested on Linux from this Windows box — recommend the audit's optional scheduled `pip install --dry-run` job on Linux. An unusual CUDA/CPU platform may need the documented `--index-url` override. |
+| AUD-008 | First leaf done | URL fetch policy extracted to `lib/url-fetch-policy.js`; index.js imports + re-exports on `__seekdeepTest`. Commit `d40b19a`. | `node smoke_test.mjs` → pass=612 (identical to pre-extraction); both files `node --check` clean; added to preflight `js` stage. | Debt remains: index.js is still ~24k lines. Next leaves (image-reply intent, archive naming/count, template parsing, auto-reaction compile) should follow the same one-at-a-time-with-tests pattern. |
+
+**Not reopened:** HIST-001…HIST-006 were re-verified as still-healthy and left unchanged.
+
