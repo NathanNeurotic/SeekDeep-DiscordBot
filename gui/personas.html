@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Personas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { overflow: hidden; }
+  .app-wrap { height: 100vh; padding: 24px; display: grid; place-items: center; }
+  /* No in-window titlebar (the topnav lockup carries the jump palette), so the
+     window is a single full-height row — same shell as memory.html / prompts.html. */
+  .win { width: 100%; max-width: 1500px; height: calc(100vh - 48px); display: grid; grid-template-rows: 1fr; border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(45,212,255,0.25);
+    background: linear-gradient(rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(90deg, rgba(45,212,255,0.03) 1px, transparent 1px) 0 0 / 32px 32px, linear-gradient(180deg, var(--substrate-2) 0%, var(--substrate) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.5), inset 0 0 0 1px rgba(0,0,0,0.35), 0 50px 120px rgba(0,0,0,0.8); position: relative; }
+  .win::before { content: ""; position: absolute; inset: 10px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 22px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 22px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 22px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top right / 1px 22px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 22px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom left / 1px 22px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 22px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 22px no-repeat; filter: drop-shadow(0 0 6px rgba(109,240,255,0.55)); z-index: 0; }
+  .win > * { position: relative; z-index: 1; }
+
+  .body { display: grid; grid-template-columns: 320px 1fr 380px; gap: 0; overflow: hidden; min-height: 0; }
+  .rail { background: rgba(2,6,15,0.55); border-right: 1px solid var(--stroke); padding: 18px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .rail .grp { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.2em; color: var(--hull-3); text-transform: uppercase; padding: 8px 10px 6px; display: flex; justify-content: space-between; align-items: baseline; }
+  .rail .grp em { font-style: normal; color: var(--cyan-1); }
+
+  .pane { padding: 22px 26px; overflow-y: auto; min-width: 0; border-right: 1px solid var(--stroke); }
+  .pane:last-child { border-right: none; background: rgba(2,6,15,0.35); }
+  .pane h2 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 6px; }
+  .pane h3.section-h { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--hull-3); margin: 22px 0 10px; font-weight: 500; display: flex; justify-content: space-between; align-items: baseline; }
+  .pane h3.section-h:first-child { margin-top: 0; }
+  .pane h3.section-h em { color: var(--cyan-1); font-style: normal; }
+  .pane .sub { color: var(--hull-3); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--stroke); display: flex; justify-content: space-between; gap: 10px; }
+
+  .live-tag {
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em;
+    padding: 2px 7px; border: 1px solid color-mix(in oklab, var(--good) 45%, transparent);
+    color: var(--good); border-radius: 2px; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .live-tag .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); display: inline-block; margin-right: 5px; vertical-align: 1px; }
+
+  /* built-in persona chip (read-only) */
+  .p-builtin { padding: 10px 12px; margin: 4px 0; background: rgba(0,4,12,0.45); border: 1px solid var(--stroke); border-radius: var(--r-md); }
+  .p-builtin .nm { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-1); letter-spacing: 0.06em; display: flex; justify-content: space-between; align-items: center; }
+  .p-builtin .ro { font-size: 8.5px; letter-spacing: 0.16em; color: var(--hull-3); border: 1px solid var(--stroke); border-radius: 2px; padding: 1px 5px; text-transform: uppercase; }
+  .p-builtin .ds { font-size: 11px; color: var(--hull-3); line-height: 1.5; margin-top: 5px; }
+
+  /* custom persona card */
+  .p-custom { padding: 11px 13px; margin: 6px 0; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid rgba(45,212,255,0.22); border-radius: var(--r-md); position: relative; overflow: hidden; }
+  .p-custom::before { content: ""; position: absolute; inset: 4px; pointer-events: none; background: linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 8px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) top left / 1px 8px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 8px 1px no-repeat, linear-gradient(var(--trace-hi), var(--trace-hi)) bottom right / 1px 8px no-repeat; filter: drop-shadow(0 0 3px rgba(109,240,255,0.5)); opacity: 0.5; }
+  .p-custom > * { position: relative; z-index: 2; }
+  .p-custom.editing { border-color: var(--cyan-1); box-shadow: 0 0 0 1px rgba(45,212,255,0.4); }
+  .p-custom .nm { font-family: var(--font-mono); font-size: 12.5px; color: var(--hull); letter-spacing: 0.04em; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .p-custom .when { font-family: var(--font-mono); font-size: 9px; color: var(--hull-3); letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; }
+  .p-custom .tone { font-size: 11.5px; color: var(--hull-2); line-height: 1.5; margin: 6px 0 8px; word-break: break-word; }
+  .p-custom .row { display: flex; gap: 6px; }
+
+  .mini-btn { background: transparent; border: 1px solid rgba(45,212,255,0.30); color: var(--cyan-1); font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--r-sm); cursor: pointer; }
+  .mini-btn:hover { background: rgba(45,212,255,0.10); }
+  .mini-btn.bad { color: var(--bad); border-color: rgba(255,107,107,0.30); }
+  .mini-btn.bad:hover { background: rgba(255,107,107,0.08); }
+
+  .empty {
+    padding: 28px 14px; text-align: center;
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;
+    color: var(--hull-3); line-height: 1.6;
+    border: 1px dashed var(--stroke);
+    border-radius: var(--r-md);
+    margin: 10px 0;
+  }
+
+  /* editor form */
+  .form-field { margin-bottom: 16px; }
+  .form-field label { display: block; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan-1); margin-bottom: 6px; }
+  .form-field input, .form-field textarea, .assign-block select, .assign-block input {
+    width: 100%; background: rgba(0,0,0,0.55); border: 1px solid rgba(45,212,255,0.25);
+    color: var(--hull); border-radius: var(--r-sm); padding: 9px 12px;
+    font-family: var(--font-mono); font-size: 13px; outline: none;
+  }
+  .form-field input:focus, .form-field textarea:focus, .assign-block select:focus, .assign-block input:focus { border-color: var(--cyan-1); box-shadow: inset 0 0 0 1px rgba(45,212,255,0.5); }
+  .form-field textarea { resize: vertical; min-height: 130px; line-height: 1.55; }
+  .form-field .desc { font-size: 11px; color: var(--hull-3); font-family: var(--font-mono); line-height: 1.55; margin-top: 5px; }
+  .counter-row { display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.08em; margin-top: 4px; }
+  .form-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+  /* assign blocks */
+  .assign-block { padding: 14px; margin-bottom: 12px; background: linear-gradient(180deg, var(--substrate-2), var(--substrate)); border: 1px solid var(--stroke); border-radius: var(--r-md); }
+  .assign-block h4 { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan-1); margin: 0 0 4px; font-weight: 500; }
+  .assign-block .ds { font-size: 10.5px; color: var(--hull-3); line-height: 1.5; margin-bottom: 10px; }
+  .assign-block .ctl { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .assign-block .ctl select { flex: 1; }
+  .assign-block .idin { margin-bottom: 0; }
+
+  .assign-current { padding: 12px 14px; background: rgba(0,4,12,0.55); border: 1px solid rgba(45,212,255,0.20); border-radius: var(--r-md); margin-bottom: 16px; font-family: var(--font-mono); font-size: 11.5px; color: var(--hull-2); line-height: 1.8; }
+  .assign-current .k { color: var(--hull-3); }
+  .assign-current .v { color: var(--cyan-1); }
+
+  /* Confirm modal (mirrors memory.html) */
+  .cf-back { position: fixed; inset: 0; z-index: 9990; background: rgba(2,6,15,0.85); backdrop-filter: blur(6px); display: none; }
+  .cf-back.open { display: block; }
+  .cf {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 9991; width: min(460px, calc(100vw - 40px));
+    background: linear-gradient(180deg, rgba(10,26,48,0.97), rgba(6,18,31,0.99));
+    border: 1px solid rgba(255,107,107,0.5);
+    border-radius: var(--r-md);
+    box-shadow: 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(255,107,107,0.25);
+    display: none;
+    padding: 22px 24px;
+  }
+  .cf.open { display: block; }
+  .cf h3 { color: var(--bad); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 6px; font-weight: 500; }
+  .cf p { color: var(--hull-2); font-size: 13px; line-height: 1.6; margin: 0 0 16px; word-break: break-word; }
+  .cf .row { display: flex; gap: 10px; justify-content: flex-end; }
+</style>
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+<div class="bubbles">
+  <span style="left:4%;animation-duration:24s;animation-delay:-3s"></span>
+  <span class="cube" style="left:28%;animation-duration:42s;animation-delay:-22s"></span>
+  <span style="left:48%;animation-duration:22s;animation-delay:-2s;width:2px;height:2px"></span>
+  <span class="cube big" style="left:54%;animation-duration:48s;animation-delay:-30s"></span>
+  <span style="left:84%;animation-duration:44s;animation-delay:-25s" class="cube"></span>
+</div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill" data-version><span class="dot"></span><span data-version>v—</span> · LOCAL</span>
+  </div>
+</nav>
+
+<div class="app-wrap"><div class="win">
+  <div class="body">
+
+    <!-- ===== LEFT RAIL · PERSONA LIST ===== -->
+    <nav class="rail">
+      <div class="grp">
+        <span>PERSONAS</span>
+        <span class="live-tag" id="pBackendTag" title="data/custom-personas.json · live"><span class="dot"></span>BACKEND LIVE</span>
+      </div>
+
+      <div class="grp" style="padding-top: 6px;"><span>BUILT-IN</span><em>read-only</em></div>
+      <div id="builtinList"><div class="empty" style="padding:14px 8px;">⋯ loading…</div></div>
+
+      <div class="grp" style="padding-top: 14px;"><span>CUSTOM</span><em id="customCount">0 / 50</em></div>
+      <div id="customList"><div class="empty" style="padding:14px 8px;">⋯ loading…</div></div>
+
+      <div style="margin-top: auto; padding-top: 12px;">
+        <div style="font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); line-height: 1.7; padding: 0 10px;">
+          ▸ <span style="color:var(--cyan-1)">data/custom-personas.json</span><br>
+          slug · 2–32 chars · tone ≤ 2000<br>
+          shared with Discord <span style="color:var(--cyan-1)">@SeekDeep persona</span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- ===== CENTER PANE · ADD / EDIT ===== -->
+    <section class="pane">
+      <div style="display:flex; justify-content:space-between; align-items:end; gap:12px; margin-bottom:6px;">
+        <h2>Add / edit persona</h2>
+        <span class="live-tag" id="pModeTag" style="color:var(--cyan-1); border-color:color-mix(in oklab, var(--cyan-1) 45%, transparent);"><span class="dot" style="background:var(--cyan-1); box-shadow:0 0 6px var(--cyan-1)"></span><span id="pMode">NEW PERSONA</span></span>
+      </div>
+      <div class="sub"><span>▸ POST /personas · create or update</span><span>writes <span style="color:var(--cyan-1)">custom-personas.json</span></span></div>
+
+      <div class="form-field">
+        <label for="pSlug">SLUG</label>
+        <input id="pSlug" type="text" placeholder="e.g. slickback" autocomplete="off" spellcheck="false" maxlength="32" />
+        <div class="desc">2–32 chars · lowercase letters, digits, <span style="color:var(--cyan-1)">-</span> or <span style="color:var(--cyan-1)">_</span>. Re-using an existing slug updates it.</div>
+      </div>
+
+      <div class="form-field">
+        <label for="pTone">DESCRIPTION · TONE</label>
+        <textarea id="pTone" placeholder="A profane, theatrical street philosopher who demands respect and turns every reply into a sermon."></textarea>
+        <div class="counter-row">
+          <span>the personality line injected into the system prompt</span>
+          <span id="pToneLen">0 / 2000</span>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" id="pSave">▸ Save persona</button>
+        <button class="btn btn-ghost" id="pNew">+ New / clear</button>
+      </div>
+
+      <h3 class="section-h" style="margin-top: 26px;"><span>SYSTEM-PROMPT PREVIEW</span></h3>
+      <div class="sub" style="margin-bottom:12px;"><span>▸ what a chat call sees when this persona is active</span></div>
+      <div id="pPreview" style="padding:14px; background:rgba(0,4,12,0.65); border:1px solid rgba(45,212,255,0.20); border-radius:var(--r-md); font-family:var(--font-mono); font-size:11.5px; color:var(--hull-2); line-height:1.7; white-space:pre-wrap; word-break:break-word;"></div>
+    </section>
+
+    <!-- ===== RIGHT PANE · ASSIGN ACTIVE PERSONA ===== -->
+    <section class="pane">
+      <h3 class="section-h"><span>ASSIGN ACTIVE PERSONA</span></h3>
+      <div class="sub"><span>▸ GET / POST /persona · overrides</span><span id="asgTag" style="color:var(--hull-3)">probing…</span></div>
+
+      <div class="assign-current" id="asgCurrent">⋯ loading current assignments…</div>
+
+      <div class="assign-block">
+        <h4>Global</h4>
+        <div class="ds">Applies everywhere unless a channel or server override wins. Below Discord per-channel overrides, above the env default.</div>
+        <div class="ctl">
+          <select id="asgGlobalSel"></select>
+          <button class="btn btn-primary" id="asgGlobalSet">Set</button>
+          <button class="btn btn-ghost" id="asgGlobalReset">Reset</button>
+        </div>
+      </div>
+
+      <div class="assign-block">
+        <h4>Channel</h4>
+        <div class="ds">Override the persona for one Discord channel (by channel ID).</div>
+        <input class="idin" id="asgChannelId" type="text" placeholder="channel ID" autocomplete="off" spellcheck="false" />
+        <div class="ctl">
+          <select id="asgChannelSel"></select>
+          <button class="btn btn-primary" id="asgChannelSet">Set</button>
+          <button class="btn btn-ghost" id="asgChannelReset">Reset</button>
+        </div>
+      </div>
+
+      <div class="assign-block">
+        <h4>Server</h4>
+        <div class="ds">Override the persona for a whole Discord server (by guild ID).</div>
+        <input class="idin" id="asgServerId" type="text" placeholder="guild ID" autocomplete="off" spellcheck="false" />
+        <div class="ctl">
+          <select id="asgServerSel"></select>
+          <button class="btn btn-primary" id="asgServerSet">Set</button>
+          <button class="btn btn-ghost" id="asgServerReset">Reset</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</div></div>
+
+<!-- Confirm modal -->
+<div class="cf-back" id="cfBack"></div>
+<div class="cf" id="cf" role="dialog">
+  <h3 id="cfTitle">CONFIRM</h3>
+  <p id="cfBody">—</p>
+  <div class="row">
+    <button class="btn btn-ghost" id="cfCancel">Cancel</button>
+    <button class="btn" id="cfOk" style="background: var(--bad); color: var(--ink); font-weight: 700;">Yes, remove it</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Persona manager · GUI surface for data/custom-personas.json
+   ============================================================
+   Backend contract:
+     GET    /personas                → { ok, builtin:[{slug,description}],
+                                          custom:[{slug,tone,updatedAt}], count, max }
+     POST   /personas { slug, tone } → create / update a custom persona
+     DELETE /personas/{slug}         → remove a custom persona (404 if built-in/absent)
+     GET    /persona                 → { ok, valid_personas, env_default, global,
+                                          effective_global, channels_count, guilds_count }
+     POST   /persona { scope, persona | action:'reset', channel_id?, guild_id? }
+
+   GET /personas + GET /persona are open. Writes (POST/DELETE) are token-gated;
+   nav.js's patched fetch attaches X-SeekDeep-Token automatically. If the server
+   is unreachable the page renders a clearly-labelled OFFLINE placeholder and
+   flips to BACKEND LIVE on the first 200.
+*/
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+
+  const SLUG_MAX = 32;
+  const TONE_MIN = 2;
+  const TONE_MAX = 2000;
+  const SLUG_RE  = /^[a-z0-9_-]{2,32}$/;
+  // Mirror index.js + gui_endpoints.py so the form gives the same verdict the
+  // server will (instant feedback; the server stays the authority).
+  const RESERVED = new Set(['reset', 'show', 'create', 'remove', 'list', 'channel', 'server', 'guild']);
+  const BUILTIN_SLUGS = ['neurotic', 'unsettling', 'clinical', 'chaotic'];
+  const BUILTIN_FALLBACK_DESC = {
+    neurotic:   'Anxious over-thinker (the default).',
+    unsettling: 'Quietly ominous, faintly wrong.',
+    clinical:   'Cold, precise, minimal warmth.',
+    chaotic:    'Manic and unpredictable.',
+  };
+
+  const state = {
+    live: false,
+    builtin: [],     // [{slug, description}]
+    custom: [],      // [{slug, tone, updatedAt}]
+    assign: null,    // GET /persona body
+    editingSlug: null,
+  };
+
+  // --- helpers ------------------------------------------------------
+  function base() {
+    if (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (typeof window !== 'undefined' && (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')) {
+      return 'http://127.0.0.1:7865';
+    }
+    return (location.protocol === 'http:' || location.protocol === 'https:')
+      ? location.origin
+      : 'http://127.0.0.1:7865';
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function fmtAgo(iso) {
+    if (!iso) return '—';
+    const t = Date.parse(iso);
+    if (isNaN(t)) return '—';
+    const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60)    return s + 's ago';
+    if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+  }
+  function toast(tone, title, body) {
+    const fn = (window.SeekDeepNotify && window.SeekDeepNotify.toast) || ((o) => alert(o.title));
+    fn({ tone, title, body, ttl: tone === 'bad' ? 6500 : 4000 });
+  }
+  async function safeGet(url) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+  // Write helper — resolves to parsed JSON on success, throws Error(detail) on
+  // any failure so callers can surface the server's 4xx message verbatim.
+  async function writeJson(method, url, bodyObj) {
+    const opts = { method, signal: AbortSignal.timeout(8000) };
+    if (bodyObj !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(bodyObj);
+    }
+    const r = await fetch(url, opts);
+    let j = null;
+    try { j = await r.json(); } catch {}
+    if (!r.ok) {
+      const msg = (j && (j.detail || j.error)) || ('HTTP ' + r.status);
+      throw new Error(msg);
+    }
+    return j || { ok: true };
+  }
+
+  function personaSlugs() {
+    return [...state.builtin.map(b => b.slug), ...state.custom.map(c => c.slug)];
+  }
+
+  // --- load ---------------------------------------------------------
+  async function loadAll() {
+    const [pj, aj] = await Promise.all([
+      safeGet(base() + '/personas'),
+      safeGet(base() + '/persona'),
+    ]);
+    if (pj && pj.ok) {
+      state.live = true;
+      state.builtin = Array.isArray(pj.builtin) ? pj.builtin : [];
+      state.custom  = Array.isArray(pj.custom)  ? pj.custom  : [];
+    } else {
+      state.live = false;
+      state.builtin = BUILTIN_SLUGS.map(s => ({ slug: s, description: BUILTIN_FALLBACK_DESC[s] || '(built-in persona)' }));
+      state.custom = [];
+    }
+    if (aj && aj.ok) {
+      state.assign = aj;
+    } else if (!state.assign) {
+      state.assign = { ok: false, valid_personas: BUILTIN_SLUGS.slice(), env_default: 'neurotic', global: null, effective_global: 'neurotic', channels_count: 0, guilds_count: 0 };
+    }
+    renderAll();
+  }
+
+  // --- render -------------------------------------------------------
+  function renderAll() { renderTag(); renderList(); renderAssign(); renderPreview(); updateSaveState(); }
+
+  function renderTag() {
+    const tag = $('#pBackendTag');
+    if (!tag) return;
+    if (state.live) {
+      tag.style.color = ''; tag.style.borderColor = '';
+      tag.innerHTML = '<span class="dot"></span>BACKEND LIVE';
+      tag.title = 'data/custom-personas.json · live';
+    } else {
+      tag.style.color = 'var(--warn)';
+      tag.style.borderColor = 'color-mix(in oklab, var(--warn) 45%, transparent)';
+      tag.innerHTML = '<span class="dot" style="background:var(--warn); box-shadow:0 0 6px var(--warn);"></span>OFFLINE';
+      tag.title = 'GET /personas unreachable — start the local AI server.';
+    }
+  }
+
+  function renderList() {
+    // Built-in: read-only chips. description comes from the server (escape it).
+    $('#builtinList').innerHTML = state.builtin.map(b => `
+      <div class="p-builtin">
+        <div class="nm"><span>${escapeHtml(b.slug)}</span><span class="ro">built-in</span></div>
+        <div class="ds">${escapeHtml(b.description || '')}</div>
+      </div>
+    `).join('') || '<div class="empty" style="padding:14px 8px;">no built-ins</div>';
+
+    // Custom: editable cards with Edit + Remove. Use index-based lookup for
+    // actions so the (server-supplied) slug never has to round-trip through an
+    // HTML attribute. All visible text is escaped.
+    $('#customCount').textContent = state.custom.length + ' / 50';
+    const host = $('#customList');
+    if (!state.custom.length) {
+      host.innerHTML = state.live
+        ? '<div class="empty" style="padding:16px 8px;">no custom personas yet ·<br>add one with the form →</div>'
+        : '<div class="empty" style="padding:16px 8px;">server offline ·<br>custom personas unavailable</div>';
+      return;
+    }
+    host.innerHTML = state.custom.map((p, i) => {
+      const preview = (p.tone || '').length > 140 ? (p.tone || '').slice(0, 140) + '…' : (p.tone || '');
+      return `
+        <div class="p-custom ${p.slug === state.editingSlug ? 'editing' : ''}" data-i="${i}">
+          <div class="nm"><span>${escapeHtml(p.slug)}</span><span class="when">${escapeHtml(fmtAgo(p.updatedAt))}</span></div>
+          <div class="tone">${escapeHtml(preview)}</div>
+          <div class="row">
+            <button class="mini-btn" data-act="edit">Edit</button>
+            <button class="mini-btn bad" data-act="remove">Remove</button>
+          </div>
+        </div>`;
+    }).join('');
+    host.querySelectorAll('.p-custom').forEach(card => {
+      const i = +card.dataset.i;
+      card.querySelector('[data-act="edit"]').addEventListener('click', () => startEdit(i));
+      card.querySelector('[data-act="remove"]').addEventListener('click', () => startRemove(i));
+    });
+  }
+
+  function fillSelect(sel, current) {
+    const slugs = personaSlugs();
+    sel.innerHTML = slugs.map(s => `<option value="${escapeHtml(s)}"${s === current ? ' selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  }
+
+  function renderAssign() {
+    const a = state.assign || {};
+    $('#asgTag').textContent = state.live ? 'LIVE' : 'OFFLINE';
+    $('#asgTag').style.color = state.live ? 'var(--cyan-1)' : 'var(--warn)';
+    const g = a.global || null;
+    $('#asgCurrent').innerHTML =
+      `<div><span class="k">env default</span> · <span class="v">${escapeHtml(a.env_default || 'neurotic')}</span></div>` +
+      `<div><span class="k">global override</span> · <span class="v">${g ? escapeHtml(g) : '<span style="color:var(--hull-3)">none</span>'}</span></div>` +
+      `<div><span class="k">effective global</span> · <span class="v">${escapeHtml(a.effective_global || a.env_default || 'neurotic')}</span></div>` +
+      `<div><span class="k">channel overrides</span> · <span class="v">${Number(a.channels_count || 0)}</span> &nbsp; <span class="k">server overrides</span> · <span class="v">${Number(a.guilds_count || 0)}</span></div>`;
+    fillSelect($('#asgGlobalSel'), a.effective_global || a.env_default);
+    fillSelect($('#asgChannelSel'), a.effective_global || a.env_default);
+    fillSelect($('#asgServerSel'), a.effective_global || a.env_default);
+  }
+
+  function renderPreview() {
+    const slug = ($('#pSlug').value || '').trim().toLowerCase();
+    const tone = ($('#pTone').value || '').trim();
+    const shown = tone || '(type a description above to preview)';
+    $('#pPreview').innerHTML =
+      '<span style="color:var(--cyan-1)"># system prompt</span>\n' +
+      'You are SeekDeep.\n\n' +
+      '<span style="color:var(--cyan-1)"># persona' + (slug ? ' · ' + escapeHtml(slug) : '') + '</span>\n' +
+      '<span style="color:var(--good)">Tone: ' + escapeHtml(shown) + '</span>';
+  }
+
+  // --- editor -------------------------------------------------------
+  function setEditing(slug) {
+    state.editingSlug = slug || null;
+    $('#pMode').textContent = slug ? ('EDITING · ' + slug) : 'NEW PERSONA';
+    // re-mark the active card without a full reload
+    document.querySelectorAll('.p-custom').forEach((c, i) => {
+      c.classList.toggle('editing', !!slug && state.custom[+c.dataset.i] && state.custom[+c.dataset.i].slug === slug);
+    });
+  }
+  function startEdit(i) {
+    const p = state.custom[i];
+    if (!p) return;
+    $('#pSlug').value = p.slug;
+    $('#pTone').value = p.tone || '';
+    setEditing(p.slug);
+    updateCounter();
+    renderPreview();
+    $('#pTone').focus();
+  }
+  function clearForm() {
+    $('#pSlug').value = '';
+    $('#pTone').value = '';
+    setEditing(null);
+    updateCounter();
+    renderPreview();
+  }
+
+  function updateCounter() {
+    const n = $('#pTone').value.length;
+    const el = $('#pToneLen');
+    el.textContent = n + ' / ' + TONE_MAX;
+    el.style.color = n > TONE_MAX ? 'var(--bad)' : '';
+    updateSaveState();
+  }
+  function slugVerdict(slug) {
+    if (!SLUG_RE.test(slug)) return 'slug must be 2–' + SLUG_MAX + ' chars: a–z, 0–9, - or _';
+    if (BUILTIN_SLUGS.includes(slug)) return '"' + slug + '" is a built-in persona';
+    if (RESERVED.has(slug)) return '"' + slug + '" is a reserved keyword';
+    return '';
+  }
+  function updateSaveState() {
+    const slug = ($('#pSlug').value || '').trim().toLowerCase();
+    const raw = $('#pTone').value || '';
+    const trimmed = raw.trim();
+    const ok = state.live && !slugVerdict(slug) && trimmed.length >= TONE_MIN && raw.length <= TONE_MAX;
+    const btn = $('#pSave');
+    btn.disabled = !ok;
+    btn.style.opacity = ok ? '' : '0.5';
+    btn.style.pointerEvents = ok ? '' : 'none';
+  }
+
+  async function savePersona() {
+    const slug = ($('#pSlug').value || '').trim().toLowerCase();
+    const tone = ($('#pTone').value || '').trim();
+    const sv = slugVerdict(slug);
+    if (sv) { toast('warn', sv); return; }
+    if (tone.length < TONE_MIN) { toast('warn', 'Description is too short', 'Give the persona at least a sentence.'); return; }
+    if (($('#pTone').value || '').length > TONE_MAX) { toast('warn', 'Description is too long', 'Trim to ' + TONE_MAX + ' chars or fewer.'); return; }
+    if (!state.live) { toast('bad', 'Server offline', 'Start the local AI server to save personas.'); return; }
+    const btn = $('#pSave');
+    btn.disabled = true; btn.textContent = '⋯ saving…';
+    try {
+      const res = await writeJson('POST', base() + '/personas', { slug, tone });
+      toast('good', '✓ Persona "' + slug + '" ' + (res.created ? 'created' : 'updated'));
+      clearForm();
+      await loadAll();
+    } catch (err) {
+      toast('bad', 'Save failed', err.message || String(err));
+    } finally {
+      btn.textContent = '▸ Save persona';
+      updateSaveState();
+    }
+  }
+
+  function startRemove(i) {
+    const p = state.custom[i];
+    if (!p) return;
+    if (!state.live) { toast('bad', 'Server offline', 'Cannot remove personas while the server is unreachable.'); return; }
+    confirmModal('Remove persona?',
+      'This deletes custom persona "' + p.slug + '" from data/custom-personas.json. Any channel/server override pointing at it falls back to the default on the bot\'s next message. Cannot be undone.',
+      async () => {
+        try {
+          await writeJson('DELETE', base() + '/personas/' + encodeURIComponent(p.slug));
+          toast('good', '✓ Removed "' + p.slug + '"');
+          if (state.editingSlug === p.slug) clearForm();
+          await loadAll();
+        } catch (err) {
+          toast('bad', 'Remove failed', err.message || String(err));
+        }
+      });
+  }
+
+  // --- assign -------------------------------------------------------
+  async function doAssign(payload, label) {
+    if (!state.live && !state.assign) { /* still try — /persona may be up */ }
+    try {
+      await writeJson('POST', base() + '/persona', payload);
+      toast('good', '✓ ' + label);
+      const aj = await safeGet(base() + '/persona');
+      if (aj && aj.ok) { state.assign = aj; renderAssign(); }
+    } catch (err) {
+      toast('bad', 'Assign failed', err.message || String(err));
+    }
+  }
+
+  function wireAssign() {
+    $('#asgGlobalSet').addEventListener('click', () =>
+      doAssign({ scope: 'global', persona: $('#asgGlobalSel').value }, 'Global persona set to "' + $('#asgGlobalSel').value + '"'));
+    $('#asgGlobalReset').addEventListener('click', () =>
+      doAssign({ scope: 'global', action: 'reset' }, 'Global override cleared'));
+
+    $('#asgChannelSet').addEventListener('click', () => {
+      const cid = ($('#asgChannelId').value || '').trim();
+      if (!cid) { toast('warn', 'Enter a channel ID first'); return; }
+      doAssign({ scope: 'channel', channel_id: cid, persona: $('#asgChannelSel').value }, 'Channel ' + cid + ' → "' + $('#asgChannelSel').value + '"');
+    });
+    $('#asgChannelReset').addEventListener('click', () => {
+      const cid = ($('#asgChannelId').value || '').trim();
+      if (!cid) { toast('warn', 'Enter a channel ID first'); return; }
+      doAssign({ scope: 'channel', channel_id: cid, action: 'reset' }, 'Channel ' + cid + ' override cleared');
+    });
+
+    $('#asgServerSet').addEventListener('click', () => {
+      const gid = ($('#asgServerId').value || '').trim();
+      if (!gid) { toast('warn', 'Enter a guild ID first'); return; }
+      doAssign({ scope: 'server', guild_id: gid, persona: $('#asgServerSel').value }, 'Server ' + gid + ' → "' + $('#asgServerSel').value + '"');
+    });
+    $('#asgServerReset').addEventListener('click', () => {
+      const gid = ($('#asgServerId').value || '').trim();
+      if (!gid) { toast('warn', 'Enter a guild ID first'); return; }
+      doAssign({ scope: 'server', guild_id: gid, action: 'reset' }, 'Server ' + gid + ' override cleared');
+    });
+  }
+
+  // --- confirm modal ------------------------------------------------
+  function confirmModal(title, body, ok) {
+    $('#cfTitle').textContent = title;
+    $('#cfBody').textContent  = body;
+    $('#cf').classList.add('open');
+    $('#cfBack').classList.add('open');
+    const close = () => { $('#cf').classList.remove('open'); $('#cfBack').classList.remove('open'); };
+    $('#cfCancel').onclick = close;
+    $('#cfBack').onclick   = close;
+    $('#cfOk').onclick     = async () => { close(); await ok(); };
+  }
+
+  // --- wire form ----------------------------------------------------
+  $('#pSlug').addEventListener('input', () => { updateSaveState(); renderPreview(); });
+  $('#pTone').addEventListener('input', () => { updateCounter(); renderPreview(); });
+  $('#pSave').addEventListener('click', savePersona);
+  $('#pNew').addEventListener('click', () => { clearForm(); $('#pSlug').focus(); });
+  wireAssign();
+
+  // --- boot ---------------------------------------------------------
+  // Run AFTER nav.js (deferred, below) patches fetch with the GUI token so the
+  // token-gated writes carry X-SeekDeep-Token. Deferred scripts run before
+  // DOMContentLoaded, so gating on it guarantees the patch is installed — firing
+  // fetches at parse time would send them on the unpatched fetch → 401 → mock
+  // (the exact bug memory.html + prompts.html both hit).
+  function boot() { updateCounter(); loadAll(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+  else boot();
+})();
+</script>
+<script src="nav.js" defer></script>
+</body>
+</html>
