@@ -359,6 +359,20 @@ stage('docs', () => {
   return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok' };
 });
 
+// AUD-006: endpoint→GUI/test coverage map drift guard. Regenerates the map in
+// memory and fails if docs/ENDPOINT_COVERAGE.md is stale, so an endpoint
+// rename / auth change / new route can't silently diverge from the doc.
+stage('coverage', () => {
+  const script = path.join(ROOT, 'scripts', 'audit_endpoint_coverage.mjs');
+  if (!existsSync(script)) return { ok: true, detail: 'coverage generator absent; skipped' };
+  const r = spawnSync(process.execPath, [script, '--check'], { cwd: ROOT, encoding: 'utf8' });
+  if (r.status !== 0) {
+    const msg = (r.stderr || r.stdout || '').trim().split('\n').slice(-1)[0] || 'coverage map stale';
+    return { ok: false, detail: msg.slice(0, 160) };
+  }
+  return { ok: true, detail: 'endpoint coverage map up to date' };
+});
+
 const failed = stages.filter((s) => !s.ok);
 const passed = stages.filter((s) => s.ok && !s.skipped);
 const skipped = stages.filter((s) => s.skipped);
