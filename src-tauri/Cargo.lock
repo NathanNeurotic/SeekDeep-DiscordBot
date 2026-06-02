@@ -2860,6 +2860,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "url",
  "win32job",
 ]
 

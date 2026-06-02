@@ -120,12 +120,108 @@ fn retry_spawn(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// AUD-003: allowlist gate for `open_external`. The desktop bridge opens a
+/// frontend-supplied URL in the system browser; an unvalidated opener turns any
+/// GUI XSS into an arbitrary-URL / local-protocol-handler opener. Policy:
+///
+///   * `discord:` — allowed (the first-party deep-link the prompts page uses;
+///     `discord://-/channels/<g>/<c>`). No host check — it's a fixed OS handler,
+///     and the `https://discord.com/...` form is the fallback covered below.
+///   * `https:`   — allowed only for the small product host allowlist.
+///   * everything else (`http:`, `file:`, `javascript:`, `data:`, other custom
+///     schemes) — refused.
+///
+/// Returns Ok(()) when the URL may be opened, or Err(reason) to refuse.
+fn open_external_url_allowed(raw: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("unparseable URL: {e}"))?;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    if scheme == "discord" {
+        return Ok(());
+    }
+    if scheme != "https" {
+        return Err(format!("blocked URL scheme '{scheme}' (only https + discord: are allowed)"));
+    }
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("blocked: https URL has no host".to_string());
+    }
+    // Product hosts only. Subdomains match via the leading-dot suffix check so a
+    // look-alike like `github.com.evil.com` or `evilgithub.com` is refused.
+    const ALLOWED_HOSTS: &[&str] = &[
+        "github.com",
+        "raw.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "discord.com",
+        "discord.gg",
+        "python.org",
+        "huggingface.co",
+        "pytorch.org",
+        "ollama.com",
+        "ollama.ai",
+        "docker.com",
+        "nvidia.com",
+    ];
+    let allowed = ALLOWED_HOSTS.iter().any(|&h| host == h || host.ends_with(&format!(".{h}")));
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!("blocked host '{host}' (not in the SeekDeep open-external allowlist)"))
+    }
+}
+
 #[tauri::command]
 fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    // AUD-003: validate scheme + host before handing the URL to the OS opener.
+    open_external_url_allowed(&url)?;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| format!("open_url: {e}"))
+}
+
+#[cfg(test)]
+mod open_external_tests {
+    use super::open_external_url_allowed as chk;
+
+    #[test]
+    fn allows_product_https_hosts() {
+        assert!(chk("https://github.com/NathanNeurotic/SeekDeep-DiscordBot/releases/tag/v1.2.3").is_ok());
+        assert!(chk("https://raw.githubusercontent.com/x/y/main/file").is_ok());
+        assert!(chk("https://www.python.org/downloads/").is_ok());      // www. subdomain
+        assert!(chk("https://ollama.com/download").is_ok());
+        assert!(chk("https://cdn-lfs.huggingface.co/repos/x").is_ok()); // subdomain
+        assert!(chk("https://discord.com/channels/1/2").is_ok());
+        assert!(chk("https://developer.nvidia.com/cuda").is_ok());
+    }
+
+    #[test]
+    fn allows_first_party_discord_deeplink() {
+        assert!(chk("discord://-/channels/123/456").is_ok());
+    }
+
+    #[test]
+    fn blocks_dangerous_schemes() {
+        assert!(chk("http://github.com/x").is_err());        // plain http
+        assert!(chk("file:///etc/passwd").is_err());
+        assert!(chk("javascript:alert(1)").is_err());
+        assert!(chk("data:text/html,<script>alert(1)</script>").is_err());
+        assert!(chk("tauri://localhost/x").is_err());        // custom scheme
+        assert!(chk("ms-msdt:/id").is_err());                // OS handler abuse
+    }
+
+    #[test]
+    fn blocks_unapproved_and_lookalike_hosts() {
+        assert!(chk("https://evil.example.com/x").is_err());
+        assert!(chk("https://github.com.evil.com/x").is_err());  // suffix-append attack
+        assert!(chk("https://evilgithub.com/x").is_err());       // no dot boundary
+        assert!(chk("https://evilhuggingface.co/x").is_err());
+    }
+
+    #[test]
+    fn blocks_unparseable_and_hostless() {
+        assert!(chk("not a url").is_err());
+        assert!(chk("https://").is_err());
+    }
 }
 
 /// Open the SeekDeep log directory in the OS file manager. Used by the

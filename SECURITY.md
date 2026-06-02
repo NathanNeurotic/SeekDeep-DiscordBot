@@ -24,6 +24,12 @@ By default, SeekDeep expects local services on loopback:
 
 Do not expose these ports publicly unless you have added authentication, firewall rules, and a clear deployment plan.
 
+## Desktop Shell (Tauri) Bridge (AUD-003)
+
+The Tauri desktop shell exposes a small set of `#[tauri::command]` functions to the bundled GUI. The `open_external` command — which opens a frontend-supplied URL in the system browser — is allowlisted (`open_external_url_allowed` in `src-tauri/src/lib.rs`): only `https://` to a short product host list (github, discord, python.org, huggingface, pytorch, ollama, docker, nvidia) plus the first-party `discord://` deep-link are opened; `http:`, `file:`, `javascript:`, `data:`, and other custom schemes are refused. This keeps a hypothetical GUI XSS from turning the bridge into an arbitrary-URL / local-protocol-handler opener. Unit tests cover the allow/deny cases (`open_external_tests`).
+
+The WebView CSP is still intentionally permissive (`'unsafe-inline'`/`'unsafe-eval'`/`withGlobalTauri`) for the inline-script GUI pages; tightening it is sequenced in [docs/audits/CSP_TIGHTENING_PLAN.md](docs/audits/CSP_TIGHTENING_PLAN.md) because it must roll out page-by-page with regression testing.
+
 ## Discord Permissions
 
 Use the minimum Discord bot permissions needed for:
