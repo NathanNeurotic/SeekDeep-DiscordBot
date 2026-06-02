@@ -2979,6 +2979,51 @@ def register_gui_endpoints(
                 + ", ".join(bad_integrity[:8]))
         event_bus.publish_sync({"type": "self-update.line",
                                 "data": {"line": f"integrity ok: {len(staged)} file(s) match git SHAs"}})
+        # AUD-001 follow-up: release-SIGNATURE gate. The git-SHA check proves the
+        # bytes match GitHub's tree for this ref; it does NOT defend a compromised
+        # repo (the malicious code would have a valid git SHA). When a release-
+        # signing public key is pinned, require a valid maintainer Ed25519
+        # signature over a manifest whose sha256s match the staged files, BEFORE
+        # commit. A present-but-invalid signature ALWAYS aborts (attack signal).
+        import release_signing as _rsign
+        _sig_require = str(os.environ.get("SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE", "")).strip().lower() in ("1", "true", "yes", "on")
+        _pubkey_hex = str(os.environ.get("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "") or _rsign.RELEASE_SIGNING_PUBKEY_HEX or "").strip()
+
+        def _abort_sig(reason: str):
+            try: shutil.rmtree(staging, ignore_errors=True)
+            except Exception: pass
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "signature check failed", "detail": reason}})
+            raise HTTPException(409, f"Self-update aborted: {reason} (live tree untouched).")
+
+        if not _pubkey_hex:
+            if _sig_require:
+                _abort_sig("signature required (SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on) but no release-signing key is pinned")
+            event_bus.publish_sync({"type": "self-update.line",
+                                    "data": {"line": "signature check skipped: no pinned release-signing key"}})
+        else:
+            _have_manifest = True
+            try:
+                _manifest_bytes = _fetch(base_url + _rsign.MANIFEST_NAME)
+                _sig_bytes = _fetch(base_url + _rsign.MANIFEST_SIG_NAME)
+            except Exception:
+                _have_manifest = False
+            if not _have_manifest:
+                if _sig_require:
+                    _abort_sig(f"signature required but no signed manifest is published for ref {ref}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"no signed manifest for ref {ref}; proceeding unsigned (set SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on to refuse)"}})
+            else:
+                _ok, _reason, _manifest = _rsign.verify_release_bytes(_manifest_bytes, _sig_bytes, _pubkey_hex)
+                if not _ok:
+                    _abort_sig(f"release signature invalid: {_reason}")
+                if str((_manifest or {}).get("ref") or "") != ref:
+                    _abort_sig(f"manifest ref mismatch (manifest={(_manifest or {}).get('ref')!r}, requested={ref!r})")
+                _files_ok, _files_reason = _rsign.check_staged_against_manifest(_manifest, staging, staged)
+                if not _files_ok:
+                    _abort_sig(_files_reason)
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"signature ok: manifest verified against pinned key ({len((_manifest or {}).get('files', {}))} files)"}})
         # Phase 2: commit. Each src.replace(target) is atomic on the same
         # volume (staging is a sibling so always same vol). Live tree only
         # transitions consistent old → consistent new per file.

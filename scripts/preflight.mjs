@@ -90,7 +90,8 @@ function runPyCompile() {
   const py = existsSync(venvPy) ? venvPy : 'python';
   // gui_endpoints.py is owned by us with extensive audit overrides; a parse
   // regression there silently breaks the entire GUI write side at boot.
-  const targets = ['local_ai_server.py', 'warmup_local_cache.py', 'gui_endpoints.py']
+  const targets = ['local_ai_server.py', 'warmup_local_cache.py', 'gui_endpoints.py', 'release_signing.py',
+                   'scripts/gen_release_keypair.py', 'scripts/sign_release_manifest.py']
     .filter((f) => existsSync(path.join(ROOT, f)));
   if (!targets.length) return { ok: true, detail: 'no python files to compile' };
   const r = spawnSync(py, ['-m', 'py_compile', ...targets], {

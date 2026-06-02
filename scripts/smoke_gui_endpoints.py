@@ -80,9 +80,33 @@ def _self_update_checks() -> None:
         from fastapi.testclient import TestClient
         import gui_endpoints as _ge
         import urllib.request as _urlreq
+        import release_signing as _rsign
+        import base64 as _b64
     except Exception as e:
         check("self-update: test imports", False, str(e))
         return
+
+    # ---- Ed25519 (release signing) — RFC 8032 §7.1 official test vectors ----
+    # Pins the vendored pure-Python Ed25519's correctness: pubkey derivation,
+    # signing, verification, and tamper-rejection must match the RFC exactly.
+    _t1 = ("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+           "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+           "",
+           "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+    _t2 = ("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+           "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+           "72",
+           "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00")
+    for _i, (_sk, _pk, _m, _sig) in enumerate((_t1, _t2), 1):
+        _seed = bytes.fromhex(_sk); _wantpub = bytes.fromhex(_pk)
+        _msg = bytes.fromhex(_m); _wantsig = bytes.fromhex(_sig)
+        _pub = _rsign.ed25519_publickey(_seed)
+        _gotsig = _rsign.ed25519_sign(_msg, _seed, _pub)
+        _tampered = (bytes([_msg[0] ^ 1]) + _msg[1:]) if _msg else b"\x01"
+        check(f"ed25519 RFC8032 vector {_i}: pubkey + signature + verify match",
+              _pub == _wantpub and _gotsig == _wantsig
+              and _rsign.ed25519_verify(_wantsig, _msg, _wantpub) is True
+              and _rsign.ed25519_verify(_wantsig, _tampered, _wantpub) is False)
 
     # ---- pure ref-policy matrix (no app, no network) ----
     pol_keys = ("SEEKDEEP_SELF_UPDATE_REF_POLICY", "SEEKDEEP_SELF_UPDATE_ALLOW_MAIN")
@@ -115,6 +139,8 @@ def _self_update_checks() -> None:
     auth_saved = dict(_ge._AUTH_STATE)
     cap_saved = _ge._SELF_UPDATE_MAX_FILE_BYTES
     enabled_saved = os.environ.get("SEEKDEEP_SELF_UPDATE_ENABLED")
+    sig_env_saved = {k: os.environ.get(k) for k in
+                     ("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE")}
     try:
         TT = "selfupd-test-token-0001"
         (tmp / ".env").write_text(f"SEEKDEEP_GUI_TOKEN={TT}\n", encoding="utf-8")
@@ -176,9 +202,21 @@ def _self_update_checks() -> None:
                 self._p += len(chunk)
                 return chunk
 
-        def _make_urlopen(file_bytes: bytes, tree_paths: dict):
+        def _make_urlopen(file_bytes: bytes, tree_paths: dict, manifest_bytes=None, sig_bytes=None):
             def _open(req, timeout=None):
                 url = getattr(req, "full_url", None) or str(req)
+                # Manifest/sig URLs (.sig checked first — it's a superstring of the
+                # manifest name). When no manifest is provided, 404 them so the
+                # route's fetch raises and _have_manifest becomes False (mirrors a
+                # release that simply hasn't published a signed manifest).
+                if url.endswith(_rsign.MANIFEST_SIG_NAME):
+                    if manifest_bytes is None:
+                        raise OSError("404 manifest signature not found")
+                    return _FakeResp(sig_bytes)
+                if url.endswith(_rsign.MANIFEST_NAME):
+                    if manifest_bytes is None:
+                        raise OSError("404 manifest not found")
+                    return _FakeResp(manifest_bytes)
                 if "api.github.com" in url and "/contents/" in url:
                     return _FakeResp(b"[]")  # empty gui/ + scripts/ listings
                 if "api.github.com" in url and "/git/trees/" in url:
@@ -231,6 +269,61 @@ def _self_update_checks() -> None:
               (tmp / "local_ai_server.py").exists() and (tmp / "local_ai_server.py").read_bytes() == content)
         check("self-update happy path: .self-updated sentinel written",
               (tmp / ".self-updated").exists())
+
+        # (d) AUD-001 follow-up: release-signature gate. Ephemeral offline key →
+        # pin its public half via env; sign a manifest covering the staged files.
+        eph_seed = os.urandom(32)
+        eph_pub = _rsign.ed25519_publickey(eph_seed)
+        wrong_seed = os.urandom(32)
+        wrong_pub = _rsign.ed25519_publickey(wrong_seed)
+        os.environ["SEEKDEEP_RELEASE_SIGNING_PUBKEY"] = eph_pub.hex()
+
+        def _signed(content_bytes, names, seed, pub, ref="v9.9.9"):
+            man = {"schema": "seekdeep-release-manifest/v1", "ref": ref, "algorithm": "sha256",
+                   "files": {n: hashlib.sha256(content_bytes).hexdigest() for n in names}}
+            mb = _rsign.manifest_to_bytes(man)
+            sig = _b64.b64encode(_rsign.ed25519_sign(mb, seed, pub))
+            return mb, sig
+
+        # (d1) require=on + valid signature -> commits the signed content.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "on"
+        c2_content = b"# signed-update content v2\n"
+        c2_tree = {n: _git_blob_sha(c2_content) for n in single}
+        mb1, sig1 = _signed(c2_content, single, eph_seed, eph_pub)
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree, mb1, sig1)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: valid signature (require=on) -> 200",
+              r.status_code == 200 and (r.json() or {}).get("ok") is True, f"got {r.status_code}")
+        check("self-update signed: committed the signed content",
+              (tmp / "local_ai_server.py").read_bytes() == c2_content)
+
+        # (d2) present-but-INVALID signature (wrong key) -> 409 EVEN with require=off
+        #      (a present-but-bad signature is always an attack signal). Different
+        #      content that must NOT land.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        c3_content = b"# attacker swapped content v3\n"
+        c3_tree = {n: _git_blob_sha(c3_content) for n in single}
+        mb2, badsig = _signed(c3_content, single, wrong_seed, wrong_pub)  # signed by the WRONG key
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c3_content, c3_tree, mb2, badsig)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: invalid signature -> 409 even when require=off",
+              r.status_code == 409, f"got {r.status_code}")
+        check("self-update signed: invalid-signature content NOT committed",
+              (tmp / "local_ai_server.py").read_bytes() == c2_content)
+
+        # (d3) require=on + NO manifest published -> 409.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "on"
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree)):  # no manifest
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: require=on + no manifest -> 409", r.status_code == 409, f"got {r.status_code}")
+
+        # (d4) require=off + NO manifest (pinned key set) -> proceeds (graceful for
+        #      old unsigned releases).
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: require=off + no manifest -> 200 (unsigned tolerated)",
+              r.status_code == 200 and (r.json() or {}).get("ok") is True, f"got {r.status_code}")
     except Exception as e:
         check("self-update: route tests ran without harness error", False, repr(e))
     finally:
@@ -241,6 +334,11 @@ def _self_update_checks() -> None:
             os.environ.pop("SEEKDEEP_SELF_UPDATE_ENABLED", None)
         else:
             os.environ["SEEKDEEP_SELF_UPDATE_ENABLED"] = enabled_saved
+        for _k, _v in sig_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
         shutil.rmtree(tmp, ignore_errors=True)
 
 
