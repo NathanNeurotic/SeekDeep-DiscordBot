@@ -47,6 +47,16 @@ User-attached files (vision uploads, reactrule import JSON, emoji vault import J
 
 When adding a new feature that fetches a user-supplied URL, use this helper. Do not fall back to bare `await fetch(url)`. For deliberate internal/loopback calls (local AI server, SearXNG), use `fetchJson` or pass `{ allowPrivate: true }` explicitly — never route a user-controlled URL through the private path.
 
+## Self-Update Trust Boundary (AUD-001)
+
+`POST /system/self-update` is the highest-authority local action: it overwrites the running Python/GUI/script files from a GitHub ref. It is token-gated, and it stages every file, verifies each against the GitHub git-blob SHA for that ref, and only then move-replaces into the live tree (mid-batch failure leaves the tree untouched). On top of that:
+
+- **Ref policy** — `SEEKDEEP_SELF_UPDATE_REF_POLICY=strict` (default) accepts only an immutable release tag (`vMAJOR.MINOR.PATCH[-pre]`) or a full 40-char commit SHA. Mutable `main` and short SHAs are refused. Set `SEEKDEEP_SELF_UPDATE_ALLOW_MAIN=on` to allow `main` under strict, or `…REF_POLICY=loose` to allow both.
+- **Concurrency** — a module-level lock makes the route single-flight; a second concurrent request returns `409` instead of racing two commits over the same tree.
+- **Bounded reads** — file fetches are capped at `SEEKDEEP_SELF_UPDATE_MAX_FILE_BYTES` (25 MiB) and API listings at `SEEKDEEP_SELF_UPDATE_MAX_API_BYTES` (8 MiB), so a garbled/oversized response fails that file instead of exhausting memory.
+- **Kill switch** — `SEEKDEEP_SELF_UPDATE_ENABLED=off` refuses the route entirely (`403`) for installs that should only update via the signed MSI.
+- The integrity check proves the bytes match GitHub's published tree for that ref; it does **not** by itself defend against a compromised repo (that needs code signing). The ref allowlist + HTTPS + token gate remain the mitigations there.
+
 ## Feature Flags As Attack-Surface Management
 
 `SEEKDEEP_FEATURE_*` env vars default to `off`. The default-off list is deliberate:
