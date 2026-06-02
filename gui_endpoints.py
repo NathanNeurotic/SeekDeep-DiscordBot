@@ -280,6 +280,53 @@ _PID_FILE_NAMES = {
 _TRANSITIONING: set[str] = set()
 _TRANSITIONING_LOCK = threading.Lock()
 
+# AUD-001: serialize /system/self-update. Two concurrent clicks could stage and
+# commit executable code over the live tree at the same time. Non-blocking
+# acquire -> 409 when an update is already running.
+_SELF_UPDATE_LOCK = threading.Lock()
+
+# AUD-001: bounded reads for the self-updater so a hostile/garbled GitHub/CDN
+# response can't exhaust memory mid-update. Per-source-file vs API-listing caps.
+_SELF_UPDATE_MAX_FILE_BYTES = int(os.environ.get("SEEKDEEP_SELF_UPDATE_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
+_SELF_UPDATE_MAX_API_BYTES = int(os.environ.get("SEEKDEEP_SELF_UPDATE_MAX_API_BYTES", str(8 * 1024 * 1024)))
+
+# AUD-001: ref allowlist. Strict (default) accepts only an immutable release tag
+# (vMAJOR.MINOR.PATCH[-pre]) or a full 40-char commit SHA — NOT mutable `main`
+# or an over-broad `v*` prefix. The self-updater writes executable code over the
+# running install, so the default refuses anything that can move under it.
+_SELF_UPDATE_SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
+_SELF_UPDATE_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SELF_UPDATE_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _self_update_ref_is_allowed(ref: str) -> tuple[bool, str]:
+    """Return (allowed, reason). Policy is read from env at call time:
+
+      SEEKDEEP_SELF_UPDATE_REF_POLICY = strict (default) | loose
+        strict: a 'vMAJOR.MINOR.PATCH[-pre]' tag, or a full 40-char SHA.
+                'main' allowed only if SEEKDEEP_SELF_UPDATE_ALLOW_MAIN=on.
+        loose : additionally accepts 'main' and 7-40 char short SHAs.
+    """
+    ref = (ref or "").strip()
+    policy = str(os.environ.get("SEEKDEEP_SELF_UPDATE_REF_POLICY", "strict")).strip().lower()
+    loose = policy in ("loose", "dev", "any")
+    allow_main = loose or str(os.environ.get("SEEKDEEP_SELF_UPDATE_ALLOW_MAIN", "")).strip().lower() in ("1", "true", "yes", "on")
+    if not ref:
+        return False, "ref is empty"
+    if ref == "main":
+        if allow_main:
+            return True, ""
+        return False, ("ref 'main' is refused by the strict self-update policy; pass a 'vMAJOR.MINOR.PATCH' "
+                       "tag or a 40-char commit SHA, or set SEEKDEEP_SELF_UPDATE_ALLOW_MAIN=on")
+    if _SELF_UPDATE_SEMVER_TAG_RE.match(ref):
+        return True, ""
+    if _SELF_UPDATE_FULL_SHA_RE.match(ref):
+        return True, ""
+    if loose and _SELF_UPDATE_SHORT_SHA_RE.match(ref):
+        return True, ""
+    return False, ("ref must be a 'vMAJOR.MINOR.PATCH' release tag or a 40-char commit SHA "
+                   "(set SEEKDEEP_SELF_UPDATE_REF_POLICY=loose to also allow 'main' and short SHAs)")
+
 # Last-known state per service, so we can detect transitions and emit
 # `service.state.changed` events. Keyed by service name; value is the
 # previous dict returned by _service_state() (sans transitioning flag).
@@ -2738,7 +2785,6 @@ def register_gui_endpoints(
     # NathanNeurotic/SeekDeep-DiscordBot repo's `main` branch.
     @app.post("/system/self-update", dependencies=[Depends(_require_gui_token)])
     def post_self_update(body: dict | None = None):
-        import urllib.request, urllib.error
         ref = str((body or {}).get("ref") or "main").strip()
         # P0-3: let operators disable remote self-update entirely. Default on
         # (preserves behavior). SEEKDEEP_SELF_UPDATE_ENABLED=off refuses with 403
@@ -2749,11 +2795,25 @@ def register_gui_endpoints(
             event_bus.publish_sync({"type": "self-update.failed",
                                     "data": {"error": "self-update disabled (SEEKDEEP_SELF_UPDATE_ENABLED=off)"}})
             raise HTTPException(403, "Self-update is disabled on this install (SEEKDEEP_SELF_UPDATE_ENABLED=off).")
-        # Allowlist: main / a tag / a commit SHA. No arbitrary refs.
-        if not (ref == "main" or ref.startswith("v") or (7 <= len(ref) <= 40 and all(c in "0123456789abcdef" for c in ref))):
+        # AUD-001: ref allowlist (strict by default — immutable tag or full SHA).
+        ok_ref, ref_reason = _self_update_ref_is_allowed(ref)
+        if not ok_ref:
             event_bus.publish_sync({"type": "self-update.failed",
-                                    "data": {"error": "ref must be main|v*|<sha>"}})
-            raise HTTPException(400, "ref must be 'main', a 'v*' tag, or a 40-char commit SHA")
+                                    "data": {"error": ref_reason}})
+            raise HTTPException(400, ref_reason)
+        # AUD-001: only one self-update at a time. A second concurrent click must
+        # not stage/commit over the same live tree — return 409 instead.
+        if not _SELF_UPDATE_LOCK.acquire(blocking=False):
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "a self-update is already in progress"}})
+            raise HTTPException(409, "A self-update is already in progress on this install.")
+        try:
+            return _post_self_update_locked(ref)
+        finally:
+            _SELF_UPDATE_LOCK.release()
+
+    def _post_self_update_locked(ref: str):
+        import urllib.request, urllib.error
         _seekdeep_audit("self_update", ref=ref)
         REPO = "NathanNeurotic/SeekDeep-DiscordBot"
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
@@ -2778,13 +2838,32 @@ def register_gui_endpoints(
             raise HTTPException(500, f"could not create staging dir: {exc}")
         staged: list[dict] = []
         errors: list[str] = []
-        def _fetch(url: str, timeout: float = 20.0) -> bytes:
-            req = urllib.request.Request(url, headers={
+        def _fetch(url: str, timeout: float = 20.0, max_bytes: int = _SELF_UPDATE_MAX_FILE_BYTES) -> bytes:
+            # AUD-001: bounded read. A garbled CDN body, an HTML error page in
+            # place of code, or an unexpectedly huge API response can't blow up
+            # memory mid-update — we stop at max_bytes and fail this file/listing
+            # (the staging pipeline then aborts before touching the live tree).
+            headers = {
                 "User-Agent": "SeekDeep-Self-Updater",
                 "Accept": "application/vnd.github.raw",
-            })
+            }
+            # Optional: authenticate ONLY GitHub API calls when a token is present,
+            # so rate-limit failures don't look like product failures. Never sent
+            # to raw.githubusercontent (public; avoids leaking the token to a CDN).
+            gh_tok = str(os.environ.get("GITHUB_TOKEN", "")).strip()
+            if gh_tok and url.startswith("https://api.github.com/"):
+                headers["Authorization"] = f"Bearer {gh_tok}"
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read()
+                buf = bytearray()
+                while True:
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise ValueError(f"response exceeds {max_bytes} byte cap")
+                return bytes(buf)
         def _stage(rel_path: str, content: bytes):
             staged_target = (staging / rel_path).resolve()
             if not _is_inside(staged_target, staging):
@@ -2815,7 +2894,7 @@ def register_gui_endpoints(
         for sub in ("gui", "scripts"):
             sub_contents_url = f"https://api.github.com/repos/{REPO}/contents/{sub}?ref={ref}"
             try:
-                api_resp = _fetch(sub_contents_url)
+                api_resp = _fetch(sub_contents_url, max_bytes=_SELF_UPDATE_MAX_API_BYTES)
                 import json as _json
                 entries = _json.loads(api_resp)
                 if isinstance(entries, list):
@@ -2873,7 +2952,7 @@ def register_gui_endpoints(
         blob_shas = None
         try:
             import json as _json
-            tree = _json.loads(_fetch(f"https://api.github.com/repos/{REPO}/git/trees/{ref}?recursive=1"))
+            tree = _json.loads(_fetch(f"https://api.github.com/repos/{REPO}/git/trees/{ref}?recursive=1", max_bytes=_SELF_UPDATE_MAX_API_BYTES))
             blob_shas = {e["path"]: e["sha"] for e in tree.get("tree", [])
                          if isinstance(e, dict) and e.get("type") == "blob" and e.get("path") and e.get("sha")}
         except Exception as exc:
@@ -2900,6 +2979,51 @@ def register_gui_endpoints(
                 + ", ".join(bad_integrity[:8]))
         event_bus.publish_sync({"type": "self-update.line",
                                 "data": {"line": f"integrity ok: {len(staged)} file(s) match git SHAs"}})
+        # AUD-001 follow-up: release-SIGNATURE gate. The git-SHA check proves the
+        # bytes match GitHub's tree for this ref; it does NOT defend a compromised
+        # repo (the malicious code would have a valid git SHA). When a release-
+        # signing public key is pinned, require a valid maintainer Ed25519
+        # signature over a manifest whose sha256s match the staged files, BEFORE
+        # commit. A present-but-invalid signature ALWAYS aborts (attack signal).
+        import release_signing as _rsign
+        _sig_require = str(os.environ.get("SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE", "")).strip().lower() in ("1", "true", "yes", "on")
+        _pubkey_hex = str(os.environ.get("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "") or _rsign.RELEASE_SIGNING_PUBKEY_HEX or "").strip()
+
+        def _abort_sig(reason: str):
+            try: shutil.rmtree(staging, ignore_errors=True)
+            except Exception: pass
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": "signature check failed", "detail": reason}})
+            raise HTTPException(409, f"Self-update aborted: {reason} (live tree untouched).")
+
+        if not _pubkey_hex:
+            if _sig_require:
+                _abort_sig("signature required (SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on) but no release-signing key is pinned")
+            event_bus.publish_sync({"type": "self-update.line",
+                                    "data": {"line": "signature check skipped: no pinned release-signing key"}})
+        else:
+            _have_manifest = True
+            try:
+                _manifest_bytes = _fetch(base_url + _rsign.MANIFEST_NAME)
+                _sig_bytes = _fetch(base_url + _rsign.MANIFEST_SIG_NAME)
+            except Exception:
+                _have_manifest = False
+            if not _have_manifest:
+                if _sig_require:
+                    _abort_sig(f"signature required but no signed manifest is published for ref {ref}")
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"no signed manifest for ref {ref}; proceeding unsigned (set SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on to refuse)"}})
+            else:
+                _ok, _reason, _manifest = _rsign.verify_release_bytes(_manifest_bytes, _sig_bytes, _pubkey_hex)
+                if not _ok:
+                    _abort_sig(f"release signature invalid: {_reason}")
+                if str((_manifest or {}).get("ref") or "") != ref:
+                    _abort_sig(f"manifest ref mismatch (manifest={(_manifest or {}).get('ref')!r}, requested={ref!r})")
+                _files_ok, _files_reason = _rsign.check_staged_against_manifest(_manifest, staging, staged)
+                if not _files_ok:
+                    _abort_sig(_files_reason)
+                event_bus.publish_sync({"type": "self-update.line",
+                                        "data": {"line": f"signature ok: manifest verified against pinned key ({len((_manifest or {}).get('files', {}))} files)"}})
         # Phase 2: commit. Each src.replace(target) is atomic on the same
         # volume (staging is a sibling so always same vol). Live tree only
         # transitions consistent old → consistent new per file.

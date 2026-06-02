@@ -6,7 +6,7 @@ name = "seekdeep"
 # package.json, the bundled FastAPI server (which reads package.json at
 # boot via _read_pkg_version) will report a different version than the
 # Rust shell — making the stale-server guard misfire on every launch.
-version = "10.35.47"
+version = "10.36.0"
 description = "SeekDeep — local AI assistant (Discord bot + standalone GUI)"
 authors = ["NathanNeurotic"]
 edition = "2021"
@@ -26,6 +26,10 @@ tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-opener = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# AUD-003: robust URL parsing for the open_external scheme/host allowlist.
+# Already in the dependency tree via tauri; declaring it direct just lets us
+# use url::Url for validation.
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Bind the spawned AI-server child to a Win32 Job Object (kill-on-job-close) so

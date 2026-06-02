@@ -36,10 +36,15 @@ Line numbers below are from the snapshot when this file was created and will dri
 
 Core files:
 
-- `index.js` - main Node ESM Discord bot, about 17.3k lines at snapshot.
-- `local_ai_server.py` - FastAPI local model server, about 1.4k lines.
+- `index.js` - main Node ESM Discord bot, about 24k lines at snapshot.
+- `gui_endpoints.py` - FastAPI GUI/control-center backend: token auth, launcher, `/system/self-update` (lock + ref policy + signature gate), about 6.4k lines.
+- `local_ai_server.py` - FastAPI local model server, about 5.7k lines.
+- `lib/url-fetch-policy.js` - user-URL SSRF fetch policy (scheme/IP validation + per-hop redirect re-check + DNS pinning), extracted from index.js and imported back.
+- `release_signing.py` - vendored Ed25519 (RFC 8032) sign/verify + release-manifest helpers for self-update signature verification.
 - `smoke_test.mjs` - automated regression smoke tests against real helper functions.
-- `scripts/preflight.mjs` - one-command JS/Python/smoke preflight runner.
+- `scripts/preflight.mjs` - one-command JS/Python/smoke/docs/coverage preflight runner.
+- `scripts/audit_endpoint_coverage.mjs` - generates `docs/ENDPOINT_COVERAGE.md` (endpoint -> GUI/test map; preflight `coverage` stage checks drift).
+- `scripts/gen_release_keypair.py` / `scripts/sign_release_manifest.py` - offline release-signing tools (see `RELEASE_SIGNING.md`).
 - `seekdeep_launcher.bat` - Windows launcher for SearXNG, local AI server, and bot.
 - `.env.default` - committed configuration template. `.env` is local secret state.
 - `searxng/settings.yml` - local SearXNG config.
@@ -55,7 +60,10 @@ Docs:
 - `SMOKE_TEST.md` - automated and live Discord smoke checklist.
 - `PLANNED.md` - shipped history, deferred work, optional features.
 - `CONTRIBUTING.md` - local setup and coding rules.
-- `SECURITY.md` - secrets, local services, user URL fetch policy.
+- `SECURITY.md` - secrets, local services, user-URL SSRF fetch policy, self-update trust boundary + signing, Tauri bridge.
+- `RELEASE_SIGNING.md` - offline-key workflow for cryptographically-signed self-updates.
+- `docs/ENDPOINT_COVERAGE.md` - generated endpoint -> GUI/test coverage map (AUD-006).
+- `docs/audits/` - dated security audits + the CSP tightening plan.
 
 Large/runtime/local dirs:
 
@@ -409,9 +417,9 @@ Important defaults from `.env.default`:
 
 Feature flags:
 
-- `SEEKDEEP_FEATURE_IMG2IMG=on` in template.
-- `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=off` in template.
-- `SEEKDEEP_FEATURE_INPAINT=off` in template.
+- `SEEKDEEP_FEATURE_IMG2IMG=off` (code + `.env.default` default; `.env.example` flips it on as a feature demo).
+- `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=off` in `.env.default`.
+- `SEEKDEEP_FEATURE_INPAINT=off` in `.env.default`.
 - `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off`.
 - `SEEKDEEP_FEATURE_NSFW_GATE=off`.
 - `SEEKDEEP_FEATURE_TTS_VOICE=off`.
@@ -592,7 +600,7 @@ Image generation/edit changes:
 - Some docs say all data writes are atomic, but current observed write helpers use direct `fs.writeFileSync`. Verify if atomicity matters.
 - `archive-guild-config.json` is gitignored to keep Discord IDs out of the repo (current policy); only `archive-guild-config.sample.json` is tracked.
 - Feature flags affect command registration and help text. If a command appears missing, check `.env` and whether registration has propagated.
-- `.env.default` has `SEEKDEEP_FEATURE_IMG2IMG=on`, but pix2pix and inpaint default off even though v10.31 shipped their implementation.
+- `.env.default` defaults `SEEKDEEP_FEATURE_IMG2IMG=off` (code default in `index.js` is `off`); pix2pix and inpaint also default off even though v10.31 shipped their implementation. `.env.example` (the all-on reference) flips these on.
 - `LOCAL_CHAT_QUANT=4bit` is important on 24 GB laptop GPUs. Full precision 8B plus SDXL and overhead can push Windows into shared-memory thrashing.
 - `SEEKDEEP_TEST_MODE=1` avoids Discord login but still evaluates top-level module code.
 - `assets/loading.gif` is optional and cached at startup if present.

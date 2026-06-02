@@ -90,7 +90,8 @@ function runPyCompile() {
   const py = existsSync(venvPy) ? venvPy : 'python';
   // gui_endpoints.py is owned by us with extensive audit overrides; a parse
   // regression there silently breaks the entire GUI write side at boot.
-  const targets = ['local_ai_server.py', 'warmup_local_cache.py', 'gui_endpoints.py']
+  const targets = ['local_ai_server.py', 'warmup_local_cache.py', 'gui_endpoints.py', 'release_signing.py',
+                   'scripts/gen_release_keypair.py', 'scripts/sign_release_manifest.py']
     .filter((f) => existsSync(path.join(ROOT, f)));
   if (!targets.length) return { ok: true, detail: 'no python files to compile' };
   const r = spawnSync(py, ['-m', 'py_compile', ...targets], {
@@ -137,7 +138,7 @@ stage('js', () => {
   // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
   // interceptor + jump palette + SeekDeepPrompt API — a parse error there
   // silently breaks every page.
-  const targets = ['index.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js'];
+  const targets = ['index.js', 'lib/url-fetch-policy.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/audit_endpoint_coverage.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js'];
   for (const t of targets) {
     if (!existsSync(path.join(ROOT, t))) continue;
     const r = checkJsFile(t);
@@ -291,6 +292,14 @@ stage('docs', () => {
         problems.push(`.env.example ${k}=${ex[k]} != .env.default ${k}=${def[k]} (CONF-1)`);
       }
     }
+    // Superset invariant (MAINTAINER.md 4.4): .env.example documents EVERY
+    // committed key. A key in .env.default but absent from .env.example means a
+    // user reading the reference can't discover it. Enforce what was a manual
+    // `comm -13` check so it can't silently drift again.
+    const missingInExample = Object.keys(def).filter((k) => !(k in ex)).sort();
+    if (missingInExample.length) {
+      problems.push(`.env.example missing ${missingInExample.length} key(s) present in .env.default (superset invariant, MAINTAINER.md 4.4): ${missingInExample.slice(0, 10).join(', ')}`);
+    }
   }
 
   // (c) DOC-2: the smoke total must be read live. Assert smoke_test.mjs still
@@ -327,8 +336,50 @@ stage('docs', () => {
     }
   }
 
+  // (e) AUD-005: canonical-doc drift guards. The code is safer than the docs
+  // were — and stale docs are how safer code gets "simplified" back into unsafe
+  // code. Fail-closed on the three drifts the audit found. Scoped to the
+  // maintainer/user docs that teach future agents; docs/audits/* legitimately
+  // QUOTE the stale phrases as evidence, so they are intentionally NOT scanned.
+  const CANON_DOCS = ['README.md', 'SECURITY.md', 'INTEGRATION.md', 'MAINTAINER.md', 'CODEX_REPO_BRIEF.md', 'AGENTS.md'];
+  for (const rel of CANON_DOCS) {
+    const p = path.join(ROOT, rel);
+    if (!existsSync(p)) continue;
+    const lines = readFileSync(p, 'utf8').split(/\r?\n/);
+    lines.forEach((line, i) => {
+      const ln = i + 1;
+      // AUD-005a: no doc may claim img2img is ON by default (code default is off).
+      if (/IMG2IMG/.test(line) && /\bon by default\b/i.test(line)) {
+        problems.push(`${rel}:${ln} claims IMG2IMG is "on by default" — code defaults off (AUD-005)`);
+      }
+      // AUD-005b: no doc may claim /logs/* or sensitive /data/* are OPEN reads
+      // (both are token-gated now).
+      if (/\/(logs|data)\/\*/.test(line) && /\bopen\b/i.test(line)) {
+        problems.push(`${rel}:${ln} claims '/logs/*' or '/data/*' is an open read — both are token-gated (AUD-005)`);
+      }
+      // AUD-005c: the snapshot file is singular (archive-snapshot.json).
+      if (/archive-snapshots\.json/.test(line)) {
+        problems.push(`${rel}:${ln} references 'archive-snapshots.json' — the file is singular 'archive-snapshot.json' (AUD-005)`);
+      }
+    });
+  }
+
   if (problems.length) return { ok: false, detail: problems.join(' · ') };
-  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok' };
+  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok' };
+});
+
+// AUD-006: endpoint→GUI/test coverage map drift guard. Regenerates the map in
+// memory and fails if docs/ENDPOINT_COVERAGE.md is stale, so an endpoint
+// rename / auth change / new route can't silently diverge from the doc.
+stage('coverage', () => {
+  const script = path.join(ROOT, 'scripts', 'audit_endpoint_coverage.mjs');
+  if (!existsSync(script)) return { ok: true, detail: 'coverage generator absent; skipped' };
+  const r = spawnSync(process.execPath, [script, '--check'], { cwd: ROOT, encoding: 'utf8' });
+  if (r.status !== 0) {
+    const msg = (r.stderr || r.stdout || '').trim().split('\n').slice(-1)[0] || 'coverage map stale';
+    return { ok: false, detail: msg.slice(0, 160) };
+  }
+  return { ok: true, detail: 'endpoint coverage map up to date' };
 });
 
 const failed = stages.filter((s) => !s.ok);

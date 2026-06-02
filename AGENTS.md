@@ -7,7 +7,7 @@
 >
 > This file is the **architecture canonical**: what each subsystem does and where the key entry points live. Update this in the same change as the code edit.
 
-SeekDeep is a single-file Node bot (`index.js`, ~22.5k lines as of v10.35.6) plus a Python FastAPI local AI server (`local_ai_server.py`, ~4.9k lines). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. This document maps each subsystem to the key entry points so future edits don't have to grep blind.
+SeekDeep is a single-file Node bot (`index.js`, ~24k lines as of v10.35.47) plus a Python FastAPI local AI server (`local_ai_server.py`, ~5.7k lines) and a GUI/control-center backend (`gui_endpoints.py`, ~6.4k lines). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. A few leaf modules now live alongside `index.js` — notably [`lib/url-fetch-policy.js`](lib/url-fetch-policy.js) (the user-URL SSRF fetch policy, imported by `index.js`) and [`release_signing.py`](release_signing.py) (Ed25519 self-update signature verification). This document maps each subsystem to the key entry points so future edits don't have to grep blind.
 
 Function names are stable enough to grep for. If you find a stale reference here while reading the code, please update this file in the same change.
 
@@ -217,7 +217,7 @@ Gated by `SEEKDEEP_FEATURE_EMOJI_VAULT=on` in `.env`. Returns `false` (not `true
 
 - `seekdeepReplyToTarget(target, payload, options?)` — target-agnostic reply. Sniffs `Interaction` vs `Message` and dispatches to `safeEditOrReply` or `message.reply` respectively. Optional `previousReply` lets the Message path EDIT a prior reply handle so the "preparing → final" flow matches `Interaction.editReply` semantics.
 - `safeEditOrReply(interaction, payload)` — interaction reply with deferred/replied state machine + explicit-content fallback.
-- `seekdeepFetchWithLimits(url, options)` — `fetch` wrapper with `AbortController` timeout + `Content-Length` precheck. Used by `askVision`, reactrule import, emoji vault import.
+- `seekdeepFetchWithLimits(url, options)` — the user-URL fetch wrapper, **defined in [`lib/url-fetch-policy.js`](lib/url-fetch-policy.js)** and imported by `index.js` (it is no longer inline). Layers: `AbortController` timeout + `Content-Length`/streamed byte cap; **SSRF validation** (`seekdeepValidateFetchTarget` rejects non-http(s) schemes and private/loopback/link-local/CGNAT/IPv6-ULA/cloud-metadata targets); **manual redirect re-validation** on every hop; and **DNS-pinned connections** (the socket connects to the exact validated IP — anti-rebinding, via `seekdeepBuildPinnedAgent`). Default-deny; `SEEKDEEP_FETCH_ALLOW_PRIVATE=on` opts a trusted LAN install back in. Used by `askVision`, img2img/upscale/pix2pix/inpaint source fetches, archive upload, reactrule import, emoji vault import.
 - `splitDiscordText(value, limit)` — fence-aware splitter. Closes open ` ``` ` on the cut chunk and reopens with the same language hint on the next chunk.
 - `sendLongMessageReply(message, content)` / `sendLongInteractionReply(interaction, content)` — auto-chunked replies.
 

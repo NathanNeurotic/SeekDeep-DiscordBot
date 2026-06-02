@@ -61,6 +61,300 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     suffix = f" -> {detail}" if detail else ""
     print(f"{marker} {name}{suffix}")
 
+
+def _self_update_checks() -> None:
+    """AUD-001 / AUD-004: hermetic /system/self-update coverage.
+
+    The route writes executable code over its own tree, so we NEVER point it at
+    the real repo here. A dedicated app is registered with repo_root=<tempdir>
+    and every GitHub call is mocked through urllib.request.urlopen — no network,
+    no live-tree mutation. Covers: ref policy (strict/loose/allow-main), auth,
+    disabled flag, concurrency lock, bounded fetch, integrity mismatch (live
+    tree untouched), and a mocked happy path that commits into the temp root.
+    """
+    import tempfile, shutil, json as _json, hashlib
+    from unittest import mock
+    from pathlib import Path as _Path
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import gui_endpoints as _ge
+        import urllib.request as _urlreq
+        import release_signing as _rsign
+        import base64 as _b64
+    except Exception as e:
+        check("self-update: test imports", False, str(e))
+        return
+
+    # ---- Ed25519 (release signing) — RFC 8032 §7.1 official test vectors ----
+    # Pins the vendored pure-Python Ed25519's correctness: pubkey derivation,
+    # signing, verification, and tamper-rejection must match the RFC exactly.
+    _t1 = ("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+           "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+           "",
+           "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+    _t2 = ("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+           "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+           "72",
+           "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00")
+    for _i, (_sk, _pk, _m, _sig) in enumerate((_t1, _t2), 1):
+        _seed = bytes.fromhex(_sk); _wantpub = bytes.fromhex(_pk)
+        _msg = bytes.fromhex(_m); _wantsig = bytes.fromhex(_sig)
+        _pub = _rsign.ed25519_publickey(_seed)
+        _gotsig = _rsign.ed25519_sign(_msg, _seed, _pub)
+        _tampered = (bytes([_msg[0] ^ 1]) + _msg[1:]) if _msg else b"\x01"
+        check(f"ed25519 RFC8032 vector {_i}: pubkey + signature + verify match",
+              _pub == _wantpub and _gotsig == _wantsig
+              and _rsign.ed25519_verify(_wantsig, _msg, _wantpub) is True
+              and _rsign.ed25519_verify(_wantsig, _tampered, _wantpub) is False)
+
+    # ---- pure ref-policy matrix (no app, no network) ----
+    pol_keys = ("SEEKDEEP_SELF_UPDATE_REF_POLICY", "SEEKDEEP_SELF_UPDATE_ALLOW_MAIN")
+    pol_saved = {k: os.environ.get(k) for k in pol_keys}
+    for k in pol_keys:
+        os.environ.pop(k, None)  # strict default
+    try:
+        check("self-update ref(strict): vX.Y.Z tag allowed", _ge._self_update_ref_is_allowed("v10.35.47")[0] is True)
+        check("self-update ref(strict): vX.Y.Z-pre tag allowed", _ge._self_update_ref_is_allowed("v10.36.0-rc1")[0] is True)
+        check("self-update ref(strict): 40-char SHA allowed", _ge._self_update_ref_is_allowed("a" * 40)[0] is True)
+        check("self-update ref(strict): 'main' refused", _ge._self_update_ref_is_allowed("main")[0] is False)
+        check("self-update ref(strict): 7-char SHA refused", _ge._self_update_ref_is_allowed("abc1234")[0] is False)
+        check("self-update ref(strict): 'vlatest' (non-semver) refused", _ge._self_update_ref_is_allowed("vlatest")[0] is False)
+        check("self-update ref(strict): path-ish ref refused", _ge._self_update_ref_is_allowed("../etc/passwd")[0] is False)
+        os.environ["SEEKDEEP_SELF_UPDATE_ALLOW_MAIN"] = "on"
+        check("self-update ref: 'main' allowed with ALLOW_MAIN=on", _ge._self_update_ref_is_allowed("main")[0] is True)
+        os.environ.pop("SEEKDEEP_SELF_UPDATE_ALLOW_MAIN", None)
+        os.environ["SEEKDEEP_SELF_UPDATE_REF_POLICY"] = "loose"
+        check("self-update ref(loose): 'main' allowed", _ge._self_update_ref_is_allowed("main")[0] is True)
+        check("self-update ref(loose): short SHA allowed", _ge._self_update_ref_is_allowed("abc1234")[0] is True)
+    finally:
+        for k, v in pol_saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    # ---- route tests against a temp-root app ----
+    tmp = _Path(tempfile.mkdtemp(prefix="sd-selfupd-"))
+    auth_saved = dict(_ge._AUTH_STATE)
+    cap_saved = _ge._SELF_UPDATE_MAX_FILE_BYTES
+    enabled_saved = os.environ.get("SEEKDEEP_SELF_UPDATE_ENABLED")
+    sig_env_saved = {k: os.environ.get(k) for k in
+                     ("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE")}
+    try:
+        TT = "selfupd-test-token-0001"
+        (tmp / ".env").write_text(f"SEEKDEEP_GUI_TOKEN={TT}\n", encoding="utf-8")
+        app2 = FastAPI()
+        _ge.register_gui_endpoints(app2, log_dir="logs", data_dir="data",
+                                   env_path=str(tmp / ".env"), repo_root=str(tmp))
+        c2 = TestClient(app2)
+        H = {_ge._TOKEN_HEADER: TT}
+        for k in ("SEEKDEEP_SELF_UPDATE_REF_POLICY", "SEEKDEEP_SELF_UPDATE_ALLOW_MAIN", "SEEKDEEP_SELF_UPDATE_ENABLED"):
+            os.environ.pop(k, None)  # strict + enabled defaults
+
+        check("POST /system/self-update no token -> 401",
+              c2.post("/system/self-update", json={}).status_code == 401)
+
+        os.environ["SEEKDEEP_SELF_UPDATE_ENABLED"] = "off"
+        r = c2.post("/system/self-update", json={"ref": "v1.2.3"}, headers=H)
+        os.environ.pop("SEEKDEEP_SELF_UPDATE_ENABLED", None)
+        check("POST /system/self-update disabled -> 403", r.status_code == 403, f"got {r.status_code}")
+
+        r = c2.post("/system/self-update", json={"ref": "main"}, headers=H)
+        check("POST /system/self-update ref=main (strict) -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        r = c2.post("/system/self-update", json={"ref": "garbage!!"}, headers=H)
+        check("POST /system/self-update bad ref -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        # concurrency: hold the lock -> the route's non-blocking acquire fails.
+        got = _ge._SELF_UPDATE_LOCK.acquire(blocking=False)
+        try:
+            r = c2.post("/system/self-update", json={"ref": "v1.2.3"}, headers=H)
+            check("POST /system/self-update while update in progress -> 409",
+                  r.status_code == 409, f"got {r.status_code}")
+        finally:
+            if got:
+                _ge._SELF_UPDATE_LOCK.release()
+
+        # ---- mocked-network staging tests ----
+        def _git_blob_sha(data: bytes) -> str:
+            h = hashlib.sha1()
+            h.update(b"blob " + str(len(data)).encode() + b"\x00")
+            h.update(data)
+            return h.hexdigest()
+
+        class _FakeResp:
+            def __init__(self, data: bytes):
+                self._d = data
+                self._p = 0
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self, n=-1):
+                if self._p >= len(self._d):
+                    return b""
+                if n is None or n < 0:
+                    chunk = self._d[self._p:]
+                    self._p = len(self._d)
+                    return chunk
+                chunk = self._d[self._p:self._p + n]
+                self._p += len(chunk)
+                return chunk
+
+        def _make_urlopen(file_bytes: bytes, tree_paths: dict, manifest_bytes=None, sig_bytes=None):
+            def _open(req, timeout=None):
+                url = getattr(req, "full_url", None) or str(req)
+                # Manifest/sig URLs (.sig checked first — it's a superstring of the
+                # manifest name). When no manifest is provided, 404 them so the
+                # route's fetch raises and _have_manifest becomes False (mirrors a
+                # release that simply hasn't published a signed manifest).
+                if url.endswith(_rsign.MANIFEST_SIG_NAME):
+                    if manifest_bytes is None:
+                        raise OSError("404 manifest signature not found")
+                    return _FakeResp(sig_bytes)
+                if url.endswith(_rsign.MANIFEST_NAME):
+                    if manifest_bytes is None:
+                        raise OSError("404 manifest not found")
+                    return _FakeResp(manifest_bytes)
+                if "api.github.com" in url and "/contents/" in url:
+                    return _FakeResp(b"[]")  # empty gui/ + scripts/ listings
+                if "api.github.com" in url and "/git/trees/" in url:
+                    tree = {"tree": [{"type": "blob", "path": p, "sha": s} for p, s in tree_paths.items()]}
+                    return _FakeResp(_json.dumps(tree).encode())
+                return _FakeResp(file_bytes)  # raw.githubusercontent file
+            return _open
+
+        # (a) integrity mismatch (empty tree => no SHA matches) -> 409, untouched.
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(b"FAKE-CODE", {})):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update integrity mismatch -> 409", r.status_code == 409, f"got {r.status_code}")
+        check("self-update integrity fail: live tree untouched (no committed file)",
+              not (tmp / "local_ai_server.py").exists())
+        check("self-update integrity fail: staging dir cleaned up",
+              not any(tmp.glob(".self-update-staging-*")))
+
+        # (b) oversized response -> bounded read fails per-file, nothing committed.
+        _ge._SELF_UPDATE_MAX_FILE_BYTES = 4
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(b"WAY-TOO-LONG", {})):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        _ge._SELF_UPDATE_MAX_FILE_BYTES = cap_saved
+        body = {}
+        try:
+            body = r.json()
+        except Exception:
+            pass
+        check("self-update oversized: byte-cap failure surfaced, nothing committed",
+              (r.status_code == 200 and body.get("ok") is False and "exceeds" in _json.dumps(body))
+              or r.status_code in (409, 500),
+              f"status={r.status_code} body={str(body)[:160]}")
+        check("self-update oversized: live tree untouched",
+              not (tmp / "local_ai_server.py").exists())
+
+        # (c) happy path: tree SHAs match fetched bytes -> commit into temp root.
+        content = b"# patched by self-update smoke test\n"
+        single = ["local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
+                  "package.json", "requirements-local.txt", "requirements-ml.txt"]
+        tree_paths = {name: _git_blob_sha(content) for name in single}
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(content, tree_paths)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        body = {}
+        try:
+            body = r.json()
+        except Exception:
+            pass
+        check("self-update happy path -> 200 ok=True",
+              r.status_code == 200 and body.get("ok") is True, f"status={r.status_code} body={str(body)[:160]}")
+        check("self-update happy path: file committed into temp root with fetched bytes",
+              (tmp / "local_ai_server.py").exists() and (tmp / "local_ai_server.py").read_bytes() == content)
+        check("self-update happy path: .self-updated sentinel written",
+              (tmp / ".self-updated").exists())
+
+        # (d) AUD-001 follow-up: release-signature gate. Ephemeral offline key →
+        # pin its public half via env; sign a manifest covering the staged files.
+        eph_seed = os.urandom(32)
+        eph_pub = _rsign.ed25519_publickey(eph_seed)
+        wrong_seed = os.urandom(32)
+        wrong_pub = _rsign.ed25519_publickey(wrong_seed)
+        os.environ["SEEKDEEP_RELEASE_SIGNING_PUBKEY"] = eph_pub.hex()
+
+        def _signed(content_bytes, names, seed, pub, ref="v9.9.9"):
+            man = {"schema": "seekdeep-release-manifest/v1", "ref": ref, "algorithm": "sha256",
+                   "files": {n: hashlib.sha256(content_bytes).hexdigest() for n in names}}
+            mb = _rsign.manifest_to_bytes(man)
+            sig = _b64.b64encode(_rsign.ed25519_sign(mb, seed, pub))
+            return mb, sig
+
+        # (d1) require=on + valid signature -> commits the signed content.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "on"
+        c2_content = b"# signed-update content v2\n"
+        c2_tree = {n: _git_blob_sha(c2_content) for n in single}
+        mb1, sig1 = _signed(c2_content, single, eph_seed, eph_pub)
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree, mb1, sig1)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: valid signature (require=on) -> 200",
+              r.status_code == 200 and (r.json() or {}).get("ok") is True, f"got {r.status_code}")
+        check("self-update signed: committed the signed content",
+              (tmp / "local_ai_server.py").read_bytes() == c2_content)
+
+        # (d2) present-but-INVALID signature (wrong key) -> 409 EVEN with require=off
+        #      (a present-but-bad signature is always an attack signal). Different
+        #      content that must NOT land.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        c3_content = b"# attacker swapped content v3\n"
+        c3_tree = {n: _git_blob_sha(c3_content) for n in single}
+        mb2, badsig = _signed(c3_content, single, wrong_seed, wrong_pub)  # signed by the WRONG key
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c3_content, c3_tree, mb2, badsig)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: invalid signature -> 409 even when require=off",
+              r.status_code == 409, f"got {r.status_code}")
+        check("self-update signed: invalid-signature content NOT committed",
+              (tmp / "local_ai_server.py").read_bytes() == c2_content)
+
+        # (d3) require=on + NO manifest published -> 409.
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "on"
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree)):  # no manifest
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: require=on + no manifest -> 409", r.status_code == 409, f"got {r.status_code}")
+
+        # (d4) require=off + NO manifest (pinned key set) -> proceeds (graceful for
+        #      old unsigned releases).
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: require=off + no manifest -> 200 (unsigned tolerated)",
+              r.status_code == 200 and (r.json() or {}).get("ok") is True, f"got {r.status_code}")
+
+        # (d5) completeness: a VALID signed manifest that lists a file which was
+        #      NOT staged must abort (silent-omission guard, per PR review).
+        os.environ["SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE"] = "off"
+        man5 = {"schema": "seekdeep-release-manifest/v1", "ref": "v9.9.9", "algorithm": "sha256",
+                "files": {**{n: hashlib.sha256(c2_content).hexdigest() for n in single},
+                          "gui/never-staged.js": hashlib.sha256(b"x").hexdigest()}}
+        mb5 = _rsign.manifest_to_bytes(man5)
+        sig5 = _b64.b64encode(_rsign.ed25519_sign(mb5, eph_seed, eph_pub))
+        with mock.patch.object(_urlreq, "urlopen", _make_urlopen(c2_content, c2_tree, mb5, sig5)):
+            r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        check("self-update signed: manifest lists an unstaged file -> 409 (completeness)",
+              r.status_code == 409, f"got {r.status_code}")
+    except Exception as e:
+        check("self-update: route tests ran without harness error", False, repr(e))
+    finally:
+        _ge._SELF_UPDATE_MAX_FILE_BYTES = cap_saved
+        _ge._AUTH_STATE.clear()
+        _ge._AUTH_STATE.update(auth_saved)
+        if enabled_saved is None:
+            os.environ.pop("SEEKDEEP_SELF_UPDATE_ENABLED", None)
+        else:
+            os.environ["SEEKDEEP_SELF_UPDATE_ENABLED"] = enabled_saved
+        for _k, _v in sig_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     try:
         from fastapi import FastAPI
@@ -1146,6 +1440,9 @@ def main() -> int:
                    headers={_TOKEN_HEADER: token})
         check("POST /deps/install with random requirements_file -> 400",
               r.status_code == 400, f"got {r.status_code}")
+
+    # ---- AUD-001 / AUD-004: self-update hardening (hermetic; temp root) ----
+    _self_update_checks()
 
     # =================================================================
     # Section 2: local_ai_server.app -- model lifecycle + route debug.

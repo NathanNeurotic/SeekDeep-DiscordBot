@@ -165,9 +165,11 @@ SEEKDEEP_FILE_LOGGING=on
 MODEL_ROUTER_LOG=true
 MODEL_LOG_VRAM=true                        # off in .env.default to keep startup quiet
 
-# Fetch safety (v10.5)
+# Fetch safety (v10.5; SSRF policy added AUD-002 — see SECURITY.md)
 SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS=30000
 SEEKDEEP_FETCH_DEFAULT_MAX_BYTES=52428800
+SEEKDEEP_FETCH_MAX_REDIRECTS=5
+SEEKDEEP_FETCH_ALLOW_PRIVATE=off   # off = block private/loopback/metadata targets + re-check each redirect
 ```
 
 ## Current Local Models

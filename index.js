@@ -5,6 +5,20 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fetch from 'node-fetch';
+// AUD-008: URL fetch policy extracted to its own leaf module. Imported AFTER
+// `import 'dotenv/config'` (first import above) so the module's env-derived
+// constants see the loaded .env. index.js re-exports these on __seekdeepTest.
+import {
+  seekdeepClassifyBlockedIp,
+  seekdeepValidateFetchTarget,
+  seekdeepFetchWithLimits,
+  seekdeepBuildPinnedLookup,
+  seekdeepBuildPinnedAgent,
+  __setFetchTransportForTests,
+  SEEKDEEP_FETCH_DEFAULT_MAX_BYTES,
+  SEEKDEEP_FETCH_ALLOW_PRIVATE,
+  SEEKDEEP_FETCH_MAX_REDIRECTS,
+} from './lib/url-fetch-policy.js';
 import {
   ActionRowBuilder,
   ActivityType,
@@ -1321,118 +1335,8 @@ function splitDiscordTextPlain(raw, limit) {
   return chunks.length ? chunks : [''];
 }
 
-// v10.5: fetch helper with two safety layers for user-supplied URLs (Discord
-// attachment downloads, etc.). Audit flagged the raw `await fetch(attachment.url)`
-// sites as missing timeouts and size caps — a hostile or malformed upload could
-// stall the handler or exhaust memory.
-//
-// 1. AbortController-based timeout (default 30s).
-// 2. Pre-check of `Content-Length` header; if present and > maxBytes, reject
-//    before consuming the body. This isn't bulletproof (a server can lie or
-//    omit the header) but it stops the obvious abuse case cheaply.
-//
-// Returns a Response-like object. Caller still does `.arrayBuffer()` / `.text()` etc.
-const SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS = Number(process.env.SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS || 30000);
-const SEEKDEEP_FETCH_DEFAULT_MAX_BYTES = Number(process.env.SEEKDEEP_FETCH_DEFAULT_MAX_BYTES || 50 * 1024 * 1024);
-
-async function seekdeepFetchWithLimits(url, options = {}) {
-  const {
-    timeoutMs = SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS,
-    maxBytes = SEEKDEEP_FETCH_DEFAULT_MAX_BYTES,
-    ...rest
-  } = options;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
-  let timerCleared = false;
-  const clearTimer = () => { if (!timerCleared) { clearTimeout(timer); timerCleared = true; } };
-  const readCappedBody = async (res) => {
-    const chunks = [];
-    let consumed = 0;
-
-    const addChunk = (chunk) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      consumed += buf.byteLength;
-      if (consumed > maxBytes) {
-        controller.abort();
-        throw new Error(`Streamed body exceeded ${maxBytes} byte cap at ${consumed} bytes`);
-      }
-      chunks.push(buf);
-    };
-
-    try {
-      if (res.body && typeof res.body.getReader === 'function') {
-        const reader = res.body.getReader();
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) addChunk(value);
-          }
-        } catch (err) {
-          try { await reader.cancel(); } catch {}
-          throw err;
-        }
-      } else if (res.body && typeof res.body[Symbol.asyncIterator] === 'function') {
-        for await (const chunk of res.body) {
-          if (chunk) addChunk(chunk);
-        }
-      } else if (typeof res.arrayBuffer === 'function') {
-        addChunk(Buffer.from(await res.arrayBuffer()));
-      }
-
-      return Buffer.concat(chunks);
-    } finally {
-      clearTimer();
-    }
-  };
-
-  const responseWithCappedBody = (res) => {
-    let bodyPromise = null;
-    const getBody = () => {
-      if (!bodyPromise) bodyPromise = readCappedBody(res);
-      return bodyPromise;
-    };
-
-    return {
-      ok: res.ok,
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-      url: res.url,
-      redirected: res.redirected,
-      type: res.type,
-      arrayBuffer: async () => {
-        const buf = await getBody();
-        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-      },
-      text: async () => (await getBody()).toString('utf8'),
-      json: async () => JSON.parse((await getBody()).toString('utf8')),
-    };
-  };
-
-  try {
-    const res = await (globalThis.fetch || fetch)(url, { ...rest, signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
-    }
-    const cl = Number(res.headers?.get?.('content-length') || 0);
-    if (Number.isFinite(cl) && cl > 0 && cl > maxBytes) {
-      controller.abort();
-      throw new Error(`Attachment too large: ${cl} bytes > ${maxBytes} byte cap`);
-    }
-    // Return WITHOUT clearing timer when there is a body: it stays alive during
-    // body reads and is cleared by readCappedBody(). node-fetch exposes a Node
-    // Readable stream, while native fetch exposes a Web ReadableStream, so the
-    // wrapper supports both instead of assuming `.getReader()`.
-    if (res.body) return responseWithCappedBody(res);
-    clearTimer();
-    return res;
-  } catch (err) {
-    clearTimer();
-    throw err;
-  }
-}
-
+// AUD-008: the user-URL fetch policy (SSRF validation + bounded fetcher) was
+// extracted to ./lib/url-fetch-policy.js and imported at the top of this file.
 
 // Atomic JSON writer: write to a temp file then rename, so a crash mid-write
 // can't leave a truncated JSON file. Safe on Windows (renameSync overwrites).
@@ -23287,6 +23191,15 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_PROMPTS_COPY_BUTTON_PREFIX,
     SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
     SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS,
+    // AUD-002: SSRF fetch policy
+    seekdeepValidateFetchTarget,
+    seekdeepClassifyBlockedIp,
+    seekdeepFetchWithLimits,
+    seekdeepBuildPinnedLookup,
+    seekdeepBuildPinnedAgent,
+    __setFetchTransportForTests,
+    SEEKDEEP_FETCH_ALLOW_PRIVATE,
+    SEEKDEEP_FETCH_MAX_REDIRECTS,
   };
   console.log('[SeekDeep] SEEKDEEP_TEST_MODE=1 — skipping client.login(); helpers exposed on globalThis.__seekdeepTest.');
 } else {

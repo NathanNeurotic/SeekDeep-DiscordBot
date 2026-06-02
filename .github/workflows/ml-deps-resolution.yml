@@ -1,0 +1,97 @@
+# SeekDeep CI · non-Windows ML dependency resolution (AUD-007)
+#
+# requirements-ml.txt pins Windows torch/torchvision to specific +cu128 wheels,
+# but Linux/macOS get bounded RANGES (torch>=2.4,<2.12 etc.). Those ranges are
+# only ever resolved on a user's own machine — the preflight + e2e jobs install
+# a minimal dep set and NEVER touch the full ML stack, so a future torch release
+# that breaks resolution inside our bounds would first surface as a user bug
+# report, not a CI signal.
+#
+# This job closes that gap cheaply: it runs pip's resolver against
+# requirements-ml.txt on Linux (several Python versions) WITHOUT installing the
+# ~2 GB of wheels or downloading any model weights (`--dry-run` resolves + reports
+# only). If the bounds ever stop resolving, this turns red on a schedule instead
+# of in a user's terminal.
+#
+# It is intentionally NOT wired into the per-push preflight (that stays fast and
+# ML-free). It runs weekly, on demand, and when requirements-ml.txt changes.
+
+name: ml-deps-resolution
+
+on:
+  schedule:
+    # Mondays 07:00 UTC — catch upstream drift early in the week.
+    - cron: '0 7 * * 1'
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+    paths:
+      - 'requirements-ml.txt'
+      - '.github/workflows/ml-deps-resolution.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'requirements-ml.txt'
+      - '.github/workflows/ml-deps-resolution.yml'
+
+concurrency:
+  group: ml-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Resolve independently per Python version — torch/torchvision wheels are
+      # cp-tagged, so a bound that resolves on 3.11 can still fail on 3.12.
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show pip version
+        run: python -m pip install --upgrade pip && python -m pip --version
+
+      - name: Resolve requirements-ml.txt (dry-run, no install, no model weights)
+        # --dry-run resolves the full graph and prints what WOULD be installed
+        # without downloading/installing wheels or fetching any model. --report
+        # writes the resolution plan as JSON for bisects. The Windows-only +cu128
+        # lines carry `platform_system == "Windows"` markers, so pip skips them
+        # here and only the non-Windows ranges are exercised — exactly the path
+        # a Linux user hits.
+        run: |
+          python -m pip install \
+            --dry-run \
+            --ignore-installed \
+            --progress-bar off \
+            --report ml-resolution-${{ matrix.python-version }}.json \
+            -r requirements-ml.txt
+
+      - name: Summarize resolved key packages
+        if: always()
+        # Pull the resolved versions of the headline packages out of the report
+        # so the run log shows at a glance what the bounds landed on this week.
+        run: |
+          report="ml-resolution-${{ matrix.python-version }}.json"
+          if [ -f "$report" ]; then
+            python -c "import json,sys; d=json.load(open(sys.argv[1])); [print('  '+(m.get('name') or '')+'=='+(m.get('version') or '')) for it in d.get('install',[]) for m in [it.get('metadata',{})] if (m.get('name') or '').lower() in ('torch','torchvision','transformers','diffusers','accelerate','safetensors')]" "$report"
+          else
+            echo "no report produced (resolution failed before report write)"
+          fi
+
+      - name: Upload resolution report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-resolution-${{ matrix.python-version }}
+          path: ml-resolution-${{ matrix.python-version }}.json
+          if-no-files-found: ignore
