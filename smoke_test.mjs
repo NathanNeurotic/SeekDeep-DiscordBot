@@ -2050,6 +2050,104 @@ if (typeof T.seekdeepBuildReactToggleEmbed === 'function' && typeof T.seekdeepBu
   }
 }
 
+// ── AUD-002: SSRF fetch policy ────────────────────────────────────────────
+// seekdeepValidateFetchTarget must reject private/loopback/link-local/metadata
+// targets (default policy) and re-validate every redirect hop. All cases below
+// use IP literals or local hostnames or bad schemes, so NONE hit real DNS/network.
+if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValidateFetchTarget === 'function') {
+  console.log('NN. AUD-002 SSRF fetch-target validation.');
+
+  // -- pure IP classifier --
+  const blockedIp = (ip) => T.seekdeepClassifyBlockedIp(ip) !== '';
+  check('ssrf classify: 127.0.0.1 loopback', blockedIp('127.0.0.1'));
+  check('ssrf classify: 10.0.0.1 private', blockedIp('10.0.0.1'));
+  check('ssrf classify: 172.16.0.1 private', blockedIp('172.16.0.1'));
+  check('ssrf classify: 172.31.255.255 private', blockedIp('172.31.255.255'));
+  check('ssrf classify: 172.15.0.1 is PUBLIC (below /12)', !blockedIp('172.15.0.1'));
+  check('ssrf classify: 172.32.0.1 is PUBLIC (above /12)', !blockedIp('172.32.0.1'));
+  check('ssrf classify: 192.168.1.1 private', blockedIp('192.168.1.1'));
+  check('ssrf classify: 169.254.169.254 link-local', blockedIp('169.254.169.254'));
+  check('ssrf classify: 100.64.0.1 CGNAT', blockedIp('100.64.0.1'));
+  check('ssrf classify: 0.0.0.0 unspecified', blockedIp('0.0.0.0'));
+  check('ssrf classify: ::1 loopback', blockedIp('::1'));
+  check('ssrf classify: fc00::1 unique-local', blockedIp('fc00::1'));
+  check('ssrf classify: fe80::1 link-local', blockedIp('fe80::1'));
+  check('ssrf classify: ::ffff:127.0.0.1 mapped loopback', blockedIp('::ffff:127.0.0.1'));
+  check('ssrf classify: 8.8.8.8 PUBLIC', !blockedIp('8.8.8.8'));
+  check('ssrf classify: 2606:4700:4700::1111 PUBLIC', !blockedIp('2606:4700:4700::1111'));
+
+  // -- async validator: reject + accept --
+  const blocked = async (url, opts) => {
+    try { await T.seekdeepValidateFetchTarget(url, opts); return false; } catch { return true; }
+  };
+  const allowed = async (url, opts) => {
+    try { await T.seekdeepValidateFetchTarget(url, opts); return true; } catch { return false; }
+  };
+  check('ssrf validate: http://127.0.0.1 blocked', await blocked('http://127.0.0.1/x'));
+  check('ssrf validate: http://localhost blocked (pre-DNS)', await blocked('http://localhost/x'));
+  check('ssrf validate: http://0.0.0.0 blocked', await blocked('http://0.0.0.0/x'));
+  check('ssrf validate: http://10.0.0.1 blocked', await blocked('http://10.0.0.1/x'));
+  check('ssrf validate: http://192.168.1.1 blocked', await blocked('http://192.168.1.1/x'));
+  check('ssrf validate: http://169.254.169.254 blocked (metadata)', await blocked('http://169.254.169.254/latest/meta-data/'));
+  check('ssrf validate: metadata.google.internal blocked', await blocked('http://metadata.google.internal/x'));
+  check('ssrf validate: http://[::1] blocked', await blocked('http://[::1]/x'));
+  check('ssrf validate: http://[fc00::1] blocked', await blocked('http://[fc00::1]/x'));
+  check('ssrf validate: http://[fe80::1] blocked', await blocked('http://[fe80::1]/x'));
+  check('ssrf validate: ftp:// scheme blocked', await blocked('ftp://example.com/x'));
+  check('ssrf validate: file:// scheme blocked', await blocked('file:///etc/passwd'));
+  check('ssrf validate: javascript: scheme blocked', await blocked('javascript:alert(1)'));
+  check('ssrf validate: https public IPv4 literal allowed', await allowed('https://8.8.8.8/x'));
+  check('ssrf validate: https public IPv6 literal allowed', await allowed('https://[2606:4700:4700::1111]/x'));
+
+  // -- allowPrivate opt-in: permits loopback, but NEVER metadata/unspecified --
+  check('ssrf validate: allowPrivate permits 127.0.0.1', await allowed('http://127.0.0.1/x', { allowPrivate: true }));
+  check('ssrf validate: allowPrivate still blocks metadata', await blocked('http://169.254.169.254/x', { allowPrivate: true }));
+  check('ssrf validate: allowPrivate still blocks 0.0.0.0', await blocked('http://0.0.0.0/x', { allowPrivate: true }));
+
+  // -- redirect re-validation: public → private must fail before body read --
+  if (typeof T.seekdeepFetchWithLimits === 'function') {
+    const origFetch = globalThis.fetch;
+    let bodyReadAfterPrivateRedirect = false;
+    globalThis.fetch = async (u) => ({
+      status: 302,
+      ok: false,
+      headers: { get: (k) => (String(k).toLowerCase() === 'location' ? 'http://127.0.0.1/secret' : null) },
+      arrayBuffer: async () => new ArrayBuffer(0),
+      get body() { bodyReadAfterPrivateRedirect = true; return null; },
+    });
+    let redirectBlocked = false;
+    try {
+      await T.seekdeepFetchWithLimits('https://93.184.216.34/start');
+    } catch (e) {
+      redirectBlocked = /Blocked fetch|private\/loopback|redirect/i.test(String(e?.message || e));
+    }
+    globalThis.fetch = origFetch;
+    check('ssrf redirect: public→127.0.0.1 redirect blocked on re-validation', redirectBlocked);
+
+    // positive: a public→public redirect is followed to a 200
+    const origFetch2 = globalThis.fetch;
+    globalThis.fetch = async (u) => {
+      const url = String(u);
+      if (url.includes('/start')) {
+        return {
+          status: 302, ok: false,
+          headers: { get: (k) => (String(k).toLowerCase() === 'location' ? 'https://1.1.1.1/final' : null) },
+          arrayBuffer: async () => new ArrayBuffer(0),
+          body: null,
+        };
+      }
+      return { status: 200, ok: true, headers: { get: () => null }, body: null, arrayBuffer: async () => new ArrayBuffer(3) };
+    };
+    let followedStatus = 0;
+    try {
+      const r = await T.seekdeepFetchWithLimits('https://8.8.8.8/start');
+      followedStatus = Number(r?.status || 0);
+    } catch { followedStatus = -1; }
+    globalThis.fetch = origFetch2;
+    check('ssrf redirect: public→public redirect followed to 200', followedStatus === 200);
+  }
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

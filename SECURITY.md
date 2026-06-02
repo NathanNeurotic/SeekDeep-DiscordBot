@@ -43,8 +43,9 @@ User-attached files (vision uploads, reactrule import JSON, emoji vault import J
 - A configurable timeout via `AbortController` (`SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS`, 30s default).
 - A `Content-Length` precheck against `SEEKDEEP_FETCH_DEFAULT_MAX_BYTES` (50 MB default).
 - Per-callsite overrides (vision: 60s no cap; reactrule import: 15s / 1 MB; emoji vault import: 60s / 32 MB).
+- **SSRF policy (AUD-002):** before any request goes out, `seekdeepValidateFetchTarget(url)` rejects non-`http(s)` schemes and resolves the host, blocking loopback, `0.0.0.0`/`::`, RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local (`169.254/16`, `fe80::/10`), CGNAT (`100.64/10`), IPv6 unique-local (`fc00::/7`), multicast, and cloud-metadata endpoints (`169.254.169.254`, `metadata.google.internal`, etc.). Redirects are followed **manually** so every hop is re-validated — a public URL that 302s to `127.0.0.1` or the metadata IP is refused before its body is read. The default is fail-closed; `SEEKDEEP_FETCH_ALLOW_PRIVATE=on` opts a trusted single-user LAN install back into private targets (cloud-metadata + unspecified stay blocked regardless). Residual risk: a DNS-rebinding answer that differs between this lookup and the kernel's connect-time lookup is not fully closed (would require IP-pinned connections); the resolve-and-check stops the realistic URL→localhost / URL→metadata cases.
 
-When adding a new feature that fetches a user-supplied URL, use this helper. Do not fall back to bare `await fetch(url)`.
+When adding a new feature that fetches a user-supplied URL, use this helper. Do not fall back to bare `await fetch(url)`. For deliberate internal/loopback calls (local AI server, SearXNG), use `fetchJson` or pass `{ allowPrivate: true }` explicitly — never route a user-controlled URL through the private path.
 
 ## Feature Flags As Attack-Surface Management
 
