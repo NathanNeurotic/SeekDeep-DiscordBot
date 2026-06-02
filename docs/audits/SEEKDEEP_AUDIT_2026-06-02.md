@@ -628,3 +628,14 @@ Recommended order:
 
 **Not reopened:** HIST-001…HIST-006 were re-verified as still-healthy and left unchanged.
 
+### Residual-risk follow-ups (addendum)
+
+The four residual risks flagged in the table above were subsequently driven down, all at $0 (no new runtime dependencies, no paid services):
+
+- **AUD-002 residual (DNS rebinding) — closed for hostname fetches.** `seekdeepBuildPinnedLookup`/`seekdeepBuildPinnedAgent` pin the connection to the IP the validator approved (node-fetch `agent` lookup), so there is no second independent resolution to win. Transport moved to an injectable node-fetch seam (undici ignores `agent`). Commit `bd207ac`. Tests: pinned-lookup unit checks + an end-to-end http.Agent test where a fake hostname routes to a loopback server purely via the pin (`pass=616`).
+- **AUD-001 residual (compromised repo) — addressed.** Ed25519-signed release manifests (`release_signing.py`, vendored pure-Python, RFC 8032 vectors), offline-key tooling (`scripts/gen_release_keypair.py` / `sign_release_manifest.py`), and a server-side signature gate in `_post_self_update_locked` (present-but-invalid always 409; `SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE` to refuse unsigned). Ships inert (empty pinned key) until a maintainer sets it up. Commit `4c66495`. Tests: 2 RFC vectors + 5 signed-update scenarios (`231 ok`). Workflow: `RELEASE_SIGNING.md`. Remaining: vendored Ed25519 is the slow reference impl (fine for one verify/update); installer (OS) signing is still a separate optional concern.
+- **AUD-007 residual (unverified Linux bounds) — closed.** New `.github/workflows/ml-deps-resolution.yml` resolves `requirements-ml.txt` on Linux (Python 3.11/3.12, `pip --dry-run`, no wheels/models) weekly + on change + on demand, uploading the resolution report. Commit `b9db39e`.
+- **AUD-003 residual (permissive CSP) — partially closed + made verifiable.** New `e2e/csp.spec.mjs` injects the shipped CSP onto every GUI page and asserts zero violations (in `npm run test:e2e` + CI). Dropped `'unsafe-eval'`, split `default-src` into explicit directives, scoped `script-src` to `'self' 'unsafe-inline'` and the Google-Fonts origins. Commit `be662b3`. Remaining (tracked in `CSP_TIGHTENING_PLAN.md`): the 34 inline `<script>` blocks + 26 inline event-handler attributes that still require `'unsafe-inline'`, and `withGlobalTauri` — both need page-by-page externalization + interaction/packaged-app verification.
+
+Follow-up verification: `npm run preflight` 8/8; `node smoke_test.mjs` `pass=616`; GUI smoke (main venv) `231 ok`; `cargo test open_external` 5; `npm run test:e2e` 36 passed (incl. 25 CSP-harness page checks); ed25519 RFC 8032 §7.1 vectors pass.
+
