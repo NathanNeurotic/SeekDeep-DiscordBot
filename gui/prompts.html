@@ -1018,11 +1018,15 @@ The user wants information density, not company.`,
 
   renderList();
   select(TEMPLATES[0].id);
-  // Replace the demo seed with live data from the bot on load. nav.js's
-  // patchedFetch attaches X-SeekDeep-Token; gui_endpoints._normalize_prompt_
-  // templates flattens the guild→user→name nesting into a flat list with
-  // extracted {{vars}} per body.
-  hydrateFromBackend();
+  // Replace the demo seed with live data. hydrateFromBackend() fetches the
+  // token-gated /data/prompt-templates.json, so it MUST run after nav.js (below,
+  // deferred) patches fetch — deferred scripts execute before DOMContentLoaded.
+  // Firing it inline during parse sent the fetch on the UNpatched fetch → 401 →
+  // the page stuck on the demo seed + OFFLINE banner (same race as memory.html).
+  // nav.js's patchedFetch then attaches the token; _normalize_prompt_templates
+  // flattens the guild→user→name nesting into a flat list with extracted {{vars}}.
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hydrateFromBackend, { once: true });
+  else hydrateFromBackend();
 })();
 </script>
 <script src="nav.js" defer></script>
