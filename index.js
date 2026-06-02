@@ -1344,8 +1344,52 @@ function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = filePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, seekdeepJsonStringifySafe(data, 2) + '\n', 'utf8');
+  // PERSIST-3: fsync the temp file before the rename so a power loss can't leave
+  // a zero-length / torn file behind — the readers (readJsonSafe) treat an
+  // unparseable file as empty, so a non-durable write is a silent-data-loss risk.
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, seekdeepJsonStringifySafe(data, 2) + '\n');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, filePath);
+  // Best-effort directory fsync so the rename entry itself is durable. Fails on
+  // Windows (can't open a dir) — swallow; the file fsync above is the main win.
+  try {
+    const dfd = fs.openSync(dir, 'r');
+    try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+  } catch {}
+}
+
+// PERSIST-2: read a JSON data file safely. On a parse failure (corrupt/truncated
+// file — e.g. a crash mid-write before PERSIST-3 landed), QUARANTINE the bad file
+// to <path>.corrupt-<ts> and log LOUDLY instead of silently returning the empty
+// fallback — which the next write would then persist over the original, wiping
+// the user's data forever with no trace. Returns `fallback` when the file is
+// missing or after quarantining a corrupt one.
+function readJsonSafe(filePath, fallback) {
+  let raw;
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    console.warn(`[SeekDeep] readJsonSafe: could not read ${path.basename(filePath)}: ${err?.message || err}`);
+    return fallback;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    try {
+      const quarantine = `${filePath}.corrupt-${Date.now()}`;
+      fs.renameSync(filePath, quarantine);
+      console.error(`[SeekDeep] readJsonSafe: ${path.basename(filePath)} is corrupt and was QUARANTINED to ${path.basename(quarantine)} (parse error: ${err?.message || err}). Using the empty fallback — your data was NOT overwritten.`);
+    } catch (qerr) {
+      console.error(`[SeekDeep] readJsonSafe: ${path.basename(filePath)} is corrupt AND could not be quarantined (${qerr?.message || qerr}). Refusing to overwrite — fix or remove the file manually.`);
+    }
+    return fallback;
+  }
 }
 
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
@@ -13534,7 +13578,7 @@ const SEEKDEEP_RESERVED_PERSONA_KEYWORDS = new Set(['reset', 'show', 'create', '
 function seekdeepReadCustomPersonas() {
   try {
     if (!fs.existsSync(SEEKDEEP_CUSTOM_PERSONAS_PATH)) return { personas: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_CUSTOM_PERSONAS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_CUSTOM_PERSONAS_PATH, { personas: {} });
     if (!parsed || typeof parsed !== 'object') return { personas: {} };
     if (!parsed.personas || typeof parsed.personas !== 'object') parsed.personas = {};
     return parsed;
@@ -13576,7 +13620,7 @@ function seekdeepResolvePersonaTone(slug) {
 function seekdeepReadPersonaOverrides() {
   try {
     if (!fs.existsSync(SEEKDEEP_PERSONA_OVERRIDES_PATH)) return { channels: {}, guilds: {}, global: null };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_PERSONA_OVERRIDES_PATH, { channels: {}, guilds: {}, global: null });
     if (!parsed || typeof parsed !== 'object') return { channels: {}, guilds: {}, global: null };
     if (!parsed.channels || typeof parsed.channels !== 'object') parsed.channels = {};
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
@@ -14079,7 +14123,7 @@ const SEEKDEEP_KNOWN_PRESETS = {
 function seekdeepReadMemoryPresets() {
   try {
     if (!fs.existsSync(SEEKDEEP_MEMORY_PRESETS_PATH)) return { users: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_MEMORY_PRESETS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_MEMORY_PRESETS_PATH, { users: {} });
     if (!parsed || typeof parsed !== 'object') return { users: {} };
     if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
     return parsed;
@@ -14192,7 +14236,7 @@ const SEEKDEEP_USER_FACT_MAX_CHARS = Math.max(40, Math.min(2000, Number(process.
 function seekdeepReadUserFacts() {
   try {
     if (!fs.existsSync(SEEKDEEP_USER_FACTS_PATH)) return { users: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_USER_FACTS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_USER_FACTS_PATH, { users: {} });
     if (!parsed || typeof parsed !== 'object') return { users: {} };
     if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
     return parsed;
@@ -14360,7 +14404,7 @@ const SEEKDEEP_TEMPLATE_PROMPT_MAX = 2000;
 function seekdeepReadPromptTemplates() {
   try {
     if (!fs.existsSync(SEEKDEEP_PROMPT_TEMPLATES_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PROMPT_TEMPLATES_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_PROMPT_TEMPLATES_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     return parsed;
@@ -15762,7 +15806,7 @@ const SEEKDEEP_SERVER_STATS_PATH = path.join(__dirname, 'data', 'server-stats.js
 function seekdeepReadServerStats() {
   try {
     if (!fs.existsSync(SEEKDEEP_SERVER_STATS_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_SERVER_STATS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_SERVER_STATS_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     return parsed;
@@ -16246,7 +16290,7 @@ const SEEKDEEP_BUILTIN_REACTIONS_DEFAULT = {
 function seekdeepReadAutoReactions() {
   try {
     if (!fs.existsSync(SEEKDEEP_AUTO_REACTIONS_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_AUTO_REACTIONS_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     // Backfill default emoji/threshold onto any built-in that has state but is
@@ -23192,6 +23236,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
     SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS,
     // AUD-002: SSRF fetch policy
+    // PERSIST-2/3: safe JSON read (quarantine on corrupt) + atomic write
+    readJsonSafe,
+    writeJsonAtomic,
     seekdeepValidateFetchTarget,
     seekdeepClassifyBlockedIp,
     seekdeepFetchWithLimits,

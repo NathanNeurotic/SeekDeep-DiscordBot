@@ -5315,8 +5315,21 @@ def register_gui_endpoints(
     def _atomic_write_json(path: Path, data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp." + str(os.getpid()))
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        # PERSIST-3: fsync the temp file before replace so a crash/power-loss can't
+        # leave a torn file the readers would treat as empty (silent data loss).
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         tmp.replace(path)
+        try:
+            dfd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except Exception:
+            pass
 
     def _user_row_bytes(facts: list) -> int:
         try:

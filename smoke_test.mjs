@@ -2197,6 +2197,26 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   }
 }
 
+// -- PERSIST-2/3: readJsonSafe quarantines a corrupt file instead of silently
+//    returning empty (which the next write would persist over = data loss). --
+if (typeof T.readJsonSafe === 'function' && typeof T.writeJsonAtomic === 'function') {
+  const pfs = await import('node:fs');
+  const pos = await import('node:os');
+  const ppath = await import('node:path');
+  const dir = pfs.mkdtempSync(ppath.join(pos.tmpdir(), 'sd-persist-'));
+  const f = ppath.join(dir, 'data.json');
+  T.writeJsonAtomic(f, { users: { a: 1 } });
+  const back = T.readJsonSafe(f, { users: {} });
+  check('persist: writeJsonAtomic + readJsonSafe round-trip', !!(back && back.users && back.users.a === 1));
+  // Corrupt the file → must quarantine + return fallback, NOT overwrite-with-empty.
+  pfs.writeFileSync(f, '{ not valid json ', 'utf8');
+  const fb = T.readJsonSafe(f, { users: {} });
+  const quarantined = pfs.readdirSync(dir).some((n) => n.includes('.corrupt-'));
+  check('persist: corrupt file returns the fallback', !!(fb && typeof fb.users === 'object' && Object.keys(fb.users).length === 0));
+  check('persist: corrupt file is QUARANTINED, original moved aside (no silent wipe)', quarantined && !pfs.existsSync(f));
+  try { pfs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
