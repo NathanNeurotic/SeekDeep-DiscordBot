@@ -725,12 +725,21 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
   $('#rSearch').addEventListener('input', () => renderUsersRail(state.users, $('#rSearch').value));
 
   // --- boot ---------------------------------------------------------
-  (async function () {
-    state.users = await listUsers();
-    renderUsersRail(state.users);
-    updateMockTag();
-    if (state.users.length) selectUser(state.users[0].user_id);
-  })();
+  // Run AFTER nav.js (deferred, below) has patched fetch with the GUI token.
+  // Deferred scripts execute before DOMContentLoaded, so gating on it guarantees
+  // the patch is installed. Firing during parse (as this IIFE used to) sent the
+  // first /memory/users on the UNpatched fetch → 401 → the page fell back to the
+  // offline mock seed and never recovered ("stuck in mock").
+  function memoryBoot() {
+    (async function () {
+      state.users = await listUsers();
+      renderUsersRail(state.users);
+      updateMockTag();
+      if (state.users.length) selectUser(state.users[0].user_id);
+    })();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', memoryBoot, { once: true });
+  else memoryBoot();
 })();
 </script>
 <script src="nav.js" defer></script>
