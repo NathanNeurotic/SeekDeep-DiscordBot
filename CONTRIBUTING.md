@@ -44,7 +44,7 @@ JavaScript (`index.js`):
 - Keep helper functions top-level when they're shared across routes; nested arrow functions are OK for callbacks.
 - Avoid wrapper stacks. If you find a `seekdeepFooSafeV13(x)` that just `return foo(x)`, delete the wrapper and rename call sites (v10.6 did this for 6 wrappers; the codebase is allergic to them now).
 - Use `seekdeepReplyToTarget(target, payload)` for any new reply that should work with both `Message` and `Interaction` shapes — don't fork into two parallel `…Message` / `…Interaction` functions (v10.7 / v10.8 consolidated the last 4 of those).
-- Use `seekdeepFetchWithLimits(url, { timeoutMs, maxBytes })` instead of bare `fetch(attachment.url)` for any user-supplied URL.
+- Use `seekdeepFetchWithLimits(url, { timeoutMs, maxBytes })` (defined in `lib/url-fetch-policy.js`, imported by index.js) instead of bare `fetch(attachment.url)` for any user-supplied URL — it adds SSRF validation + DNS pinning + redirect re-checks, not just timeout/size caps.
 
 Python (`local_ai_server.py`):
 

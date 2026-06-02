@@ -36,10 +36,15 @@ Line numbers below are from the snapshot when this file was created and will dri
 
 Core files:
 
-- `index.js` - main Node ESM Discord bot, about 17.3k lines at snapshot.
-- `local_ai_server.py` - FastAPI local model server, about 1.4k lines.
+- `index.js` - main Node ESM Discord bot, about 24k lines at snapshot.
+- `gui_endpoints.py` - FastAPI GUI/control-center backend: token auth, launcher, `/system/self-update` (lock + ref policy + signature gate), about 6.4k lines.
+- `local_ai_server.py` - FastAPI local model server, about 5.7k lines.
+- `lib/url-fetch-policy.js` - user-URL SSRF fetch policy (scheme/IP validation + per-hop redirect re-check + DNS pinning), extracted from index.js and imported back.
+- `release_signing.py` - vendored Ed25519 (RFC 8032) sign/verify + release-manifest helpers for self-update signature verification.
 - `smoke_test.mjs` - automated regression smoke tests against real helper functions.
-- `scripts/preflight.mjs` - one-command JS/Python/smoke preflight runner.
+- `scripts/preflight.mjs` - one-command JS/Python/smoke/docs/coverage preflight runner.
+- `scripts/audit_endpoint_coverage.mjs` - generates `docs/ENDPOINT_COVERAGE.md` (endpoint -> GUI/test map; preflight `coverage` stage checks drift).
+- `scripts/gen_release_keypair.py` / `scripts/sign_release_manifest.py` - offline release-signing tools (see `RELEASE_SIGNING.md`).
 - `seekdeep_launcher.bat` - Windows launcher for SearXNG, local AI server, and bot.
 - `.env.default` - committed configuration template. `.env` is local secret state.
 - `searxng/settings.yml` - local SearXNG config.
@@ -55,7 +60,10 @@ Docs:
 - `SMOKE_TEST.md` - automated and live Discord smoke checklist.
 - `PLANNED.md` - shipped history, deferred work, optional features.
 - `CONTRIBUTING.md` - local setup and coding rules.
-- `SECURITY.md` - secrets, local services, user URL fetch policy.
+- `SECURITY.md` - secrets, local services, user-URL SSRF fetch policy, self-update trust boundary + signing, Tauri bridge.
+- `RELEASE_SIGNING.md` - offline-key workflow for cryptographically-signed self-updates.
+- `docs/ENDPOINT_COVERAGE.md` - generated endpoint -> GUI/test coverage map (AUD-006).
+- `docs/audits/` - dated security audits + the CSP tightening plan.
 
 Large/runtime/local dirs:
 

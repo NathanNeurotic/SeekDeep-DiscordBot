@@ -24,6 +24,7 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 > - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant picking up the repo cold.
 > - **[INTEGRATION.md](INTEGRATION.md)** — how the GUI mounts onto the FastAPI server (`gui/` static mount, write endpoints, WebSocket bridge, archive bot bridge).
 > - **[MAINTAINER.md](MAINTAINER.md)** — playbook for merging designer-shipped GUI zips without losing audit/auth overrides.
+> - **[SECURITY.md](SECURITY.md)** — secrets, local-service binding, user-URL SSRF fetch policy, the self-update trust boundary (ref policy + Ed25519 signing), and the Tauri desktop-bridge controls.
 >
 > This file is the **user-facing canonical**: install, configure, run, commands, feature flags. Internal architecture details live in `AGENTS.md`.
 
@@ -151,6 +152,7 @@ That's it. SmartScreen remembers your choice for that file's hash — you won't 
 
 - The full source for every release is at https://github.com/NathanNeurotic/SeekDeep-DiscordBot — every `.msi` is built by GitHub Actions from a public commit. The build log on the [nightly release](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/actions/workflows/tauri-release.yml) shows exactly which sources went in.
 - The Tauri sidecar's only network calls go to: `huggingface.co` (model downloads, opt-in), `127.0.0.1` (your own SearXNG / Ollama daemon), `raw.githubusercontent.com` (the Self-update button), and whatever remote chat provider you explicitly configure in `.env`. Nothing else phones home. See the privacy note at the top of this README.
+- The **Self-update** button (`/system/self-update`) is hardened: by default it pulls only from immutable release tags / commit SHAs (not mutable `main` — set `SEEKDEEP_SELF_UPDATE_REF_POLICY=loose` or `SEEKDEEP_SELF_UPDATE_ALLOW_MAIN=on` to relax), verifies every downloaded file against GitHub's git-blob SHA, and can require a maintainer Ed25519 signature (`SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on`). Disable it entirely with `SEEKDEEP_SELF_UPDATE_ENABLED=off`. Full trust model: [SECURITY.md](SECURITY.md) + [RELEASE_SIGNING.md](RELEASE_SIGNING.md).
 - Run the installer through https://www.virustotal.com/ if you want a third-party scan. Unsigned Tauri builds typically come back clean across all engines.
 
 ### macOS Gatekeeper

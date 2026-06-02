@@ -292,6 +292,14 @@ stage('docs', () => {
         problems.push(`.env.example ${k}=${ex[k]} != .env.default ${k}=${def[k]} (CONF-1)`);
       }
     }
+    // Superset invariant (MAINTAINER.md 4.4): .env.example documents EVERY
+    // committed key. A key in .env.default but absent from .env.example means a
+    // user reading the reference can't discover it. Enforce what was a manual
+    // `comm -13` check so it can't silently drift again.
+    const missingInExample = Object.keys(def).filter((k) => !(k in ex)).sort();
+    if (missingInExample.length) {
+      problems.push(`.env.example missing ${missingInExample.length} key(s) present in .env.default (superset invariant, MAINTAINER.md 4.4): ${missingInExample.slice(0, 10).join(', ')}`);
+    }
   }
 
   // (c) DOC-2: the smoke total must be read live. Assert smoke_test.mjs still
