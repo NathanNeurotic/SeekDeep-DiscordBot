@@ -44,6 +44,7 @@ const IMAGE_STATES = [
 ];
 
 let imageStateIndex = 0;
+let discordSdkClient = null;
 
 const qs = (selector, root = document) => root.querySelector(selector);
 const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -63,9 +64,9 @@ async function setupDiscordActivity() {
 
   try {
     const clientId = requireClientId();
-    const discordSdk = new DiscordSDK(clientId);
+    discordSdkClient = new DiscordSDK(clientId);
 
-    await discordSdk.ready();
+    await discordSdkClient.ready();
 
     document.documentElement.classList.add("discord-activity-ready");
 
@@ -203,6 +204,21 @@ function cycleImageState() {
   if (seed) seed.textContent = state.seed;
 }
 
+
+async function openExternalUrl(url) {
+  if (!url) return;
+
+  try {
+    if (discordSdkClient?.commands?.openExternalLink) {
+      await discordSdkClient.commands.openExternalLink({ url });
+      return;
+    }
+  } catch (error) {
+    console.warn("Discord openExternalLink failed; falling back to window.open.", error);
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 function bindButtons() {
   qsa("[data-panel]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -229,6 +245,12 @@ function bindButtons() {
     });
   });
 
+
+  qsa("[data-open-external]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openExternalUrl(button.dataset.openExternal);
+    });
+  });
   const imageButton = qs("[data-cycle-image]");
   if (imageButton) {
     imageButton.addEventListener("click", cycleImageState);
