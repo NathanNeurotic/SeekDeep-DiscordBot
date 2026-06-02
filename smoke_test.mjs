@@ -33,6 +33,7 @@ process.env.SEEKDEEP_FEATURE_EMOJI_VAULT = 'off';
 process.env.SEEKDEEP_FEATURE_FORCE_REACT = 'off';
 
 import { spawnSync } from 'node:child_process';
+import http from 'node:http';
 
 let pass = 0;
 let fail = 0;
@@ -1389,6 +1390,20 @@ globalThis.fetch = async (url, options) => {
   };
 };
 
+// AUD-002 follow-up: source-image downloads now flow through node-fetch via the
+// transport seam (so DNS can be pinned), NOT globalThis.fetch. Feed that path
+// valid PNG bytes so the handler gets past seekdeepFetchImageAsBase64 and on to
+// the /inpaint_mask_preview POST (which fetchJson still routes via globalThis.fetch).
+if (typeof T.__setFetchTransportForTests === 'function') {
+  T.__setFetchTransportForTests(async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: null,
+    arrayBuffer: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer, // PNG signature
+  }));
+}
+
 const routeLogsPhaseC = [];
 globalThis.__seekdeepRouteSpy = (route, prompt) => {
   routeLogsPhaseC.push({ route, prompt });
@@ -1442,6 +1457,7 @@ check('routing: prompt debug returns report', replyContentDebug.includes('Image 
 
 // Clean up
 globalThis.fetch = originalFetchSuite51;
+if (typeof T.__setFetchTransportForTests === 'function') T.__setFetchTransportForTests(null);
 globalThis.__seekdeepRouteSpy = null;
 
 // ============================================================================
@@ -2105,28 +2121,27 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf validate: allowPrivate still blocks 0.0.0.0', await blocked('http://0.0.0.0/x', { allowPrivate: true }));
 
   // -- redirect re-validation: public → private must fail before body read --
-  if (typeof T.seekdeepFetchWithLimits === 'function') {
-    const origFetch = globalThis.fetch;
-    let bodyReadAfterPrivateRedirect = false;
-    globalThis.fetch = async (u) => ({
+  // Production now uses node-fetch (not globalThis.fetch) so the per-request
+  // `agent` can pin DNS; tests inject a stub transport via the seam below.
+  if (typeof T.seekdeepFetchWithLimits === 'function' && typeof T.__setFetchTransportForTests === 'function') {
+    T.__setFetchTransportForTests(async (u) => ({
       status: 302,
       ok: false,
       headers: { get: (k) => (String(k).toLowerCase() === 'location' ? 'http://127.0.0.1/secret' : null) },
       arrayBuffer: async () => new ArrayBuffer(0),
-      get body() { bodyReadAfterPrivateRedirect = true; return null; },
-    });
+      body: null,
+    }));
     let redirectBlocked = false;
     try {
       await T.seekdeepFetchWithLimits('https://93.184.216.34/start');
     } catch (e) {
       redirectBlocked = /Blocked fetch|private\/loopback|redirect/i.test(String(e?.message || e));
     }
-    globalThis.fetch = origFetch;
+    T.__setFetchTransportForTests(null);
     check('ssrf redirect: public→127.0.0.1 redirect blocked on re-validation', redirectBlocked);
 
     // positive: a public→public redirect is followed to a 200
-    const origFetch2 = globalThis.fetch;
-    globalThis.fetch = async (u) => {
+    T.__setFetchTransportForTests(async (u) => {
       const url = String(u);
       if (url.includes('/start')) {
         return {
@@ -2137,14 +2152,48 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
         };
       }
       return { status: 200, ok: true, headers: { get: () => null }, body: null, arrayBuffer: async () => new ArrayBuffer(3) };
-    };
+    });
     let followedStatus = 0;
     try {
       const r = await T.seekdeepFetchWithLimits('https://8.8.8.8/start');
       followedStatus = Number(r?.status || 0);
     } catch { followedStatus = -1; }
-    globalThis.fetch = origFetch2;
+    T.__setFetchTransportForTests(null);
     check('ssrf redirect: public→public redirect followed to 200', followedStatus === 200);
+  }
+
+  // -- DNS-rebinding pin: the pinned lookup ignores the hostname and yields the
+  //    pre-validated IP; an http.Agent built from it actually routes there. --
+  if (typeof T.seekdeepBuildPinnedLookup === 'function') {
+    // (a) pure lookup behavior
+    const lookup = T.seekdeepBuildPinnedLookup(['203.0.113.7']);
+    const single = await new Promise((resolve) => lookup('attacker-rebind.example', {}, (err, addr, fam) => resolve({ err, addr, fam })));
+    check('dns-pin: lookup ignores hostname, returns the validated IPv4', single.err == null && single.addr === '203.0.113.7' && single.fam === 4);
+    const all = await new Promise((resolve) => lookup('attacker-rebind.example', { all: true }, (err, entries) => resolve({ err, entries })));
+    check('dns-pin: lookup honors {all:true} shape', all.err == null && Array.isArray(all.entries) && all.entries[0].address === '203.0.113.7' && all.entries[0].family === 4);
+    const v6 = T.seekdeepBuildPinnedLookup(['2606:4700:4700::1111']);
+    const v6r = await new Promise((resolve) => v6('x', {}, (err, addr, fam) => resolve({ addr, fam })));
+    check('dns-pin: IPv6 pinned address reports family 6', v6r.addr === '2606:4700:4700::1111' && v6r.fam === 6);
+
+    // (b) end-to-end mechanism: a fake hostname (would NXDOMAIN in real DNS)
+    //     resolves to our loopback server purely because the agent's lookup is
+    //     pinned to 127.0.0.1 — proving http.Agent honors the pinned lookup.
+    const server = http.createServer((req, res) => { res.end('pinned-ok'); });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const agent = new http.Agent({ lookup: T.seekdeepBuildPinnedLookup(['127.0.0.1']), keepAlive: false });
+    let pinnedBody = '';
+    try {
+      pinnedBody = await new Promise((resolve, reject) => {
+        const req = http.get({ host: 'totally-not-real-rebind.example', port, agent }, (res) => {
+          let d = ''; res.on('data', (c) => { d += c; }); res.on('end', () => resolve(d));
+        });
+        req.on('error', reject);
+        req.setTimeout(4000, () => req.destroy(new Error('timeout')));
+      });
+    } catch (e) { pinnedBody = `ERR:${e.message}`; }
+    server.close();
+    check('dns-pin: http.Agent routes a fake hostname to the pinned IP (mechanism works)', pinnedBody === 'pinned-ok', pinnedBody);
   }
 }
 
