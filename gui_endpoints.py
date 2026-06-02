@@ -4075,7 +4075,6 @@ def register_gui_endpoints(
         "VRAM_SAFETY_MARGIN_MB": "VRAM (MB) left free as a safety margin when loading models.",
         "HF_HUB_OFFLINE": "Lock HuggingFace to local cache only — no Hub downloads (run after first warmup).",
         "TRANSFORMERS_OFFLINE": "Lock Transformers to local cache only; pairs with HF_HUB_OFFLINE.",
-        "HF_DATASETS_OFFLINE": "Lock HuggingFace Datasets to local cache only.",
         "HF_HOME": "HuggingFace home directory (cache root).",
         "HF_HUB_CACHE": "HuggingFace Hub cache directory.",
         "TRANSFORMERS_CACHE": "Transformers model cache directory.",
@@ -4149,7 +4148,7 @@ def register_gui_endpoints(
     # NOT every 0/1 key is boolean (e.g. SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD=0 is a
     # real number), so this is an explicit allowlist rather than "treat all 0/1 as
     # boolean". ON writes 1, OFF writes 0.
-    _SCHEMA_TOGGLE_01 = {"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"}
+    _SCHEMA_TOGGLE_01 = {"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"}
 
     def _schema_section_for(k):
         if k.startswith("JOIN_LEAVE_"):
@@ -4172,7 +4171,7 @@ def register_gui_endpoints(
                 or k in ("LOCAL_MODEL_CACHE_DIR", "MODEL_KEEP_MODE",
                          "LOCAL_CHAT_QUANT", "LOCAL_CHAT_QUANT_FULL_ROLES",
                          "HF_LOCAL_FILES_ONLY", "HF_HUB_OFFLINE",
-                         "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")):
+                         "TRANSFORMERS_OFFLINE")):
             return "VRAM & model cache"
         if (k.startswith("LOCAL_CHAT_") or k.startswith("MODEL_")
                 or k in ("LOCAL_VISION_MODEL_ID", "LOCAL_IMAGE_MODEL_ID")):
