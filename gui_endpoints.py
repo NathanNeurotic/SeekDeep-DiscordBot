@@ -134,6 +134,20 @@ class PersonaPatch(BaseModel):
     guild_id: str | None = None
 
 
+class CustomPersonaPatch(BaseModel):
+    """Body for POST /personas (create / update a custom persona). Module-level
+    for the same reason as PersonaPatch — FastAPI + Pydantic v2 treat a
+    closure-scoped BaseModel as a bag of query params, not a JSON body.
+
+    Validation mirrors index.js's `persona create` handler so the GUI write
+    path and the Discord command reject exactly the same things and stay in
+    agreement on data/custom-personas.json:
+      slug  → ^[a-z0-9_-]{2,32}$, not a built-in, not a reserved keyword
+      tone  → 2..2000 chars (the personality line injected into the prompt)."""
+    slug: str = ""
+    tone: str = ""
+
+
 # Constants mirror index.js. If you bump the bot-side env vars, mirror here too;
 # the bot remains source of truth -- these are just the validation ceilings on
 # the GUI write path so we don't silently accept facts the bot would reject.
@@ -4293,19 +4307,50 @@ def register_gui_endpoints(
     _VALID_SCOPES = {"channel", "server", "guild", "global"}
     _WEB_OWNER_ID = "web-owner"  # sentinel for setBy when the call comes from the playground
 
+    # Custom-persona validation ceilings + reserved names — mirror index.js
+    # (SEEKDEEP_CUSTOM_PERSONA_* + SEEKDEEP_RESERVED_PERSONA_KEYWORDS) so the
+    # GUI /personas write path rejects exactly what the Discord `persona create`
+    # handler rejects. The two write the SAME data/custom-personas.json.
+    _CUSTOM_PERSONA_SLUG_MAX   = 32
+    _CUSTOM_PERSONA_TONE_MAX   = 2000
+    _CUSTOM_PERSONA_MAX_COUNT  = 50
+    _CUSTOM_PERSONA_SLUG_RE    = re.compile(r"^[a-z0-9_-]{2,32}$")
+    _RESERVED_PERSONA_KEYWORDS = frozenset(
+        {"reset", "show", "create", "remove", "list", "channel", "server", "guild"})
+    # Stock one-liners for the built-ins (the bot keeps the real tone strings in
+    # its prompt builder; these are just human-readable blurbs for the GUI list).
+    # Insertion order is the canonical order the UI shows them in.
+    _BUILTIN_PERSONA_DESCRIPTIONS = {
+        "neurotic":   "Anxious over-thinker — caveats, second-guessing, spiraling asides (the default).",
+        "unsettling": "Quietly ominous — calm, courteous, and faintly wrong in a way you can't place.",
+        "clinical":   "Cold and precise — numbered points, minimal warmth; a manpage with feelings.",
+        "chaotic":    "Manic and unpredictable — tangents, sudden caps, gleeful disregard for the question.",
+    }
+
+    def _read_custom_personas() -> dict:
+        """Full data/custom-personas.json contents, shape
+        {"personas": {<slug>: {tone, createdBy, createdAt, updatedAt}}}. Mirrors
+        index.js seekdeepReadCustomPersonas — returns the empty shape on a
+        missing or malformed file so every caller is crash-proof."""
+        try:
+            if not _custom_personas_path.is_file():
+                return {"personas": {}}
+            raw = json.loads(_custom_personas_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return {"personas": {}}
+            if not isinstance(raw.get("personas"), dict):
+                raw["personas"] = {}
+            return raw
+        except Exception:
+            return {"personas": {}}
+
     def _read_custom_persona_slugs() -> list[str]:
         """Slugs of every persona in data/custom-personas.json (lowercase).
         Empty list if the file's missing or malformed. Used to make /persona's
         valid_personas list include user-defined personas so the chat-playground
         popover and the persona admin command stay in sync."""
-        try:
-            if not _custom_personas_path.is_file():
-                return []
-            raw = json.loads(_custom_personas_path.read_text(encoding="utf-8"))
-            personas = (raw or {}).get("personas") or {}
-            return [str(k).lower() for k in personas.keys() if str(k).strip()]
-        except Exception:
-            return []
+        personas = _read_custom_personas().get("personas") or {}
+        return [str(k).lower() for k in personas.keys() if str(k).strip()]
 
     def _valid_personas() -> set[str]:
         """Built-in + custom slugs. Recomputed on each call so newly-created
@@ -4402,6 +4447,108 @@ def register_gui_endpoints(
         except Exception:
             pass
         return {"ok": True, "scope": scope, "persona": persona, "set_at": entry["setAt"]}
+
+    # ----- /personas (custom persona catalog: list / create-update / delete) -----
+    # Wraps data/custom-personas.json so the GUI persona manager can do full
+    # CRUD on user-authored personas — previously only the Discord `persona
+    # create/remove` commands could touch this file. The bot reads the SAME
+    # file (seekdeepReadCustomPersonas), so a persona created here is usable in
+    # Discord on the bot's next message and vice-versa. GET is open (the names
+    # aren't sensitive, matching GET /persona); writes are token-gated.
+    @app.get("/personas")
+    def list_personas():
+        custom_raw = _read_custom_personas().get("personas") or {}
+        custom = []
+        for slug, row in custom_raw.items():
+            if not isinstance(row, dict):
+                continue
+            custom.append({
+                "slug": str(slug),
+                "tone": str(row.get("tone") or ""),
+                "updatedAt": row.get("updatedAt") or row.get("createdAt") or None,
+            })
+        custom.sort(key=lambda r: r["slug"])
+        builtin = [{"slug": s, "description": d}
+                   for s, d in _BUILTIN_PERSONA_DESCRIPTIONS.items()]
+        return {
+            "ok": True,
+            "builtin": builtin,
+            "custom": custom,
+            "count": len(custom),
+            "max": _CUSTOM_PERSONA_MAX_COUNT,
+        }
+
+    @app.post("/personas", dependencies=[Depends(_require_gui_token)])
+    def upsert_persona(patch: CustomPersonaPatch):
+        slug = (patch.slug or "").strip().lower()
+        if not _CUSTOM_PERSONA_SLUG_RE.match(slug):
+            raise HTTPException(
+                400,
+                f"slug must be 2-{_CUSTOM_PERSONA_SLUG_MAX} chars of lowercase letters, "
+                f"digits, '-' or '_' (^[a-z0-9_-]{{2,{_CUSTOM_PERSONA_SLUG_MAX}}}$) — got {slug!r}")
+        if slug in _BUILTIN_PERSONAS:
+            raise HTTPException(400, f'"{slug}" is a built-in persona; pick a different name')
+        if slug in _RESERVED_PERSONA_KEYWORDS:
+            raise HTTPException(
+                400, f'"{slug}" is reserved (used by the persona command itself); pick a different name')
+
+        tone = (patch.tone or "").strip()
+        if len(tone) < 2:
+            raise HTTPException(
+                400, "tone (the persona description) is too short — give it at least a sentence (min 2 chars)")
+        if len(tone) > _CUSTOM_PERSONA_TONE_MAX:
+            raise HTTPException(
+                400,
+                f"tone is too long — {len(tone)}/{_CUSTOM_PERSONA_TONE_MAX} chars; "
+                f"trim about {len(tone) - _CUSTOM_PERSONA_TONE_MAX}")
+
+        data = _read_custom_personas()
+        personas = data.get("personas")
+        if not isinstance(personas, dict):
+            personas = {}
+            data["personas"] = personas
+        existed = slug in personas
+        if not existed and len(personas) >= _CUSTOM_PERSONA_MAX_COUNT:
+            raise HTTPException(
+                400, f"custom persona cap reached ({_CUSTOM_PERSONA_MAX_COUNT}); remove one first")
+
+        now = _now_iso()
+        prev = personas.get(slug) if isinstance(personas.get(slug), dict) else {}
+        # Preserve createdAt + the original createdBy across edits (a persona
+        # first authored in Discord keeps its Discord creator); only updatedAt
+        # moves. Structure is byte-for-byte what index.js writes.
+        personas[slug] = {
+            "tone": tone,
+            "createdBy": prev.get("createdBy") or _WEB_OWNER_ID,
+            "createdAt": prev.get("createdAt") or now,
+            "updatedAt": now,
+        }
+        _atomic_write_json(_custom_personas_path, data)
+        return {
+            "ok": True,
+            "slug": slug,
+            "created": not existed,
+            "updatedAt": now,
+            "count": len(personas),
+            "max": _CUSTOM_PERSONA_MAX_COUNT,
+        }
+
+    @app.delete("/personas/{slug}", dependencies=[Depends(_require_gui_token)])
+    def delete_persona(slug: str):
+        s = (slug or "").strip().lower()
+        if s in _BUILTIN_PERSONAS:
+            raise HTTPException(404, f'"{s}" is a built-in persona and cannot be deleted')
+        data = _read_custom_personas()
+        personas = data.get("personas")
+        if not isinstance(personas, dict) or s not in personas:
+            raise HTTPException(404, f'no custom persona named "{s}"')
+        personas.pop(s, None)
+        data["personas"] = personas
+        _atomic_write_json(_custom_personas_path, data)
+        # Any channel/guild override pointing at this slug now fails
+        # seekdeepIsValidPersonaSlug on the bot side and falls back to the env
+        # default on the next message — no extra cleanup needed here.
+        return {"ok": True, "slug": s, "removed": True, "count": len(personas)}
 
     # ----- GET /stats/counts -----
     # Source-of-truth counts that pages display in their stat tiles. Replaces

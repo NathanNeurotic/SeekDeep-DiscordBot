@@ -976,6 +976,123 @@ def main() -> int:
     except Exception:
         pass
 
+    # ---- /personas (custom-persona CRUD — GUI persona manager) ----
+    # GET list / POST create-update / DELETE. Validation mirrors index.js's
+    # `persona create/remove`; the file written is the SAME data/custom-
+    # personas.json the bot reads. Snapshot + restore that file so a smoke run
+    # never wipes or pollutes the user's real custom personas.
+    _cpersonas_path = _Path("data") / "custom-personas.json"
+    _cpersonas_backup: bytes | None = None
+    try:
+        if _cpersonas_path.is_file():
+            _cpersonas_backup = _cpersonas_path.read_bytes()
+    except Exception:
+        _cpersonas_backup = None
+
+    # A clearly-fake, regex-valid slug (^[a-z0-9_-]{2,32}$) that won't collide
+    # with anything a user would actually name a persona.
+    SMOKE_PERSONA = "smoke-test-persona"
+    SMOKE_PERSONA_TONE = "a calm, terse persona used only by the gui-smoke round-trip"
+
+    # GET is open (no token), same posture as GET /persona.
+    r = c.get("/personas")
+    check("GET /personas -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
+    body = r.json() if r.status_code == 200 else {}
+    check("  ...returns {ok, builtin:[{slug,description}], custom:[...], count, max:50}",
+          body.get("ok") is True
+          and isinstance(body.get("builtin"), list)
+          and isinstance(body.get("custom"), list)
+          and isinstance(body.get("count"), int)
+          and body.get("max") == 50,
+          f"body keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
+    builtin_slugs = {b.get("slug") for b in (body.get("builtin") or []) if isinstance(b, dict)}
+    check("  ...builtin list carries the four built-ins, each with a description",
+          {"neurotic", "unsettling", "clinical", "chaotic"}.issubset(builtin_slugs)
+          and all(isinstance(b.get("description"), str) and b.get("description")
+                  for b in (body.get("builtin") or [])),
+          f"builtin={body.get('builtin')}")
+
+    # Writes are token-gated.
+    r = c.post("/personas", json={"slug": SMOKE_PERSONA, "tone": SMOKE_PERSONA_TONE})
+    check("POST /personas without token -> 401", r.status_code == 401, f"got {r.status_code}")
+    r = c.delete(f"/personas/{SMOKE_PERSONA}")
+    check("DELETE /personas/{slug} without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
+    if token:
+        # Clean slate (best-effort; ignore if absent).
+        c.delete(f"/personas/{SMOKE_PERSONA}", headers={_TOKEN_HEADER: token})
+
+        # Create.
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": SMOKE_PERSONA, "tone": SMOKE_PERSONA_TONE})
+        check("POST /personas create -> 200", r.status_code == 200, f"got {r.status_code}")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, slug, created:true, max:50}",
+              b.get("ok") is True and b.get("slug") == SMOKE_PERSONA
+              and b.get("created") is True and b.get("max") == 50,
+              f"body={b}")
+
+        # GET-list round-trip: the new persona shows up with its tone.
+        r = c.get("/personas")
+        b = r.json() if r.status_code == 200 else {}
+        custom_map = {row.get("slug"): row for row in (b.get("custom") or []) if isinstance(row, dict)}
+        check("  ...GET /personas custom list now includes it with its tone + updatedAt",
+              SMOKE_PERSONA in custom_map
+              and custom_map[SMOKE_PERSONA].get("tone") == SMOKE_PERSONA_TONE
+              and isinstance(custom_map[SMOKE_PERSONA].get("updatedAt"), str),
+              f"custom={b.get('custom')}")
+
+        # Update (same slug, new tone) -> created flips false, createdAt preserved.
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": SMOKE_PERSONA, "tone": "an even calmer, updated test persona"})
+        check("POST /personas update (same slug) -> 200 created:false",
+              r.status_code == 200 and r.json().get("created") is False,
+              f"got {r.status_code} body={r.json() if r.status_code == 200 else None}")
+
+        # Validation: bad slug (spaces + punctuation) -> 400.
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": "Bad Slug!", "tone": "perfectly valid tone string"})
+        check("POST /personas invalid slug -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        # Validation: tone > 2000 chars -> 400.
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": "smoke-test-persona-toolong", "tone": "x" * 2001})
+        check("POST /personas tone >2000 chars -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        # Validation: built-in name -> 400 (can't clobber a built-in).
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": "neurotic", "tone": "trying to clobber a built-in"})
+        check("POST /personas built-in slug -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        # Validation: reserved keyword -> 400 (mirror index.js reserved set).
+        r = c.post("/personas", headers={_TOKEN_HEADER: token},
+                   json={"slug": "reset", "tone": "trying to use a reserved keyword"})
+        check("POST /personas reserved keyword -> 400", r.status_code == 400, f"got {r.status_code}")
+
+        # DELETE a built-in -> 404 (built-ins are not removable).
+        r = c.delete("/personas/neurotic", headers={_TOKEN_HEADER: token})
+        check("DELETE /personas/neurotic (built-in) -> 404", r.status_code == 404, f"got {r.status_code}")
+
+        # DELETE the created persona -> 200, then 404 on the second pass.
+        r = c.delete(f"/personas/{SMOKE_PERSONA}", headers={_TOKEN_HEADER: token})
+        check("DELETE /personas/{slug} -> 200", r.status_code == 200, f"got {r.status_code}")
+        b = r.json() if r.status_code == 200 else {}
+        check("  ...returns {ok, slug, removed:true}",
+              b.get("ok") is True and b.get("slug") == SMOKE_PERSONA and b.get("removed") is True,
+              f"body={b}")
+        r = c.delete(f"/personas/{SMOKE_PERSONA}", headers={_TOKEN_HEADER: token})
+        check("DELETE /personas/{slug} second time -> 404 (absent)", r.status_code == 404, f"got {r.status_code}")
+
+    # Teardown: restore original custom-personas.json (or remove if absent before).
+    try:
+        if _cpersonas_backup is None:
+            if _cpersonas_path.is_file():
+                _os.remove(_cpersonas_path)
+        else:
+            _cpersonas_path.write_bytes(_cpersonas_backup)
+    except Exception:
+        pass
+
     # ---- /stats/counts (Item J: source-of-truth counts for stat tiles) ----
     r = c.get("/stats/counts")
     check("GET /stats/counts -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
