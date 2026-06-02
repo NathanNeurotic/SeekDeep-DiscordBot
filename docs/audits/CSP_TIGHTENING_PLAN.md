@@ -6,6 +6,17 @@
 > tests. CSP tightening is sequenced here because it **can break GUI pages** and
 > must be rolled out page-by-page with regression testing, not in one flip.
 
+> **Status — DEFERRED (low priority, not scheduled).** The verifiable wins
+> shipped (dropped `'unsafe-eval'`, scoped `script-src`, added the
+> `e2e/csp.spec.mjs` harness). The remaining `'unsafe-inline'` removal
+> (Steps 1/2/5 below) is **intentionally parked** with no near-term date. It is
+> defense-in-depth, not a fix for any known issue: there is no known GUI XSS,
+> and the highest-value escalation path (`open_external`) is already locked down.
+> It requires a 24-file inline-script/handler externalization that can only be
+> verified by clicking through the **packaged** desktop app. Pick it up only when
+> there's appetite for that hands-on pass; until then this is a conscious "won't
+> do yet", not an oversight.
+
 ## Current state (intentionally permissive)
 
 `src-tauri/tauri.conf.json`:
