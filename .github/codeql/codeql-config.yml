@@ -18,3 +18,10 @@ paths-ignore:
   - smoke_test.mjs
   - e2e
   - scripts/smoke_gui_endpoints.py
+  # Vendored Discord Activity (DataDash): a self-contained game + bundled Discord
+  # SDK that runs sandboxed inside Discord's iframe, cross-origin to the bot and AI
+  # server (it cannot reach the GUI token or any privileged endpoint). It is outside
+  # SeekDeep's trusted attack surface, so scanning the game + its minified SDK only
+  # yields low-signal false positives. The SeekDeep GUI proper (gui/*.html, gui/*.js)
+  # is still fully analyzed.
+  - gui/activity
