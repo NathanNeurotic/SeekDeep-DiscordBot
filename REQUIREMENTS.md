@@ -19,7 +19,7 @@ The current verified machine reports:
 
 - Node.js 20 or newer
 - npm
-- Python 3.10 or newer
+- Python 3.11+
 - pip
 - Docker Desktop
 
@@ -71,6 +71,8 @@ Copy `.env.default` to `.env` for a fresh setup, then add the Discord token.
 
 A complete list of supported env vars lives in `.env.default` (the template `.env` is copied from). The most-touched are:
 
+> Canonical values live in `.env.default`; this list is illustrative — verify against `.env.default` before relying on a value.
+
 ```text
 # Required
 DISCORD_TOKEN=
@@ -98,17 +100,16 @@ LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID=google/gemma-3n-E4B-it
 
 # Quantization
 LOCAL_CHAT_QUANT=4bit
-LOCAL_CHAT_QUANT_FULL_ROLES=default_chat,fallback_chat
+LOCAL_CHAT_QUANT_FULL_ROLES=                # empty since v10.15 — fp16 on a 24GB GPU thrashes shared memory
 
 # Model cache + offline
 LOCAL_MODEL_CACHE_DIR=./models/huggingface
 MODEL_KEEP_MODE=task-lru
-LOCAL_VISION_KEEP_RESIDENT=on              # v10.4 — pin vision in VRAM
-LOCAL_IMAGE_KEEP_RESIDENT=off              # v10.4 — pin SDXL in VRAM
-HF_LOCAL_FILES_ONLY=true                   # offline after warmup
-HF_HUB_OFFLINE=1
-TRANSFORMERS_OFFLINE=1
-HF_DATASETS_OFFLINE=1
+LOCAL_VISION_KEEP_RESIDENT=off             # off by default; pin only with VRAM headroom
+LOCAL_IMAGE_KEEP_RESIDENT=off             # off by default; pin SDXL only with VRAM headroom
+HF_LOCAL_FILES_ONLY=false                  # online until first warmup completes; lock offline afterward
+HF_HUB_OFFLINE=0
+TRANSFORMERS_OFFLINE=0
 
 # Web search
 WEB_AUTO_SEARCH=true
@@ -119,10 +120,10 @@ WEB_APPEND_SOURCES=true
 # Memory + chunking
 MAX_DISCORD_CHARS=1900
 SEEKDEEP_MEMORY_MODE=rolling
-MAX_CONTEXT_MESSAGES=40
-MAX_CONTEXT_CHARS=24000
-SEEKDEEP_MEMORY_RECENT_ENTRIES=30
-SEEKDEEP_MEMORY_CONTEXT_CHARS=20000
+MAX_CONTEXT_MESSAGES=50
+MAX_CONTEXT_CHARS=36000
+SEEKDEEP_MEMORY_RECENT_ENTRIES=40
+SEEKDEEP_MEMORY_CONTEXT_CHARS=28000
 
 # Image generation
 SEEKDEEP_IMAGE_PROMPT_MAX_CHARS=650
@@ -141,7 +142,7 @@ SEEKDEEP_EMERGENCY_SEEN_TTL_MS=300000      # v10.5 — naming the 5-min Set TTLs
 # Feature flags (all default off — see README "Feature Flags")
 SEEKDEEP_FEATURE_EMOJI_VAULT=off           # demonbot coexistence
 SEEKDEEP_FEATURE_FORCE_REACT=off           # demonbot coexistence
-SEEKDEEP_FEATURE_IMG2IMG=on                # reuses Dreamshaper-XL, no extra download
+SEEKDEEP_FEATURE_IMG2IMG=off               # default off; reuses Dreamshaper-XL, no extra download
 SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off    # scaffold only
 SEEKDEEP_FEATURE_NSFW_GATE=off             # scaffold only
 SEEKDEEP_FEATURE_TTS_VOICE=off             # scaffold only
@@ -163,7 +164,7 @@ SEEKDEEP_DAILY_DIGEST_HOUR=9
 # Logging
 SEEKDEEP_FILE_LOGGING=on
 MODEL_ROUTER_LOG=true
-MODEL_LOG_VRAM=true                        # off in .env.default to keep startup quiet
+MODEL_LOG_VRAM=false                       # off in .env.default to keep startup quiet
 
 # Fetch safety (v10.5; SSRF policy added AUD-002 — see SECURITY.md)
 SEEKDEEP_FETCH_DEFAULT_TIMEOUT_MS=30000
@@ -182,7 +183,7 @@ The server uses task-LRU model loading, so switching from chat refinement to ima
 
 ## Installation
 
-1. Install Node.js 20+, Python 3.10+, and Docker Desktop.
+1. Install Node.js 20+, Python 3.11+, and Docker Desktop.
 2. From the repo root, install Node dependencies:
    ```powershell
    npm install
@@ -209,7 +210,7 @@ Run the full preflight after code changes:
 npm run preflight
 ```
 
-Runs `node --check` on the JS files, `python -m py_compile` on the Python files, and the smoke test in ~1 second. Exit code 0 only when every stage passes.
+Runs 8 stages in order: `js` (`node --check` on shipped JS), `html-js` (inline `<script>` blocks in `gui/*.html`), `py` (`python -m py_compile` on the Python files — `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, and the two release-signing scripts), `smoke` (`node smoke_test.mjs`), `gui-smoke`, `rust` (`cargo check`, skip-with-warn when cargo/GTK absent), `docs` (drift guards), and `coverage` (endpoint map). Exit code 0 only when every stage passes (or was skipped).
 
 Individual checks:
 

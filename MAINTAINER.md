@@ -235,11 +235,16 @@ The fast path is one command:
 npm run preflight
 ```
 
-`preflight` (defined in `scripts/preflight.mjs`) runs three stages:
+`preflight` (defined in `scripts/preflight.mjs`) runs eight stages in order:
 
-- **js** — `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/nav.js`
-- **py** — `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`
+- **js** — `node --check` on every shipped JS file (`index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/*.js`, …)
+- **html-js** — `node --check` on every inline `<script>` block in `gui/*.html`
+- **py** — `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, `scripts/gen_release_keypair.py`, `scripts/sign_release_manifest.py`
 - **smoke** — `node smoke_test.mjs` (no Discord login, no model load, no file mutation)
+- **gui-smoke** — `python scripts/smoke_gui_endpoints.py` (self-skips when fastapi/httpx/pydantic absent)
+- **rust** — `cargo check` on `src-tauri` (skip-with-warn when cargo / GTK libs absent)
+- **docs** — fail-closed doc-drift guards
+- **coverage** — `docs/ENDPOINT_COVERAGE.md` drift check
 
 Exit code 0 = green. Same checks run in CI on every push + PR via
 `.github/workflows/ci.yml`.

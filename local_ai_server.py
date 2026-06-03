@@ -316,20 +316,85 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 TEMP_DIR = ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# PYS-4: cap the on-disk image scratch dirs. Every image endpoint saves a PNG to
+# outputs/ that is redundant with the base64 payload we already return to the bot,
+# so without a cap a long-running server grows outputs/ without bound. 0 disables
+# a cap. outputs/ is bounded by count + age; temp/ is swept by age only (its files
+# are short-lived, so an age sweep only reclaims orphans left by a decode failure
+# and can never delete an in-flight file).
+SEEKDEEP_OUTPUTS_MAX_FILES = int(os.getenv("SEEKDEEP_OUTPUTS_MAX_FILES", "200") or 0)
+SEEKDEEP_OUTPUTS_MAX_AGE_HOURS = float(os.getenv("SEEKDEEP_OUTPUTS_MAX_AGE_HOURS", "72") or 0)
+
+
+def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> None:
+    """Best-effort cap on a scratch directory: delete by age first, then by count
+    (oldest first). Pure housekeeping -- never raises into the request path."""
+    try:
+        if max_files <= 0 and max_age_hours <= 0:
+            return
+        entries = []
+        for p in directory.iterdir():
+            try:
+                if p.is_file():
+                    entries.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        if max_age_hours and max_age_hours > 0:
+            cutoff = time.time() - max_age_hours * 3600.0
+            survivors = []
+            for mtime, p in entries:
+                if mtime < cutoff:
+                    try:
+                        p.unlink()
+                        continue
+                    except OSError:
+                        # Locked or already removed by another process; keep it as
+                        # a survivor and let a later sweep retry.
+                        pass
+                survivors.append((mtime, p))
+            entries = survivors
+        if max_files and max_files > 0 and len(entries) > max_files:
+            entries.sort(key=lambda t: t[0])
+            for _mtime, p in entries[: len(entries) - max_files]:
+                try:
+                    p.unlink()
+                except OSError:
+                    # Best-effort delete; a locked/already-gone file is fine to skip.
+                    pass
+    except Exception:
+        # Pruning is pure housekeeping; never let a scratch-dir hiccup surface
+        # into the image request path.
+        pass
+
+
+def _output_path(safe_name: str):
+    """OUTPUT_DIR / safe_name, pruning stale outputs (and temp orphans) first."""
+    _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+    _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+    return OUTPUT_DIR / safe_name
+
 CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct")
 VISION_MODEL_ID = os.getenv("LOCAL_VISION_MODEL_ID", "Qwen/Qwen2.5-VL-3B-Instruct")
 IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Lykon/dreamshaper-xl-1-0")
 
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
 HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1", "true", "yes", "on"}
-# Security (audit P0-4): trust_remote_code lets a Hugging Face repo execute its
-# OWN Python at load time. A few models genuinely need it (custom tokenizer /
-# model code), but combined with arbitrary /model/install it is an RCE-shaped
+# Security (PYS-1 / deep audit): trust_remote_code lets a Hugging Face repo
+# execute its OWN Python at load time. A few models genuinely need it (custom
+# tokenizer / model code), but combined with /model/install it is an RCE-shaped
 # footgun — installing an untrusted model_id would run its code in the server.
-# Default ON to preserve existing behavior for the known-good configured models;
-# flip to off (All Settings) to harden against malicious repos. When off, models
-# that require remote code will fail to load loudly rather than executing it.
-SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "on").lower() in {"1", "true", "yes", "on"}
+# Default OFF (secure-by-default): the configured default models (Llama-3.1,
+# Qwen2.5-VL, Dreamshaper-XL, Granite/Mistral/Phi/Gemma) are all natively
+# supported by the pinned transformers and load fine without it. A model that
+# genuinely requires remote code now fails to load LOUDLY; set
+# SEEKDEEP_TRUST_REMOTE_CODE=on (All Settings) only after you trust that repo.
+SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "off").lower() in {"1", "true", "yes", "on"}
+# PYS-3: bound chat tokenizer input so an oversized aggregated payload (e.g. 200
+# messages * 20k chars) can't spike CPU/RAM during tokenization. The char cap is
+# far above any legitimate prompt (memory caps top out ~36k chars); the token cap
+# truncates to a generous model budget. Only abusive inputs are affected.
+SEEKDEEP_CHAT_MAX_INPUT_CHARS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_CHARS", str(200_000)))
+SEEKDEEP_CHAT_MAX_INPUT_TOKENS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_TOKENS", str(16384)))
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
 # Opt-in pins to keep specific models resident in VRAM across task switches.
@@ -3243,6 +3308,18 @@ def model_install(req: ModelInstallRequest):
             ),
         }
     else:  # hf
+        # PYS-1: validate the HF repo-id SHAPE before downloading. Accept only
+        # `name` or `org/name` (alnum start, [A-Za-z0-9._-] body, at most one
+        # slash) and reject `..` — so /model/install can't be pointed at a local
+        # path, a URL, or a traversal string. Defense-in-depth alongside
+        # trust_remote_code now defaulting off.
+        if ".." in model_id or not re.match(r"^[A-Za-z0-9][\w.-]*(/[A-Za-z0-9][\w.-]*)?$", model_id):
+            _publish_model_event("model.install.failed", {
+                "model_id": model_id, "backend": "hf",
+                "role": (req.role or "").strip() or None,
+                "error": "invalid HF repo id",
+            })
+            raise HTTPException(400, "invalid HF repo id; expected 'name' or 'org/name' (letters/digits/._- only)")
         install_result = _hf_install(model_id, req.revision or "")
         install_result["backend"] = "hf"
 
@@ -4271,7 +4348,11 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     except Exception:
         text = f"{messages[0]['content']}\n\nUser: {messages[1]['content']}\nAssistant:"
 
-    inputs = chat_tokenizer(text, return_tensors="pt")
+    # PYS-3: cap the tokenizer input. Keep the start (system prompt + earliest
+    # context) on the char cap; truncate the token sequence to the model budget.
+    if len(text) > SEEKDEEP_CHAT_MAX_INPUT_CHARS:
+        text = text[:SEEKDEEP_CHAT_MAX_INPUT_CHARS]
+    inputs = chat_tokenizer(text, return_tensors="pt", truncation=True, max_length=SEEKDEEP_CHAT_MAX_INPUT_TOKENS)
     inputs = move_inputs(inputs, first_model_device(chat_model))
 
     gen_kwargs = {
@@ -4790,7 +4871,7 @@ def image(req: ImageRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_image_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -4854,7 +4935,7 @@ def img2img(req: Img2ImgRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_img2img_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5050,7 +5131,7 @@ def upscale(req: UpscaleRequest):
         png_bytes = encode_image_bytes(img, "PNG")
         ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
         safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
-        out_path = OUTPUT_DIR / safe_name
+        out_path = _output_path(safe_name)
         out_path.write_bytes(selected["bytes"])
         result = {
             "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
@@ -5167,7 +5248,7 @@ def upscale(req: UpscaleRequest):
             png_bytes = encode_image_bytes(img, "PNG")
             ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
             safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
-            out_path = OUTPUT_DIR / safe_name
+            out_path = _output_path(safe_name)
             out_path.write_bytes(selected["bytes"])
             return {
                 "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
@@ -5279,7 +5360,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_pix2pix_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5560,7 +5641,7 @@ def inpaint_endpoint(req: InpaintRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_inpaint_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5612,7 +5693,7 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_mask_preview_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     mask_img.save(out_path)
 
     return {
@@ -5652,6 +5733,10 @@ def chart(req: ChartRequest):
     buckets = req.day_buckets or {}
     if not buckets:
         return JSONResponse(status_code=400, content={"error": "No day_buckets data."})
+    # PYS-5: bound the render. A stats chart only needs ~30-90 daily points;
+    # refuse a payload that would pin matplotlib. (Label strings clamped below.)
+    if len(buckets) > 400:
+        return JSONResponse(status_code=400, content={"error": "too many day_buckets (max 400)"})
 
     # Sort dates and fill gaps with zeros so the chart is contiguous.
     sorted_dates = sorted(buckets.keys())
@@ -5684,9 +5769,11 @@ def chart(req: ChartRequest):
     ax.yaxis.label.set_color("#dcddde")
     ax.xaxis.label.set_color("#dcddde")
 
-    title = req.title
+    # PYS-5: clamp caller-supplied label strings so an oversized title/guild
+    # name can't bloat the render.
+    title = str(req.title or "")[:200]
     if req.guild_name:
-        title += f"  •  {req.guild_name}"
+        title += f"  •  {str(req.guild_name)[:120]}"
     ax.set_title(title, color="#ffffff", fontsize=13, pad=10)
     ax.legend(loc="upper left", facecolor="#36393f", edgecolor="#40444b",
               labelcolor="#dcddde", fontsize=9)

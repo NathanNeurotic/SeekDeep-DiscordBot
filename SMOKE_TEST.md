@@ -4,12 +4,17 @@ Run after any source change to verify nothing regressed. Each step has an explic
 
 ## 0. Automated preflight
 
-The fast path — runs the three regression layers in one command:
+The fast path — runs all regression layers in one command:
 
-- [ ] `npm run preflight` exits 0 with `3 ok · 0 fail`
-   - `js` stage: `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`
-   - `py` stage: `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`
+- [ ] `npm run preflight` exits 0 with `0 fail` (up to `8 ok`; stages whose tooling is absent — e.g. `rust` without cargo, `gui-smoke` without fastapi — report as skipped rather than ok)
+   - `js` stage: `node --check` on every shipped JS file (`index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/*.js`, …)
+   - `html-js` stage: `node --check` on every inline `<script>` block in `gui/*.html`
+   - `py` stage: `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, and the two release-signing scripts
    - `smoke` stage: `node smoke_test.mjs` reports all checks passing (the current count may rise as regression checks are added)
+   - `gui-smoke` stage: `python scripts/smoke_gui_endpoints.py` (self-skips when fastapi/httpx/pydantic absent)
+   - `rust` stage: `cargo check` on `src-tauri` (skip-with-warn when cargo / GTK libs absent)
+   - `docs` stage: fail-closed doc-drift guards
+   - `coverage` stage: `docs/ENDPOINT_COVERAGE.md` drift check
 
 If preflight fails, do not proceed to live-Discord smoke. Fix the failure first.
 

@@ -623,7 +623,7 @@ Full preflight (recommended after any source change):
 npm run preflight
 ```
 
-Runs five stages — `js` (node --check on shipped JS), `html-js` (node --check on every inline `<script>` block in `gui/*.html`), `py` (python -m py_compile), `smoke` (`node smoke_test.mjs`), and `gui-smoke` (`python scripts/smoke_gui_endpoints.py`) — in one go. Exit code 0 only when every stage passes. The `smoke` stage prints the live check total at the end of its run.
+Runs eight stages in order — `js` (node --check on shipped JS), `html-js` (node --check on every inline `<script>` block in `gui/*.html`), `py` (python -m py_compile on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, and the two release-signing scripts), `smoke` (`node smoke_test.mjs`), `gui-smoke` (`python scripts/smoke_gui_endpoints.py`), `rust` (`cargo check` on `src-tauri`; skip-with-warn when cargo/GTK libs are absent), `docs` (fail-closed doc-drift guards), and `coverage` (`docs/ENDPOINT_COVERAGE.md` drift check) — in one go. Exit code 0 only when every stage passes (or was skipped). The `smoke` stage prints the live check total at the end of its run.
 
 Individual checks:
 
@@ -841,7 +841,7 @@ The project is git-tracked from `v10.0-baseline` onward. The old, broken `.git/`
 git log --oneline
 git tag                 # v10.0-baseline tags the first commit
 git status              # see local changes
-npm run preflight       # 5 stages: js, html-js, py, smoke, gui-smoke
+npm run preflight       # 8 stages: js, html-js, py, smoke, gui-smoke, rust, docs, coverage
 npm run smoke           # smoke test only (no Discord, no model load)
 ```
 

@@ -1593,6 +1593,14 @@ def main() -> int:
         check("POST /model/install with empty model_id -> 400",
               r.status_code == 400, f"got {r.status_code}")
 
+        # PYS-1: hf repo-id shape validation — paths / URLs / traversal refused.
+        for bad in ("../../etc/passwd", "http://evil.example/x", "/abs/path", "a/b/c", "evil model id"):
+            r = cl.post("/model/install",
+                        json={"backend": "hf", "model_id": bad},
+                        headers={_TOKEN_HEADER: token})
+            check(f"POST /model/install rejects invalid hf repo id {bad!r} -> 400",
+                  r.status_code == 400, f"got {r.status_code}")
+
         r = cl.post("/model/install",
                     json={"backend": "nonsense", "model_id": "x"},
                     headers={_TOKEN_HEADER: token})

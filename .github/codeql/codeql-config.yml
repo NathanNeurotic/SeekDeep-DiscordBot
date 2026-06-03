@@ -1,0 +1,20 @@
+name: "SeekDeep CodeQL config"
+
+# Query suite: security-extended gives stronger-than-default SECURITY coverage
+# without the maintainability/style "notes" suite (security-and-quality), which on
+# a 24k-line monolith produces a firehose of low-signal nits (empty-except,
+# unneeded-defensive-code, …) that bury the security findings. Security is the
+# point of running CodeQL here; the monolith cleanup is tracked separately.
+queries:
+  - uses: security-extended
+
+# Test harnesses and e2e specs deliberately contain adversarial fixtures — e.g.
+# catastrophic-backtracking regex strings fed to the auto-react compiler purely to
+# prove it REJECTS them (smoke_test.mjs), plus crafted payloads in the endpoint
+# smoke tests. Those strings are never reachable by untrusted runtime input, so
+# scanning them only yields false positives. Production code (index.js, gui/*.js,
+# local_ai_server.py, gui_endpoints.py, lib/*.js, …) is still fully analyzed.
+paths-ignore:
+  - smoke_test.mjs
+  - e2e
+  - scripts/smoke_gui_endpoints.py

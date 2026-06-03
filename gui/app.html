@@ -908,7 +908,20 @@
           </div>
         </div>
 
-        
+
+        <!-- Keep-resident controls, surfaced HERE on the Model manager (they
+             previously lived only in Config → VRAM & cache, so users had to hunt
+             for them). Self-contained: hydrates from /config + POSTs on toggle.
+             Same LOCAL_*_KEEP_RESIDENT env keys as the Config pane toggles. -->
+        <div style="display:flex; gap:18px; align-items:center; margin-bottom:12px; padding:10px 14px; background:rgba(2,6,15,0.55); border:1px solid var(--stroke); border-radius:var(--r-md); flex-wrap:wrap;">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.14em; color:var(--hull-3); text-transform:uppercase;">Keep resident</span>
+          <label style="display:flex; align-items:center; gap:7px; font-size:12px; color:var(--hull-2); cursor:pointer;">Chat <div class="toggle" data-resident-key="LOCAL_CHAT_KEEP_RESIDENT" title="Pin the chat model in VRAM"></div></label>
+          <label style="display:flex; align-items:center; gap:7px; font-size:12px; color:var(--hull-2); cursor:pointer;">Image <div class="toggle" data-resident-key="LOCAL_IMAGE_KEEP_RESIDENT" title="Pin SDXL in VRAM"></div></label>
+          <label style="display:flex; align-items:center; gap:7px; font-size:12px; color:var(--hull-2); cursor:pointer;">Vision <div class="toggle" data-resident-key="LOCAL_VISION_KEEP_RESIDENT" title="Pin the vision model in VRAM"></div></label>
+          <span id="mmResidentNote" class="tiny muted" style="margin-left:auto;">Pin a model in VRAM (zero reload cost). Saves immediately · takes effect after the AI server restarts.</span>
+        </div>
+
+
         <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 12px; padding: 10px 14px; background: rgba(2,6,15,0.55); border: 1px solid var(--stroke); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; flex-wrap: wrap;">
           <span><span class="m-backend hf" style="margin-right:4px;">HF</span> hugging face · local</span>
           <span><span class="m-backend ollama" style="margin-right:4px;">OL</span> ollama daemon</span>
@@ -6612,5 +6625,46 @@ root.render(/*#__PURE__*/React.createElement(App, null));
 
 <script src="config-render.js" defer></script>
 <script src="nav.js" defer></script>
+<script>
+  // Model manager · keep-resident toggles (self-contained, surfaced on the Model
+  // pane so users don't hunt for them in Config). Hydrate from /config; POST the
+  // single changed LOCAL_*_KEEP_RESIDENT key on toggle (nav.js adds the token).
+  (function () {
+    var base = (typeof window.SEEKDEEP_BASE === 'string') ? window.SEEKDEEP_BASE : location.origin;
+    var ctls = Array.prototype.slice.call(document.querySelectorAll('[data-resident-key]'));
+    if (!ctls.length) return;
+    function toast(tone, title, body) {
+      try { if (window.SeekDeepNotify && window.SeekDeepNotify.toast) window.SeekDeepNotify.toast({ tone: tone, title: title, body: body, ttl: 6000 }); } catch (e) {}
+    }
+    function truthy(v) { v = String(v == null ? '' : v).toLowerCase(); return v === 'on' || v === 'true' || v === '1' || v === 'yes'; }
+    fetch(base + '/config', { signal: AbortSignal.timeout(5000) })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var env = (d && d.env) || {};
+        ctls.forEach(function (t) { t.classList.toggle('on', truthy(env[t.getAttribute('data-resident-key')])); });
+      })
+      .catch(function () {});
+    ctls.forEach(function (t) {
+      t.addEventListener('click', function () {
+        var key = t.getAttribute('data-resident-key');
+        var on = !t.classList.contains('on');
+        t.classList.toggle('on', on);
+        var upd = {}; upd[key] = on ? 'on' : 'off';
+        fetch(base + '/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: upd }),
+          signal: AbortSignal.timeout(8000),
+        }).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          toast('good', 'Saved', key + ' = ' + (on ? 'on' : 'off') + ' · restart the AI server to apply.');
+        }).catch(function (e) {
+          t.classList.toggle('on', !on);
+          toast('bad', 'Save failed', String((e && e.message) || e));
+        });
+      });
+    });
+  })();
+</script>
 </body>
 </html>

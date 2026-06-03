@@ -151,6 +151,12 @@ check('reactrule ReDoS: /(\\d+)+/ rejected → null', T.seekdeepCompileReactionP
 check('reactrule ReDoS: 250-char pattern rejected → null', T.seekdeepCompileReactionPattern('/' + 'a'.repeat(250) + '/') === null);
 check('reactrule ReDoS: safe /bug.*report/i still compiles + matches', T.seekdeepCompileReactionPattern('/bug.*report/i')?.test('a bug report') === true);
 check('reactrule ReDoS: safe /(foo|bar)/ not falsely rejected', T.seekdeepCompileReactionPattern('/(foo|bar)/')?.test('bar') === true);
+// BOT-1: alternation-overlap repeated group `(a|a)*` bypassed the old nested-only
+// detector and froze the event loop ~32s. Now rejected as a repeated group.
+check('reactrule ReDoS: /(a|a)*$/ (alternation overlap) rejected → null', T.seekdeepCompileReactionPattern('/(a|a)*$/') === null);
+check('reactrule ReDoS: /(ab)+/ (any repeated group) rejected → null', T.seekdeepCompileReactionPattern('/(ab)+/') === null);
+check('reactrule ReDoS: /(x|y){1,9}/ (bounded repeated group) rejected → null', T.seekdeepCompileReactionPattern('/(x|y){1,9}/') === null);
+check('reactrule ReDoS: safe optional group /(?:ab)?c/ still compiles', T.seekdeepCompileReactionPattern('/(?:ab)?c/')?.test('c') === true);
 
 console.log('10. Fence-aware chunker (real splitDiscordText).');
 const helpBlocks = [];
@@ -2194,6 +2200,53 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
     } catch (e) { pinnedBody = `ERR:${e.message}`; }
     server.close();
     check('dns-pin: http.Agent routes a fake hostname to the pinned IP (mechanism works)', pinnedBody === 'pinned-ok', pinnedBody);
+  }
+}
+
+// -- PERSIST-2/3: readJsonSafe quarantines a corrupt file instead of silently
+//    returning empty (which the next write would persist over = data loss). --
+if (typeof T.readJsonSafe === 'function' && typeof T.writeJsonAtomic === 'function') {
+  const pfs = await import('node:fs');
+  const pos = await import('node:os');
+  const ppath = await import('node:path');
+  const dir = pfs.mkdtempSync(ppath.join(pos.tmpdir(), 'sd-persist-'));
+  const f = ppath.join(dir, 'data.json');
+  T.writeJsonAtomic(f, { users: { a: 1 } });
+  const back = T.readJsonSafe(f, { users: {} });
+  check('persist: writeJsonAtomic + readJsonSafe round-trip', !!(back && back.users && back.users.a === 1));
+  // Corrupt the file → must quarantine + return fallback, NOT overwrite-with-empty.
+  pfs.writeFileSync(f, '{ not valid json ', 'utf8');
+  const fb = T.readJsonSafe(f, { users: {} });
+  const quarantined = pfs.readdirSync(dir).some((n) => n.includes('.corrupt-'));
+  check('persist: corrupt file returns the fallback', !!(fb && typeof fb.users === 'object' && Object.keys(fb.users).length === 0));
+  check('persist: corrupt file is QUARANTINED, original moved aside (no silent wipe)', quarantined && !pfs.existsSync(f));
+  try { pfs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+
+// -- BOT-2: image-queue admission bounds pending depth + per-user in-flight jobs,
+//    while admin/priority jobs bypass the caps. --
+if (typeof T.seekdeepImageQueueAdmission === 'function' && globalThis.__seekdeepImageQueueState) {
+  const qs = globalThis.__seekdeepImageQueueState;
+  const savedPending = qs.pending;
+  const { maxPending, maxPerUser } = T.imageQueueConstants || {};
+  if (maxPending > 0 && maxPerUser > 0 && maxPending > maxPerUser) {
+    try {
+      qs.pending = [];
+      check('queue admission: empty queue admits', T.seekdeepImageQueueAdmission('u1').ok === true);
+      // Per-user cap: the user at their limit is refused; a different user is not.
+      qs.pending = Array.from({ length: maxPerUser }, () => ({ job: { userId: 'u1' } }));
+      const userBlocked = T.seekdeepImageQueueAdmission('u1');
+      check('queue admission: per-user cap blocks the over-limit user', userBlocked.ok === false && userBlocked.reason === 'user-limit');
+      check('queue admission: per-user cap is per-user (other user still admitted)', T.seekdeepImageQueueAdmission('u2').ok === true);
+      // Global cap: a full queue refuses even a brand-new user.
+      qs.pending = Array.from({ length: maxPending }, (_, i) => ({ job: { userId: `bulk_${i}` } }));
+      const full = T.seekdeepImageQueueAdmission('brand_new_user');
+      check('queue admission: global pending cap blocks when full', full.ok === false && full.reason === 'queue-full');
+      // Priority/admin jobs bypass the caps even when the queue is full.
+      check('queue admission: priority job bypasses a full queue', T.seekdeepImageQueueAdmission('admin', { isPriority: true }).ok === true);
+    } finally {
+      qs.pending = savedPending;
+    }
   }
 }
 

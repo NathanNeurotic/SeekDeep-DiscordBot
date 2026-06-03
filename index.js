@@ -1344,8 +1344,52 @@ function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = filePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, seekdeepJsonStringifySafe(data, 2) + '\n', 'utf8');
+  // PERSIST-3: fsync the temp file before the rename so a power loss can't leave
+  // a zero-length / torn file behind — the readers (readJsonSafe) treat an
+  // unparseable file as empty, so a non-durable write is a silent-data-loss risk.
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, seekdeepJsonStringifySafe(data, 2) + '\n');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, filePath);
+  // Best-effort directory fsync so the rename entry itself is durable. Fails on
+  // Windows (can't open a dir) — swallow; the file fsync above is the main win.
+  try {
+    const dfd = fs.openSync(dir, 'r');
+    try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+  } catch {}
+}
+
+// PERSIST-2: read a JSON data file safely. On a parse failure (corrupt/truncated
+// file — e.g. a crash mid-write before PERSIST-3 landed), QUARANTINE the bad file
+// to <path>.corrupt-<ts> and log LOUDLY instead of silently returning the empty
+// fallback — which the next write would then persist over the original, wiping
+// the user's data forever with no trace. Returns `fallback` when the file is
+// missing or after quarantining a corrupt one.
+function readJsonSafe(filePath, fallback) {
+  let raw;
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    console.warn(`[SeekDeep] readJsonSafe: could not read ${path.basename(filePath)}: ${err?.message || err}`);
+    return fallback;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    try {
+      const quarantine = `${filePath}.corrupt-${Date.now()}`;
+      fs.renameSync(filePath, quarantine);
+      console.error(`[SeekDeep] readJsonSafe: ${path.basename(filePath)} is corrupt and was QUARANTINED to ${path.basename(quarantine)} (parse error: ${err?.message || err}). Using the empty fallback — your data was NOT overwritten.`);
+    } catch (qerr) {
+      console.error(`[SeekDeep] readJsonSafe: ${path.basename(filePath)} is corrupt AND could not be quarantined (${qerr?.message || qerr}). Refusing to overwrite — fix or remove the file manually.`);
+    }
+    return fallback;
+  }
 }
 
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
@@ -4340,6 +4384,39 @@ function seekdeepImageQueueCurrentPosition() {
   return seekdeepImageQueueState.pending.length + (seekdeepImageQueueState.active ? 1 : 0) + 1;
 }
 
+// BOT-2: bound the image queue so a spammed /image (or a runaway caller) cannot
+// grow `pending` without limit. 0 disables a cap. These are soft caps enforced at
+// the user-facing entry point (seekdeepSendImageWithButtons); admin / priority
+// jobs and the regenerate/emergency buttons bypass them.
+const SEEKDEEP_IMAGE_QUEUE_MAX_PENDING = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_QUEUE_MAX_PENDING || 50));
+const SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER || 5));
+
+function seekdeepImageQueueAdmission(userId, { isPriority = false } = {}) {
+  if (isPriority) return { ok: true };
+  const pending = seekdeepImageQueueState.pending || [];
+  if (SEEKDEEP_IMAGE_QUEUE_MAX_PENDING > 0 && pending.length >= SEEKDEEP_IMAGE_QUEUE_MAX_PENDING) {
+    return {
+      ok: false,
+      reason: 'queue-full',
+      text: `The image queue is full right now (${pending.length}/${SEEKDEEP_IMAGE_QUEUE_MAX_PENDING} waiting). Please try again in a moment.`,
+    };
+  }
+  if (SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER > 0 && userId) {
+    let mine = 0;
+    for (const entry of pending) {
+      if (String(entry?.job?.userId || '') === String(userId)) mine += 1;
+    }
+    if (mine >= SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER) {
+      return {
+        ok: false,
+        reason: 'user-limit',
+        text: `You already have ${mine} image job${mine === 1 ? '' : 's'} queued (limit ${SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER}). Let those finish before adding more.`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 function seekdeepCreateImageQueueJob({ source = 'unknown', userId = '', channelId = '', prompt = '', width = 1024, height = 1024, seed = null } = {}) {
   seekdeepImageQueueState.sequence += 1;
 
@@ -4931,7 +5008,6 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   // the working-loop key prefix uses the same convention.
   const loopKeyPrefix = isInteraction ? 'slash-image' : 'image';
   const targetId = isInteraction ? target?.id : target?.id;
-  const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
   const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
     source: isInteraction ? 'slash' : 'message',
@@ -4942,6 +5018,23 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
     height,
     seed,
   });
+
+  // BOT-2: refuse to grow the queue without bound. Checked before the typing /
+  // working loop starts so a rejected request leaves no dangling state. Admin /
+  // priority jobs (emergency buttons) bypass the cap.
+  const seekdeepQueueAdmission = seekdeepImageQueueAdmission(userId, { isPriority: Boolean(job.priorityAdmin) });
+  if (!seekdeepQueueAdmission.ok) {
+    seekdeepLogRoute('image-queue-limit', seekdeepQueueAdmission.reason);
+    seekdeepStopTypingSafelyForMessage(target);
+    return await seekdeepReplyToTarget(target, {
+      content: seekdeepAppendResponseFooter(seekdeepQueueAdmission.text, {
+        startedAt: requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+    });
+  }
+
+  const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
 
   const startNotice = seekdeepImageQueueAckText(job, position);
   const ackLoadingGif = seekdeepLoadingGifAttachment();
@@ -13534,7 +13627,7 @@ const SEEKDEEP_RESERVED_PERSONA_KEYWORDS = new Set(['reset', 'show', 'create', '
 function seekdeepReadCustomPersonas() {
   try {
     if (!fs.existsSync(SEEKDEEP_CUSTOM_PERSONAS_PATH)) return { personas: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_CUSTOM_PERSONAS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_CUSTOM_PERSONAS_PATH, { personas: {} });
     if (!parsed || typeof parsed !== 'object') return { personas: {} };
     if (!parsed.personas || typeof parsed.personas !== 'object') parsed.personas = {};
     return parsed;
@@ -13576,7 +13669,7 @@ function seekdeepResolvePersonaTone(slug) {
 function seekdeepReadPersonaOverrides() {
   try {
     if (!fs.existsSync(SEEKDEEP_PERSONA_OVERRIDES_PATH)) return { channels: {}, guilds: {}, global: null };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PERSONA_OVERRIDES_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_PERSONA_OVERRIDES_PATH, { channels: {}, guilds: {}, global: null });
     if (!parsed || typeof parsed !== 'object') return { channels: {}, guilds: {}, global: null };
     if (!parsed.channels || typeof parsed.channels !== 'object') parsed.channels = {};
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
@@ -14079,7 +14172,7 @@ const SEEKDEEP_KNOWN_PRESETS = {
 function seekdeepReadMemoryPresets() {
   try {
     if (!fs.existsSync(SEEKDEEP_MEMORY_PRESETS_PATH)) return { users: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_MEMORY_PRESETS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_MEMORY_PRESETS_PATH, { users: {} });
     if (!parsed || typeof parsed !== 'object') return { users: {} };
     if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
     return parsed;
@@ -14192,7 +14285,7 @@ const SEEKDEEP_USER_FACT_MAX_CHARS = Math.max(40, Math.min(2000, Number(process.
 function seekdeepReadUserFacts() {
   try {
     if (!fs.existsSync(SEEKDEEP_USER_FACTS_PATH)) return { users: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_USER_FACTS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_USER_FACTS_PATH, { users: {} });
     if (!parsed || typeof parsed !== 'object') return { users: {} };
     if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
     return parsed;
@@ -14360,7 +14453,7 @@ const SEEKDEEP_TEMPLATE_PROMPT_MAX = 2000;
 function seekdeepReadPromptTemplates() {
   try {
     if (!fs.existsSync(SEEKDEEP_PROMPT_TEMPLATES_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_PROMPT_TEMPLATES_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_PROMPT_TEMPLATES_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     return parsed;
@@ -15762,7 +15855,7 @@ const SEEKDEEP_SERVER_STATS_PATH = path.join(__dirname, 'data', 'server-stats.js
 function seekdeepReadServerStats() {
   try {
     if (!fs.existsSync(SEEKDEEP_SERVER_STATS_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_SERVER_STATS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_SERVER_STATS_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     return parsed;
@@ -16246,7 +16339,7 @@ const SEEKDEEP_BUILTIN_REACTIONS_DEFAULT = {
 function seekdeepReadAutoReactions() {
   try {
     if (!fs.existsSync(SEEKDEEP_AUTO_REACTIONS_PATH)) return { guilds: {} };
-    const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_AUTO_REACTIONS_PATH, 'utf8'));
+    const parsed = readJsonSafe(SEEKDEEP_AUTO_REACTIONS_PATH, { guilds: {} });
     if (!parsed || typeof parsed !== 'object') return { guilds: {} };
     if (!parsed.guilds || typeof parsed.guilds !== 'object') parsed.guilds = {};
     // Backfill default emoji/threshold onto any built-in that has state but is
@@ -16556,8 +16649,21 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
 // nested-quantifier shapes, and FAIL CLOSED (a rejected/invalid non-empty pattern
 // matches nothing — see seekdeepRuleMatches).
 const SEEKDEEP_REACT_PATTERN_MAX = 200;
+// BOT-1: cap how much message text a user-supplied react pattern is tested
+// against. Bounds the worst case for any pattern the detector still allows
+// (e.g. polynomial `.*a.*a` shapes have no repeated group, so they pass the
+// detector but stay cheap on a bounded input). Discord messages are <=4000.
+const SEEKDEEP_REACT_MATCH_MAX_CHARS = Number(process.env.SEEKDEEP_REACT_MATCH_MAX_CHARS || 2000);
 function seekdeepReactPatternRedosRisk(src) {
-  return /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)   // (…+…)+  (…*…)*
+  // BOT-1: a quantifier that REPEATS a group — `(…)*`, `(…)+`, `(…){n[,m]}` — is
+  // the necessary ingredient for catastrophic (exponential) backtracking. The
+  // old detector only caught groups that ALSO had a quantifier inside, so
+  // alternation-overlap like `(a|a)*` (no inner quantifier) slipped through and
+  // could freeze the event loop for tens of seconds. Reject ALL repeated groups;
+  // a bounded optional group `(…)?` is safe and still allowed.
+  return /\)\s*[*+]/.test(src)                       // (…)*  (…)+
+      || /\)\s*\{/.test(src)                         // (…){n}  (…){n,}  (…){n,m}
+      || /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)    // (…+…)+  (…*…)*  (kept)
       || /\([^()]*[+*}][^()]*\)\s*\{/.test(src)      // (…+…){n,}
       || /[+*]\)\s*[+*]/.test(src);                  // …+)+   …*)*
 }
@@ -16570,7 +16676,7 @@ function seekdeepReactPatternRejectReason(pattern = '') {
   const src = rx ? rx[1] : raw;
   if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return `pattern too long (max ${SEEKDEEP_REACT_PATTERN_MAX} chars)`;
   if (rx) {
-    if (seekdeepReactPatternRedosRisk(src)) return 'pattern has nested quantifiers that can hang the bot (rejected)';
+    if (seekdeepReactPatternRedosRisk(src)) return 'pattern repeats a group (e.g. (…)+ / (…){n}) which can hang the bot — rejected';
     try { new RegExp(src, rx[2].replace(/[^gimsuy]/g, '') || 'i'); }
     catch (e) { return 'invalid regex: ' + (e?.message || e); }
   }
@@ -16609,7 +16715,9 @@ function seekdeepRuleMatches(rule, message, content) {
     // CLOSED so a bad rule reacts to nothing rather than to every message.
     return !String(rule.pattern || '').trim();
   }
-  return rule._compiled.test(content);
+  // BOT-1: bound the input the user pattern runs against (defence-in-depth on
+  // top of the repeated-group rejection in the compiler).
+  return rule._compiled.test(String(content).slice(0, SEEKDEEP_REACT_MATCH_MAX_CHARS));
 }
 
 // Resolve a stored rule emoji into something message.react() accepts. Handles:
@@ -17238,7 +17346,15 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
       if (isZip) {
         const JSZip = await seekdeepEmojiVaultLoadJSZip();
         const zip = await JSZip.loadAsync(Buffer.from(ab));
-        const files = Object.values(zip.files).filter((f) => !f.dir && /\.(png|gif|webp|jpe?g)$/i.test(f.name));
+        // BOT-3: zip-bomb guards. Cap entry count + per-entry decompressed size
+        // (Discord emoji are <=256KB; 1MB is generous headroom) so a small
+        // malicious zip can't expand to GBs in memory. Check the declared
+        // uncompressed size BEFORE reading the entry.
+        const MAX_IMPORT_ENTRIES = 500;
+        const MAX_EMOJI_BYTES = 1024 * 1024;
+        const allFiles = Object.values(zip.files).filter((f) => !f.dir && /\.(png|gif|webp|jpe?g)$/i.test(f.name));
+        if (allFiles.length > MAX_IMPORT_ENTRIES) failures.push(`zip has ${allFiles.length} entries; processing the first ${MAX_IMPORT_ENTRIES}`);
+        const files = allFiles.slice(0, MAX_IMPORT_ENTRIES);
         for (const file of files) {
           // Filename is `<name>__<id>.<ext>`; strip __ID to recover original name.
           const base = String(file.name).split('/').pop() || file.name;
@@ -17247,8 +17363,11 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
           const safe = rawName.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
           if (!safe) { failed += 1; failures.push(`${base}: bad name`); continue; }
           if (existing.has(safe.toLowerCase())) { skipped += 1; continue; }
+          const usize = file?._data?.uncompressedSize;
+          if (typeof usize === 'number' && usize > MAX_EMOJI_BYTES) { failed += 1; failures.push(`${safe}: entry too large (${usize} B)`); continue; }
           try {
             const data = await file.async('nodebuffer');
+            if (data.length > MAX_EMOJI_BYTES) { failed += 1; failures.push(`${safe}: too large`); continue; }
             await guild.emojis.create({ attachment: data, name: safe });
             added += 1;
             existing.add(safe.toLowerCase());
@@ -17260,7 +17379,8 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
       } else {
         // JSON manifest path.
         const parsed = JSON.parse(Buffer.from(ab).toString('utf8'));
-        const incoming = Array.isArray(parsed.emojis) ? parsed.emojis : [];
+        // BOT-3: cap entry count so a huge manifest can't spawn unbounded work.
+        const incoming = (Array.isArray(parsed.emojis) ? parsed.emojis : []).slice(0, 500);
         for (const item of incoming) {
           const rawName = String(item?.name || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
           const url = String(item?.url || (item?.id ? `https://cdn.discordapp.com/emojis/${item.id}.${item.animated ? 'gif' : 'png'}` : '')).trim();
@@ -23022,6 +23142,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
       dynamicMaxChars: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS,
       dynamicCacheTtlMs: SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS,
     },
+    // BOT-2: image-queue admission (pending/per-user cap enforcement)
+    seekdeepImageQueueAdmission,
+    imageQueueConstants: {
+      maxPending: SEEKDEEP_IMAGE_QUEUE_MAX_PENDING,
+      maxPerUser: SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER,
+    },
     // Force-react picker constants (so tests can read them without re-declaring)
     forceReactConstants: {
       bucketSize: SEEKDEEP_FORCE_REACT_BUCKET_SIZE,
@@ -23192,6 +23318,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     SEEKDEEP_PROMPTS_SHARE_BODY_MAX,
     SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS,
     // AUD-002: SSRF fetch policy
+    // PERSIST-2/3: safe JSON read (quarantine on corrupt) + atomic write
+    readJsonSafe,
+    writeJsonAtomic,
     seekdeepValidateFetchTarget,
     seekdeepClassifyBlockedIp,
     seekdeepFetchWithLimits,

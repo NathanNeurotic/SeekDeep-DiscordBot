@@ -1,6 +1,6 @@
 # SeekDeep GUI · Integration
 
-This folder contains the SeekDeep GUI surfaces — 16 HTML files + shared `styles.css` + `assets/`. They can be opened directly via `file://` (the live probes try `http://127.0.0.1:7865` and fall back to canned mocks), but **the recommended deployment is to serve them from `local_ai_server.py` at `/gui/`** so the same-origin live probes work without CORS hacks.
+This folder contains the SeekDeep GUI surfaces — 24 HTML files + shared `styles.css` + `assets/`. They can be opened directly via `file://` (the live probes try `http://127.0.0.1:7865` and fall back to canned mocks), but **the recommended deployment is to serve them from `local_ai_server.py` at `/gui/`** so the same-origin live probes work without CORS hacks.
 
 ## TL;DR
 
@@ -75,7 +75,7 @@ The token model is broader than the original "three write routes". Current `gui_
 
 - **Writes are tokened** — `POST /config`, `POST /launcher/*`, `POST /model/warm`, and the other mutating routes require the `X-SeekDeep-Token` header.
 - **Sensitive reads are tokened** — `GET /logs/tail`, `GET /logs/stream`, and the sensitive `GET /data/*.json` files (e.g. `server-stats.json`, `auto-reactions.json`, `archive-snapshot.json`, `prompt-templates.json`) carry Discord/guild/user IDs and require the token. `/logs/stream` (and the `/events` WebSocket) accept the token via a `?token=` query param because EventSource/WebSocket clients cannot set request headers.
-- **Open reads** — only non-sensitive status endpoints stay open so the GUI can render before the token loads: `/health`, `/gpu`, `/config/status`.
+- **Open reads** — the *sensitive* surface is token-gated; a number of non-sensitive status/read endpoints remain open so the GUI can render before the token loads (e.g. `/health`, `/gpu`, `/config/status`). See `docs/ENDPOINT_COVERAGE.md` for the full list.
 - **`/token`** is loopback/browser-origin guarded — a caller proxying port 7865 from off-box gets `403` even if it can reach everything else.
 
 **Bootstrap:**

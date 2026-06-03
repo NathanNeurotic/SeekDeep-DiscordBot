@@ -282,7 +282,7 @@ Audited all 5 image pipelines on 2026-05-19. Parameters listed are what the Node
 ### 6. Inpainting quality improvements ✅ tuned
 CLIPSeg mask: threshold 0.4->0.3, MaxFilter(21) dilation, GaussianBlur(8) feathering. Inpaint params: strength 0.95, guidance 5.0, steps 30, negative prompt now sent. CLIPSeg remains a lightweight model — future upgrade path is SAM/GroundingDINO.
 **Remaining improvement ideas:**
-  - [ ] Mask preview option (`mask_preview:true`)
+  - [x] Mask preview option (`mask_preview:true`) — shipped in Phase C (`@SeekDeep mask preview <target>`)
   - [ ] Multi-prompt CLIPSeg for complex targets
   - [ ] Stronger segmentation model (SAM, GroundingDINO)
 
@@ -386,6 +386,8 @@ Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-cha
 - **Role of Mask Preview**: Exposing the mask preview helper command (`@SeekDeep mask preview <target>`) allows testing/debugging CLIPSeg boundaries locally before spending GPU cycles on full diffusion inpainting.
 
 ## Persistent Memory Roadmap
+
+> **Already shipped (basic tier):** the explicit `@SeekDeep remember <fact>` / `recall` / `forget #N | <substring> | all` commands already exist — facts persist to `data/user-facts.json` (gitignored, atomic writes; 25 facts/user, 500 chars/fact) and are injected into the chat system prompt via `seekdeepComposeUserSystemBlock`. What remains deferred below is the *richer* vector-backed / semantically-retrieved version (per-channel memories, embeddings-based injection, opt-out switches).
 
 ### 1. Current State: Rolling Memory
 Currently, SeekDeep utilizes in-memory rolling buffers (`getRecentContext`, `remember`) which maintain conversational state in RAM per-channel/thread. When the bot restarts, or after active contexts expire from memory, this state is lost.
