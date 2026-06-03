@@ -143,6 +143,14 @@
       backdrop-filter: blur(3px);
     }
     .overlay.hidden, .timer.hidden, .banner.hidden { display: none; }
+    .menu-sprite {
+      display: block; margin: 0 auto 2px; height: clamp(150px, 23vh, 230px); width: auto;
+      pointer-events: none;
+      filter: drop-shadow(0 0 30px rgba(45, 212, 255, 0.55));
+      animation: spriteFloat 3.4s ease-in-out infinite;
+    }
+    .menu-sprite.hidden { display: none !important; }
+    @keyframes spriteFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
     .ov-card { max-width: 560px; padding: 0 26px; margin: 0 auto; text-align: center; }
     .ov-kicker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.32em; color: var(--cyan); text-transform: uppercase; }
     .ov-title { margin: 8px 0 0; font-size: clamp(40px, 8vw, 84px); line-height: 0.9; letter-spacing: -0.06em; text-shadow: 0 0 40px rgba(45,212,255,0.4); }
@@ -244,6 +252,33 @@
       .hud-val { font-size: 18px; }
       .foot { display: none; }
     }
+
+    /* ---- touch controls (mobile, landscape twin-stick) ---- */
+    .touch-ui { position: absolute; inset: 0; z-index: 6; pointer-events: none; display: none; }
+    body.touch .touch-ui.on { display: block; }
+    .touch-zone { position: absolute; top: 0; bottom: 0; width: 46%; pointer-events: auto; touch-action: none; }
+    .touch-zone.move { left: 0; } .touch-zone.aim { right: 0; }
+    .touch-stick { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+      border: 2px solid rgba(109,240,255,0.45); background: radial-gradient(circle, rgba(45,212,255,0.10), transparent 70%);
+      opacity: 0; transition: opacity .12s; pointer-events: none; }
+    .touch-stick.aim { border-color: rgba(255,209,102,0.5); background: radial-gradient(circle, rgba(255,178,77,0.10), transparent 70%); }
+    .touch-stick.show { opacity: 1; }
+    .touch-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; transform: translate(-50%,-50%); border-radius: 50%;
+      background: radial-gradient(circle at 50% 35%, #eafdff, #2dd4ff 70%); box-shadow: 0 0 18px rgba(45,212,255,0.7); }
+    .touch-knob.aim { background: radial-gradient(circle at 50% 35%, #fff6e0, #ffb24d 70%); box-shadow: 0 0 18px rgba(255,178,77,0.7); }
+    .tbtn { pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+      border: 2px solid rgba(109,240,255,0.5); border-radius: 50%; background: rgba(2,12,26,0.5); color: var(--cyan-2);
+      font-family: var(--mono); font-weight: 700; font-size: 12px; letter-spacing: .03em;
+      display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px); }
+    .tbtn.charge { position: absolute; right: 26px; bottom: 28px; width: 96px; height: 96px; border-color: rgba(255,255,255,0.6); color: #fff; }
+    .tbtn.charge.charging { background: rgba(45,212,255,0.3); box-shadow: 0 0 24px rgba(45,212,255,0.85); }
+    .tbtn.charge.held { transform: scale(0.93); }
+    .touch-sys { position: absolute; right: 16px; top: 14px; display: flex; gap: 10px; pointer-events: none; }
+    .tbtn.sys { width: 46px; height: 46px; font-size: 18px; }
+    .rotate-hint { position: absolute; inset: 0; z-index: 40; display: none; place-items: center; text-align: center;
+      background: rgba(2,6,15,0.97); color: var(--cyan-2); font-family: var(--mono); font-size: 18px; letter-spacing: .14em; }
+    .rotate-hint div { line-height: 1.8; font-size: 34px; }
+    body.touch.portrait .rotate-hint { display: grid; }
   </style>
 </head>
 <body>
@@ -292,8 +327,20 @@
         <div class="banner hidden" id="banner"></div>
       </div>
 
+      <div class="touch-ui" id="touch-ui" aria-hidden="true">
+        <div class="touch-zone move" id="touch-move"><div class="touch-stick" id="ts-move"><div class="touch-knob"></div></div></div>
+        <div class="touch-zone aim" id="touch-aim"><div class="touch-stick aim" id="ts-aim"><div class="touch-knob aim"></div></div></div>
+        <button class="tbtn charge" id="tbtn-charge" type="button">CHARGE</button>
+        <div class="touch-sys">
+          <button class="tbtn sys" id="tbtn-mute" type="button">🔊</button>
+          <button class="tbtn sys" id="tbtn-pause" type="button">⏸</button>
+        </div>
+      </div>
+      <div class="rotate-hint" id="rotate-hint"><div>⟳<br />Rotate to landscape</div></div>
+
       <div class="overlay" id="overlay">
         <div class="ov-card">
+          <canvas id="menu-sprite" class="menu-sprite hidden" width="346" height="361" aria-hidden="true"></canvas>
           <div class="ov-kicker" id="ov-kicker">SEEKDEEP'S</div>
           <h1 class="ov-title" id="ov-title">DATA DASH</h1>
           <p class="ov-sub" id="ov-sub"></p>
@@ -310,6 +357,7 @@
           </div>
           <div class="ov-controls" id="ov-controls">SPACE to lift · LEFT-CLICK to shoot · P to pause</div>
           <div class="ov-controls" id="mute-status" style="margin-top:6px;">[M] SOUND: ON</div>
+          <div class="ov-controls" id="credit" style="margin-top:10px;">© NathanNeurotic 2026 · <a href="https://www.nathanneurotic.com/" target="_blank" rel="noopener" style="color:var(--cyan-2);text-decoration:none;">nathanneurotic.com</a> · NEURALOTICS</div>
 
           <div class="scoreboard" id="scoreboard"></div>
         </div>
@@ -345,7 +393,7 @@
           </div>
           <div class="ctrl-row">
             <span class="ctrl-name">AIM&nbsp;/&nbsp;FIRE</span>
-            <span class="ctrl-keys">mouse aims · L-click fires (100KB)</span>
+            <span class="ctrl-keys">mouse aims · L-click fires (25KB)</span>
           </div>
           <div class="ctrl-row">
             <span class="ctrl-name">CHARGE SHOT</span>
@@ -364,45 +412,28 @@
     </div>
 
     <div class="foot">
-      <span>SeekDeep · DATA Dash — reskinnable arcade prototype</span>
+      <span>© NathanNeurotic 2026 · <a href="https://www.nathanneurotic.com/" target="_blank" rel="noopener">nathanneurotic.com</a> · NEURALOTICS</span>
       <span>edit <a href="datadash.config.js">datadash.config.js</a> to retheme</span>
     </div>
   </div>
 
-  <!-- Discord Embedded App SDK bootstrap.
-       Static-page safe: the game still runs normally outside Discord.
-       Activity-safe: the SDK is bundled locally as ./discord-sdk.bundle.js, so launch does not depend on a third-party CDN. -->
+  <!-- Discord Embedded App SDK — lets this run as a Discord Activity. Guarded so it
+       also works as a plain web page (outside Discord it just no-ops). -->
   <script>
     window.SEEKDEEP_DISCORD_CLIENT_ID = "1500739883046670346";
   </script>
   <script type="module">
     (async () => {
-      const params = new URLSearchParams(location.search);
-      const launchedByDiscord = params.has("frame_id") || params.has("instance_id");
-      window.__seekdeepDiscordActivity = {
-        launchedByDiscord,
-        sdkReady: false,
-        clientId: window.SEEKDEEP_DISCORD_CLIENT_ID,
-        params: Object.fromEntries(params.entries()),
-        error: null,
-      };
-
-      // Only attempt the handshake when launched as a Discord Activity.
-      // This keeps the same files usable as a normal GitHub Pages web game.
-      if (!launchedByDiscord) return;
-
       try {
-        const { DiscordSDK } = await import("./discord-sdk.bundle.js");
+        const params = new URLSearchParams(location.search);
+        // Only attempt the handshake when actually launched inside Discord.
+        if (!params.get("frame_id")) return;
+        const { DiscordSDK } = await import("https://esm.sh/@discord/embedded-app-sdk@1.9.0");
         const sdk = new DiscordSDK(window.SEEKDEEP_DISCORD_CLIENT_ID);
         await sdk.ready();
         window.__discordSDK = sdk;
-        window.__seekdeepDiscordActivity.sdkReady = true;
         document.documentElement.classList.add("discord-activity-ready");
-      } catch (e) {
-        window.__seekdeepDiscordActivity.error = String(e && (e.stack || e.message || e));
-        document.documentElement.classList.add("discord-activity-sdk-error");
-        console.warn("SeekDeep Discord Activity SDK initialization failed:", e);
-      }
+      } catch (e) { /* not in Discord / SDK unavailable — run as normal web page */ }
     })();
   </script>
   <script src="datadash.config.js"></script>
