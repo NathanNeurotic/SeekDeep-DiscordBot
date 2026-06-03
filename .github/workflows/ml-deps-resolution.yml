@@ -18,6 +18,10 @@
 
 name: ml-deps-resolution
 
+# CI-6: least-privilege token — this job only reads the repo.
+permissions:
+  contents: read
+
 on:
   schedule:
     # Mondays 07:00 UTC — catch upstream drift early in the week.
