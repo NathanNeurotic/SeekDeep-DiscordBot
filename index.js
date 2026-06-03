@@ -5024,7 +5024,7 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   // priority jobs (emergency buttons) bypass the cap.
   const seekdeepQueueAdmission = seekdeepImageQueueAdmission(userId, { isPriority: Boolean(job.priorityAdmin) });
   if (!seekdeepQueueAdmission.ok) {
-    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-queue-limit', seekdeepQueueAdmission.reason);
+    seekdeepLogRoute('image-queue-limit', seekdeepQueueAdmission.reason);
     seekdeepStopTypingSafelyForMessage(target);
     return await seekdeepReplyToTarget(target, {
       content: seekdeepAppendResponseFooter(seekdeepQueueAdmission.text, {

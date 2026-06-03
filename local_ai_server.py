@@ -348,6 +348,8 @@ def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> Non
                         p.unlink()
                         continue
                     except OSError:
+                        # Locked or already removed by another process; keep it as
+                        # a survivor and let a later sweep retry.
                         pass
                 survivors.append((mtime, p))
             entries = survivors
@@ -357,8 +359,11 @@ def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> Non
                 try:
                     p.unlink()
                 except OSError:
+                    # Best-effort delete; a locked/already-gone file is fine to skip.
                     pass
     except Exception:
+        # Pruning is pure housekeeping; never let a scratch-dir hiccup surface
+        # into the image request path.
         pass
 
 

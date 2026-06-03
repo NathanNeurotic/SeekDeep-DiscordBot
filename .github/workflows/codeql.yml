@@ -35,7 +35,9 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          # Query suite + test-fixture exclusions live in the config file so they
+          # apply to both the PR and scheduled scans.
+          config-file: ./.github/codeql/codeql-config.yml
       - name: Analyze
         uses: github/codeql-action/analyze@v3
         with:
