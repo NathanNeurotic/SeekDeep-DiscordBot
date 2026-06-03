@@ -11096,6 +11096,9 @@ function seekdeepLooksLikeVisualRequest(prompt = '') {
 // SEEKDEEP_GROUNDED_IMAGE_CONTEXT_START
 const SEEKDEEP_RECENT_IMAGE_SUBJECTS = globalThis.__seekdeepRecentImageSubjects || new Map();
 globalThis.__seekdeepRecentImageSubjects = SEEKDEEP_RECENT_IMAGE_SUBJECTS;
+// BOT-2: cap like the sibling recent-* maps so this can't grow one entry per
+// (channel,user) forever (the prior version had no cap or stale eviction).
+const SEEKDEEP_RECENT_IMAGE_SUBJECTS_MAX = 200;
 
 function seekdeepImageContextKeyFromMessage(message) {
   const channelId = message?.channel?.id || 'unknown-channel';
@@ -11109,10 +11112,12 @@ function seekdeepRememberImageSubjectPrompt(message, prompt = '') {
   if (!clean || seekdeepIsGenericImageFollowupPrompt(clean)) return;
   if (clean.length < 3 || clean.length > 300) return;
 
-  SEEKDEEP_RECENT_IMAGE_SUBJECTS.set(seekdeepImageContextKeyFromMessage(message), {
-    prompt: clean,
-    at: Date.now(),
-  });
+  const subjectKey = seekdeepImageContextKeyFromMessage(message);
+  SEEKDEEP_RECENT_IMAGE_SUBJECTS.delete(subjectKey); // LRU touch
+  SEEKDEEP_RECENT_IMAGE_SUBJECTS.set(subjectKey, { prompt: clean, at: Date.now() });
+  while (SEEKDEEP_RECENT_IMAGE_SUBJECTS.size > SEEKDEEP_RECENT_IMAGE_SUBJECTS_MAX) {
+    SEEKDEEP_RECENT_IMAGE_SUBJECTS.delete(SEEKDEEP_RECENT_IMAGE_SUBJECTS.keys().next().value);
+  }
 }
 
 // SEEKDEEP_PENDING_IMAGE_SUBJECT_FOLLOWUP_V1_START
@@ -11263,12 +11268,15 @@ function seekdeepResolveImagePromptFromContext(message, prompt = '') {
     return { prompt: clean, resolvedFromContext: false, missingContext: false };
   }
 
-  const item = SEEKDEEP_RECENT_IMAGE_SUBJECTS.get(seekdeepImageContextKeyFromMessage(message));
+  const subjectKey = seekdeepImageContextKeyFromMessage(message);
+  const item = SEEKDEEP_RECENT_IMAGE_SUBJECTS.get(subjectKey);
   const ttlMs = Number(process.env.SEEKDEEP_IMAGE_CONTEXT_TTL_MS || 10 * 60 * 1000);
 
   if (item?.prompt && (Date.now() - Number(item.at || 0)) <= ttlMs) {
     return { prompt: item.prompt, resolvedFromContext: true, missingContext: false };
   }
+  // BOT-2: drop the stale entry on read so expired subjects don't linger.
+  if (item) SEEKDEEP_RECENT_IMAGE_SUBJECTS.delete(subjectKey);
 
   return { prompt: clean, resolvedFromContext: false, missingContext: true };
 }
@@ -19015,6 +19023,11 @@ function seekdeepLogRoute(route, prompt = '') {
 // SEEKDEEP_CANONICAL_MEMORY_HELPERS_START
 const SEEKDEEP_MEMORY_COMPAT_STORE_V13 = globalThis.__seekdeepMemoryCompatStoreV13 || new Map();
 globalThis.__seekdeepMemoryCompatStoreV13 = SEEKDEEP_MEMORY_COMPAT_STORE_V13;
+// BOT-1: bound the number of (channel,user) conversation keys so the store can't
+// grow without limit on a long-running multi-guild bot (each key holds up to the
+// 50-entry / 36 KB window). `remember()` re-inserts a touched key at the end (LRU)
+// and evicts the oldest keys once over this cap.
+const SEEKDEEP_MEMORY_STORE_MAX_KEYS = Math.max(50, Number(process.env.SEEKDEEP_MEMORY_STORE_MAX_KEYS || 1000));
 
 function seekdeepNormalizeUserTextSafeV12(value = '') {
   return normalizeUserText(value);
@@ -19101,7 +19114,12 @@ function remember(key, role, value) {
     trimmed = trimmed.slice(1);
   }
 
+  // BOT-1: LRU touch (re-insert at the end) + evict oldest keys over the cap.
+  SEEKDEEP_MEMORY_COMPAT_STORE_V13.delete(key);
   SEEKDEEP_MEMORY_COMPAT_STORE_V13.set(key, trimmed);
+  while (SEEKDEEP_MEMORY_COMPAT_STORE_V13.size > SEEKDEEP_MEMORY_STORE_MAX_KEYS) {
+    SEEKDEEP_MEMORY_COMPAT_STORE_V13.delete(SEEKDEEP_MEMORY_COMPAT_STORE_V13.keys().next().value);
+  }
 }
 
 const SEEKDEEP_IMAGE_WORKFLOW_NOISE_RE = /^(?:Queued image locally for:|Prepared image prompt choices for:|Generated image locally for:|Regenerating latest cached image|Posted recent images|What should I generate an image of|Queued pending image subject|Using recent context as image subject|Bare confirmation with no pending image subject)/i;
@@ -23295,6 +23313,13 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
   // pure, side-effect-free helpers — nothing that touches the Discord client,
   // network, or filesystem.
   globalThis.__seekdeepTest = {
+    // BOT-1/BOT-2: in-memory store eviction (unbounded-growth regression guards)
+    remember,
+    seekdeepRememberImageSubjectPrompt,
+    memoryStoreConstants: {
+      maxKeys: SEEKDEEP_MEMORY_STORE_MAX_KEYS,
+      recentImageSubjectsMax: SEEKDEEP_RECENT_IMAGE_SUBJECTS_MAX,
+    },
     // String / regex predicates
     splitDiscordText,
     seekdeepIsFrustrationPrompt,

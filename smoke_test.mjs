@@ -2292,6 +2292,30 @@ if (typeof T.seekdeepMutateJson === 'function') {
   }
 }
 
+// -- BOT-1/BOT-2: in-memory stores must evict past their cap (unbounded-growth guards). --
+if (typeof T.remember === 'function' && typeof T.seekdeepRememberImageSubjectPrompt === 'function' && T.memoryStoreConstants) {
+  const { maxKeys, recentImageSubjectsMax } = T.memoryStoreConstants;
+  const store = globalThis.__seekdeepMemoryCompatStoreV13;
+  if (store && maxKeys > 0) {
+    store.clear();
+    for (let i = 0; i < maxKeys + 50; i++) T.remember('user:c:' + i, 'user', 'hello ' + i);
+    check('mem-evict: conversation store capped at maxKeys', store.size === maxKeys);
+    check('mem-evict: newest conversation key retained', store.has('user:c:' + (maxKeys + 49)));
+    check('mem-evict: oldest conversation key evicted', !store.has('user:c:0'));
+    store.clear();
+  }
+  const subs = globalThis.__seekdeepRecentImageSubjects;
+  if (subs && recentImageSubjectsMax > 0) {
+    subs.clear();
+    for (let i = 0; i < recentImageSubjectsMax + 50; i++) {
+      T.seekdeepRememberImageSubjectPrompt({ channel: { id: 'c' + i }, author: { id: 'u' } }, 'a red apple number ' + i);
+    }
+    check('mem-evict: recent-image-subjects capped', subs.size === recentImageSubjectsMax);
+    check('mem-evict: oldest image-subject evicted', !subs.has('c0:u'));
+    subs.clear();
+  }
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

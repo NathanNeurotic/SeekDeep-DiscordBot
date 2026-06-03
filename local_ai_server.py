@@ -4588,6 +4588,7 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
         return [img], "image"
 
     # Video path: sample up to 8 frames.
+    tmp = None
     try:
         import imageio.v3 as iio
         tmp = TEMP_DIR / f"vision_{int(time.time() * 1000)}{ext or '.mp4'}"
@@ -4600,15 +4601,20 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
                 frames.append(img.convert("RGB"))
             if len(frames) >= 8:
                 break
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
         if not frames:
             raise RuntimeError("No frames could be decoded from video.")
         return frames, "video"
     except Exception as exc:
         raise RuntimeError(f"Could not decode video. Try a PNG/JPG first, or install imageio-ffmpeg. Details: {exc}")
+    finally:
+        # PYS-6: always remove the temp file, even when imiter() raises mid-decode
+        # (the old cleanup sat after the loop, so a corrupt upload leaked it until
+        # the 72 h temp/ sweep).
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def generate_vision_answer(prompt: str, frames: list[Image.Image], media_kind: str, max_new_tokens: int, temperature: float) -> str:
