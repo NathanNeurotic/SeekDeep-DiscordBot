@@ -334,6 +334,20 @@ stage('docs', () => {
         problems.push(`version drift: package.json ${pkgVer} != Cargo.lock seekdeep ${lockVer} (run cargo build to sync the lock)`);
       }
     }
+    // CI-2: package-lock.json drifted unnoticed (it lagged ~19 patch versions)
+    // because the version-sync guard didn't include it. npm ci tolerates a
+    // root-version mismatch, so it never red-X'd CI — guard it explicitly.
+    const pkgLockPath = path.join(ROOT, 'package-lock.json');
+    if (pkgVer && existsSync(pkgLockPath)) {
+      let plVer = null;
+      try {
+        const pl = JSON.parse(readFileSync(pkgLockPath, 'utf8'));
+        plVer = pl.version || pl.packages?.['']?.version || null;
+      } catch { problems.push('package-lock.json is not valid JSON'); }
+      if (plVer && pkgVer !== plVer) {
+        problems.push(`version drift: package.json ${pkgVer} != package-lock.json ${plVer} (run npm install --package-lock-only)`);
+      }
+    }
   }
 
   // (e) AUD-005: canonical-doc drift guards. The code is safer than the docs
