@@ -332,6 +332,12 @@ HF_LOCAL_FILES_ONLY = os.getenv("HF_LOCAL_FILES_ONLY", "false").lower() in {"1",
 # genuinely requires remote code now fails to load LOUDLY; set
 # SEEKDEEP_TRUST_REMOTE_CODE=on (All Settings) only after you trust that repo.
 SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "off").lower() in {"1", "true", "yes", "on"}
+# PYS-3: bound chat tokenizer input so an oversized aggregated payload (e.g. 200
+# messages * 20k chars) can't spike CPU/RAM during tokenization. The char cap is
+# far above any legitimate prompt (memory caps top out ~36k chars); the token cap
+# truncates to a generous model budget. Only abusive inputs are affected.
+SEEKDEEP_CHAT_MAX_INPUT_CHARS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_CHARS", str(200_000)))
+SEEKDEEP_CHAT_MAX_INPUT_TOKENS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_TOKENS", str(16384)))
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
 # Opt-in pins to keep specific models resident in VRAM across task switches.
@@ -4285,7 +4291,11 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     except Exception:
         text = f"{messages[0]['content']}\n\nUser: {messages[1]['content']}\nAssistant:"
 
-    inputs = chat_tokenizer(text, return_tensors="pt")
+    # PYS-3: cap the tokenizer input. Keep the start (system prompt + earliest
+    # context) on the char cap; truncate the token sequence to the model budget.
+    if len(text) > SEEKDEEP_CHAT_MAX_INPUT_CHARS:
+        text = text[:SEEKDEEP_CHAT_MAX_INPUT_CHARS]
+    inputs = chat_tokenizer(text, return_tensors="pt", truncation=True, max_length=SEEKDEEP_CHAT_MAX_INPUT_TOKENS)
     inputs = move_inputs(inputs, first_model_device(chat_model))
 
     gen_kwargs = {
@@ -5666,6 +5676,10 @@ def chart(req: ChartRequest):
     buckets = req.day_buckets or {}
     if not buckets:
         return JSONResponse(status_code=400, content={"error": "No day_buckets data."})
+    # PYS-5: bound the render. A stats chart only needs ~30-90 daily points;
+    # refuse a payload that would pin matplotlib. (Label strings clamped below.)
+    if len(buckets) > 400:
+        return JSONResponse(status_code=400, content={"error": "too many day_buckets (max 400)"})
 
     # Sort dates and fill gaps with zeros so the chart is contiguous.
     sorted_dates = sorted(buckets.keys())
@@ -5698,9 +5712,11 @@ def chart(req: ChartRequest):
     ax.yaxis.label.set_color("#dcddde")
     ax.xaxis.label.set_color("#dcddde")
 
-    title = req.title
+    # PYS-5: clamp caller-supplied label strings so an oversized title/guild
+    # name can't bloat the render.
+    title = str(req.title or "")[:200]
     if req.guild_name:
-        title += f"  •  {req.guild_name}"
+        title += f"  •  {str(req.guild_name)[:120]}"
     ax.set_title(title, color="#ffffff", fontsize=13, pad=10)
     ax.legend(loc="upper left", facecolor="#36393f", edgecolor="#40444b",
               labelcolor="#dcddde", fontsize=9)

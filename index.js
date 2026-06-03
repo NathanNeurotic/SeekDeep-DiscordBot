@@ -17297,7 +17297,15 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
       if (isZip) {
         const JSZip = await seekdeepEmojiVaultLoadJSZip();
         const zip = await JSZip.loadAsync(Buffer.from(ab));
-        const files = Object.values(zip.files).filter((f) => !f.dir && /\.(png|gif|webp|jpe?g)$/i.test(f.name));
+        // BOT-3: zip-bomb guards. Cap entry count + per-entry decompressed size
+        // (Discord emoji are <=256KB; 1MB is generous headroom) so a small
+        // malicious zip can't expand to GBs in memory. Check the declared
+        // uncompressed size BEFORE reading the entry.
+        const MAX_IMPORT_ENTRIES = 500;
+        const MAX_EMOJI_BYTES = 1024 * 1024;
+        const allFiles = Object.values(zip.files).filter((f) => !f.dir && /\.(png|gif|webp|jpe?g)$/i.test(f.name));
+        if (allFiles.length > MAX_IMPORT_ENTRIES) failures.push(`zip has ${allFiles.length} entries; processing the first ${MAX_IMPORT_ENTRIES}`);
+        const files = allFiles.slice(0, MAX_IMPORT_ENTRIES);
         for (const file of files) {
           // Filename is `<name>__<id>.<ext>`; strip __ID to recover original name.
           const base = String(file.name).split('/').pop() || file.name;
@@ -17306,8 +17314,11 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
           const safe = rawName.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
           if (!safe) { failed += 1; failures.push(`${base}: bad name`); continue; }
           if (existing.has(safe.toLowerCase())) { skipped += 1; continue; }
+          const usize = file?._data?.uncompressedSize;
+          if (typeof usize === 'number' && usize > MAX_EMOJI_BYTES) { failed += 1; failures.push(`${safe}: entry too large (${usize} B)`); continue; }
           try {
             const data = await file.async('nodebuffer');
+            if (data.length > MAX_EMOJI_BYTES) { failed += 1; failures.push(`${safe}: too large`); continue; }
             await guild.emojis.create({ attachment: data, name: safe });
             added += 1;
             existing.add(safe.toLowerCase());
@@ -17319,7 +17330,8 @@ async function seekdeepHandleEmojiVaultCommand(message, raw = '') {
       } else {
         // JSON manifest path.
         const parsed = JSON.parse(Buffer.from(ab).toString('utf8'));
-        const incoming = Array.isArray(parsed.emojis) ? parsed.emojis : [];
+        // BOT-3: cap entry count so a huge manifest can't spawn unbounded work.
+        const incoming = (Array.isArray(parsed.emojis) ? parsed.emojis : []).slice(0, 500);
         for (const item of incoming) {
           const rawName = String(item?.name || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
           const url = String(item?.url || (item?.id ? `https://cdn.discordapp.com/emojis/${item.id}.${item.animated ? 'gif' : 'png'}` : '')).trim();
