@@ -208,6 +208,10 @@
         <span><span id="hUpdated">never</span></span>
       </div>
 
+      <div style="padding: 10px 14px; margin-bottom: 12px; background: rgba(45,212,255,0.05); border: 1px solid color-mix(in oklab, var(--cyan-1) 30%, transparent); border-radius: var(--r-md); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; letter-spacing: 0.02em; color: var(--hull-2);">
+        <strong style="color: var(--cyan-1);">Memory</strong> = durable facts the bot keeps about each user and injects into every reply (see the live preview on the right). Add, edit, or remove them here — or use <span class="mono" style="color:var(--cyan-1)">@SeekDeep remember / recall / forget</span> in Discord.
+      </div>
+
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
         <div class="meter-card">
           <div class="lbl"><span>FACTS</span><em id="mFactsLbl">0 / 25</em></div>
@@ -250,8 +254,8 @@
         <!-- chips rendered by JS -->
       </div>
 
-      <h3 class="section-h" style="margin-top: 24px;"><span>INJECTED PROMPT · LIVE PREVIEW</span></h3>
-      <div class="sub" style="margin-bottom: 12px;"><span>▸ what the chat call sees for this user</span></div>
+      <h3 class="section-h" style="margin-top: 24px;"><span>WHY THIS MATTERS — THIS IS WHAT THE MODEL SEES</span></h3>
+      <div class="sub" style="margin-bottom: 12px;"><span>▸ injected prompt · live preview of what the chat call sees for this user</span></div>
       <div class="sample-prompt" id="injectionPreview"><span class="sys"># system prompt</span>
 You are SeekDeep. <span class="inj">(no presets active)</span>
 
@@ -441,7 +445,14 @@ You are SeekDeep. <span class="inj">(no presets active)</span>
     const host = $('#rUsers');
     const q = (query || '').toLowerCase();
     const filtered = users.filter(u => !q || (u.display + ' ' + u.user_id).toLowerCase().includes(q));
-    if (!filtered.length) { host.innerHTML = '<div class="empty" style="padding:16px 8px;">no users match</div>'; return; }
+    if (!filtered.length) {
+      // Distinguish a genuinely-empty store (zero saved users) from a
+      // search that filtered everyone out — the guidance differs.
+      host.innerHTML = users.length
+        ? '<div class="empty" style="padding:16px 8px;">no users match</div>'
+        : '<div class="empty" style="padding:20px 12px; line-height:1.7; text-transform:none; letter-spacing:0.04em;">No saved memory yet — run <span style="color:var(--cyan-1)">@SeekDeep remember &lt;a fact about you&gt;</span> in Discord, then click Refresh.</div>';
+      return;
+    }
     // XSS-safe: build with createElement + textContent so a malicious display
     // name ("<img onerror=…>") can't escape the row markup. user_id IDs go
     // via setAttribute (escaped) instead of attribute interpolation.

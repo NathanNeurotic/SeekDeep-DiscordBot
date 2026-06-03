@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — Prompt marketplace</title>
+<title>SeekDeep — Prompt templates</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -215,6 +215,16 @@
         <div class="sub" style="margin-top: 4px;">▸ <span id="tplSource">data/prompt-templates.json</span> · <span id="tplBackendTag" style="color: var(--hull-3);">probing…</span></div>
       </div>
 
+      <!-- STEP 1 · storage scope — the unlock for all create/edit/delete/duplicate writes -->
+      <div style="padding-top: 4px;">
+        <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--cyan-1); letter-spacing: 0.1em; margin-bottom: 6px; text-transform: uppercase;">▸ Step 1 · Storage scope</div>
+        <input type="text" id="tplGuildId" placeholder="guild ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 4px;" />
+        <input type="text" id="tplOwnerId" placeholder="your Discord user ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 6px;" />
+        <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.05em; line-height: 1.55;">
+          Enter your Discord server (guild) ID and your user ID to create/edit templates here. In Discord with Developer Mode on, right-click the server icon / your avatar → Copy ID.
+        </div>
+      </div>
+
       <div class="info-banner" id="tplBanner" style="background: rgba(45,212,255,0.04); border-color: color-mix(in oklab, var(--cyan-1) 22%, transparent);">
         <strong>▸ LIVE.</strong> Templates load from <span class="mono">GET /data/prompt-templates.json</span> (the bot writes this on every <span class="mono" style="color:var(--cyan-1)">@SeekDeep template save</span>). Use Discord to author/edit/share; this pane is read-only by design — Discord remains the source of truth.
       </div>
@@ -228,12 +238,9 @@
       <div class="tpl-list" id="tplList"></div>
 
       <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--stroke);">
-        <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.1em; margin-bottom: 6px; text-transform: uppercase;">▸ Storage scope</div>
-        <input type="text" id="tplGuildId" placeholder="guild ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 4px;" />
-        <input type="text" id="tplOwnerId" placeholder="your Discord user ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 8px;" />
         <button class="btn btn-ghost" style="width: 100%;" id="newBtn">+ New template</button>
         <div id="tplScopeHint" style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.1em; margin-top: 8px; line-height: 1.55;">
-          ▸ Set guild + user ID above to unlock save / delete from GUI<br>
+          ▸ Set guild + user ID (Step 1, above) to unlock save / delete from GUI<br>
           ▸ <span style="color:var(--cyan-1)">@SeekDeep template share</span> still required to post to <span class="mono" style="color:var(--cyan-1)">#prompts</span>
         </div>
       </div>
@@ -241,6 +248,9 @@
 
     <!-- ===== RIGHT · VIEWER ===== -->
     <section class="viewer">
+      <div class="info-banner">
+        <strong>What is this?</strong> Templates are reusable image-generation prompts with <span class="mono" style="color:var(--cyan-1)">{{variables}}</span>. Create them here or with <span class="mono" style="color:var(--cyan-1)">@SeekDeep template save</span>, then use them via <span class="mono" style="color:var(--cyan-1)">@SeekDeep image</span> / the <span class="mono" style="color:var(--cyan-1)">/template</span> command.
+      </div>
       <div class="v-head">
         <div>
           <h2 id="vName">— pick a template</h2>
@@ -251,7 +261,7 @@
           <button class="btn btn-ghost" id="vDup">Duplicate</button>
           <button class="btn btn-ghost" id="vDelete" style="color:var(--bad);">✕ Delete</button>
           <button class="btn btn-ghost" id="vExport">⇩ Export JSON</button>
-          <button class="btn btn-primary" id="vShare">▸ Share</button>
+          <button class="btn btn-primary" id="vShare">▸ How to share</button>
         </div>
       </div>
 
@@ -299,9 +309,10 @@
             <div><div class="f-name">Author</div><div class="f-value" id="eAuth">@offline-demo</div></div>
           </div>
           <div class="embed-body" id="eBody">…</div>
-          <div class="embed-actions">
+          <div class="embed-actions" style="align-items: center;">
             <button class="dbtn primary" id="dImport">⤓ Import to my templates</button>
             <button class="dbtn secondary">Copy raw</button>
+            <span style="font-size: 11px; color: #949ba4; font-style: italic; margin-left: 2px;">· example, not live</span>
           </div>
           <div class="footer">
             <span>scope:</span><span class="key">this server only</span>
