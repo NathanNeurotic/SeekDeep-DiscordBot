@@ -894,16 +894,14 @@
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
     }
-    // PEPE COIN — jackpot every 10 MB of gross accumulation (not while already invincible)
-    // PEPE COIN — jackpot: time-gated, at most once every pepeEverySec. The clock
-    // restarts on every spawn (collected or not) — it never queues.
+    // PEPE COIN — jackpot: spawns on the timer every pepeEverySec(+random) seconds,
+    // UNCONDITIONALLY (per Nathan). If the player can't grab it (busy / invincible /
+    // whatever), it just flies by — too bad, the next one comes on schedule.
     if (game.t >= game.nextPepeT) {
       game.nextPepeT = game.t + T.pepeEverySec + Math.random() * T.pepeRandSec;
-      if (!busy && game.invincible <= 0 && !game.pickups.some((p) => p.kind === "pepe" && !p.grabbed)) {
-        const col = colAtSpawn();
-        const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
-        game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
-      }
+      const col = colAtSpawn();
+      const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
+      game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
     }
     // ELEMENTAL EVENT — shared pool: spawn EITHER a DATA LOSS skull or a DATA
     // RECOVERY drive (coin-flip), never both, and no more than once a minute.
@@ -1171,6 +1169,7 @@
       }
       // player bullets damage bots
       for (const pb of game.playerBullets) {
+        if (b.dead) break;   // bot already destroyed this frame — stop, so later bullets don't "hit" the corpse (dupe particles/SFX)
         if (pb.dead) continue;
         if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; spawnParticles(pb.x, pb.y, C.warn, 10, 240); if (b.hp <= 0) { b.dead = true; SFX("malwareDie"); spawnParticles(b.x, b.y, C.danger, 30, 360); } }
       }
