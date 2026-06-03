@@ -417,6 +417,44 @@
     </div>
   </div>
 
+  <!-- SeekDeep integration: jump back to Control Center when this game is opened
+       from the SeekDeep GUI. Hidden when running as a Discord Activity (inside
+       Discord's iframe, Control Center isn't reachable). -->
+  <a id="sd-return-cc" href="../app.html" hidden>&#8592; CONTROL CENTER</a>
+  <style>
+    #sd-return-cc {
+      position: fixed; left: 14px; bottom: 14px; z-index: 99999;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 8px 14px; border-radius: 999px;
+      font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+      color: #bdeeff; text-decoration: none;
+      background: rgba(3, 10, 26, 0.80);
+      border: 1px solid rgba(45, 212, 255, 0.42);
+      box-shadow: 0 6px 22px rgba(0,0,0,0.5), 0 0 18px rgba(45,212,255,0.14);
+      backdrop-filter: blur(8px);
+      transition: background .15s, border-color .15s, box-shadow .15s, color .15s;
+    }
+    #sd-return-cc:hover, #sd-return-cc:focus-visible {
+      background: rgba(45,212,255,0.12); border-color: rgba(45,212,255,0.62);
+      box-shadow: 0 8px 26px rgba(0,0,0,0.55), 0 0 26px rgba(45,212,255,0.32);
+      color: #eaffff; outline: none;
+    }
+    @media (max-width: 640px) { #sd-return-cc { font-size: 10px; padding: 7px 11px; letter-spacing: .1em; } }
+  </style>
+  <script>
+    (function () {
+      try {
+        // Show the "back to Control Center" affordance only when this is NOT a
+        // Discord Activity — Discord launches with a ?frame_id and iframes the
+        // page, where Control Center isn't reachable. In the SeekDeep GUI it's a
+        // normal top-level page, so offer the way back.
+        var inDiscord = !!new URLSearchParams(location.search).get('frame_id') || window.self !== window.top;
+        if (!inDiscord) { var el = document.getElementById('sd-return-cc'); if (el) el.hidden = false; }
+      } catch (e) {}
+    })();
+  </script>
+
   <!-- Discord Embedded App SDK — lets this run as a Discord Activity. Guarded so it
        also works as a plain web page (outside Discord it just no-ops). -->
   <script>

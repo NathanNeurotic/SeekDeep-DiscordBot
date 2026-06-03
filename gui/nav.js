@@ -1413,6 +1413,7 @@
       { title: 'Personas',    path: 'personas.html'  },
       { title: 'Add a Model', path: 'add-model.html' },
       { title: 'Changelog',   path: 'changelog.html' },
+      { title: 'DATA DASH!',  path: 'activity/index.html' },
     ];
     const moreCSS = `
       .topnav .links .sd-more { position: relative; display: inline-flex; align-items: center; }
