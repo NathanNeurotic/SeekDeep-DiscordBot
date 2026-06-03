@@ -52,7 +52,14 @@ const bundleExtra = sot.bundle_extra;
 const subdirs = sot.subdirs;
 
 const errors = [];
-const setEq = (a, b) => a.length === b.length && new Set(a).size === new Set([...a, ...b]).size;
+// Gemini: sort-compare (the Set-size trick mis-passes lists with differing
+// duplicates, e.g. ['x','y','y'] vs ['x','x','y']). These lists shouldn't have
+// duplicates, but compare robustly anyway.
+const setEq = (a, b) => {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort(), y = [...b].sort();
+  return x.every((v, i) => v === y[i]);
+};
 const diff = (got, want) => ({
   missing: want.filter((x) => !got.includes(x)),
   unexpected: got.filter((x) => !want.includes(x)),

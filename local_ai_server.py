@@ -4580,7 +4580,10 @@ def load_vision_model() -> None:
 
 
 def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tuple[list[Image.Image], str]:
-    ext = Path(filename).suffix.lower()
+    # ext comes from a user-provided filename — keep only a safe extension charset
+    # so it can never become a path component (CodeQL py/path-injection; defensive,
+    # since .suffix is already separator-free).
+    ext = re.sub(r"[^A-Za-z0-9.]", "", Path(filename).suffix.lower())[:12]
     is_video = media_kind == "video" or (media_kind == "auto" and ext in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".gif"})
 
     if not is_video:
@@ -4589,12 +4592,14 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
 
     # Video path: sample up to 8 frames.
     tmp = None
+    vid_iter = None
     try:
         import imageio.v3 as iio
         tmp = TEMP_DIR / f"vision_{int(time.time() * 1000)}{ext or '.mp4'}"
         tmp.write_bytes(media_bytes)
         frames = []
-        for idx, frame in enumerate(iio.imiter(tmp)):
+        vid_iter = iio.imiter(tmp)
+        for idx, frame in enumerate(vid_iter):
             if idx % 15 == 0:
                 img = Image.fromarray(frame)
                 _check_image_pixel_budget(img, label="vision video frame")
@@ -4607,9 +4612,15 @@ def load_media_frames(media_bytes: bytes, filename: str, media_kind: str) -> tup
     except Exception as exc:
         raise RuntimeError(f"Could not decode video. Try a PNG/JPG first, or install imageio-ffmpeg. Details: {exc}")
     finally:
-        # PYS-6: always remove the temp file, even when imiter() raises mid-decode
-        # (the old cleanup sat after the loop, so a corrupt upload leaked it until
-        # the 72 h temp/ sweep).
+        # PYS-6: close the imiter generator FIRST. On Windows an early `break` leaves
+        # it suspended holding a file lock on tmp, so the unlink below would fail with
+        # PermissionError and leak the file (Gemini). Then remove the temp file on
+        # EVERY exit path (corrupt upload, early break, success).
+        if vid_iter is not None:
+            try:
+                vid_iter.close()
+            except Exception:
+                pass
         if tmp is not None:
             try:
                 tmp.unlink(missing_ok=True)

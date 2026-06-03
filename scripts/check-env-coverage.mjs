@@ -41,10 +41,11 @@ function codeKeys() {
   }
   for (const f of PY_FILES) {
     const s = read(f);
-    for (const m of s.matchAll(/os\.getenv\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/os\.environ\.get\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/os\.environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/os\.environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
+    // Gemini: `os.` optional so `from os import getenv, environ` callers are caught too.
+    for (const m of s.matchAll(/(?:os\.)?getenv\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/(?:os\.)?environ\.get\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/(?:os\.)?environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/(?:os\.)?environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
   }
   // CI-4: the Rust shell reads env too (std::env::var) — scan it so a Tauri knob
   // (e.g. SEEKDEEP_PYTHON) can't silently go undocumented.
@@ -72,11 +73,13 @@ const IGNORE_PREFIX = [];
 // Best-effort: pull a key's default value out of code, for --scaffold.
 function defaultFor(key) {
   for (const f of JS_FILES) {
-    const m = read(f).match(new RegExp('process\\.env\\.' + key + '\\s*(?:\\|\\||\\?\\?)\\s*([^\\s);,&|}]+)'));
+    // Gemini: also match bracket notation process.env['KEY'] (codeKeys does).
+    const m = read(f).match(new RegExp('process\\.env(?:\\.' + key + '|\\[\\s*[\'"]' + key + '[\'"]\\s*\\])\\s*(?:\\|\\||\\?\\?)\\s*([^\\s);,&|}]+)'));
     if (m) return m[1].replace(/^['"]|['"]$/g, '');
   }
   for (const f of PY_FILES) {
-    const m = read(f).match(new RegExp('os\\.(?:getenv|environ\\.get)\\(\\s*["\\\']' + key + '["\\\']\\s*,\\s*([^\\),]+)'));
+    // Gemini: `os.` optional + include environ.setdefault, matching codeKeys.
+    const m = read(f).match(new RegExp('(?:os\\.)?(?:getenv|environ\\.get|environ\\.setdefault)\\(\\s*["\\\']' + key + '["\\\']\\s*,\\s*([^\\),]+)'));
     if (m) return m[1].trim().replace(/^['"]|['"]$/g, '');
   }
   return '';

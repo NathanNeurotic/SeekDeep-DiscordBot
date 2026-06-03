@@ -347,15 +347,18 @@
   function refreshSrcPreview() {
     const url = $('#srcUrl').value.trim();
     const p = $('#srcPreview');
-    if (url) {
+    if (url && /^(?:https?:|data:image\/|blob:)/i.test(url)) {
       // FE-2: build the <img> via the DOM (not innerHTML + an inline onerror) so a
-      // pasted URL like `x" onerror="…` can't break out of the attribute into markup.
+      // pasted URL can't break out into markup; and only accept image-bearing schemes
+      // so a tainted value can't reach a script-capable sink (CodeQL js/xss-through-dom).
       p.textContent = '';
       const img = document.createElement('img');
       img.alt = '';
       img.addEventListener('error', () => { p.textContent = 'SOURCE URL UNREACHABLE'; });
       img.src = url;
       p.appendChild(img);
+    } else if (url) {
+      p.textContent = 'SOURCE URL UNREACHABLE';
     } else {
       p.textContent = 'DROP SOURCE IMAGE';
     }
