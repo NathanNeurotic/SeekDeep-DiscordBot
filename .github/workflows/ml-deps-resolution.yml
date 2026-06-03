@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload resolution report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ml-resolution-${{ matrix.python-version }}
           path: ml-resolution-${{ matrix.python-version }}.json
