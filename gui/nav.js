@@ -167,7 +167,16 @@
     function isOurServer(url) {
       // Relative paths (root or otherwise) are always same-origin.
       if (!/^https?:/i.test(url)) return true;
-      return url.indexOf(getBase()) === 0;
+      // GUI-1: compare ORIGINS exactly, not a prefix. A prefix match treated
+      // http://127.0.0.1:7865.evil.com/ as "ours" and would attach the
+      // X-SeekDeep-Token to it (token exfil via a user-pasted URL).
+      try {
+        var target = new URL(url);
+        var base = new URL(getBase() || location.origin, location.origin);
+        return target.origin === base.origin;
+      } catch (e) {
+        return false;
+      }
     }
     function ensureHeader(headers, name, value) {
       if (headers instanceof Headers) {
