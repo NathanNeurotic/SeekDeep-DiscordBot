@@ -16,6 +16,7 @@
 
   function resize() {
     const r = canvas.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return;   // layout not ready yet — frame() will retry (fixes first-launch white screen)
     DPR = Math.min(window.devicePixelRatio || 1, 2);
     // worldScale > 1 "zooms out": the logical play-field is larger than the
     // viewport, so more of the course is visible and the ball is smaller
@@ -89,7 +90,8 @@
       bytes: 0,
       streamed: 0,             // monotonic bytes-ever-streamed → drives spawns
       gross: 0,                // total gross accumulation (distance + collected) → Pepe
-      nextPepe: T.pepeEvery,
+      nextPepe: 0,
+      nextPepeT: T.pepeEverySec + Math.random() * T.pepeRandSec,   // first Pepe window (seconds)
       nextElementalT: 42,      // first DATA LOSS / RECOVERY event window (seconds); then ≥ elementalEvery apart
       invincible: 0,           // Pepe invincibility timer
       flashT: 0,               // full-screen flash intensity
@@ -893,12 +895,15 @@
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
     }
     // PEPE COIN — jackpot every 10 MB of gross accumulation (not while already invincible)
-    if (!busy && game.invincible <= 0 && game.gross >= game.nextPepe &&
-        !game.pickups.some((p) => p.kind === "pepe" && !p.grabbed)) {
-      game.nextPepe += T.pepeEvery;
-      const col = colAtSpawn();
-      const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
-      game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
+    // PEPE COIN — jackpot: time-gated, at most once every pepeEverySec. The clock
+    // restarts on every spawn (collected or not) — it never queues.
+    if (game.t >= game.nextPepeT) {
+      game.nextPepeT = game.t + T.pepeEverySec + Math.random() * T.pepeRandSec;
+      if (!busy && game.invincible <= 0 && !game.pickups.some((p) => p.kind === "pepe" && !p.grabbed)) {
+        const col = colAtSpawn();
+        const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
+        game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
+      }
     }
     // ELEMENTAL EVENT — shared pool: spawn EITHER a DATA LOSS skull or a DATA
     // RECOVERY drive (coin-flip), never both, and no more than once a minute.
@@ -927,7 +932,7 @@
     const spacing = kind === "database" ? T.colW * T.dbSpacingCols
                   : kind === "ddos" ? T.colW * T.ddosSpacingCols
                   : T.colW * T.pepeGridCols;
-    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: T.ddosSlots / 2, gapV: 0 };
+    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: 1 + Math.random() * (T.ddosSlots - 3), gapV: (Math.random() - 0.5) * 0.4 };
     const meta = {
       database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
       ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
@@ -955,11 +960,14 @@
       game.pickups.push({ x, y, grabbed: false, bob: Math.random() * 6, kind: "packet" });
     } else if (ev.kind === "ddos") {
       const slots = T.ddosSlots;
-      ev.gapV += (Math.random() - 0.5) * 0.7; ev.gapV = Math.max(-1, Math.min(1, ev.gapV));
+      // gentle, FOLLOWABLE drift — small bounded slope so SeekDeep can always track the gap
+      ev.gapV += (Math.random() - 0.5) * 0.32;
+      ev.gapV = Math.max(-0.38, Math.min(0.38, ev.gapV));
       ev.gapY = Math.max(1, Math.min(slots - 3, ev.gapY + ev.gapV));
       const gapSlot = Math.round(ev.gapY);
+      const wide = Math.random() < 0.28 ? 1 : 0;   // sometimes a roomier 3-slot gap (variety)
       for (let sI = 0; sI < slots; sI++) {
-        if (sI === gapSlot || sI === gapSlot + 1) continue;   // 2-slot navigable gap that meanders
+        if (sI >= gapSlot && sI <= gapSlot + 1 + wide) continue;   // navigable gap that meanders
         const y = top + span * ((sI + 0.5) / slots);
         game.bots.push({ x: x + 30, y, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: game.streamed, static: true });
       }
@@ -2852,6 +2860,7 @@
   // ---- loop ----------------------------------------------------------------
   let last = performance.now();
   function frame(now) {
+    if (!W || !H) resize();   // self-heal if the canvas sized to 0 (first-launch race)
     let dt = (now - last) / 1000;
     last = now;
     dt = Math.max(0, Math.min(0.05, dt)); // guard against negative / huge deltas

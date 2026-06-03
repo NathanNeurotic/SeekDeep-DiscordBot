@@ -201,15 +201,15 @@ window.DATADASH = {
     obsChance:         0.82,   // chance to place one when eligible
     obsSpanMin:        2,      // obstacle width (columns)
     obsSpanMax:        4,
-    obsPassage:        0.19,   // guaranteed clear channel past the chip (fraction of H)
-    obsMinHeight:      0.13,   // chip protrusion range (fraction of H)
-    obsMaxHeight:      0.36,
+    obsPassage:        0.17,   // guaranteed clear channel past the chip (fraction of H)
+    obsMinHeight:      0.16,   // chip protrusion range (fraction of H) — juts a bit more
+    obsMaxHeight:      0.42,
     obsDoubleChance:   0.16,   // chance of a top+bottom pair (squeeze you through the middle)
 
     // ---- FLYABLE LANE (error correction) ----
     // A slope-limited "safe altitude" that walls & chips may never cross, so a
     // navigable thread always exists no matter how dense/varied the layout.
-    laneMargin:        0.125,  // half-height of the protected lane (fraction of H) — a touch roomier
+    laneMargin:        0.11,   // half-height of the protected lane (fraction of H) — tighter, more dodging
     laneSlopePx:       8,      // max lane drift per column (px) — gentler, easier to track
     laneRetargetMin:   13,     // columns between lane re-aims (range)
     laneRetargetMax:   30,
@@ -269,7 +269,7 @@ window.DATADASH = {
     eventCols:         560,    // event "distance" in terrain columns (~12–16s)
     dbWaveAmp:         0.30,   // DATA Base: kb wave amplitude (fraction of H)
     dbSpacingCols:     3,      // DATA Base: columns between kb bits along the wave
-    ddosSpacingCols:   4,      // DDoS: columns between maze rows of stationary malware
+    ddosSpacingCols:   5,      // DDoS: columns between maze rows (more horizontal room = gentler, followable slopes)
     ddosSlots:         8,      // DDoS: vertical slots per maze row
     pepeGridCols:      5,      // Pepe Packets: columns between grid columns
     pepeGridRows:      6,      // Pepe Packets: rows of collectibles across the hallway
@@ -299,9 +299,10 @@ window.DATADASH = {
     chargeBulletSize:  34,     // big bullet diameter (px)
     chargeBossReduce:  6.0,    // seconds shaved per charged hit (≈4 hits to fell a boss)
 
-    // PEPE COIN — ultra-rare jackpot: every 10 MB of gross accumulation, grants
-    // 15s of total invincibility (everything you touch dies/breaks, walls included)
-    pepeEvery:         20000000, // gross bytes between Pepe spawns (20 MB — 50% rarer)
+    // PEPE COIN — jackpot: time-gated random spawn, AT MOST once every 60s of play.
+    // The clock restarts on every spawn (collected or not) — it never queues up.
+    pepeEverySec:      60,      // minimum seconds between Pepe spawns (hard cap)
+    pepeRandSec:       35,      // extra random seconds on top so timing stays unpredictable
     pepeSize:          76,
     pepeInvincible:    15,      // seconds of invincibility on collect
 
