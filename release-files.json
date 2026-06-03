@@ -1,0 +1,40 @@
+{
+  "__doc__": [
+    "DUP-1 single source of truth for the runtime file set that must stay in sync",
+    "across the four consumers below. The preflight `release-files` guard",
+    "(scripts/check-release-files.mjs) parses each consumer and fails if it drifts",
+    "from this file. When you add or remove a shipped runtime file, edit THIS file",
+    "first; preflight then names exactly which consumer lists to update.",
+    "",
+    "Consumers and what each must contain:",
+    "  gui_endpoints.py        self-updater `single_files`      == core_files",
+    "  release_signing.py      MANIFEST_SINGLE_FILES            == core_files",
+    "                          MANIFEST_SUBDIRS                 == subdirs",
+    "  src-tauri/tauri.conf.json  bundle.resources (../-prefixed) == core_files + bundle_extra + ['gui/**/*']",
+    "  src-tauri/src/sidecar.rs   extraction `let files = [...]`  == core_files + bundle_extra",
+    "",
+    "Why the asymmetry is intentional: the .env templates + the three runtime",
+    "scripts are BUNDLED + EXTRACTED (so a fresh install can read them) but not",
+    "self-updated/signed individually (gui/ and scripts/ ship as whole subdirs on",
+    "the network path). sidecar.rs does not re-extract gui/ (served from the bundle)."
+  ],
+  "core_files": [
+    "local_ai_server.py",
+    "gui_endpoints.py",
+    "warmup_local_cache.py",
+    "package.json",
+    "requirements-local.txt",
+    "requirements-ml.txt"
+  ],
+  "bundle_extra": [
+    ".env.default",
+    ".env.example",
+    "scripts/doctor.mjs",
+    "scripts/preflight.mjs",
+    "scripts/smoke_gui_endpoints.py"
+  ],
+  "subdirs": [
+    "gui",
+    "scripts"
+  ]
+}

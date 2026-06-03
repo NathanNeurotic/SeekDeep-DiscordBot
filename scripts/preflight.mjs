@@ -138,7 +138,7 @@ stage('js', () => {
   // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
   // interceptor + jump palette + SeekDeepPrompt API — a parse error there
   // silently breaks every page.
-  const targets = ['index.js', 'lib/url-fetch-policy.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/audit_endpoint_coverage.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js'];
+  const targets = ['index.js', 'lib/url-fetch-policy.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/audit_endpoint_coverage.mjs', 'scripts/check-release-files.mjs', 'scripts/check-env-coverage.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js'];
   for (const t of targets) {
     if (!existsSync(path.join(ROOT, t))) continue;
     const r = checkJsFile(t);
@@ -378,8 +378,28 @@ stage('docs', () => {
     });
   }
 
+  // DUP-1: the four runtime-file lists (self-update / signing / bundle / extract)
+  // must stay in sync with release-files.json. Delegate to the dedicated guard.
+  {
+    const rf = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'check-release-files.mjs')], { cwd: ROOT, encoding: 'utf8' });
+    if (rf.status !== 0) {
+      const msg = (rf.stderr || rf.stdout || 'release-files guard failed').trim().replace(/\s*\n\s*/g, ' ');
+      problems.push(`release-files: ${msg}`);
+    }
+  }
+
+  // DUP-3: every env var the code reads must be documented in .env.example (or be
+  // in the guard's ignore-list of system/test/build-secret keys).
+  {
+    const ec = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'check-env-coverage.mjs')], { cwd: ROOT, encoding: 'utf8' });
+    if (ec.status !== 0) {
+      const msg = (ec.stderr || ec.stdout || 'env-coverage guard failed').trim().replace(/\s*\n\s*/g, ' ');
+      problems.push(`env-coverage: ${msg}`);
+    }
+  }
+
   if (problems.length) return { ok: false, detail: problems.join(' · ') };
-  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok' };
+  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok · release-files ok · env-coverage ok' };
 });
 
 // AUD-006: endpoint→GUI/test coverage map drift guard. Regenerates the map in
