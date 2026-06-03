@@ -20,6 +20,10 @@
 
 name: preflight
 
+# CI-6: least-privilege token — this job only reads the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]

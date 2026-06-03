@@ -13,6 +13,9 @@
 // Set test mode BEFORE importing index.js — top-level statements in index.js
 // see process.env at their evaluation time.
 process.env.SEEKDEEP_TEST_MODE = '1';
+// TEST-1: shorten the cross-process file-lock timeout so the fail-open test is fast
+// + deterministic (the lock module reads this env at load time).
+process.env.SEEKDEEP_FILE_LOCK_TIMEOUT_MS = process.env.SEEKDEEP_FILE_LOCK_TIMEOUT_MS || '300';
 
 // Feature flags read at module-load time. Suite 51 exercises the mask preview
 // routing path, which is gated by SEEKDEEP_FEATURE_INPAINT. Without this flag
@@ -2287,6 +2290,16 @@ if (typeof T.seekdeepMutateJson === 'function') {
     const b3 = JSON.parse(lfs.readFileSync(lf, 'utf8'));
     check('lock: stale lock is stolen + mutate proceeds', ran && b3.users.carol === 3);
     check('lock: stale lockfile cleaned up after takeover', !lfs.existsSync(lock));
+    // TEST-1: a LIVE (fresh) lock held by "another process" — seekdeepWithFileLock
+    // waits up to the (test-shortened) timeout, then FAILS OPEN without stealing it.
+    // A rare lost update beats freezing the bot; this is COUP-1's cross-process
+    // contract (the Node side of the Node<->Python coordination).
+    lfs.writeFileSync(lock, '99999 held-by-other');
+    let failOpenRan = false;
+    T.seekdeepWithFileLock(lf, () => { failOpenRan = true; });
+    check('lock: fail-open proceeds past a live lock after timeout', failOpenRan);
+    check('lock: fail-open does NOT steal a live (non-stale) lock', lfs.existsSync(lock));
+    try { lfs.rmSync(lock, { force: true }); } catch {}
   } finally {
     try { lfs.rmSync(ldir, { recursive: true, force: true }); } catch {}
   }
