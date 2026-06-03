@@ -23,6 +23,7 @@
 //
 // On window close: child process is killed via the AppState held in tauri::State.
 
+use std::ffi::OsString;
 use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -67,12 +68,104 @@ fn quiet_command(program: &Path) -> Command {
 }
 
 /// Same as quiet_command but takes a &str (for `py`, `python3`, etc. that
-/// resolve via PATH lookup).
+/// resolve via PATH lookup). Known Windows *system* tools are pinned to their
+/// absolute System32 path first (TAU-9) — see resolve_system_tool.
 fn quiet_command_str(program: &str) -> Command {
-    let mut c = Command::new(program);
+    let mut c = Command::new(resolve_system_tool(program));
     #[cfg(windows)]
     c.creation_flags(CREATE_NO_WINDOW);
     c
+}
+
+/// TAU-9 (PATH-hijack hardening): map a known Windows *system* tool name to its
+/// absolute %SystemRoot%\System32 path, so a malicious same-named .exe planted
+/// earlier on PATH can't run in its place. Only binaries that ship with Windows
+/// are remapped; everything else (py, python3, docker, sh, …) is returned
+/// unchanged so it still resolves via PATH exactly as before. No-op off Windows.
+pub(crate) fn resolve_system_tool(program: &str) -> OsString {
+    #[cfg(windows)]
+    {
+        let base = program
+            .rsplit(|c| c == '\\' || c == '/')
+            .next()
+            .unwrap_or(program)
+            .to_ascii_lowercase();
+        let stem = base.strip_suffix(".exe").unwrap_or(&base);
+        let rel: Option<&str> = match stem {
+            "netstat" => Some("System32\\netstat.exe"),
+            "taskkill" => Some("System32\\taskkill.exe"),
+            "tasklist" => Some("System32\\tasklist.exe"),
+            "cmd" => Some("System32\\cmd.exe"),
+            "curl" => Some("System32\\curl.exe"),
+            "where" => Some("System32\\where.exe"),
+            "powershell" => Some("System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+            _ => None,
+        };
+        if let Some(rel) = rel {
+            let sysroot = std::env::var_os("SystemRoot")
+                .unwrap_or_else(|| OsString::from("C:\\Windows"));
+            let full = Path::new(&sysroot).join(rel);
+            if full.exists() {
+                return full.into_os_string();
+            }
+        }
+    }
+    OsString::from(program)
+}
+
+/// TAU-N1: load SEEKDEEP_* knobs from `<runtime>/.env` into this process's env so
+/// the Tauri shell actually honours them. The Node bot (dotenv) and Python server
+/// (python-dotenv) each load .env themselves; the Rust shell never did, so knobs
+/// set only in .env — SEEKDEEP_PYTHON, SEEKDEEP_TAURI_KEEP_BOT_ON_EXIT,
+/// SEEKDEEP_TAURI_REUSE_SIDECAR, SEEKDEEP_CLOSE_HIDES_TO_TRAY — were silently
+/// ignored. A real environment variable always wins (set-if-absent), matching
+/// dotenv's default. Only SEEKDEEP_-prefixed keys are imported: the shell has no
+/// use for the rest, and this keeps unrelated secrets (e.g. DISCORD_TOKEN) out of
+/// the shell's own environment. Call once, early in setup, before find_python /
+/// the sidecar spawn / the window+exit handlers read any of these.
+pub fn load_runtime_env(runtime: &Path) {
+    let content = match fs::read_to_string(runtime.join(".env")) {
+        Ok(c) => c,
+        Err(_) => return, // first run / no .env yet — nothing to load
+    };
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let (key, val) = match line.split_once('=') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        let key = key.trim();
+        if !key.starts_with("SEEKDEEP_") {
+            continue;
+        }
+        if !key
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
+            continue;
+        }
+        if std::env::var_os(key).is_some() {
+            continue; // a real environment variable always wins
+        }
+        let raw_val = val.trim();
+        let value = if raw_val.len() >= 2
+            && ((raw_val.starts_with('"') && raw_val.ends_with('"'))
+                || (raw_val.starts_with('\'') && raw_val.ends_with('\'')))
+        {
+            raw_val[1..raw_val.len() - 1].to_string()
+        } else {
+            // dotenv-style trailing inline comment (only when unquoted): `val # note`
+            match raw_val.find(" #") {
+                Some(i) => raw_val[..i].trim_end().to_string(),
+                None => raw_val.to_string(),
+            }
+        };
+        std::env::set_var(key, value);
+    }
 }
 
 use tauri::{AppHandle, Emitter, Manager};
