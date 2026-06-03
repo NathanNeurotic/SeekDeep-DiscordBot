@@ -16600,8 +16600,21 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
 // nested-quantifier shapes, and FAIL CLOSED (a rejected/invalid non-empty pattern
 // matches nothing — see seekdeepRuleMatches).
 const SEEKDEEP_REACT_PATTERN_MAX = 200;
+// BOT-1: cap how much message text a user-supplied react pattern is tested
+// against. Bounds the worst case for any pattern the detector still allows
+// (e.g. polynomial `.*a.*a` shapes have no repeated group, so they pass the
+// detector but stay cheap on a bounded input). Discord messages are <=4000.
+const SEEKDEEP_REACT_MATCH_MAX_CHARS = Number(process.env.SEEKDEEP_REACT_MATCH_MAX_CHARS || 2000);
 function seekdeepReactPatternRedosRisk(src) {
-  return /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)   // (…+…)+  (…*…)*
+  // BOT-1: a quantifier that REPEATS a group — `(…)*`, `(…)+`, `(…){n[,m]}` — is
+  // the necessary ingredient for catastrophic (exponential) backtracking. The
+  // old detector only caught groups that ALSO had a quantifier inside, so
+  // alternation-overlap like `(a|a)*` (no inner quantifier) slipped through and
+  // could freeze the event loop for tens of seconds. Reject ALL repeated groups;
+  // a bounded optional group `(…)?` is safe and still allowed.
+  return /\)\s*[*+]/.test(src)                       // (…)*  (…)+
+      || /\)\s*\{/.test(src)                         // (…){n}  (…){n,}  (…){n,m}
+      || /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)    // (…+…)+  (…*…)*  (kept)
       || /\([^()]*[+*}][^()]*\)\s*\{/.test(src)      // (…+…){n,}
       || /[+*]\)\s*[+*]/.test(src);                  // …+)+   …*)*
 }
@@ -16614,7 +16627,7 @@ function seekdeepReactPatternRejectReason(pattern = '') {
   const src = rx ? rx[1] : raw;
   if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return `pattern too long (max ${SEEKDEEP_REACT_PATTERN_MAX} chars)`;
   if (rx) {
-    if (seekdeepReactPatternRedosRisk(src)) return 'pattern has nested quantifiers that can hang the bot (rejected)';
+    if (seekdeepReactPatternRedosRisk(src)) return 'pattern repeats a group (e.g. (…)+ / (…){n}) which can hang the bot — rejected';
     try { new RegExp(src, rx[2].replace(/[^gimsuy]/g, '') || 'i'); }
     catch (e) { return 'invalid regex: ' + (e?.message || e); }
   }
@@ -16653,7 +16666,9 @@ function seekdeepRuleMatches(rule, message, content) {
     // CLOSED so a bad rule reacts to nothing rather than to every message.
     return !String(rule.pattern || '').trim();
   }
-  return rule._compiled.test(content);
+  // BOT-1: bound the input the user pattern runs against (defence-in-depth on
+  // top of the repeated-group rejection in the compiler).
+  return rule._compiled.test(String(content).slice(0, SEEKDEEP_REACT_MATCH_MAX_CHARS));
 }
 
 // Resolve a stored rule emoji into something message.react() accepts. Handles:

@@ -151,6 +151,12 @@ check('reactrule ReDoS: /(\\d+)+/ rejected → null', T.seekdeepCompileReactionP
 check('reactrule ReDoS: 250-char pattern rejected → null', T.seekdeepCompileReactionPattern('/' + 'a'.repeat(250) + '/') === null);
 check('reactrule ReDoS: safe /bug.*report/i still compiles + matches', T.seekdeepCompileReactionPattern('/bug.*report/i')?.test('a bug report') === true);
 check('reactrule ReDoS: safe /(foo|bar)/ not falsely rejected', T.seekdeepCompileReactionPattern('/(foo|bar)/')?.test('bar') === true);
+// BOT-1: alternation-overlap repeated group `(a|a)*` bypassed the old nested-only
+// detector and froze the event loop ~32s. Now rejected as a repeated group.
+check('reactrule ReDoS: /(a|a)*$/ (alternation overlap) rejected → null', T.seekdeepCompileReactionPattern('/(a|a)*$/') === null);
+check('reactrule ReDoS: /(ab)+/ (any repeated group) rejected → null', T.seekdeepCompileReactionPattern('/(ab)+/') === null);
+check('reactrule ReDoS: /(x|y){1,9}/ (bounded repeated group) rejected → null', T.seekdeepCompileReactionPattern('/(x|y){1,9}/') === null);
+check('reactrule ReDoS: safe optional group /(?:ab)?c/ still compiles', T.seekdeepCompileReactionPattern('/(?:ab)?c/')?.test('c') === true);
 
 console.log('10. Fence-aware chunker (real splitDiscordText).');
 const helpBlocks = [];
