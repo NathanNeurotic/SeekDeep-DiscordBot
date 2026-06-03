@@ -561,7 +561,7 @@ SEEKDEEP_IMAGE_COOLDOWN_MS=15000          # per-user image cooldown (15s default
 IMAGE_IMG2IMG_GUIDANCE_SCALE=5.0          # img2img guidance (lower than txt2img for better edits)
 SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS=900000   # Original/Refined/Both button TTL (15min)
 SEEKDEEP_PENDING_IMAGE_SUBJECT_TTL_MS=900000  # 'generate me' follow-up TTL (15min)
-SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=3600000  # refined-prompt reuse window (RE-REFINE bypasses it)
+SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS=600000   # refined-prompt reuse window — 10min as shipped in .env.default (RE-REFINE bypasses it; code fallback when unset is 3600000)
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS=45    # SDXL-friendly refinement clamp
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS=360   # SDXL-friendly refinement clamp
 

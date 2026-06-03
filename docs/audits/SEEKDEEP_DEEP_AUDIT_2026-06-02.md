@@ -1,5 +1,11 @@
 # SeekDeep Deep Audit — 2026-06-02 (whole-codebase, critical pass)
 
+> **⚠️ SUPERSEDED (2026-06-03) — most findings REMEDIATED.** Current state:
+> [SEEKDEEP_AUDIT_2026-06-03.md](SEEKDEEP_AUDIT_2026-06-03.md). PERSIST-2/3, PYS-1,
+> BOT-1, COUP-1, DUP-1/DUP-3 and the GUI XSS/auth items are fixed, and CSP dropped
+> `unsafe-eval`, since this was written. Treat as a point-in-time record — verify
+> against code before acting on any item.
+
 > Comprehensive critical audit of `NathanNeurotic/SeekDeep-DiscordBot` at **v10.36.0**
 > (commit after PR #4 merged the AUD-001…008 security work). This is a *new, from-scratch*
 > critical pass — not a recycle of `SEEKDEEP_AUDIT_2026-06-02.md` (the earlier, narrower

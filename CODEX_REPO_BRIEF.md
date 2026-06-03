@@ -17,7 +17,7 @@ Line numbers below are from the snapshot when this file was created and will dri
 - Repo root: `/mnt/c/Users/natha/SeekDeep-DiscordBot`
 - Branch at snapshot: `main`
 - Latest commit at snapshot: `7a73168 v10.31: context menus, mention commands, per-user memory, help rewrite` (historical; line/commit references in this brief are snapshot-time, not current)
-- Package version: now `10.36.0` in `package.json` (was `10.0.0-fresh-rebuild` at snapshot). Server `FastAPI(version=...)` reads from `package.json` via `_read_pkg_version()` rather than the old hard-coded literal.
+- Package version: `10.38.2` in `package.json` (was `10.0.0-fresh-rebuild` at snapshot). Server `FastAPI(version=...)` reads from `package.json` via `_read_pkg_version()` rather than the old hard-coded literal.
 - Pre-existing dirty files before this brief was created:
   - `index.js`
   - `seekdeep_launcher.bat`
