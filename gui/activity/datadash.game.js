@@ -2394,6 +2394,15 @@
       lastScoreEntry.name = (hud.scoreName.value || "").replace(/[^A-Za-z0-9_.#]/g, "").slice(0, 24) || "—";
       saveScores(); renderScores();
     });
+    // Keep keystrokes in the score-name field from reaching the global game key
+    // listeners — typing a Discord ID (a/s/d/w move, Space/Arrows) would otherwise
+    // fly the ship or restart the game. Wired here via addEventListener (not an
+    // inline onkeydown= attribute) so it survives a strict CSP: the Discord
+    // Activity iframe disallows unsafe-inline handlers.
+    if (hud.scoreName) {
+      hud.scoreName.addEventListener("keydown", (e) => e.stopPropagation());
+      hud.scoreName.addEventListener("keyup", (e) => e.stopPropagation());
+    }
 
     if (hud.ovControls) hud.ovControls.textContent = "WASD/ARROWS fly · MOUSE aim · L-CLICK fire · R-CLICK charge · P pause";
     if (hud.timerLabel) hud.timerLabel.textContent = "CLICK TO FRAG";

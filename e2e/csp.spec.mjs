@@ -57,10 +57,14 @@ test.describe('Tauri CSP (shipped policy, injected)', () => {
       try { sessionStorage.setItem('sd-setup-prompted', '1'); } catch {}
       document.addEventListener('securitypolicyviolation', (e) => {
         try {
+          // exposeFunction returns a Promise; if the page navigates right as a
+          // violation fires it rejects asynchronously (the sync catch below only
+          // guards an undefined binding), so swallow it to avoid an unhandled
+          // rejection in the page context.
           window.__sdReportCspViolation(
             `${e.violatedDirective} blocked ${e.blockedURI || 'inline'}`
             + ` @ ${e.sourceFile || ''}:${e.lineNumber || ''}`,
-          );
+          ).catch(() => {});
         } catch {}
       });
     });
