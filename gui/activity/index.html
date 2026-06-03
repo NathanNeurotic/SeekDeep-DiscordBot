@@ -301,7 +301,7 @@
 
           <div class="score-entry hidden" id="score-entry">
             <label for="score-name" class="score-entry-label">DISCORD ID</label>
-            <input id="score-name" class="score-name" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="your_discord" />
+            <input id="score-name" class="score-name" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="your_discord" onkeydown="event.stopPropagation()" onkeyup="event.stopPropagation()" />
           </div>
 
           <div class="ov-actions">

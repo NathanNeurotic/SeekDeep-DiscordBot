@@ -24,6 +24,9 @@
   function vol(key) { return (CFG.volumes && CFG.volumes[key] != null) ? CFG.volumes[key] : 1; }
 
   function trimBounds(buf) {
+    // Gemini: an empty/corrupt decode can yield 0 channels; getChannelData(0)
+    // would throw IndexSizeError. Treat it as "nothing to trim".
+    if (!buf.numberOfChannels) return { start: 0, end: buf.duration };
     var ch = buf.getChannelData(0);
     var n = ch.length, i, s = 0, e = n - 1;
     for (i = 0; i < n; i++) { if (Math.abs(ch[i]) > SILENCE) { s = i; break; } }
@@ -35,7 +38,12 @@
   }
 
   function load(key, url) {
-    return fetch(url).then(function (r) { return r.arrayBuffer(); })
+    return fetch(url).then(function (r) {
+      // Gemini: fail fast on 404/etc. so an HTML error body never reaches
+      // decodeAudioData (it would reject into the catch below anyway).
+      if (!r.ok) throw new Error("HTTP " + r.status + " for " + url);
+      return r.arrayBuffer();
+    })
       .then(function (ab) { return ctx.decodeAudioData(ab); })
       .then(function (buf) { var b = trimBounds(buf); buffers[key] = { buffer: buf, start: b.start, end: b.end }; })
       .catch(function () { /* missing/undecodable — skip silently */ });
