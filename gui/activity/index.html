@@ -4,345 +4,409 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <title>SeekDeep — Discord Activity Demo</title>
+  <title>SeekDeep's DATA Dash</title>
+  <style>
+    :root {
+      --bg: #02060f;
+      --panel: rgba(5, 13, 34, 0.74);
+      --stroke: rgba(120, 222, 255, 0.18);
+      --stroke-2: rgba(120, 222, 255, 0.34);
+      --text: #eefaff;
+      --muted: #a9bac7;
+      --dim: #6f8496;
+      --cyan: #2dd4ff;
+      --cyan-2: #6df0ff;
+      --cyan-3: #00a8e8;
+      --ok: #72ffcf;
+      --warn: #ffd166;
+      --danger: #ff5d73;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background:
+        radial-gradient(circle at 18% 12%, rgba(45, 212, 255, 0.18), transparent 30%),
+        radial-gradient(circle at 78% 18%, rgba(0, 82, 204, 0.22), transparent 32%),
+        linear-gradient(180deg, var(--bg), #01030a 76%);
+      color: var(--text);
+      font-family: var(--font);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .abyss {
+      position: fixed; inset: 0; pointer-events: none; opacity: 0.4;
+      background:
+        linear-gradient(90deg, rgba(45, 212, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(45, 212, 255, 0.04) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: radial-gradient(circle at 50% 20%, black 0%, transparent 78%);
+    }
 
+    .wrap {
+      width: min(1180px, calc(100% - 28px));
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      padding: 12px 16px;
+      border: 1px solid var(--stroke);
+      border-radius: 999px;
+      background: rgba(2, 6, 15, 0.72);
+      backdrop-filter: blur(18px);
+      flex: 0 0 auto;
+    }
+    .brand { display: inline-flex; gap: 12px; align-items: center; }
+    .brand img { width: 34px; height: 34px; border-radius: 10px; box-shadow: 0 0 22px rgba(45,212,255,0.4); }
+    .brand-text { font-weight: 800; letter-spacing: 0.13em; font-size: 14px; line-height: 1; }
+    .brand-text em { color: var(--cyan); font-style: normal; }
+    .brand-text small { display: block; color: var(--dim); font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em; margin-top: 3px; }
+    .pill {
+      display: inline-flex; gap: 7px; align-items: center;
+      border: 1px solid var(--stroke); border-radius: 999px; padding: 7px 11px;
+      color: var(--cyan-2); font-family: var(--mono); font-size: 10px;
+      letter-spacing: 0.11em; text-transform: uppercase; background: rgba(2, 6, 15, 0.48);
+    }
+    .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
+
+    .stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      border: 1px solid var(--stroke);
+      border-radius: 24px;
+      overflow: hidden;
+      background: #02060f;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.5), inset 0 0 80px rgba(45,212,255,0.04);
+    }
+    #game { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
+    .scan {
+      position: absolute; inset: 0; pointer-events: none; z-index: 4;
+      background: linear-gradient(180deg, transparent 0%, rgba(45,212,255,0.05) 48%, transparent 54%);
+      animation: scan 9s linear infinite; opacity: 0.5;
+    }
+    @keyframes scan { 0% { transform: translateY(-100%);} 100% { transform: translateY(100%);} }
+
+    .hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+    .hud-top {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      padding: 16px 18px; gap: 12px;
+    }
+    .hud-block { display: flex; flex-direction: column; gap: 4px; }
+    .hud-block.right { align-items: flex-end; }
+    .hud-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; color: var(--dim); text-transform: uppercase; }
+    .hud-val { font-family: var(--mono); font-weight: 700; font-size: 22px; letter-spacing: 0.02em; color: var(--cyan-2); text-shadow: 0 0 18px rgba(45,212,255,0.4); }
+    .hud-val.small { font-size: 13px; color: var(--muted); text-shadow: none; }
+    .lives { display: flex; gap: 6px; margin-top: 2px; }
+    .life {
+      width: 16px; height: 16px; border-radius: 5px;
+      background: radial-gradient(circle at 50% 35%, #fff, var(--cyan) 60%, var(--cyan-3));
+      box-shadow: 0 0 12px rgba(45,212,255,0.6);
+    }
+
+    .timer {
+      position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
+      width: min(360px, 70%);
+      display: flex; flex-direction: column; gap: 6px; align-items: center;
+    }
+    .timer-head { display: flex; justify-content: space-between; width: 100%; font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; white-space: nowrap; }
+    .timer-head .l { color: var(--warn); }
+    .timer-head .r { color: var(--text); }
+    .timer-bar { width: 100%; height: 8px; border-radius: 999px; border: 1px solid rgba(255,209,102,0.4); overflow: hidden; background: rgba(0,0,0,0.4); }
+    .timer-bar i { display: block; height: 100%; transform-origin: left; transform: scaleX(1);
+      background: linear-gradient(90deg, var(--warn), #ff9e4d); box-shadow: 0 0 14px rgba(255,209,102,0.6); transition: transform 0.2s linear; }
+
+    .banner {
+      position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%);
+      text-align: center; pointer-events: none; width: 90%;
+    }
+    .banner-title { font-weight: 900; font-size: clamp(24px, 4.6vw, 44px); letter-spacing: -0.02em; text-shadow: 0 0 30px currentColor; }
+    .banner-sub { margin-top: 6px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase; }
+    .banner-pop { animation: pop 0.4s cubic-bezier(.2,.9,.3,1.4) both; }
+    @keyframes pop { from { opacity: 0; transform: translate(-50%,-50%) scale(0.8);} to { opacity: 1; transform: translate(-50%,-50%) scale(1);} }
+
+    .overlay {
+      position: absolute; inset: 0; z-index: 6; pointer-events: auto;
+      display: grid; place-items: safe center; overflow-y: auto; padding: 24px;
+      background: radial-gradient(circle at 50% 40%, rgba(2,6,15,0.72), rgba(2,6,15,0.94));
+      backdrop-filter: blur(3px);
+    }
+    .overlay.hidden, .timer.hidden, .banner.hidden { display: none; }
+    .ov-card { max-width: 560px; padding: 0 26px; margin: 0 auto; text-align: center; }
+    .ov-kicker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.32em; color: var(--cyan); text-transform: uppercase; }
+    .ov-title { margin: 8px 0 0; font-size: clamp(40px, 8vw, 84px); line-height: 0.9; letter-spacing: -0.06em; text-shadow: 0 0 40px rgba(45,212,255,0.4); }
+    .ov-sub { margin: 18px auto 0; max-width: 44ch; color: var(--muted); font-size: 16px; line-height: 1.6; }
+    .ov-best { margin-top: 16px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.12em; color: var(--cyan-2); }
+    .ov-btn {
+      margin-top: 26px; pointer-events: auto; cursor: pointer;
+      border: 0; border-radius: 999px; padding: 16px 40px;
+      font-family: var(--font); font-weight: 800; font-size: 17px; letter-spacing: 0.04em; white-space: nowrap;
+      color: #02111d; background: linear-gradient(135deg, var(--cyan), var(--cyan-3));
+      box-shadow: 0 14px 40px rgba(45,212,255,0.3); transition: transform 160ms ease, box-shadow 160ms ease;
+    }
+    .ov-btn:hover { transform: translateY(-2px); box-shadow: 0 18px 50px rgba(45,212,255,0.45); }
+    .ov-controls { margin-top: 22px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--dim); }
+
+    /* shared */
+    .ov-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .ov-btn.ghost { background: transparent; color: var(--cyan-2); border: 1px solid var(--stroke-2); box-shadow: none; }
+    .ov-btn.ghost:hover { background: rgba(45,212,255,0.08); box-shadow: none; }
+    .ov-btn.small { padding: 11px 22px; font-size: 14px; margin-top: 0; }
+    .pause.hidden, .modal.hidden, .score-entry.hidden, .fx-pill.hidden { display: none !important; }
+
+    /* fx status pill */
+    .fx-pill {
+      position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+      z-index: 5; pointer-events: none;
+      font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 0.14em;
+      padding: 7px 14px; border-radius: 999px; border: 1px solid rgba(192,140,255,0.5);
+      background: rgba(2,6,15,0.7); text-shadow: 0 0 14px currentColor;
+      animation: fxpulse 1s ease-in-out infinite;
+    }
+    @keyframes fxpulse { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+
+    /* score entry + board */
+    .score-entry { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .score-entry-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; color: var(--dim); }
+    .score-name {
+      width: 240px; text-align: center;
+      font-family: var(--mono); font-weight: 700; font-size: 16px; letter-spacing: 0.08em;
+      color: var(--cyan-2); background: rgba(2,6,15,0.6);
+      border: 1px solid var(--stroke-2); border-radius: 12px; padding: 8px 6px; outline: none;
+    }
+    .score-name:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(45,212,255,0.18); }
+    .scoreboard { margin: 22px auto 0; max-width: 360px; text-align: left; }
+    .score-head { font-family: var(--mono); font-size: 11px; letter-spacing: 0.24em; color: var(--cyan); text-align: center; margin-bottom: 10px; }
+    .score-empty { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--dim); text-align: center; }
+    .score-row {
+      display: grid; grid-template-columns: 30px 1fr auto; gap: 12px; align-items: center;
+      padding: 7px 12px; border-radius: 10px; font-family: var(--mono); font-size: 13px; color: var(--muted);
+    }
+    .score-row + .score-row { margin-top: 2px; }
+    .score-row .rank { color: var(--dim); }
+    .score-row .who { color: var(--text); letter-spacing: 0.12em; }
+    .score-row .val { color: var(--cyan-2); font-weight: 700; }
+    .score-row.me { background: rgba(45,212,255,0.1); border: 1px solid var(--stroke-2); }
+    .score-row.me .who { color: var(--cyan); }
+
+    /* pause overlay */
+    .pause {
+      position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; text-align: center;
+      background: radial-gradient(circle at 50% 45%, rgba(2,6,15,0.78), rgba(2,6,15,0.92)); backdrop-filter: blur(4px);
+    }
+    .pause-card { padding: 0 26px; }
+    .pause-glyph { display: flex; gap: 12px; justify-content: center; margin-bottom: 22px; }
+    .pause-glyph span { width: 16px; height: 56px; border-radius: 5px; background: var(--cyan); box-shadow: 0 0 26px rgba(45,212,255,0.6); }
+    .pause-title { font-size: clamp(40px, 8vw, 72px); font-weight: 900; letter-spacing: -0.04em; text-shadow: 0 0 36px rgba(45,212,255,0.4); }
+    .pause-sub { margin-top: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em; color: var(--muted); }
+
+    /* controls modal */
+    .modal {
+      position: absolute; inset: 0; z-index: 8; display: grid; place-items: center;
+      background: rgba(2,6,15,0.7); backdrop-filter: blur(4px);
+    }
+    .modal-card {
+      width: min(420px, calc(100% - 40px)); padding: 28px;
+      border: 1px solid var(--stroke); border-radius: 22px; background: var(--panel); box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+    }
+    .modal-title { font-family: var(--mono); font-size: 13px; letter-spacing: 0.3em; color: var(--cyan); text-align: center; margin-bottom: 22px; }
+    .ctrl-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--stroke); }
+    .ctrl-name { font-weight: 800; letter-spacing: 0.06em; }
+    .ctrl-keys { font-family: var(--mono); font-size: 12px; color: var(--cyan-2); letter-spacing: 0.06em; text-align: right; }
+    .ctrl-btn {
+      min-width: 150px; cursor: pointer; padding: 11px 16px; border-radius: 10px;
+      border: 1px solid var(--stroke-2); background: rgba(2,6,15,0.5); color: var(--cyan-2);
+      font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; transition: 160ms ease;
+    }
+    .ctrl-btn:hover { background: rgba(45,212,255,0.08); }
+    .ctrl-btn.listening { color: var(--warn); border-color: var(--warn); animation: fxpulse 0.9s ease-in-out infinite; }
+    .ctrl-hint { margin: 18px 0 22px; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--dim); text-align: center; }
+
+    .foot {
+      flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--dim); padding: 0 6px;
+    }
+    .foot a { color: var(--cyan-2); text-decoration: none; }
+    @media (max-width: 640px) {
+      .topbar { border-radius: 18px; }
+      .brand img { width: 28px; height: 28px; }
+      .hud-val { font-size: 18px; }
+      .foot { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="abyss" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+        <div class="brand-text">SEEK<em>DEEP</em>'S
+          <small>DATA DASH</small>
+        </div>
+      </div>
+      <span class="pill"><span class="dot"></span>ARCADE ACTIVITY · PROTOTYPE</span>
+    </header>
+
+    <div class="stage">
+      <canvas id="game" tabindex="0"></canvas>
+      <div class="scan" aria-hidden="true"></div>
+
+      <div class="hud">
+        <div class="hud-top">
+          <div class="hud-block">
+            <span class="hud-label" id="lbl-lives">KERNELS</span>
+            <div class="lives" id="hud-lives"></div>
+          </div>
+          <div class="hud-block" style="align-items:center;">
+            <span class="hud-label" id="lbl-dist">DATA STREAMED</span>
+            <span class="hud-val" id="hud-dist">0 B</span>
+          </div>
+          <div class="hud-block right">
+            <span class="hud-label" id="lbl-best">BEST RUN</span>
+            <span class="hud-val small" id="hud-best">0 B</span>
+          </div>
+        </div>
+
+        <div class="timer hidden" id="hud-timer">
+          <div class="timer-head">
+            <span class="l" id="hud-timer-label">DAEMON · RIGHT-CLICK TO FRAG</span>
+            <span class="r" id="hud-timer-val">0s</span>
+          </div>
+          <div class="timer-bar"><i id="hud-timer-fill"></i></div>
+        </div>
+
+        <div class="fx-pill hidden" id="hud-fx"></div>
+        <div class="banner hidden" id="banner"></div>
+      </div>
+
+      <div class="overlay" id="overlay">
+        <div class="ov-card">
+          <div class="ov-kicker" id="ov-kicker">SEEKDEEP'S</div>
+          <h1 class="ov-title" id="ov-title">DATA DASH</h1>
+          <p class="ov-sub" id="ov-sub"></p>
+          <div class="ov-best" id="ov-best"></div>
+
+          <div class="score-entry hidden" id="score-entry">
+            <label for="score-name" class="score-entry-label">DISCORD ID</label>
+            <input id="score-name" class="score-name" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="your_discord" />
+          </div>
+
+          <div class="ov-actions">
+            <button class="ov-btn" id="ov-btn" type="button">JACK IN</button>
+            <button class="ov-btn ghost" type="button" data-open-controls>CONTROLS</button>
+          </div>
+          <div class="ov-controls" id="ov-controls">SPACE to lift · LEFT-CLICK to shoot · P to pause</div>
+          <div class="ov-controls" id="mute-status" style="margin-top:6px;">[M] SOUND: ON</div>
+
+          <div class="scoreboard" id="scoreboard"></div>
+        </div>
+      </div>
+
+      <div class="pause hidden" id="pause">
+        <div class="pause-card">
+          <div class="pause-glyph" aria-hidden="true"><span></span><span></span></div>
+          <div class="pause-title" id="pause-title">PAUSED</div>
+          <div class="pause-sub" id="pause-sub">press P to resume</div>
+          <div class="ov-controls" id="mute-status-pause" style="margin-top:8px;">[M] SOUND: ON</div>
+          <div class="ov-actions">
+            <button class="ov-btn" id="pause-resume" type="button">RESUME</button>
+            <button class="ov-btn ghost" type="button" data-open-controls>CONTROLS</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal hidden" id="controls-modal">
+        <div class="modal-card">
+          <div class="modal-title">CONTROLS</div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">FLY</span>
+            <span class="ctrl-keys">W A S D&nbsp;&nbsp;/&nbsp;&nbsp;↑ ← ↓ →</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">UP&nbsp;/&nbsp;DOWN</span>
+            <span class="ctrl-keys">thrust up · dive down</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">LEFT&nbsp;/&nbsp;RIGHT</span>
+            <span class="ctrl-keys">side thrusters</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">AIM&nbsp;/&nbsp;FIRE</span>
+            <span class="ctrl-keys">mouse aims · L-click fires (100KB)</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">CHARGE SHOT</span>
+            <span class="ctrl-keys">hold R-click · release (1MB)</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-name">PAUSE</span>
+            <span class="ctrl-keys">P</span>
+          </div>
+          <div class="ctrl-hint">Zero-G drift — feather the thrusters. ⚡ Over Clocked = smash through · 💰 Pepe = 15s invincible.</div>
+          <div class="ov-actions">
+            <button class="ov-btn" id="ctrl-close" type="button">DONE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span>SeekDeep · DATA Dash — reskinnable arcade prototype</span>
+      <span>edit <a href="datadash.config.js">datadash.config.js</a> to retheme</span>
+    </div>
+  </div>
+
+  <!-- Discord Embedded App SDK bootstrap.
+       Static-page safe: the game still runs normally outside Discord.
+       Activity-safe: the SDK is bundled locally as ./discord-sdk.bundle.js, so launch does not depend on a third-party CDN. -->
   <script>
     window.SEEKDEEP_DISCORD_CLIENT_ID = "1500739883046670346";
   </script>
-  <script type="module" crossorigin src="./assets/index-Ba14g3fV.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-CllfwVDq.css">
-</head>
+  <script type="module">
+    (async () => {
+      const params = new URLSearchParams(location.search);
+      const launchedByDiscord = params.has("frame_id") || params.has("instance_id");
+      window.__seekdeepDiscordActivity = {
+        launchedByDiscord,
+        sdkReady: false,
+        clientId: window.SEEKDEEP_DISCORD_CLIENT_ID,
+        params: Object.fromEntries(params.entries()),
+        error: null,
+      };
 
-<body>
-  <div class="abyss" aria-hidden="true"></div>
-  <div class="scan" aria-hidden="true"></div>
+      // Only attempt the handshake when launched as a Discord Activity.
+      // This keeps the same files usable as a normal GitHub Pages web game.
+      if (!launchedByDiscord) return;
 
-  <main class="shell" data-motion="on">
-    <header class="topbar">
-      <a class="brand" href="#top">
-        <span class="mark" aria-hidden="true"><span></span></span>
-        <span class="brand-text">SEEK<em>DEEP</em></span>
-      </a>
-
-      <div class="top-pills">
-        <span class="pill live"><span class="dot"></span>DISCORD ACTIVITY</span>
-        <span class="pill">STATIC DEMO</span>
-        <span class="pill">NO BOT COMMANDS</span>
-      </div>
-    </header>
-
-    <section id="top" class="hero">
-      <div class="hero-copy">
-        <div class="eyebrow">Discord Activity preview · promotional mockup</div>
-
-        <h1>Explore SeekDeep inside Discord.</h1>
-
-        <p>
-          A static, interactive showcase for the SeekDeep bot: local-first chat, vision,
-          image generation, archive workflows, and GPU-aware routing. This Activity does not
-          connect to the bot, the AI server, your machine, or any model endpoint.
-        </p>
-
-        <div class="hero-actions">
-          <button class="btn primary" type="button" data-jump="demo">Open demo deck</button>
-          <button class="btn ghost" type="button" data-copy="mapping">Copy URL mapping</button>
-        </div>
-
-        <div class="guardrail">
-          <strong>Mock-only safety boundary:</strong>
-          all chats, queues, status lights, and image panels below are simulated in the browser.
-        </div>
-      </div>
-
-      <aside class="activity-card">
-        <div class="frame-head">
-          <div>
-            <span class="tiny">ACTIVITY</span>
-            <strong>SeekDeep Demo</strong>
-          </div>
-
-          <span id="sdkBadge" class="status warn">SDK CONNECTING</span>
-        </div>
-
-        <div class="frame-body">
-          <div class="radar" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-
-          <div class="mini-console">
-            <div class="line dim">boot: seekdeep-demo-static</div>
-            <div class="line ok">mode: promotional preview</div>
-            <div class="line">transport: discord iframe</div>
-            <div class="line cyan">bot behavior: unchanged</div>
-          </div>
-        </div>
-      </aside>
-    </section>
-
-    <section class="notice-grid">
-      <article>
-        <span class="num">01</span>
-        <h2>Same app, isolated surface.</h2>
-        <p>
-          Enable Activities on the existing Discord app without changing message handlers,
-          intents, commands, tokens, or local model routing.
-        </p>
-      </article>
-
-      <article>
-        <span class="num">02</span>
-        <h2>Browser-only interactions.</h2>
-        <p>
-          Tabs, prompt chips, fake status lights, and generated-looking panels are just JavaScript state.
-          No model or backend request is made.
-        </p>
-      </article>
-
-      <article>
-        <span class="num">03</span>
-        <h2>Discord-ready wrapper.</h2>
-        <p>
-          The Activity uses Discord's Embedded App SDK only to announce that the iframe is ready.
-          It does not authorize users or control the bot.
-        </p>
-      </article>
-    </section>
-
-    <section id="demo" class="demo">
-      <div class="section-head">
-        <div>
-          <div class="eyebrow">Interactive showcase</div>
-          <h2>Demo deck</h2>
-        </div>
-
-        <div class="toggle-row">
-          <button class="mini active" type="button" data-panel="chat">Chat</button>
-          <button class="mini" type="button" data-panel="image">Image</button>
-          <button class="mini" type="button" data-panel="vision">Vision</button>
-          <button class="mini" type="button" data-panel="control">Control</button>
-          <button class="mini" type="button" data-panel="setup">Setup</button>
-        </div>
-      </div>
-
-      <div class="demo-grid">
-        <aside class="side-panel">
-          <button class="feature-button active" type="button" data-panel="chat">
-            <span>@SeekDeep chat</span>
-            <small>Prompt refinement, web routing, personas</small>
-          </button>
-
-          <button class="feature-button" type="button" data-panel="image">
-            <span>Image pipeline</span>
-            <small>SDXL mock queue and edit chain</small>
-          </button>
-
-          <button class="feature-button" type="button" data-panel="vision">
-            <span>Vision readout</span>
-            <small>Attachment analysis preview</small>
-          </button>
-
-          <button class="feature-button" type="button" data-panel="control">
-            <span>Local control center</span>
-            <small>Health, VRAM, routing boundaries</small>
-          </button>
-
-          <button class="feature-button" type="button" data-panel="setup">
-            <span>Install story</span>
-            <small>What users need to know</small>
-          </button>
-        </aside>
-
-        <div class="stage-card">
-          <article class="panel active" data-panel-content="chat">
-            <div class="panel-copy">
-              <span class="eyebrow">Mock chat sequence</span>
-              <h3>Local-first answers with command-shaped previews.</h3>
-              <p>
-                Click a sample prompt to add a fake response to the preview log.
-                Nothing leaves this page.
-              </p>
-            </div>
-
-            <div class="prompt-row">
-              <button type="button" class="chip" data-demo-prompt="explain">Explain the bot</button>
-              <button type="button" class="chip" data-demo-prompt="web">Show web-routed answer</button>
-              <button type="button" class="chip" data-demo-prompt="persona">Persona override</button>
-            </div>
-
-            <div id="chatLog" class="chat-log" aria-live="polite"></div>
-          </article>
-
-          <article class="panel" data-panel-content="image">
-            <div class="panel-copy">
-              <span class="eyebrow">Mock image queue</span>
-              <h3>Prompt refinement and chained edits without generation.</h3>
-              <p>
-                Cycle through static states that demonstrate the workflow: original prompt,
-                refined prompt, queued image, edit chain, archive action.
-              </p>
-            </div>
-
-            <div class="image-demo">
-              <div class="image-canvas" id="imageCanvas">
-                <span class="seed">SEED 8842 · 1024² · STATIC</span>
-                <span class="fake-creature"></span>
-              </div>
-
-              <div class="image-meta">
-                <div>
-                  <strong>Original</strong>
-                  <span>deep ocean robot frog explorer</span>
-                </div>
-
-                <div>
-                  <strong>Refined</strong>
-                  <span>cinematic abyssal expedition mascot, cyan HUD light, high detail</span>
-                </div>
-
-                <div>
-                  <strong>Chain</strong>
-                  <span id="chainState">queued → render preview</span>
-                </div>
-
-                <button class="btn small" type="button" data-cycle-image>Cycle mock state</button>
-              </div>
-            </div>
-          </article>
-
-          <article class="panel" data-panel-content="vision">
-            <div class="panel-copy">
-              <span class="eyebrow">Mock vision readout</span>
-              <h3>Attachment analysis as a previewable story.</h3>
-              <p>
-                The demo presents the kind of output users can expect without exposing a live upload
-                or model endpoint.
-              </p>
-            </div>
-
-            <div class="vision-grid">
-              <div class="scan-card">
-                <span></span>
-              </div>
-
-              <div class="analysis-lines">
-                <p>
-                  <b>Detected scene:</b> cyber-ocean interface, high-contrast bot branding,
-                  Discord-ready promotional framing.
-                </p>
-                <p>
-                  <b>Suggested action:</b> ask SeekDeep to summarize, tag, archive, or convert image
-                  context into a prompt.
-                </p>
-                <p>
-                  <b>Boundary:</b> this demo does not accept files and does not analyze user uploads.
-                </p>
-              </div>
-            </div>
-          </article>
-
-          <article class="panel" data-panel-content="control">
-            <div class="panel-copy">
-              <span class="eyebrow">Mock local control</span>
-              <h3>Bot-health language without live control.</h3>
-              <p>
-                This shows how the real local stack is explained: Discord bot, FastAPI model host,
-                SearXNG, VRAM accounting, and task routing.
-              </p>
-            </div>
-
-            <div class="metrics">
-              <div><span>Discord bot</span><b>UNCHANGED</b></div>
-              <div><span>Activity mode</span><b>STATIC</b></div>
-              <div><span>AI server</span><b>NOT CONNECTED</b></div>
-              <div><span>Outbound model API</span><b>NONE</b></div>
-            </div>
-
-            <div class="bars">
-              <label>chat route <i style="--w:22%"></i></label>
-              <label>image route <i style="--w:31%"></i></label>
-              <label>vision route <i style="--w:18%"></i></label>
-              <label>system reserve <i style="--w:17%"></i></label>
-            </div>
-          </article>
-
-          <article class="panel" data-panel-content="setup">
-            <div class="panel-copy">
-              <span class="eyebrow">What this Activity tells users</span>
-              <h3>Promotional onboarding, not an online hosted product.</h3>
-              <p>
-                Use this page to explain what SeekDeep is, how the local model stack works,
-                and where the real install/docs live.
-              </p>
-            </div>
-
-            <div class="steps">
-              <div>
-                <span>01</span>
-                <b>Install bot</b>
-                <p>Run SeekDeep locally with your Discord token and configured model backend.</p>
-              </div>
-
-              <div>
-                <span>02</span>
-                <b>Launch stack</b>
-                <p>Start the local AI server, SearXNG, and bot with the launcher.</p>
-              </div>
-
-              <div>
-                <span>03</span>
-                <b>Use Discord</b>
-                <p>Talk to the real bot via mentions, slash commands, buttons, and archive actions.</p>
-              </div>
-
-              <div>
-                <span>04</span>
-                <b>Use this demo</b>
-                <p>Let users explore what the bot does before they install or invite it.</p>
-              </div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="copy-kit">
-      <div class="section-head compact">
-        <div>
-          <div class="eyebrow">Discord portal values</div>
-          <h2>Copy-ready setup snippets</h2>
-        </div>
-      </div>
-
-      <div class="snippet-grid">
-        <button class="snippet" type="button" data-copy="mapping">
-          <span>Activity URL mapping</span>
-          <code>Prefix: /<br>Target: nathanneurotic.github.io/SeekDeep-DiscordBot/gui/activity</code>
-        </button>
-
-        <button class="snippet" type="button" data-copy="url">
-          <span>Browser preview URL</span>
-          <code>https://nathanneurotic.github.io/SeekDeep-DiscordBot/gui/activity/</code>
-        </button>
-
-        <button class="snippet" type="button" data-copy="notes">
-          <span>Demo boundary note</span>
-          <code>Static promotional preview. No live bot control, no backend, no model endpoint.</code>
-        </button>
-      </div>
-    </section>
-
-    <footer class="footer">
-      <span>SeekDeep Activity Demo · static mockup</span>
-      <div>
-        <button class="text-btn" type="button" data-motion-toggle>Toggle motion</button>
-        <button class="text-btn" type="button" data-open-external="https://nathanneurotic.github.io/SeekDeep-DiscordBot/gui/landing.html">Open full landing</button>
-      </div>
-    </footer>
-  </main>
-
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
+      try {
+        const { DiscordSDK } = await import("./discord-sdk.bundle.js");
+        const sdk = new DiscordSDK(window.SEEKDEEP_DISCORD_CLIENT_ID);
+        await sdk.ready();
+        window.__discordSDK = sdk;
+        window.__seekdeepDiscordActivity.sdkReady = true;
+        document.documentElement.classList.add("discord-activity-ready");
+      } catch (e) {
+        window.__seekdeepDiscordActivity.error = String(e && (e.stack || e.message || e));
+        document.documentElement.classList.add("discord-activity-sdk-error");
+        console.warn("SeekDeep Discord Activity SDK initialization failed:", e);
+      }
+    })();
+  </script>
+  <script src="datadash.config.js"></script>
+  <script src="datadash.audio.js"></script>
+  <script src="datadash.game.js"></script>
 </body>
 </html>
