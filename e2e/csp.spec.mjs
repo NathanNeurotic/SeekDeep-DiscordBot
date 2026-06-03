@@ -33,18 +33,35 @@ const PAGES = readdirSync(path.join(ROOT, 'gui'))
   .filter((f) => f.endsWith('.html'))
   .sort();
 
+// Per-page violation sink. Violations are collected test-side via an exposed
+// binding (set up below) AS THEY FIRE — not read out of the page at the end with
+// page.evaluate. A page that navigates mid-check (e.g. seekdeep-loading.html's
+// boot hand-off fires `location.href = …` during the settle wait) would destroy
+// the execution context and make `page.evaluate(() => window.__cspViolations)`
+// throw "Execution context was destroyed" — turning a clean page into a flaky
+// failure. The binding survives navigations and the final read is a plain JS
+// array, so that race is gone. Keyed by `page` (same fixture instance in
+// beforeEach and the test body).
+const cspViolations = new WeakMap();
+
 test.describe('Tauri CSP (shipped policy, injected)', () => {
   test.beforeEach(async ({ page }) => {
+    const violations = [];
+    cspViolations.set(page, violations);
+    // Report each violation to the test process the instant it fires; the binding
+    // is re-injected on every document, so a redirect can't lose violations.
+    await page.exposeFunction('__sdReportCspViolation', (msg) => { violations.push(msg); });
     // Match control-center.spec: keep the unconfigured-CI "setup required" modal
     // from auto-opening (its backdrop + scripts are noise for this check).
     await page.addInitScript(() => {
       try { sessionStorage.setItem('sd-setup-prompted', '1'); } catch {}
-      window.__cspViolations = [];
       document.addEventListener('securitypolicyviolation', (e) => {
-        window.__cspViolations.push(
-          `${e.violatedDirective} blocked ${e.blockedURI || 'inline'}`
-          + ` @ ${e.sourceFile || ''}:${e.lineNumber || ''}`,
-        );
+        try {
+          window.__sdReportCspViolation(
+            `${e.violatedDirective} blocked ${e.blockedURI || 'inline'}`
+            + ` @ ${e.sourceFile || ''}:${e.lineNumber || ''}`,
+          );
+        } catch {}
       });
     });
     // Inject the shipped CSP onto every HTML document the page loads. Wrapped in
@@ -78,8 +95,8 @@ test.describe('Tauri CSP (shipped policy, injected)', () => {
         // A page that redirects or can't load standalone isn't a CSP failure;
         // skip the navigation hiccup and check whatever violations fired.
       }
-      await page.waitForTimeout(600); // let inline scripts run + violations dispatch
-      const violations = await page.evaluate(() => window.__cspViolations || []);
+      await page.waitForTimeout(600); // let inline scripts run + violations dispatch (+ round-trip to the sink)
+      const violations = cspViolations.get(page) || [];
       expect(violations, `CSP violations on gui/${file}:\n  ${violations.join('\n  ')}`).toEqual([]);
     });
   }
