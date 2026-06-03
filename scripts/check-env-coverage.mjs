@@ -36,22 +36,25 @@ function codeKeys() {
   const add = (k, f) => { (refs.get(k) || refs.set(k, new Set()).get(k)).add(f); };
   for (const f of JS_FILES) {
     const s = read(f);
-    for (const m of s.matchAll(/process\.env\.([A-Z][A-Z0-9_]+)/g)) add(m[1], f);
-    for (const m of s.matchAll(/process\.env\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
+    // Gemini: \b word-boundary on every env-extraction pattern so a custom helper
+    // (custom_getenv, my_environ, myprocess.env, …) can't substring-match and add a
+    // phantom key. Real os.getenv / process.env / env::var all sit on a boundary.
+    for (const m of s.matchAll(/\bprocess\.env\.([A-Z][A-Z0-9_]+)/g)) add(m[1], f);
+    for (const m of s.matchAll(/\bprocess\.env\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
   }
   for (const f of PY_FILES) {
     const s = read(f);
     // Gemini: `os.` optional so `from os import getenv, environ` callers are caught too.
-    for (const m of s.matchAll(/(?:os\.)?getenv\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/(?:os\.)?environ\.get\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/(?:os\.)?environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
-    for (const m of s.matchAll(/(?:os\.)?environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
+    for (const m of s.matchAll(/\b(?:os\.)?getenv\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/\b(?:os\.)?environ\.get\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/\b(?:os\.)?environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
+    for (const m of s.matchAll(/\b(?:os\.)?environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
   }
   // CI-4: the Rust shell reads env too (std::env::var) — scan it so a Tauri knob
   // (e.g. SEEKDEEP_PYTHON) can't silently go undocumented.
   for (const f of RUST_FILES) {
     const s = read(f);
-    for (const m of s.matchAll(/env::var(?:_os)?\(\s*"([A-Z][A-Z0-9_]+)"/g)) add(m[1], f);
+    for (const m of s.matchAll(/\benv::var(?:_os)?\(\s*"([A-Z][A-Z0-9_]+)"/g)) add(m[1], f);
   }
   return refs;
 }
@@ -74,12 +77,12 @@ const IGNORE_PREFIX = [];
 function defaultFor(key) {
   for (const f of JS_FILES) {
     // Gemini: also match bracket notation process.env['KEY'] (codeKeys does).
-    const m = read(f).match(new RegExp('process\\.env(?:\\.' + key + '|\\[\\s*[\'"]' + key + '[\'"]\\s*\\])\\s*(?:\\|\\||\\?\\?)\\s*([^\\s);,&|}]+)'));
+    const m = read(f).match(new RegExp('\\bprocess\\.env(?:\\.' + key + '|\\[\\s*[\'"]' + key + '[\'"]\\s*\\])\\s*(?:\\|\\||\\?\\?)\\s*([^\\s);,&|}]+)'));
     if (m) return m[1].replace(/^['"]|['"]$/g, '');
   }
   for (const f of PY_FILES) {
     // Gemini: `os.` optional + include environ.setdefault, matching codeKeys.
-    const m = read(f).match(new RegExp('(?:os\\.)?(?:getenv|environ\\.get|environ\\.setdefault)\\(\\s*["\\\']' + key + '["\\\']\\s*,\\s*([^\\),]+)'));
+    const m = read(f).match(new RegExp('\\b(?:os\\.)?(?:getenv|environ\\.get|environ\\.setdefault)\\(\\s*["\\\']' + key + '["\\\']\\s*,\\s*([^\\),]+)'));
     if (m) return m[1].trim().replace(/^['"]|['"]$/g, '');
   }
   return '';

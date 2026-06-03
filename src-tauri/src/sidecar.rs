@@ -151,20 +151,46 @@ pub fn load_runtime_env(runtime: &Path) {
         if std::env::var_os(key).is_some() {
             continue; // a real environment variable always wins
         }
-        let raw_val = val.trim();
-        let value = if raw_val.len() >= 2
-            && ((raw_val.starts_with('"') && raw_val.ends_with('"'))
-                || (raw_val.starts_with('\'') && raw_val.ends_with('\'')))
-        {
-            raw_val[1..raw_val.len() - 1].to_string()
-        } else {
-            // dotenv-style trailing inline comment (only when unquoted): `val # note`
-            match raw_val.find(" #") {
-                Some(i) => raw_val[..i].trim_end().to_string(),
-                None => raw_val.to_string(),
-            }
-        };
-        std::env::set_var(key, value);
+        std::env::set_var(key, parse_dotenv_value(val.trim()));
+    }
+}
+
+/// Parse a raw .env value into its effective string. Strips matching surrounding
+/// quotes — discarding any trailing inline comment that follows the closing quote
+/// — or, for unquoted values, strips a dotenv-style ` # comment`. (Gemini: a
+/// quoted value WITH a trailing comment, e.g. `"C:\py\python.exe" # note`, must
+/// still have its quotes removed; the old `ends_with('"')` check skipped the strip
+/// and leaked literal quotes into the env var, breaking path/command resolution.)
+fn parse_dotenv_value(raw_val: &str) -> String {
+    if let Some(rest) = raw_val.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("").to_string()
+    } else if let Some(rest) = raw_val.strip_prefix('\'') {
+        rest.split('\'').next().unwrap_or("").to_string()
+    } else {
+        match raw_val.find(" #") {
+            Some(i) => raw_val[..i].trim_end().to_string(),
+            None => raw_val.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod dotenv_value_tests {
+    use super::parse_dotenv_value as p;
+
+    #[test]
+    fn strips_quotes_and_trailing_comments() {
+        assert_eq!(p("plain"), "plain");
+        assert_eq!(p("\"quoted\""), "quoted");
+        assert_eq!(p("'quoted'"), "quoted");
+        assert_eq!(p("unquoted # note"), "unquoted");
+        // the Gemini case: a quoted value WITH a trailing inline comment
+        assert_eq!(p("\"C:\\py\\python.exe\" # note"), "C:\\py\\python.exe");
+        assert_eq!(p("'/usr/bin/python3' # note"), "/usr/bin/python3");
+        assert_eq!(p("\"\""), "");
+        assert_eq!(p("1"), "1");
+        // a '#' without a leading space is a literal value char, not a comment
+        assert_eq!(p("value#nospace"), "value#nospace");
     }
 }
 
