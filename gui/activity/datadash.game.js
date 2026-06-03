@@ -2866,7 +2866,10 @@
     dt = Math.max(0, Math.min(0.05, dt)); // guard against negative / huge deltas
     if (state === STATE.PLAY && !paused) update(dt);
     updateMenuSprite(dt);
-    if (touchMode && touchUI) touchUI.classList.toggle("on", state === STATE.PLAY && !paused);
+    if (touchMode && touchUI) {
+      const showTouch = state === STATE.PLAY && !paused;
+      if (touchUI._on !== showTouch) { touchUI._on = showTouch; touchUI.classList.toggle("on", showTouch); }  // only touch the DOM on change
+    }
     render();
     requestAnimationFrame(frame);
   }
