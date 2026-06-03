@@ -1392,6 +1392,88 @@ function readJsonSafe(filePath, fallback) {
   }
 }
 
+// COUP-1: cross-process advisory lock for the data/*.json files that BOTH this
+// Node bot and the Python server (gui_endpoints.py) read-modify-write — user-facts,
+// prompt-templates, persona-overrides, custom-personas, memory-presets,
+// auto-reactions, archive-config. writeJsonAtomic already prevents *corruption*;
+// this closes the remaining lost-update window when both processes mutate the same
+// file at the same instant (last-writer-wins, silent).
+//
+// Mechanism: a `<path>.lock` sentinel created with O_EXCL ('wx'). gui_endpoints.py's
+// _seekdeep_file_lock uses the SAME `<path>.lock` name on the SAME absolute paths,
+// so the two processes actually coordinate. Stale locks (holder crashed) are stolen
+// after SEEKDEEP_FILE_LOCK_STALE_MS. If the lock can't be taken within
+// SEEKDEEP_FILE_LOCK_TIMEOUT_MS we FAIL OPEN (proceed without it) — a rare lost
+// update is strictly better than freezing the bot's event loop.
+//
+// FUTURE — async upgrade path (kept deliberately cheap): every shared-file
+// read-modify-write funnels through seekdeepMutateJson() below. To remove the
+// (rare, bounded) sync event-loop block, add an async sibling whose wait loop
+// `await`s instead of using Atomics.wait, and convert the seekdeepMutateJson call
+// sites to `await`. Because they are ALL centralized on this one function, that
+// migration is a mechanical grep — not a re-architecture.
+const SEEKDEEP_FILE_LOCK_TIMEOUT_MS = Math.max(0, Number(process.env.SEEKDEEP_FILE_LOCK_TIMEOUT_MS || 2000));
+const SEEKDEEP_FILE_LOCK_STALE_MS = Math.max(1000, Number(process.env.SEEKDEEP_FILE_LOCK_STALE_MS || 15000));
+const seekdeepFileLockWaitBuf = new Int32Array(new SharedArrayBuffer(4));
+
+function seekdeepWithFileLock(filePath, fn) {
+  const lockPath = String(filePath) + '.lock';
+  const start = Date.now();
+  let acquired = false;
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx'); // wx = O_CREAT|O_EXCL: fails if it exists
+      try { fs.writeSync(fd, `${process.pid} ${Date.now()}`); } catch {}
+      fs.closeSync(fd);
+      acquired = true;
+      break;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') {
+        // Someone holds it. Steal it if it's stale (the holder likely crashed).
+        try {
+          const st = fs.statSync(lockPath);
+          if (Date.now() - st.mtimeMs > SEEKDEEP_FILE_LOCK_STALE_MS) {
+            try { fs.unlinkSync(lockPath); } catch {}
+            continue;
+          }
+        } catch {
+          continue; // lock vanished between open and stat — retry immediately
+        }
+        if (Date.now() - start >= SEEKDEEP_FILE_LOCK_TIMEOUT_MS) {
+          console.warn(`[SeekDeep] file lock timeout on ${path.basename(lockPath)}; proceeding without it (fail-open).`);
+          break;
+        }
+        // Short synchronous wait (~25ms) before retrying. Realistic contention is
+        // a few ms (the other side's write is fast); the timeout above bounds it.
+        try { Atomics.wait(seekdeepFileLockWaitBuf, 0, 0, 25); } catch {}
+      } else {
+        // Unexpected (perms, etc.) — never let locking block a write; fail open.
+        console.warn(`[SeekDeep] file lock error on ${path.basename(lockPath)}: ${err?.message || err}; proceeding.`);
+        break;
+      }
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (acquired) { try { fs.unlinkSync(lockPath); } catch {} }
+  }
+}
+
+// The single chokepoint for cross-process-safe mutation of a shared data file.
+// Holds the lock across read -> mutate -> write so a concurrent writer in the
+// other process can't clobber the change. `mutator` may edit `data` in place or
+// return a replacement object.
+function seekdeepMutateJson(filePath, fallback, mutator) {
+  return seekdeepWithFileLock(filePath, () => {
+    const data = readJsonSafe(filePath, fallback);
+    const result = mutator(data);
+    const toWrite = (result === undefined) ? data : result;
+    writeJsonAtomic(filePath, toWrite);
+    return toWrite;
+  });
+}
+
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
 const SEEKDEEP_FINAL_REPLY_TTL_MS = Number(process.env.SEEKDEEP_FINAL_REPLY_TTL_MS || 180000);
 const seekdeepFinalReplyClaims = new Map();
@@ -23286,6 +23368,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepPendingImageQueuePlan,
     seekdeepContextGenerateImageLooksLikeStatusMessage,
     seekdeepContextMenuExtractPromptLine,
+    // COUP-1 cross-process advisory lock primitive
+    seekdeepWithFileLock,
+    seekdeepMutateJson,
     // User-facts module (remember/forget/recall)
     seekdeepReadUserFacts,
     seekdeepWriteUserFacts,

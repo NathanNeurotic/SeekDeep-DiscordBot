@@ -5331,6 +5331,62 @@ def register_gui_endpoints(
         except Exception:
             pass
 
+    class _seekdeep_file_lock:
+        """COUP-1 cross-process advisory lock — the twin of index.js's
+        seekdeepWithFileLock. Uses the SAME `<path>.lock` sentinel on the SAME
+        absolute data-file paths, so this server and the Node bot coordinate their
+        read-modify-write of the shared data/*.json files. Steals a stale lock
+        (crashed holder) after SEEKDEEP_FILE_LOCK_STALE_MS and FAILS OPEN after
+        SEEKDEEP_FILE_LOCK_TIMEOUT_MS — a rare lost update beats a hung request.
+
+        FUTURE (async upgrade): mirror index.js — swap the time.sleep wait for an
+        await-based one in an async sibling; call sites stay `with`-scoped here."""
+        _TIMEOUT_MS = max(0, int(os.getenv("SEEKDEEP_FILE_LOCK_TIMEOUT_MS", "2000") or 0))
+        _STALE_MS = max(1000, int(os.getenv("SEEKDEEP_FILE_LOCK_STALE_MS", "15000") or 0))
+
+        def __init__(self, path) -> None:
+            self._lock_path = str(path) + ".lock"
+            self._acquired = False
+
+        def __enter__(self):
+            start = time.time()
+            while True:
+                try:
+                    fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    try:
+                        os.write(fd, f"{os.getpid()} {time.time():.3f}".encode())
+                    finally:
+                        os.close(fd)
+                    self._acquired = True
+                    break
+                except FileExistsError:
+                    try:
+                        age_ms = (time.time() - os.path.getmtime(self._lock_path)) * 1000.0
+                        if age_ms > self._STALE_MS:
+                            try:
+                                os.unlink(self._lock_path)
+                            except OSError:
+                                pass
+                            continue
+                    except OSError:
+                        continue
+                    if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
+                        print(f"[SeekDeep] file lock timeout on {os.path.basename(self._lock_path)}; proceeding without it (fail-open).", flush=True)
+                        break
+                    time.sleep(0.025)
+                except OSError as exc:
+                    print(f"[SeekDeep] file lock error on {os.path.basename(self._lock_path)}: {exc}; proceeding.", flush=True)
+                    break
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            if self._acquired:
+                try:
+                    os.unlink(self._lock_path)
+                except OSError:
+                    pass
+            return False
+
     def _user_row_bytes(facts: list) -> int:
         try:
             return len(json.dumps(facts, ensure_ascii=False).encode("utf-8"))
