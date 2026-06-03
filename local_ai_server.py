@@ -912,6 +912,26 @@ def _seekdeep_req_stats() -> dict:
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response as _SDResponse
 
+# TAU-5: CSP + security headers for the browser-served GUI (loopback). Mirrors the
+# desktop CSP in src-tauri/tauri.conf.json so the identical gui/*.html assets enforce
+# the same policy whether opened in the Tauri webview or a normal browser. connect-src
+# is loopback-only (no bare https:) so a compromised page can't exfiltrate the GUI
+# token to an external host; no iframes exist anywhere in gui/, so framing is denied.
+# NOTE: 'unsafe-inline' in script-src is retained here for now and dropped in the
+# inline-script-extraction pass — kept in lockstep with the tauri.conf.json CSP.
+_SEEKDEEP_GUI_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "img-src 'self' data: blob: https:; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
+    "media-src 'self' data: blob:; "
+    "worker-src 'self' blob:; "
+    "frame-src 'none'; "
+    "frame-ancestors 'none'"
+)
+
 class _SeekDeepNoCacheStaticFiles(StaticFiles):
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
@@ -929,6 +949,13 @@ class _SeekDeepNoCacheStaticFiles(StaticFiles):
                 resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
                 resp.headers["Pragma"] = "no-cache"
                 resp.headers["Expires"] = "0"
+                # TAU-5: security headers on the browser path (the Tauri webview
+                # gets its CSP from tauri.conf.json; this loopback mount had none).
+                resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+                resp.headers.setdefault("X-Frame-Options", "DENY")
+                resp.headers.setdefault("Referrer-Policy", "no-referrer")
+                if ext in ("html", "htm"):
+                    resp.headers.setdefault("Content-Security-Policy", _SEEKDEEP_GUI_CSP)
         return resp
 
 _GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
