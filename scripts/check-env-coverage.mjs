@@ -26,9 +26,10 @@ function documentedKeys() {
   return keys;
 }
 
-// --- env keys referenced in code (Node + Python; browser gui/*.js excluded) ---
+// --- env keys referenced in code (Node + Python + Rust; browser gui/*.js excluded) ---
 const JS_FILES = ['index.js', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/doctor.mjs', 'scripts/audit_endpoint_coverage.mjs', 'scripts/check-release-files.mjs', 'lib/url-fetch-policy.js'];
 const PY_FILES = ['local_ai_server.py', 'gui_endpoints.py', 'warmup_local_cache.py', 'release_signing.py', 'scripts/gen_release_keypair.py', 'scripts/sign_release_manifest.py'];
+const RUST_FILES = ['src-tauri/src/sidecar.rs', 'src-tauri/src/lib.rs', 'src-tauri/src/main.rs'];
 
 function codeKeys() {
   const refs = new Map();
@@ -44,6 +45,12 @@ function codeKeys() {
     for (const m of s.matchAll(/os\.environ\.get\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
     for (const m of s.matchAll(/os\.environ\.setdefault\(\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) add(m[1], f);
     for (const m of s.matchAll(/os\.environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]/g)) add(m[1], f);
+  }
+  // CI-4: the Rust shell reads env too (std::env::var) — scan it so a Tauri knob
+  // (e.g. SEEKDEEP_PYTHON) can't silently go undocumented.
+  for (const f of RUST_FILES) {
+    const s = read(f);
+    for (const m of s.matchAll(/env::var(?:_os)?\(\s*"([A-Z][A-Z0-9_]+)"/g)) add(m[1], f);
   }
   return refs;
 }

@@ -1,5 +1,10 @@
 # SeekDeep Whole-Repo Audit - 2026-06-02
 
+> **⚠️ SUPERSEDED (2026-06-03) — most findings REMEDIATED.** Current state:
+> [SEEKDEEP_AUDIT_2026-06-03.md](SEEKDEEP_AUDIT_2026-06-03.md). Accurate on 2026-06-02
+> but now understates safety (e.g. `unsafe-eval` was dropped; the self-update
+> SSRF/concurrency items are implemented). Verify against code before acting.
+
 > Current-state audit of `NathanNeurotic/SeekDeep-DiscordBot` on `main`.
 > This is not a recycle of the superseded May 2026 audit notes.
 

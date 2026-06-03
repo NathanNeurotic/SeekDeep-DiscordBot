@@ -15,20 +15,35 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 // Pull the string-literal members out of an array assigned right after `marker`
-// (e.g. "single_files = " or "let files = "). Tolerates multi-line arrays and
-// // or # line comments. These lists are flat (no nested brackets).
+// (e.g. "single_files = " or "let files = "). CI-5: the scan is string- and
+// comment-aware — it anchors `marker` at the START of a code line (so a commented-
+// out "# single_files = [ OLD ]" can't be matched), tracks string/comment state,
+// and counts bracket depth, so a `]` inside a comment or a filename can't truncate
+// (and silently mask) the list. Collects every quoted member; returns null if no
+// matching `]` is found.
 function extractArray(src, marker) {
-  const at = src.indexOf(marker);
-  if (at < 0) return null;
-  const open = src.indexOf('[', at);
-  const close = src.indexOf(']', open);
-  if (open < 0 || close < 0) return null;
+  const re = new RegExp('(?:^|\\n)[ \\t]*' + marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\[');
+  const m = re.exec(src);
+  if (!m) return null;
+  let i = m.index + m[0].length; // just past the opening '['
+  let depth = 1, inStr = null, lineComment = false, cur = '';
   const items = [];
-  for (let line of src.slice(open + 1, close).split('\n')) {
-    line = line.replace(/\/\/.*$/, '').replace(/#.*$/, ''); // drop line comments
-    for (const m of line.matchAll(/"([^"]+)"/g)) items.push(m[1]);
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    if (lineComment) { if (c === '\n') lineComment = false; i++; continue; }
+    if (inStr) {
+      if (c === '\\') { cur += src[i + 1] || ''; i += 2; continue; }
+      if (c === inStr) { items.push(cur); cur = ''; inStr = null; i++; continue; }
+      cur += c; i++; continue;
+    }
+    if (c === '/' && src[i + 1] === '/') { lineComment = true; i += 2; continue; }
+    if (c === '#') { lineComment = true; i++; continue; }
+    if (c === '"' || c === "'") { inStr = c; cur = ''; i++; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') depth--;
+    i++;
   }
-  return items;
+  return depth === 0 ? items : null;
 }
 
 const sot = JSON.parse(read('release-files.json'));
