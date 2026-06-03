@@ -12,10 +12,10 @@
 # the user opts to install.
 
 fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
+uvicorn[standard]>=0.48.0
 pydantic>=2.10.0
-python-dotenv>=1.0.1
-pillow>=11.0.0
+python-dotenv>=1.2.2
+pillow>=12.2.0
 requests>=2.32.0
 huggingface_hub>=0.30.0
 matplotlib>=3.9.0
@@ -29,4 +29,4 @@ psutil>=6.0.0
 # "Couldn't instantiate the backend tokenizer". Boot-time install means
 # no "click INSTALL TOKENIZER DEPS to continue" prompt on fresh installs.
 tiktoken>=0.8.0
-sentencepiece>=0.2.0
+sentencepiece>=0.2.1
