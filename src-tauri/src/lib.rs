@@ -288,7 +288,8 @@ fn restart_sidecar(app: tauri::AppHandle) -> Result<(), String> {
 fn check_for_update() -> Result<serde_json::Value, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let url = "https://api.github.com/repos/NathanNeurotic/SeekDeep-DiscordBot/releases/latest";
-    let out = std::process::Command::new("curl")
+    // TAU-9: pin curl to %SystemRoot%\System32\curl.exe on Windows (PATH-hijack).
+    let out = std::process::Command::new(sidecar::resolve_system_tool("curl"))
         .args([
             "-s", "-L",
             "-H", "Accept: application/vnd.github+json",
@@ -350,6 +351,10 @@ fn check_for_update() -> Result<serde_json::Value, String> {
 /// docker.com.
 #[tauri::command]
 fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
+    // TAU-9 note: `docker` is intentionally NOT pinned to an absolute path the way
+    // the System32 tools are. Docker Desktop installs to a user/version-dependent
+    // Program Files path (not a fixed system location), so there is no stable
+    // absolute target to pin to — it must resolve via PATH like any third-party CLI.
     // 1. Probe: is Docker already running?
     let info = std::process::Command::new("docker")
         .arg("info")
@@ -380,7 +385,8 @@ fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
         ];
         for path in &candidates {
             if std::path::Path::new(path).exists() {
-                let spawn = std::process::Command::new("cmd")
+                // TAU-9: pin cmd to %SystemRoot%\System32\cmd.exe (PATH-hijack).
+                let spawn = std::process::Command::new(sidecar::resolve_system_tool("cmd"))
                     .args(["/C", "start", "", path])
                     .spawn();
                 if spawn.is_ok() {
@@ -430,6 +436,15 @@ pub fn run() {
             try_start_docker_desktop,
         ])
         .setup(|app| {
+            // TAU-N1: honour SEEKDEEP_* knobs set in <runtime>/.env. The shell
+            // never loaded .env, so SEEKDEEP_PYTHON / SEEKDEEP_TAURI_* /
+            // SEEKDEEP_CLOSE_HIDES_TO_TRAY were dead unless exported to the real
+            // environment. Must run first — before find_python, the sidecar
+            // spawn, and the window/exit handlers read any of these.
+            if let Ok(runtime) = sidecar::app_runtime_dir(app.handle()) {
+                sidecar::load_runtime_env(&runtime);
+            }
+
             // --- System tray ---------------------------------------------
             // Build the tray icon + menu. Close-to-tray means SeekDeep can
             // keep serving the Discord bot in the background while the main
