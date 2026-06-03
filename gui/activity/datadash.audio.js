@@ -106,6 +106,12 @@
       else { try { node.src.stop(); } catch (e) {} }
     },
     isLooping: function (key) { return !!loopNodes[key]; },
+    // live-adjust a running loop's gain (used for proximity-based SFX)
+    setLoopVolume: function (key, v) {
+      var node = loopNodes[key]; if (!node) return;
+      try { node.gain.gain.setTargetAtTime(Math.max(0, v), ctx.currentTime, 0.07); }
+      catch (e) { try { node.gain.gain.value = Math.max(0, v); } catch (e2) {} }
+    },
     // exclusive music track: stops the others, starts this one. Latches the
     // desired track so it (re)starts once buffers load / the context resumes.
     music: function (key) {
@@ -125,6 +131,6 @@
 
   function stub() {
     var noop = function () {};
-    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, isLooping: function () { return false; }, music: noop, stopAllMusic: noop };
+    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, setLoopVolume: noop, isLooping: function () { return false; }, music: noop, stopAllMusic: noop };
   }
 })();

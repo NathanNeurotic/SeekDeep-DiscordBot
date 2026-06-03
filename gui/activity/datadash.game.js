@@ -41,6 +41,11 @@
   const odFrames  = ["assets/seekdeep/od1.png"].map(loadImg);
   const imgPower  = loadImg("assets/seekdeep/power.png");   // electric power-pose (transform)
   const imgPepe   = loadImg("assets/seekdeep/pepe.png");    // pepe coin art
+  const imgShield = loadImg("assets/seekdeep/shieldpepe.png"); // shield pickup icon
+  // main-menu power-up / power-down loop frames — PRE-ALIGNED sprite sheet
+  // (body pixel-locked across every frame; aligned_01 = full electric aura → aligned_10 = calm)
+  const menuFrames = [];
+  for (let i = 1; i <= 10; i++) menuFrames.push(loadImg("assets/seekdeep/menu/aligned_" + String(i).padStart(2, "0") + ".png"));
   const SPR_AR = 602 / 413;   // source frame aspect ratio (fly1)
   const OD_AR  = 718 / 540;   // overdrive frame aspect ratio (od1)
   const POW_AR = 346 / 361;   // power pose aspect ratio
@@ -67,6 +72,7 @@
     scores:    document.getElementById("scoreboard"),
     scoreEntry:document.getElementById("score-entry"),
     scoreName: document.getElementById("score-name"),
+    menuSprite:document.getElementById("menu-sprite"),
   };
 
   // ---- state ---------------------------------------------------------------
@@ -84,11 +90,13 @@
       streamed: 0,             // monotonic bytes-ever-streamed → drives spawns
       gross: 0,                // total gross accumulation (distance + collected) → Pepe
       nextPepe: T.pepeEvery,
+      nextElementalT: 42,      // first DATA LOSS / RECOVERY event window (seconds); then ≥ elementalEvery apart
       invincible: 0,           // Pepe invincibility timer
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
       lives: T.startLives,
       invuln: 0,
+      shield: false,           // SHIELD pickup state — absorbs the next hit
       scroll: T.scrollStart,
       // player
       px: 0, py: 0, vy: 0, vx: 0,
@@ -106,7 +114,8 @@
       bossClock: 0,            // seconds of boss-free survival → triggers the next boss
       nextMystery: T.mysteryEvery * (0.6 + Math.random() * 0.8),
       nextPacket: T.packetEvery,
-      nextBot: T.botEvery,
+      nextBossPacket: 0,       // boss-fight ammo-relief packet strips (when DATA is low)
+      botTimer: T.botSpawnSeconds,   // independent mini-malware respawn clock
       nextUpgrade: T.upgradeEvery,
       freeAmmo: false,
       odHits: 0, poweringDown: 0,
@@ -117,11 +126,16 @@
       scrollFx: null,          // { kind:'fast'|'slow'|'reverse', t }
       // boss
       boss: null,
+      boss2: null,             // second daemon during a Double Boss event
+      _bossesActive: false,
+      event: null,             // active random event { kind, dist, length, ... }
+      nextEventT: 50 + Math.random() * 40,   // first random-event window (seconds)
       bullets: [],
       bars: [],
       playerBullets: [],
       playerFire: 0,
       shooting: false,
+      tapFire: false,          // one-shot request from the touch FIRE button
       charging: false, chargeT: 0,
       particles: [],
       shake: 0,
@@ -180,10 +194,12 @@
   }
 
   function makeColumn() {
-    // boss arena: wide & centered channel
-    if (game.boss && game.boss.phase !== "crash") {
-      const h = H * T.bossArenaGap / 2;
-      game.cTop = 0.5 - T.bossArenaGap / 2; game.cBot = 0.5 + T.bossArenaGap / 2;
+    // straight wide hallway during a boss fight (either daemon) OR a random event
+    const inBoss = (game.boss && game.boss.phase !== "crash") || (game.boss2 && game.boss2.phase !== "crash");
+    if (inBoss || game.event) {
+      const gapFrac = game.event ? T.eventGap : T.bossArenaGap;
+      const h = H * gapFrac / 2;
+      game.cTop = 0.5 - gapFrac / 2; game.cBot = 0.5 + gapFrac / 2;
       game.baseCenter = 0.5; game.baseCenterTarget = 0.5;
       return { ceil: Math.max(0, H * 0.5 - h), floor: Math.max(0, H - (H * 0.5 + h)), blocks: [] };
     }
@@ -360,6 +376,11 @@
     aimY = (e.clientY - r.top) / r.height * H;
     aimSet = true;
   }
+  // touch detection: only when the PRIMARY pointer is coarse (phones/tablets).
+  // A touchscreen laptop with a mouse stays in full desktop mouse+keyboard mode.
+  const touchMode = window.matchMedia ? window.matchMedia("(pointer: coarse)").matches : ("ontouchstart" in window);
+  let touchUI = null;
+
   canvas.addEventListener("pointermove", updateAim);
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
@@ -368,6 +389,7 @@
     updateAim(e);
     if (state === STATE.MENU) { start(); return; }
     if (state === STATE.DEAD) { restart(); return; }
+    if (e.pointerType === "touch") return;   // in-play: touch fires via the on-screen buttons
     if (e.button === 0 && !paused && game) game.shooting = true;
     if (e.button === 2 && !paused && game) { game.charging = true; if (window.DDAudio) window.DDAudio.startLoop("chargeLoop"); }
   });
@@ -446,6 +468,17 @@
   function loseLife(reason) {
     if (game.invuln > 0) return;
     if (game.invincible > 0) return;   // Pepe jackpot: untouchable
+    // SHIELD pickup absorbs one hit, then drops
+    if (game.shield) {
+      game.shield = false;
+      game.invuln = T.invulnTime;
+      game.shake = 14;
+      game.flashT = Math.max(game.flashT, 0.45);
+      spawnParticles(game.px, game.py, C.accentSoft, 30, 380);
+      SFX("shieldHeld");
+      showBanner("🛡 SHIELD ABSORBED", "shield down", C.accentSoft, 1.2);
+      return;
+    }
     // OVER CLOCKED absorbs TWO hits; the 2nd powers it down (and costs the +2 buffer)
     if (game.freeAmmo) {
       game.odHits = (game.odHits || 0) + 1;
@@ -505,6 +538,7 @@
           // OVERDRIVE / PEPE: smash straight through the jutting tower/chip — shatter it
           if ((game.freeAmmo || game.invincible > 0) && hb.y < bBot && hb.y + hb.h > bTop) {
             b.smashed = true; game.shake = 12;
+            SFX("firewallSmash");
             spawnParticles(bx + bw / 2, (bTop + bBot) / 2, "#ffffff", 26, 420);
             spawnParticles(game.px, game.py, C.accent, 14, 300);
             continue;
@@ -634,7 +668,7 @@
     if (game.flashT > 0) game.flashT = Math.max(0, game.flashT - dt * 2.5);
 
     advanceTerrain(dx);
-    if (!game.boss) game.bossClock += dt;  // count boss-free survival time
+    if (!game.boss && !game.boss2 && !game.event) game.bossClock += dt;  // count boss-free survival time
 
     // player physics — DRIFT (no gravity): thrusters add momentum, damping bleeds it off
     let ay = 0;
@@ -681,7 +715,10 @@
     if (touching && game.invuln <= 0) loseLife("wall");
 
     updateProgression();
+    updateEvent(dt);
     updatePickups(dt);
+    updateMalwareSpawn(dt);
+    maybeSpawnShield(dt);
     updateBots(dt);
     updateBombs(dt);
     updateBoss(dt);
@@ -695,6 +732,7 @@
     if (!game || state !== STATE.PLAY) return;
     if (game.chargeT < T.chargeMin) { game.chargeT = 0; return; }   // not held long enough
     if (!game.freeAmmo && game.bytes < T.chargeCost) { game.chargeT = 0; return; }
+    SFX("chargeFire");   // fire the release SFX FIRST — tight, in-sync with the trigger
     if (!game.freeAmmo) game.bytes = Math.max(0, game.bytes - T.chargeCost);
     const tx = aimSet ? aimX : game.px + 200, ty = aimSet ? aimY : game.py;
     const ang = Math.atan2(ty - game.py, tx - game.px);
@@ -702,38 +740,73 @@
     game.playerBullets.push({ x: game.px + Math.cos(ang) * PW * 0.6, y: game.py + Math.sin(ang) * PW * 0.6,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, big: true });
     spawnParticles(game.px, game.py, "#ffffff", 20, 300);
-    SFX("chargeFire");
     game.shake = 8;
     game.chargeT = 0;
   }
 
+  function fireNormalShot() {
+    if (state !== STATE.PLAY || game.playerFire > 0) return false;
+    if (!game.freeAmmo && game.bytes < T.shotCost) return false;
+    game.playerFire = game.freeAmmo ? T.playerFireEvery / 3 : T.playerFireEvery;
+    if (!game.freeAmmo) game.bytes = Math.max(0, game.bytes - T.shotCost);
+    const tx = aimSet ? aimX : game.px + 200;
+    const ty = aimSet ? aimY : game.py;
+    const ang = Math.atan2(ty - game.py, tx - game.px);
+    const sp = T.playerBulletSpeed;
+    const mx = game.px + Math.cos(ang) * PW * 0.5, my = game.py + Math.sin(ang) * PW * 0.5;
+    game.playerBullets.push({ x: mx, y: my, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp });
+    SFX("shot");
+    spawnParticles(mx, my, C.accentSoft, 4, 120);
+    return true;
+  }
+
+  // touch: auto-aim removed — the twin-stick provides full manual aim.
+
   function updatePlayerFire(dt) {
     if (game.charging) game.chargeT += dt;
     if (game.playerFire > 0) game.playerFire -= dt;
-    if (game.shooting && state === STATE.PLAY && game.playerFire <= 0 && (game.freeAmmo || game.bytes >= T.shotCost)) {
-      game.playerFire = game.freeAmmo ? T.playerFireEvery / 3 : T.playerFireEvery;   // overdrive = 3× fire rate
-      if (!game.freeAmmo) game.bytes = Math.max(0, game.bytes - T.shotCost);   // free ammo skips the DATA cost
-      // fire toward the mouse aim (defaults to straight ahead before the mouse moves)
-      const tx = aimSet ? aimX : game.px + 200;
-      const ty = aimSet ? aimY : game.py;
-      let ang = Math.atan2(ty - game.py, tx - game.px);
-      const sp = T.playerBulletSpeed;
-      game.playerBullets.push({ x: game.px + Math.cos(ang) * PW * 0.5, y: game.py + Math.sin(ang) * PW * 0.5, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp });
-      SFX("shot");
-      spawnParticles(game.px + Math.cos(ang) * PW * 0.5, game.py + Math.sin(ang) * PW * 0.5, C.accentSoft, 4, 120);
-    }
+    if (game.tapFire) { game.tapFire = false; if (!paused) fireNormalShot(); }   // single tap = one precise shot
+    if (game.shooting && !paused) fireNormalShot();                              // hold = rapid stream
     for (const pb of game.playerBullets) {
       pb.x += pb.vx * dt;
       pb.y += (pb.vy || 0) * dt;
       const sz = pb.big ? T.chargeBulletSize : T.playerBulletSize;
-      const b = game.boss;
-      if (b && b.phase === "fight") {
+      for (const b of [game.boss, game.boss2]) {
+        if (!b || b.phase !== "fight" || pb.dead) continue;
         const bw = SPRITES.boss.w * 0.62, bh = SPRITES.boss.h * 0.62;
         if (rectsHit(pb.x - sz / 2, pb.y - sz / 2, sz, sz, b.x - bw / 2, b.y - bh / 2, bw, bh)) {
           if (!pb.big) pb.dead = true;   // big shots pierce
           b.timer = Math.max(0, b.timer - (pb.big ? T.chargeBossReduce : T.bossHitReduce));
           b.hitFlash = 0.12;
           spawnParticles(pb.x, pb.y, pb.big ? "#ffffff" : C.warn, pb.big ? 18 : 8, 260);
+        }
+      }
+      // CHARGE shots SLAM the environment — screen shake + shatter on impact
+      if (pb.big && !pb.dead) {
+        const ci = colIndexAt(pb.x);
+        const col = game.cols[ci];
+        if (col) {
+          let hit = pb.y < col.ceil || pb.y > (H - col.floor);
+          if (!hit) {
+            const bx2 = ci * T.colW - scrollAcc;
+            for (const bl of col.blocks) {
+              if (bl.smashed) continue;
+              const bw2 = T.colW * (bl.span || 1);
+              if (pb.x >= bx2 && pb.x <= bx2 + bw2) {
+                const top = bl.from === "top";
+                const bTop = top ? col.ceil : (H - col.floor) - bl.h;
+                const bBot = top ? col.ceil + bl.h : (H - col.floor);
+                if (pb.y >= bTop && pb.y <= bBot) { hit = true; bl.smashed = true; break; }
+              }
+            }
+          }
+          if (hit) {
+            pb.dead = true;
+            game.shake = Math.max(game.shake, 16);
+            SFX("firewallSmash");
+            spawnParticles(pb.x, pb.y, "#ffffff", 24, 400);
+            spawnParticles(pb.x, pb.y, C.accent, 12, 280);
+          }
         }
       }
     }
@@ -754,15 +827,18 @@
 
   function updateProgression() {
     const S = game.streamed;
+    const busy = game.boss || game.boss2 || game.event;   // no normal spawns during a boss/event
+    // RANDOM EVENT trigger — fires at unpredictable intervals, never while already busy
+    if (!busy && game.t >= game.nextEventT) { triggerRandomEvent(); return; }
     // checkpoint backups (+1) — cadence scales with kernels held
-    if (!game.boss && S >= game.nextCheckpoint && pickupLaneClear()) {
+    if (!busy && S >= game.nextCheckpoint && pickupLaneClear()) {
       game.nextCheckpoint = S + checkpointInterval();
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
       game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind: "normal" });
     }
     // emergency packs (+2) — only while down to the last kernel, one at a time
-    if (!game.boss && game.lives <= 1 && S >= game.nextBonus && pickupLaneClear() &&
+    if (!busy && game.lives <= 1 && S >= game.nextBonus && pickupLaneClear() &&
         !game.pickups.some((p) => p.kind === "bonus" && !p.grabbed)) {
       game.nextBonus = S + T.bonusEvery;
       const col = colAtSpawn();
@@ -770,12 +846,12 @@
       game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind: "bonus" });
     }
     // boss trigger — time-based (every N seconds of boss-free survival)
-    if (!game.boss && game.bossClock >= T.bossEverySeconds) {
+    if (!busy && game.bossClock >= T.bossEverySeconds) {
       game.bossClock = 0;
       spawnBoss();
     }
-    // mystery (?) pickup — random scroll warp
-    if (!game.boss && S >= game.nextMystery && pickupLaneClear() &&
+    // mystery (?) pickup — random scroll warp (suppressed while one is already active)
+    if (!busy && !game.scrollFx && S >= game.nextMystery && pickupLaneClear() &&
         !game.pickups.some((p) => p.kind === "mystery" && !p.grabbed)) {
       game.nextMystery = S + T.mysteryEvery * (0.6 + Math.random() * 0.8);
       const col = colAtSpawn();
@@ -783,7 +859,7 @@
       game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind: "mystery" });
     }
     // DATA PACKETS — tiny streamed-data collectibles, sometimes in flowing strings
-    if (!game.boss && S >= game.nextPacket && pickupLaneClear()) {
+    if (!busy && S >= game.nextPacket && pickupLaneClear()) {
       game.nextPacket = S + T.packetEvery * (0.7 + Math.random() * 0.6);
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 50 : H / 2;
@@ -793,36 +869,112 @@
         game.pickups.push({ x: W + 60 + k * 64, y: cy + Math.sin(ph + k * 0.7) * amp, grabbed: false, bob: Math.random() * 6, kind: "packet" });
       }
     }
-    // MINI-MALWARE BOTS — drifting interference between bosses
-    if (!game.boss && S >= game.nextBot) {
-      game.nextBot = S + T.botEvery * (0.6 + Math.random() * 0.8);
-      const col = colAtSpawn();
-      const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
-      game.bots.push({ x: W + 60, y: cy, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S });
-      SFX("malwareSpawn");
-      if (window.DDAudio) window.DDAudio.startLoop("malwareLoop");
+    // MINI-MALWARE BOTS now spawn on an independent timer (updateMalwareSpawn),
+    // so they appear during any event — including boss battles.
+
+    // BOSS AMMO RELIEF — while fighting a boss with low reserves (< 1 MB), feed
+    // spaced-out but consistent kb packet strips so the player can always refuel
+    // and keep firing. Outside bosses, packets stay scarce so saving up matters.
+    if (game.boss && (game.boss.phase === "fight" || game.boss.phase === "enter") &&
+        game.bytes < T.bossPacketLowKB && S >= game.nextBossPacket && pickupLaneClear()) {
+      game.nextBossPacket = S + T.bossPacketEvery;
+      const gap = (game.cBot - game.cTop) * H;
+      const cy = game.cTop * H + gap * (0.28 + Math.random() * 0.44);   // within the boss arena
+      for (let k = 0; k < T.bossPacketCount; k++) {
+        game.pickups.push({ x: W + 60 + k * 58, y: cy, grabbed: false, bob: Math.random() * 6, kind: "packet" });
+      }
     }
     // rare UPGRADE bolt — no magnet, must be flown into
-    if (!game.boss && !game.freeAmmo && S >= game.nextUpgrade &&
+    if (!busy && !game.freeAmmo && S >= game.nextUpgrade &&
         !game.pickups.some((p) => p.kind === "upgrade" && !p.grabbed)) {
       game.nextUpgrade = S + T.upgradeEvery;
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
     }
-    // PEPE COIN — jackpot every 10 MB of gross accumulation (independent of spend)
-    if (!game.boss && game.gross >= game.nextPepe &&
+    // PEPE COIN — jackpot every 10 MB of gross accumulation (not while already invincible)
+    if (!busy && game.invincible <= 0 && game.gross >= game.nextPepe &&
         !game.pickups.some((p) => p.kind === "pepe" && !p.grabbed)) {
       game.nextPepe += T.pepeEvery;
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
       game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
     }
+    // ELEMENTAL EVENT — shared pool: spawn EITHER a DATA LOSS skull or a DATA
+    // RECOVERY drive (coin-flip), never both, and no more than once a minute.
+    if (!busy && game.t >= game.nextElementalT && pickupLaneClear() &&
+        !game.pickups.some((p) => (p.kind === "dataloss" || p.kind === "recovery") && !p.grabbed)) {
+      game.nextElementalT = game.t + T.elementalEvery * (1 + Math.random() * 0.45);   // ≥ 60s apart
+      const kind = Math.random() < 0.5 ? "dataloss" : "recovery";
+      const col = colAtSpawn();
+      const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
+      game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind });
+    }
   }
   function colAtSpawn() {
     const i = colIndexAt(W + 80);
     return game.cols[i] || game.cols[game.cols.length - 1] || null;
   }
+
+  // ---- RANDOM EVENTS -------------------------------------------------------
+  // Fire at unpredictable intervals. One of: Double Boss (rarest), DATA Base (wavy
+  // kb stream), DDoS (stationary-malware maze), Pepe Packets (collectible grid).
+  function triggerRandomEvent() {
+    game.nextEventT = game.t + T.eventEveryMin + Math.random() * (T.eventEveryMax - T.eventEveryMin);
+    const r = Math.random();
+    const kind = r < 0.10 ? "doubleboss" : (r < 0.40 ? "database" : (r < 0.72 ? "ddos" : "pepe"));
+    if (kind === "doubleboss") { spawnDoubleBoss(); return; }
+    const spacing = kind === "database" ? T.colW * T.dbSpacingCols
+                  : kind === "ddos" ? T.colW * T.ddosSpacingCols
+                  : T.colW * T.pepeGridCols;
+    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: T.ddosSlots / 2, gapV: 0 };
+    const meta = {
+      database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
+      ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
+      pepe:     ["🐸  PEPE PACKETS", "grab everything — go wild", "#72ffcf"],
+    }[kind];
+    showBanner(meta[0], meta[1], meta[2], 2.4);
+    SFX(kind === "ddos" ? "malwareSpawn" : (kind === "pepe" ? "pepe" : "packet"));
+    if (kind === "ddos" && window.DDAudio) window.DDAudio.startLoop("malwareLoop");
+  }
+
+  function updateEvent(dt) {
+    const ev = game.event;
+    if (!ev) return;
+    const dx = game.scroll * dt;
+    ev.dist += dx; ev.spawnAcc += dx;
+    while (ev.spawnAcc >= ev.spacing) { ev.spawnAcc -= ev.spacing; ev.step++; spawnEventColumn(ev); }
+    if (ev.dist >= ev.length) { game.event = null; showBanner("STREAM CLEAR", "", C.accentSoft, 1.1); }
+  }
+
+  function spawnEventColumn(ev) {
+    const top = (0.5 - T.eventGap / 2) * H, bot = (0.5 + T.eventGap / 2) * H, span = bot - top;
+    const x = W + 40;
+    if (ev.kind === "database") {
+      const y = H * 0.5 + Math.sin(ev.step * 0.5) * T.dbWaveAmp * H;   // smooth wavy kb stream
+      game.pickups.push({ x, y, grabbed: false, bob: Math.random() * 6, kind: "packet" });
+    } else if (ev.kind === "ddos") {
+      const slots = T.ddosSlots;
+      ev.gapV += (Math.random() - 0.5) * 0.7; ev.gapV = Math.max(-1, Math.min(1, ev.gapV));
+      ev.gapY = Math.max(1, Math.min(slots - 3, ev.gapY + ev.gapV));
+      const gapSlot = Math.round(ev.gapY);
+      for (let sI = 0; sI < slots; sI++) {
+        if (sI === gapSlot || sI === gapSlot + 1) continue;   // 2-slot navigable gap that meanders
+        const y = top + span * ((sI + 0.5) / slots);
+        game.bots.push({ x: x + 30, y, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: game.streamed, static: true });
+      }
+    } else if (ev.kind === "pepe") {
+      const rows = T.pepeGridRows;
+      for (let rI = 0; rI < rows; rI++) {
+        if ((rI + ev.step) % 2 !== 0) continue;   // checkerboard
+        ev.spot++;
+        const y = top + span * ((rI + 0.5) / rows);
+        const od = (ev.spot % 5 === 0) || (ev.spot % 7 === 0);   // overdrive sprinkled in
+        game.pickups.push({ x, y, grabbed: false, bob: Math.random() * 6, kind: od ? "upgrade" : "pepe", eventGift: true });
+      }
+    }
+  }
+
 
   // clear vertical span [top,bottom] at a world-x, accounting for walls AND towers,
   // so collectibles can be kept out of solid geometry
@@ -861,7 +1013,8 @@
       if (p.grabbed) continue;
       p.x -= game.scroll * dt;
       // magnet: gravitate toward the player when nearby — EXCEPT the upgrade bolt
-      if (p.kind !== "upgrade") {
+      // and the DATA LOSS skull (you want to be able to DODGE that one).
+      if (p.kind !== "upgrade" && p.kind !== "dataloss") {
         const dxp = game.px - p.x, dyp = game.py - p.y;
         const d = Math.hypot(dxp, dyp);
         if (d < T.pickupPull && d > 0.001) {
@@ -870,7 +1023,7 @@
           p.y += (dyp / d) * f;
         }
       }
-      const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : T.pickupSize);
+      const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize)));
       // never let a collectible sit inside/touching a tower — clamp into clear span
       const span = freeSpanAt(p.x);
       const pad = psz / 2 + 6;
@@ -892,22 +1045,57 @@
           SFX("packet");
           game.floaters.push({ x: p.x, y: p.y, t: 0, txt: "+10KB", col: C.accentSoft });
         } else if (p.kind === "pepe") {
-          game.invincible = T.pepeInvincible;
-          game.flashT = 1; game.shake = 22;
-          spawnParticles(p.x, p.y, "#ffe66b", 70, 620);
-          SFX("pepe");
-          if (window.DDAudio) window.DDAudio.startLoop("invincibleLoop");
-          showBanner("💰 PEPE JACKPOT", T.pepeInvincible + "s INVINCIBLE — SMASH EVERYTHING", "#ffe66b");
+          const wasInv = game.invincible > 0;
+          game.invincible = Math.max(game.invincible, T.pepeInvincible);   // refresh (no unbounded stack)
+          if (!wasInv) {
+            game.flashT = 1; game.shake = 22;
+            SFX("pepe");
+            if (window.DDAudio) window.DDAudio.startLoop("invincibleLoop");
+            showBanner("💰 PEPE JACKPOT", T.pepeInvincible + "s INVINCIBLE — SMASH EVERYTHING", "#ffe66b");
+          } else {
+            game.flashT = Math.max(game.flashT, 0.35);
+          }
+          spawnParticles(p.x, p.y, "#ffe66b", wasInv ? 16 : 70, wasInv ? 300 : 620);
         } else if (p.kind === "upgrade") {
+          const wasOD = game.freeAmmo;
           game.freeAmmo = true;
           game.odHits = 0;                       // absorbs 2 hits before power-down
-          game.lives += 2;                       // +2 kernels buffer while overdriven
-          game.transform = T.transformTime;      // freeze world for the transform sequence
-          game.flashT = 1;                        // big screen flash on transform
-          game.shake = 18;
-          spawnParticles(p.x, p.y, "#ffffff", 60, 560);
+          if (!p.eventGift) {
+            game.lives += 2;                     // +2 kernels buffer (rare standalone bolt only)
+            game.transform = T.transformTime;    // world-freeze transform sequence
+            showBanner("⚡ OVER CLOCKED!", "+2 kernels · 3× fire · smash through", C.accent);
+          } else if (!wasOD) {
+            showBanner("⚡ OVER CLOCKED!", "3× fire · smash through", C.accent, 1.2);
+          }
+          game.flashT = Math.max(game.flashT, p.eventGift ? 0.4 : 1);
+          game.shake = Math.max(game.shake, p.eventGift ? 8 : 18);
+          spawnParticles(p.x, p.y, "#ffffff", p.eventGift ? 24 : 60, p.eventGift ? 360 : 560);
           SFX("powerUp");
-          showBanner("⚡ OVER CLOCKED!", "+2 kernels · 3× fire · smash through", C.accent);
+        } else if (p.kind === "dataloss") {
+          // DATA LOSS — corrupted skull: 30% drains ALL, 40% HALF, 30% 10% of DATA streamed
+          const r = Math.random();
+          const frac = r < 0.30 ? 1.0 : (r < 0.70 ? 0.5 : 0.10);
+          const lost = Math.floor(game.bytes * frac);
+          game.bytes = Math.max(0, game.bytes - lost);
+          game.flashT = Math.max(game.flashT, 0.85); game.shake = 22;
+          spawnParticles(p.x, p.y, C.danger, 54, 480);
+          SFX("damage");
+          const pct = frac === 1 ? "ALL DATA STREAMED" : (frac === 0.5 ? "HALF DATA STREAMED" : "10% DATA STREAMED");
+          showBanner("☠ −" + formatBytes(lost) + " LOST!!", "DATA LOSS · " + pct, C.danger, 2.4);
+        } else if (p.kind === "recovery") {
+          // DATA RECOVERY — hard-drive doctor: instantly grants 5× current DATA streamed
+          const gain = Math.floor(game.bytes * T.dataRecoveryMult);
+          game.bytes += gain; game.gross += gain;
+          game.flashT = Math.max(game.flashT, 0.85); game.shake = 16;
+          spawnParticles(p.x, p.y, C.ok, 54, 480);
+          SFX("powerUp");
+          showBanner("🖥 +" + formatBytes(gain) + " RECOVERED!!", "DATA RECOVERY · 5× restored", C.ok, 2.4);
+        } else if (p.kind === "shield") {
+          game.shield = true;
+          game.flashT = Math.max(game.flashT, 0.4);
+          spawnParticles(p.x, p.y, C.accentSoft, 34, 380);
+          SFX("shieldHeld");
+          showBanner("🛡 SHIELD ONLINE", "absorbs the next hit", C.accentSoft);
         } else {
           game.lives++;
           spawnParticles(p.x, p.y, C.ok, 22, 280);
@@ -919,16 +1107,60 @@
     game.pickups = game.pickups.filter((p) => !p.grabbed && p.x > -100);
   }
 
+  // MINI-MALWARE spawns on a strict independent clock: every botSpawnSeconds it
+  // releases botBatch bots, but never more than botMax on screen. While at the cap
+  // the clock simply parks at zero (no back-queue) and only rearms once there's room.
+  function updateMalwareSpawn(dt) {
+    if (game.event) return;   // the hallway events run their own content; no chasing malware
+    game.botTimer -= dt;
+    if (game.botTimer > 0) return;
+    if (game.bots.length >= T.botMax) return;   // full screen — hold the clock until space frees
+    const room = T.botMax - game.bots.length;
+    const n = Math.min(T.botBatch, room);
+    const S = game.streamed;
+    for (let i = 0; i < n; i++) {
+      let cy;
+      if (game.boss) {
+        cy = H * (0.18 + Math.random() * 0.64);   // boss arena is open — drop them anywhere
+      } else {
+        const col = colAtSpawn();
+        cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H / 2;
+      }
+      game.bots.push({ x: W + 60 + i * 74, y: cy, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S });
+    }
+    SFX("malwareSpawn");
+    if (window.DDAudio) window.DDAudio.startLoop("malwareLoop");
+    game.botTimer = T.botSpawnSeconds;            // rearm the 30s clock only after a successful spawn
+  }
+
+  // SHIELD — its own independent entity. Memoryless random spawn: no timer, cycle,
+  // or event triggers or prevents it. Only guard is one-on-screen-at-a-time.
+  function maybeSpawnShield(dt) {
+    if (game.event) return;    // events run their own content
+    if (game.shield) return;   // already shielded — don't spawn another (no stacking, no queue)
+    if (game.pickups.some((p) => p.kind === "shield" && !p.grabbed)) return;
+    if (Math.random() < dt / T.shieldMeanSec) {
+      const col = colAtSpawn();
+      const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 70 : H / 2;
+      game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "shield" });
+    }
+  }
+
   function updateBots(dt) {
     const hb = playerHitbox();
     for (const b of game.bots) {
       b.pulse += dt;
-      // chase the player (tails you) until shot down or it expires
-      const dx = game.px - b.x, dy = game.py - b.y, d = Math.hypot(dx, dy) || 1;
-      b.x += (dx / d) * T.botSpeed * dt;
-      b.y += (dy / d) * T.botSpeed * dt;
-      // self-crash after tailing you for botCrashKB of distance
-      if (game.streamed - b.spawnStreamed > T.botCrashKB) { b.dead = true; spawnParticles(b.x, b.y, C.warn, 26, 320); continue; }
+      if (b.static) {
+        b.x -= game.scroll * dt;   // DDoS maze bot: rides the world like terrain, never chases
+        if (b.x < -80) { b.dead = true; continue; }
+      } else {
+        // chase the player (tails you) until shot down or it expires
+        const dx = game.px - b.x, dy = game.py - b.y, d = Math.hypot(dx, dy) || 1;
+        b.x += (dx / d) * T.botSpeed * dt;
+        b.y += (dy / d) * T.botSpeed * dt;
+        // self-crash after tailing you for botCrashKB of distance
+        if (game.streamed - b.spawnStreamed > T.botCrashKB) { b.dead = true; spawnParticles(b.x, b.y, C.warn, 26, 320); continue; }
+      }
       // player bullets damage bots
       for (const pb of game.playerBullets) {
         if (pb.dead) continue;
@@ -940,7 +1172,22 @@
       }
     }
     game.bots = game.bots.filter((b) => !b.dead);
-    if (!game.bots.length && window.DDAudio && window.DDAudio.isLooping("malwareLoop")) window.DDAudio.stopLoop("malwareLoop", true);
+    // PROXIMITY AUDIO: the presence loop stays near-silent until a bot is right on
+    // top of you, then swells — quiet at distance, loud only when extremely close.
+    if (window.DDAudio && window.DDAudio.isLooping("malwareLoop")) {
+      if (!game.bots.length) {
+        window.DDAudio.stopLoop("malwareLoop", true);
+      } else {
+        let nd = Infinity;
+        for (const b of game.bots) {
+          const d = Math.hypot(game.px - b.x, game.py - b.y);
+          if (d < nd) nd = d;
+        }
+        let k = (T.botLoudFar - nd) / (T.botLoudFar - T.botLoudNear);
+        k = Math.max(0, Math.min(1, k));
+        if (window.DDAudio.setLoopVolume) window.DDAudio.setLoopVolume("malwareLoop", T.botLoudPeak * k * k);
+      }
+    }
   }
 
   function updateBombs(dt) {
@@ -967,23 +1214,23 @@
   // ---- boss : vicious malware daemon ---------------------------------------
   function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 
-  function spawnBoss() {
+  function makeBoss(homeX, homeY) {
     // each daemon gets a randomized personality: movement style, a shuffled
     // attack playlist, fire cadence, and spin — never the same fight twice
     const playlist = shuffle([0, 1, 2, 3, 4]).slice(0, 3 + Math.floor(Math.random() * 3));
-    // visual archetype: distinct malware species, each its own silhouette + palette
     const ARCH = [
-      { kind: "spike",  c1: C.danger,  c2: C.mystery },   // jagged virus
-      { kind: "ring",   c1: "#ff9e4d", c2: C.danger  },   // segmented worm/ring
-      { kind: "cube",   c1: C.mystery, c2: C.accent   },   // glitch trojan cube
-      { kind: "eye",    c1: "#ff5d73", c2: "#ffd166"  },   // all-seeing rootkit
+      { kind: "spike",  c1: C.danger,  c2: C.mystery },
+      { kind: "ring",   c1: "#ff9e4d", c2: C.danger  },
+      { kind: "cube",   c1: C.mystery, c2: C.accent   },
+      { kind: "eye",    c1: "#ff5d73", c2: "#ffd166"  },
     ];
     const arch = ARCH[Math.floor(Math.random() * ARCH.length)];
-    game.boss = {
+    return {
       phase: "enter",
       x: W + SPRITES.boss.w,
-      y: H / 2,
-      tx: W * 0.78, ty: H / 2, moveT: 0,
+      y: homeY,
+      homeX: homeX, homeY: homeY,
+      tx: homeX, ty: homeY, moveT: 0,
       timer: T.bossDuration,
       enter: T.bossEnterTime,
       arch,
@@ -991,13 +1238,28 @@
       patternT: 1.2, patternDur: T.bossPatternEvery * (0.7 + Math.random() * 0.7),
       fireT: 0.6, fireRate: 0.62 + Math.random() * 0.4,
       spiralA: Math.random() * 6.28, spiralDir: Math.random() < 0.5 ? 1 : -1,
-      moveStyle: Math.floor(Math.random() * 3),         // 0 dart · 1 strafe · 2 orbit
+      moveStyle: Math.floor(Math.random() * 3),
       moveSpeed: T.bossMoveSpeed * (0.75 + Math.random() * 0.7),
       orbA: Math.random() * 6.28, orbR: H * (0.18 + Math.random() * 0.14), orbDir: Math.random() < 0.5 ? 1 : -1,
       crashVy: 0, rot: 0, hitFlash: 0, pulse: 0, bombFired: false,
     };
+  }
+
+  function spawnBoss() {
+    game.boss = makeBoss(W * 0.78, H / 2);
+    game._bossesActive = true;
     showBanner(TEXT.bossIncoming, "", C.danger);
-    game.bots = [];
+    game.nextBossPacket = game.streamed + T.bossPacketEvery * 0.35;   // first relief strip soon after engage
+    SFX("bossIncoming");
+    if (window.DDAudio) window.DDAudio.music("bossMusic");
+  }
+
+  function spawnDoubleBoss() {
+    game.boss = makeBoss(W * 0.72, H * 0.30);
+    game.boss2 = makeBoss(W * 0.82, H * 0.70);
+    game._bossesActive = true;
+    showBanner("⚠⚠  DOUBLE DAEMON BREACH", "two daemons at once — survive!", C.danger, 2.6);
+    game.nextBossPacket = game.streamed + T.bossPacketEvery * 0.35;
     SFX("bossIncoming");
     if (window.DDAudio) window.DDAudio.music("bossMusic");
   }
@@ -1015,16 +1277,29 @@
   }
 
   function updateBoss(dt) {
-    const b = game.boss;
+    if (game.boss) updateOneBoss(game.boss, dt, true);
+    if (game.boss2) updateOneBoss(game.boss2, dt, false);
+    if (game.boss && game.boss._dead) game.boss = null;
+    if (game.boss2 && game.boss2._dead) game.boss2 = null;
+    if (game._bossesActive && !game.boss && !game.boss2) {
+      game._bossesActive = false;
+      game.bullets = []; game.bars = []; game.bombs = [];
+      game.bossClock = 0;
+      hud.timerWrap.classList.add("hidden");
+      if (window.DDAudio) window.DDAudio.music("music");
+    }
+  }
+
+  function updateOneBoss(b, dt, primary) {
     if (!b) return;
     if (b.hitFlash > 0) b.hitFlash -= dt;
     b.pulse += dt;
 
     if (b.phase === "enter") {
       b.enter -= dt;
-      b.x += (W * 0.78 - b.x) * Math.min(1, dt * 4);
-      b.y += (H / 2 - b.y) * Math.min(1, dt * 3);
-      if (b.enter <= 0) { b.phase = "fight"; hud.timerWrap.classList.remove("hidden"); bossPickTarget(b); }
+      b.x += (b.homeX - b.x) * Math.min(1, dt * 4);
+      b.y += (b.homeY - b.y) * Math.min(1, dt * 3);
+      if (b.enter <= 0) { b.phase = "fight"; if (primary) hud.timerWrap.classList.remove("hidden"); bossPickTarget(b); }
     } else if (b.phase === "fight") {
       // movement by personality
       b.moveT -= dt;
@@ -1069,9 +1344,7 @@
 
       if (b.timer <= 0) {
         b.phase = "crash";
-        hud.timerWrap.classList.add("hidden");
         SFX("bossDead");
-        if (window.DDAudio) window.DDAudio.music("music");
         showBanner(TEXT.bossSurvive, TEXT.bossSurviveSub, C.ok);
       }
       // body collision (gentle — costs a kernel)
@@ -1087,18 +1360,14 @@
       if (b.y - SPRITES.boss.h / 2 > H + 40) {
         spawnParticles(b.x, H, C.danger, 36, 360);
         game.shake = 14;
-        game.boss = null;
-        game.bullets = [];
-        game.bars = [];
-        game.bombs = [];
-        game.bossClock = 0;
+        b._dead = true;
       }
     }
   }
 
   function spawnBullet(b, ang, spd) {
     var now = (game ? game.t : 0);
-    if (now - (game._lastBossShot || -1) > 0.12) { game._lastBossShot = now; SFX("bossShot", { volume: 0.22 }); }
+    if (now - (game._lastBossShot || -1) > 0.12) { game._lastBossShot = now; SFX("bossShot"); }
     game.bullets.push({
       x: b.x, y: b.y,
       vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
@@ -1202,16 +1471,17 @@
         hud.lives.appendChild(d);
       }
     }
-    if (game.boss && game.boss.phase === "fight") {
-      const f = Math.max(0, game.boss.timer / T.bossDuration);
-      hud.timerVal.textContent = Math.ceil(game.boss.timer) + "s";
+    const bossT = (game.boss && game.boss.phase === "fight") ? game.boss : ((game.boss2 && game.boss2.phase === "fight") ? game.boss2 : null);
+    if (bossT) {
+      const f = Math.max(0, bossT.timer / T.bossDuration);
+      hud.timerVal.textContent = Math.ceil(bossT.timer) + "s";
       hud.timerFill.style.transform = `scaleX(${f})`;
     }
     // mystery scroll-effect status pill
     if (hud.fx) {
       if (game.scrollFx) {
         const fx = game.scrollFx;
-        const label = fx.kind === "fast" ? "OVERCLOCK ⏩" : (fx.kind === "slow" ? "THROTTLED ⏸" : "REWIND ⏪");
+        const label = fx.kind === "fast" ? "OVERCLOCK ⏩" : (fx.kind === "slow" ? "THROTTLED ⏸" : "REVERTING ⏪");
         const fxCol = fx.kind === "reverse" ? C.danger : C.ok;
         hud.fx.textContent = label + "  " + Math.ceil(fx.t) + "s";
         hud.fx.style.color = fxCol;
@@ -1817,6 +2087,116 @@
         continue;
       }
 
+      if (p.kind === "dataloss") {
+        // DATA LOSS — pulsing RED skull ensnared in violent black corruption goop
+        const ds = s * 1.3, pp = 0.5 + 0.5 * Math.sin(game.t * 7 + p.bob);
+        ctx.save(); ctx.translate(p.x, y);
+        // menacing red halo
+        const ha = ctx.createRadialGradient(0, 0, 0, 0, 0, ds * 1.5);
+        ha.addColorStop(0, hexA("#ff5d73", 0.5 + 0.3 * pp)); ha.addColorStop(0.5, hexA("#b3001b", 0.28)); ha.addColorStop(1, "transparent");
+        ctx.fillStyle = ha; ctx.beginPath(); ctx.arc(0, 0, ds * 1.5, 0, Math.PI * 2); ctx.fill();
+        // black corruption goop — jagged static tendrils whipping around the skull
+        ctx.strokeStyle = "#05010a"; ctx.lineWidth = 3.4; ctx.lineCap = "round"; ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
+        for (let k = 0; k < 9; k++) {
+          const a = (k / 9) * 6.28 + game.t * 1.3;
+          ctx.beginPath(); let rx = Math.cos(a) * ds * 0.42, ry = Math.sin(a) * ds * 0.42; ctx.moveTo(rx, ry);
+          for (let j = 0; j < 3; j++) { rx += Math.cos(a) * ds * 0.22 + (Math.random() - 0.5) * 12; ry += Math.sin(a) * ds * 0.22 + (Math.random() - 0.5) * 12; ctx.lineTo(rx, ry); }
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        // skull — red dome + tapered jaw
+        const rr = ds * 0.46;
+        ctx.fillStyle = lerpHex("#ff5d73", "#ff2740", pp); ctx.strokeStyle = "#3a0008"; ctx.lineWidth = 2;
+        ctx.shadowColor = "#ff2740"; ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(0, -rr * 0.2, rr, Math.PI, 0); // cranium
+        ctx.lineTo(rr * 0.7, rr * 0.5); ctx.lineTo(rr * 0.34, rr * 0.5); ctx.lineTo(rr * 0.28, rr * 0.95);
+        ctx.lineTo(-rr * 0.28, rr * 0.95); ctx.lineTo(-rr * 0.34, rr * 0.5); ctx.lineTo(-rr * 0.7, rr * 0.5);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        // hollow eye sockets + nasal cavity (black)
+        ctx.fillStyle = "#05010a";
+        ctx.beginPath(); ctx.ellipse(-rr * 0.42, -rr * 0.15, rr * 0.27, rr * 0.32, 0, 0, 6.3); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(rr * 0.42, -rr * 0.15, rr * 0.27, rr * 0.32, 0, 0, 6.3); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(0, rr * 0.05); ctx.lineTo(rr * 0.14, rr * 0.4); ctx.lineTo(-rr * 0.14, rr * 0.4); ctx.closePath(); ctx.fill();
+        // angry red eye glints
+        ctx.fillStyle = "#ff6b7e"; ctx.shadowColor = "#ff2740"; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.arc(-rr * 0.42, -rr * 0.12, rr * 0.09 * (0.7 + 0.5 * pp), 0, 6.3); ctx.fill();
+        ctx.beginPath(); ctx.arc(rr * 0.42, -rr * 0.12, rr * 0.09 * (0.7 + 0.5 * pp), 0, 6.3); ctx.fill();
+        ctx.shadowBlur = 0;
+        // teeth
+        ctx.strokeStyle = "#3a0008"; ctx.lineWidth = 1.4;
+        for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(k * rr * 0.13, rr * 0.5); ctx.lineTo(k * rr * 0.13, rr * 0.92); ctx.stroke(); }
+        ctx.restore();
+        ctx.fillStyle = C.danger; ctx.font = `800 9px ${FONTS.mono}`; ctx.textAlign = "center";
+        ctx.fillText("☠ DATA LOSS", p.x, y + ds * 0.62 + 12); ctx.textAlign = "left";
+        continue;
+      }
+
+      if (p.kind === "recovery") {
+        // DATA RECOVERY — hard-drive "doctor": metallic drive w/ spinning platter + green medical cross
+        const ds = s * 1.3, pp = 0.5 + 0.5 * Math.sin(game.t * 6 + p.bob);
+        ctx.save(); ctx.translate(p.x, y);
+        // healing green halo
+        const ha = ctx.createRadialGradient(0, 0, 0, 0, 0, ds * 1.45);
+        ha.addColorStop(0, hexA("#72ffcf", 0.5 + 0.3 * pp)); ha.addColorStop(0.5, hexA("#1f8a5b", 0.25)); ha.addColorStop(1, "transparent");
+        ctx.fillStyle = ha; ctx.beginPath(); ctx.arc(0, 0, ds * 1.45, 0, Math.PI * 2); ctx.fill();
+        // drive body (metallic rounded rect)
+        const bw = ds * 0.92, bh = ds * 0.72, rad = 6;
+        ctx.shadowColor = C.ok; ctx.shadowBlur = 16;
+        const bg = ctx.createLinearGradient(0, -bh / 2, 0, bh / 2);
+        bg.addColorStop(0, "#e9f6ff"); bg.addColorStop(0.5, "#9fb6c8"); bg.addColorStop(1, "#5d7184");
+        ctx.fillStyle = bg; ctx.strokeStyle = "#2b3a47"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-bw / 2 + rad, -bh / 2); ctx.arcTo(bw / 2, -bh / 2, bw / 2, bh / 2, rad);
+        ctx.arcTo(bw / 2, bh / 2, -bw / 2, bh / 2, rad); ctx.arcTo(-bw / 2, bh / 2, -bw / 2, -bh / 2, rad);
+        ctx.arcTo(-bw / 2, -bh / 2, bw / 2, -bh / 2, rad); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        // spinning platter disc (left)
+        ctx.save(); ctx.translate(-bw * 0.2, 0); ctx.rotate(game.t * 3);
+        const pl = ctx.createRadialGradient(0, 0, 1, 0, 0, bh * 0.34);
+        pl.addColorStop(0, "#cfe0ee"); pl.addColorStop(0.7, "#7d93a6"); pl.addColorStop(1, "#3c4c5a");
+        ctx.fillStyle = pl; ctx.beginPath(); ctx.arc(0, 0, bh * 0.34, 0, 6.3); ctx.fill();
+        ctx.strokeStyle = "#cfe9ff"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(bh * 0.3, 0); ctx.stroke();
+        ctx.fillStyle = "#2b3a47"; ctx.beginPath(); ctx.arc(0, 0, bh * 0.06, 0, 6.3); ctx.fill();
+        ctx.restore();
+        // green medical "doctor" cross (right)
+        const cx2 = bw * 0.22, cw2 = bh * 0.13, cl = bh * 0.3;
+        ctx.fillStyle = lerpHex("#72ffcf", "#1f8a5b", 1 - pp); ctx.shadowColor = C.ok; ctx.shadowBlur = 12;
+        ctx.fillRect(cx2 - cw2, -cl, cw2 * 2, cl * 2);
+        ctx.fillRect(cx2 - cl, -cw2, cl * 2, cw2 * 2);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        ctx.fillStyle = C.ok; ctx.font = `800 9px ${FONTS.mono}`; ctx.textAlign = "center";
+        ctx.fillText("🖥 RECOVERY", p.x, y + ds * 0.55 + 12); ctx.textAlign = "left";
+        continue;
+      }
+
+      if (p.kind === "shield") {
+        // SHIELD — circular tactical-pepe icon ringed by a protective energy barrier
+        const ss = T.shieldSize, pp = 0.5 + 0.5 * Math.sin(game.t * 5 + p.bob);
+        ctx.save(); ctx.translate(p.x, y);
+        const ha = ctx.createRadialGradient(0, 0, 0, 0, 0, ss * 0.92);
+        ha.addColorStop(0, hexA("#6df0ff", 0.4 + 0.25 * pp)); ha.addColorStop(0.6, hexA("#2dd4ff", 0.16)); ha.addColorStop(1, "transparent");
+        ctx.fillStyle = ha; ctx.beginPath(); ctx.arc(0, 0, ss * 0.92, 0, 6.283); ctx.fill();
+        ctx.shadowColor = C.accent; ctx.shadowBlur = 16;
+        if (imgShield && imgShield.complete && imgShield.naturalWidth) {
+          ctx.save(); ctx.beginPath(); ctx.arc(0, 0, ss * 0.5, 0, 6.283); ctx.clip();
+          ctx.drawImage(imgShield, -ss * 0.5, -ss * 0.5, ss, ss); ctx.restore();
+        }
+        ctx.shadowBlur = 0;
+        // solid rim + rotating dashed barrier
+        ctx.strokeStyle = hexA("#bdf3ff", 0.85); ctx.lineWidth = 2.5; ctx.shadowColor = C.accent; ctx.shadowBlur = 12;
+        ctx.beginPath(); ctx.arc(0, 0, ss * 0.53, 0, 6.283); ctx.stroke();
+        ctx.shadowBlur = 0; ctx.setLineDash([7, 7]); ctx.lineWidth = 1.6; ctx.strokeStyle = hexA("#6df0ff", 0.7);
+        ctx.save(); ctx.rotate(game.t * 1.4); ctx.beginPath(); ctx.arc(0, 0, ss * 0.63, 0, 6.283); ctx.stroke(); ctx.restore();
+        ctx.setLineDash([]);
+        ctx.restore();
+        ctx.fillStyle = C.accentSoft; ctx.font = `800 9px ${FONTS.mono}`; ctx.textAlign = "center";
+        ctx.fillText("🛡 SHIELD", p.x, y + ss * 0.5 + 13); ctx.textAlign = "left";
+        continue;
+      }
+
       // kernel — electrified UPDATE TESSERACT: nested cubes each spinning their own
       // way, high contrast, crackling aura
       const bonus = p.kind === "bonus";
@@ -1901,7 +2281,10 @@
   }
 
   function drawBoss() {
-    const b = game.boss;
+    if (game.boss) drawOneBoss(game.boss);
+    if (game.boss2) drawOneBoss(game.boss2);
+  }
+  function drawOneBoss(b) {
     if (!b) return;
     const w = SPRITES.boss.w;
     const crashing = b.phase === "crash";
@@ -2252,6 +2635,22 @@
       ctx.shadowBlur = 0;
     }
 
+    // SHIELD barrier — translucent hex bubble around the bot while a shield is held
+    if (game.shield && !blink) {
+      const r = PH * 1.55;
+      ctx.save();
+      const sg = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r);
+      sg.addColorStop(0, "transparent"); sg.addColorStop(0.8, hexA("#2dd4ff", 0.10)); sg.addColorStop(1, hexA("#6df0ff", 0.22));
+      ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = hexA("#6df0ff", 0.5 + 0.3 * Math.sin(game.t * 6)); ctx.lineWidth = 2.4;
+      ctx.shadowColor = C.accent; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = hexA("#bdf3ff", 0.4);
+      ctx.save(); ctx.rotate(game.t * 0.8); polyPath(6, r * 0.98, 0); ctx.stroke(); ctx.restore();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+
     // lively motion: lean into velocity + gentle idle bob/sway/breathe
     const tilt = Math.max(-0.4, Math.min(0.5, game.vy / 900)) + Math.sin(game.t * 4) * 0.04;
     ctx.rotate(tilt);
@@ -2356,6 +2755,100 @@
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
   }
 
+  // ---- main-menu sprite : pixel-perfect power-up / power-down ----------------
+  // The 10 source frames are independently-generated and the body morphs/scales
+  // between them, so an animated body can never be truly pixel-locked. Instead we
+  // hold ONE eye-locked frame perfectly still (zero jitter, eyes never move) and
+  // render the whole "power up → power down" surge as a smooth PROCEDURAL electric
+  // aura around it (60fps) — pixel-perfect AND buttery smooth, no stacking.
+  let menuClock = 0, menuCtx = null;
+  function menuGlow(g, cxp, cyp, rad, col, inten) {
+    const rg = g.createRadialGradient(cxp, cyp, 0, cxp, cyp, rad);
+    rg.addColorStop(0, hexA(col, inten)); rg.addColorStop(0.5, hexA(col, inten * 0.5)); rg.addColorStop(1, "transparent");
+    g.fillStyle = rg; g.beginPath(); g.arc(cxp, cyp, rad, 0, 6.283); g.fill();
+  }
+  function updateMenuSprite(dt) {
+    const el = hud.menuSprite;
+    if (!el) return;
+    const show = state === STATE.MENU && !hud.overlay.classList.contains("hidden");
+    if (!show) { if (!el.classList.contains("hidden")) el.classList.add("hidden"); return; }
+    if (!menuCtx) menuCtx = el.getContext("2d");
+    const body = menuFrames[8];   // one calm, eye-locked frame (aligned_09) — the static base
+    if (!body || !body.complete || !body.naturalWidth) return;
+    if (el.classList.contains("hidden")) el.classList.remove("hidden");
+    menuClock += dt;
+    const g = menuCtx, cw = el.width, ch = el.height, t = menuClock;
+    const bx = 173, by = 205;     // aura/body centre (native frame coords)
+    // power 0→1→0 (eased), with a small idle floor so he always crackles a little
+    const cyc = (t % 3.6) / 3.6;
+    let p = cyc < 0.5 ? cyc / 0.5 : (1 - cyc) / 0.5;
+    p = p * p * (3 - 2 * p);
+    const pw = 0.12 + 0.88 * p;
+    g.clearRect(0, 0, cw, ch);
+    g.save();
+    // radial energy field
+    const rg = g.createRadialGradient(bx, by, 0, bx, by, 150);
+    rg.addColorStop(0, hexA("#ffffff", 0.18 * pw));
+    rg.addColorStop(0.35, hexA("#6df0ff", 0.34 * pw));
+    rg.addColorStop(0.7, hexA("#2dd4ff", 0.16 * pw));
+    rg.addColorStop(1, "transparent");
+    g.fillStyle = rg; g.beginPath(); g.arc(bx, by, 150, 0, 6.283); g.fill();
+    // expanding shock rings
+    g.lineWidth = 2;
+    for (let k = 0; k < 3; k++) {
+      const rp = (t * 0.5 + k / 3) % 1;
+      g.globalAlpha = (1 - rp) * 0.5 * pw;
+      g.strokeStyle = "#bdf3ff";
+      g.beginPath(); g.arc(bx, by, 40 + rp * 112, 0, 6.283); g.stroke();
+    }
+    g.globalAlpha = 1;
+    // radiating lightning bolts
+    g.strokeStyle = "#ffffff"; g.shadowColor = "#2dd4ff"; g.shadowBlur = 14; g.lineWidth = 2;
+    const bolts = 11;
+    for (let k = 0; k < bolts; k++) {
+      if (Math.random() > 0.3 + 0.6 * pw) continue;
+      const a = (k / bolts) * 6.283 + t * 0.6;
+      const r0 = 55, r1 = (92 + Math.random() * 62) * (0.5 + 0.5 * pw);
+      g.globalAlpha = 0.5 + 0.5 * pw;
+      g.beginPath();
+      let rx = bx + Math.cos(a) * r0, ry = by + Math.sin(a) * r0; g.moveTo(rx, ry);
+      for (let j = 1; j <= 3; j++) {
+        const rr = r0 + (r1 - r0) * (j / 3);
+        rx = bx + Math.cos(a) * rr + (Math.random() - 0.5) * 16;
+        ry = by + Math.sin(a) * rr + (Math.random() - 0.5) * 16;
+        g.lineTo(rx, ry);
+      }
+      g.stroke();
+    }
+    g.globalAlpha = 1; g.shadowBlur = 0;
+    // ground energy glow
+    g.fillStyle = hexA("#6df0ff", 0.30 * pw);
+    g.beginPath(); g.ellipse(bx, 332, 72 * (0.6 + 0.5 * pw), 12 * (0.6 + 0.5 * pw), 0, 0, 6.283); g.fill();
+    // STATIC BODY — pixel-locked, never moves
+    g.imageSmoothingEnabled = true;
+    g.drawImage(body, 0, 0, cw, ch);
+    // eyes + chest core brighten with power (additive)
+    const eg = 0.45 + 0.55 * pw;
+    g.globalCompositeOperation = "lighter";
+    menuGlow(g, 173, 150, 16, "#7df7ff", 0.7 * eg);   // round eye
+    menuGlow(g, 141, 150, 14, "#7df7ff", 0.5 * eg);   // slit eye
+    menuGlow(g, 173, 224, 18, "#9bdcff", 0.55 * eg);  // chest core
+    g.globalCompositeOperation = "source-over";
+    // close electric arcs hugging the body at high power
+    if (pw > 0.4) {
+      g.strokeStyle = "#ffffff"; g.shadowColor = "#2dd4ff"; g.shadowBlur = 8; g.lineWidth = 1.4; g.globalAlpha = (pw - 0.4) * 1.2;
+      for (let k = 0; k < 4; k++) {
+        const a = Math.random() * 6.283, r0 = 60, r1 = 82;
+        g.beginPath(); g.moveTo(bx + Math.cos(a) * r0, by + Math.sin(a) * r0);
+        const am = a + (Math.random() - 0.5) * 0.6;
+        g.lineTo(bx + Math.cos(am) * (r0 + r1) / 2 + (Math.random() - 0.5) * 10, by + Math.sin(am) * (r0 + r1) / 2 + (Math.random() - 0.5) * 10);
+        g.lineTo(bx + Math.cos(a) * r1, by + Math.sin(a) * r1); g.stroke();
+      }
+      g.globalAlpha = 1; g.shadowBlur = 0;
+    }
+    g.restore();
+  }
+
   // ---- loop ----------------------------------------------------------------
   let last = performance.now();
   function frame(now) {
@@ -2363,6 +2856,8 @@
     last = now;
     dt = Math.max(0, Math.min(0.05, dt)); // guard against negative / huge deltas
     if (state === STATE.PLAY && !paused) update(dt);
+    updateMenuSprite(dt);
+    if (touchMode && touchUI) touchUI.classList.toggle("on", state === STATE.PLAY && !paused);
     render();
     requestAnimationFrame(frame);
   }
@@ -2373,6 +2868,84 @@
     var a = document.getElementById("mute-status"), b = document.getElementById("mute-status-pause");
     if (a) a.textContent = txt; if (b) b.textContent = txt;
   }
+  // ---- touch controls (mobile, landscape twin-stick) ----------------------
+  function checkOrient() {
+    if (touchMode) document.body.classList.toggle("portrait", window.innerHeight > window.innerWidth);
+  }
+  function setupTouch() {
+    if (!touchMode) return;
+    document.body.classList.add("touch");
+    touchUI = document.getElementById("touch-ui");
+    if (!touchUI) return;
+    const uiRect = () => touchUI.getBoundingClientRect();
+    const MAXR = 52, DEAD = 12;
+
+    function bindStick(zoneId, stickId, onVec, onEnd) {
+      const zone = document.getElementById(zoneId), stick = document.getElementById(stickId);
+      if (!zone || !stick) return;
+      const knob = stick.querySelector(".touch-knob");
+      let id = null, ox = 0, oy = 0;
+      zone.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        if (id !== null) return;
+        const t = e.changedTouches[0]; id = t.identifier;
+        const r = uiRect(); ox = t.clientX - r.left; oy = t.clientY - r.top;
+        stick.style.left = ox + "px"; stick.style.top = oy + "px"; stick.classList.add("show");
+        knob.style.transform = "translate(-50%,-50%)";
+        onVec(0, 0);
+      }, { passive: false });
+      zone.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        for (const t of e.changedTouches) {
+          if (t.identifier !== id) continue;
+          const r = uiRect(); const dx = (t.clientX - r.left) - ox, dy = (t.clientY - r.top) - oy;
+          const m = Math.hypot(dx, dy) || 1, cl = m > MAXR ? MAXR / m : 1;
+          knob.style.transform = `translate(calc(-50% + ${dx * cl}px), calc(-50% + ${dy * cl}px))`;
+          onVec(dx, dy);
+        }
+      }, { passive: false });
+      function end(e) {
+        for (const t of e.changedTouches) {
+          if (t.identifier !== id) continue;
+          id = null; stick.classList.remove("show"); knob.style.transform = "translate(-50%,-50%)"; onEnd();
+        }
+      }
+      zone.addEventListener("touchend", end); zone.addEventListener("touchcancel", end);
+    }
+
+    // LEFT stick — drift thrusters
+    bindStick("touch-move", "ts-move", (dx, dy) => {
+      keys.up = keys.down = keys.left = keys.right = false;
+      if (Math.hypot(dx, dy) < DEAD) return;
+      if (dx > 14) keys.right = true; else if (dx < -14) keys.left = true;
+      if (dy > 14) keys.down = true; else if (dy < -14) keys.up = true;
+    }, () => { keys.up = keys.down = keys.left = keys.right = false; });
+
+    // RIGHT stick — aim + fire (drag to aim, release to stop; tap = forward shot)
+    bindStick("touch-aim", "ts-aim", (dx, dy) => {
+      if (state !== STATE.PLAY || paused || !game) return;
+      game.shooting = true;
+      if (Math.hypot(dx, dy) >= DEAD) { aimX = game.px + dx; aimY = game.py + dy; aimSet = true; }
+      else aimSet = false;   // pressed but not aimed → straight ahead
+    }, () => { if (game) game.shooting = false; aimSet = false; });
+
+    // CHARGE button — hold to build, release to fire
+    const cb = document.getElementById("tbtn-charge");
+    if (cb) {
+      cb.addEventListener("touchstart", (e) => { e.preventDefault(); if (state === STATE.PLAY && !paused && game) { game.charging = true; cb.classList.add("charging", "held"); if (window.DDAudio) window.DDAudio.startLoop("chargeLoop"); } }, { passive: false });
+      const up = (e) => { e.preventDefault(); cb.classList.remove("charging", "held"); if (game && game.charging) { game.charging = false; if (window.DDAudio) window.DDAudio.stopLoop("chargeLoop"); releaseCharge(); } };
+      cb.addEventListener("touchend", up); cb.addEventListener("touchcancel", up);
+    }
+    const pb = document.getElementById("tbtn-pause");
+    if (pb) pb.addEventListener("touchstart", (e) => { e.preventDefault(); togglePause(); }, { passive: false });
+    const mb = document.getElementById("tbtn-mute");
+    if (mb) mb.addEventListener("touchstart", (e) => { e.preventDefault(); if (window.DDAudio) { const m = window.DDAudio.toggleMute(); mb.textContent = m ? "🔇" : "🔊"; refreshMuteLabels(); } }, { passive: false });
+
+    checkOrient();
+    window.addEventListener("resize", checkOrient);
+    window.addEventListener("orientationchange", checkOrient);
+  }
+
   // ---- boot ----------------------------------------------------------------
   function boot() {
     resize();
@@ -2404,9 +2977,12 @@
       hud.scoreName.addEventListener("keyup", (e) => e.stopPropagation());
     }
 
-    if (hud.ovControls) hud.ovControls.textContent = "WASD/ARROWS fly · MOUSE aim · L-CLICK fire · R-CLICK charge · P pause";
+    if (hud.ovControls) hud.ovControls.textContent = touchMode
+      ? "LEFT STICK fly · RIGHT STICK aim & fire · CHARGE hold/release"
+      : "WASD/ARROWS fly · MOUSE aim · L-CLICK fire · R-CLICK charge · P pause";
     if (hud.timerLabel) hud.timerLabel.textContent = "CLICK TO FRAG";
     refreshMuteLabels();
+    setupTouch();
     // start menu music on the first user gesture (autoplay needs interaction)
     window.addEventListener("pointerdown", function gm() {
       window.removeEventListener("pointerdown", gm);

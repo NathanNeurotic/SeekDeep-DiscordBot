@@ -45,7 +45,7 @@ window.DATADASH = {
       bossDead:      "Boss_defeatedcrashed_3-1780472556720.mp3",
     },
     loops: ["menuMusic", "music", "bossMusic", "chargeLoop", "malwareLoop", "invincibleLoop"],
-    volumes: { music: 1.0, menuMusic: 1.0, bossMusic: 1.15, shot: 0.3, packet: 0.28, malwareLoop: 0.5, kernel: 1.6, bossShot: 0.22, bossIncoming: 1.0, bossBomb: 0.9, bossDead: 1.0 },
+    volumes: { music: 1.7, menuMusic: 1.7, bossMusic: 1.8, shot: 0.42, packet: 0.34, malwareLoop: 0.4, malwareDie: 0.95, malwareSpawn: 0.85, kernel: 1.6, bossShot: 0.36, bossIncoming: 1.1, bossBomb: 1.15, bossDead: 1.05, damage: 0.95, gameOver: 1.0 },
   },
 
   /* --- BRANDING / COPY ---------------------------------------------------
@@ -54,7 +54,7 @@ window.DATADASH = {
   TEXT: {
     title:        "DATA DASH",
     titleAccent:  "SEEKDEEP'S",          // small kicker above the title
-    tagline:      "Hold to thrust through the firewall. Bank your bytes. Don't get fragmented.",
+    tagline:      "You are SeekDeep. Stream the bytes, neutralize the threats, and backdoor your way through every system.",
     start:        "JACK IN",
     retry:        "REROUTE",
     unit:         "B",                    // distance unit suffix (bytes)
@@ -219,8 +219,8 @@ window.DATADASH = {
     checkpointEvery:   46000,  // base bytes between +1 packs (scaled by kernels held) — rarer
     checkpointRich:    5,      // kernels at/above which packs become rare
     pickupSize:        44,
-    pickupPull:        230,    // pickups gravitate to the player within this radius (px)
-    pickupPullForce:   1350,   // pull strength (px/s at the edge of the radius) — +50%
+    pickupPull:        360,    // pickups gravitate to the player within this radius (px) — stronger reach
+    pickupPullForce:   2200,   // pull strength (px/s at the edge of the radius) — much grabbier
 
     // Emergency packs: only appear while you're down to your last kernel, grant +2
     bonusEvery:        12000,  // bytes between emergency-pack spawns (while at 1 kernel)
@@ -228,12 +228,25 @@ window.DATADASH = {
 
     // DATA PACKETS — tiny collectibles that bump your streamed total
     packetEvery:       8000,   // bytes between data-packet spawns (≈2× as many)
-    packetStringChance:0.45,   // chance a packet spawn is a short string of several
-    packetStringMax:   6,      // up to this many in a string
+    packetStringChance:0.6,    // chance a packet spawn is a string of several — more trails
+    packetStringMax:   14,     // up to this many in a string — longer trails, cooler grabs
     packetValue:      10000,   // DATA (bytes) granted per packet — 10 KB
 
-    // MINI-MALWARE BOTS — small drifting hazards between bosses
-    botEvery:          42000,  // bytes between bot spawns (when no boss active) — uncommon
+    // BOSS AMMO RELIEF — during a boss fight, if the player's reserves run low,
+    // feed spaced-out but consistent kb packet strips so they're never stranded
+    // without ammo. (Outside bosses we still want them to save up.)
+    bossPacketEvery:   34000,  // streamed bytes between relief strips (spaced + consistent)
+    bossPacketCount:   5,      // packets per strip (~50 KB ≈ 2 shots)
+    bossPacketLowKB:   1000000,// only feed relief while DATA reserves are under 1 MB
+
+    // MINI-MALWARE BOTS — small drifting hazards on their own respawn clock
+    botSpawnSeconds:   20,     // independent timer: spawn a batch every N seconds (50% more frequent)
+    botBatch:          2,      // how many spawn per tick
+    botMax:            6,      // hard cap on screen — clock won't restart until there's room
+    botLoudFar:        420,    // world px: beyond this the presence loop is silent
+    botLoudNear:       90,     // world px: within this the presence loop hits peak (proximity audio)
+    botLoudPeak:       0.6,    // max presence-loop gain when a bot is right on top of you
+    botEvery:          42000,  // (legacy — spawns are now time-based; kept for reference)
     botSpeed:          96,     // creep speed (px/s) — closes in, but always dodgeable
     botSize:           46,     // bot diameter (px) — big enough to shoot / dodge
     botHomeForce:      90,     // how much it veers toward the player (gentle interference)
@@ -247,6 +260,19 @@ window.DATADASH = {
     mysteryFastMult:   1.45,   // scroll multiplier: overclock (flashes GREEN)
     mysterySlowMult:   0.5,    // scroll multiplier: throttle (flashes GREEN)
     mysteryReverseMult:-0.8,   // scroll multiplier: rewind (flashes RED, negative = backwards)
+
+    // RANDOM EVENTS — special hallway segments that trigger unpredictably (not on a
+    // fixed cadence) and can be any one of: double-boss, DATA Base, DDoS, Pepe Packets.
+    eventEveryMin:     62,     // soonest seconds before another event can roll
+    eventEveryMax:     140,    // latest — picked randomly between so it never feels metronomic
+    eventGap:          0.80,   // straight-hallway opening (fraction of H) during an event
+    eventCols:         560,    // event "distance" in terrain columns (~12–16s)
+    dbWaveAmp:         0.30,   // DATA Base: kb wave amplitude (fraction of H)
+    dbSpacingCols:     3,      // DATA Base: columns between kb bits along the wave
+    ddosSpacingCols:   4,      // DDoS: columns between maze rows of stationary malware
+    ddosSlots:         8,      // DDoS: vertical slots per maze row
+    pepeGridCols:      5,      // Pepe Packets: columns between grid columns
+    pepeGridRows:      6,      // Pepe Packets: rows of collectibles across the hallway
 
     // Bosses — vicious animated malware daemon
     bossEverySeconds:  50,     // a boss arrives after this many seconds of boss-free survival
@@ -278,7 +304,17 @@ window.DATADASH = {
     pepeEvery:         20000000, // gross bytes between Pepe spawns (20 MB — 50% rarer)
     pepeSize:          76,
     pepeInvincible:    15,      // seconds of invincibility on collect
-    shotCost:          50000,  // DATA (bytes) spent per shot — 50 KB
+
+    // ELEMENTAL EVENT — a shared spawn pool that yields EITHER a DATA LOSS skull or
+    // a DATA RECOVERY drive (never both at once), at most once a minute.
+    elementalEvery:    60,      // minimum seconds between elemental events (≥ 1 / minute)
+    dataRecoveryMult:  5,       // DATA RECOVERY instantly grants this × your current DATA streamed
+
+    // SHIELD pickup — its OWN entity: completely random, memoryless spawn. No event
+    // or cycle triggers or blocks it; could appear in seconds or not for ages.
+    shieldMeanSec:     30,      // average seconds between spawns (but fully unpredictable)
+    shieldSize:        66,      // pickup icon diameter (px)
+    shotCost:          25000,  // DATA (bytes) spent per shot — 25 KB
     bombFuse:          1.6,    // boss bomb: blink time before it detonates (s)
     bombRadius:        150,    // bomb splash radius (px)
     bombSpeed:         150,    // bomb drift speed (px/s)
