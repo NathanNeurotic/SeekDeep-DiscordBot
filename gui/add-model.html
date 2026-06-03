@@ -816,12 +816,20 @@
     refreshCtx();
     refreshNextEnabled();
   }
+  // CodeQL js/xss: state.model_id can arrive from the ?prefill= query param or from
+  // untrusted Ollama-registry tag metadata, and several wizard steps interpolate it
+  // into innerHTML. Escape it at every such sink.
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+    ));
+  }
   function refreshCtx() {
     const c = $('#ctx');
     if (state.step === 1) c.innerHTML = 'Pick a backend to begin · <em>5 backends · 5 chat roles</em>';
     else if (state.step === 2) c.innerHTML = `Backend · <em>${labelFor(state.backend)}</em>`;
-    else if (state.step === 3) c.innerHTML = `Backend · <em>${labelFor(state.backend)}</em> · model · <em>${state.model_id}</em>`;
-    else if (state.step === 4) c.innerHTML = `Ready to install · <em>${labelFor(state.backend)}</em> · <em>${state.model_id}</em>`;
+    else if (state.step === 3) c.innerHTML = `Backend · <em>${labelFor(state.backend)}</em> · model · <em>${esc(state.model_id)}</em>`;
+    else if (state.step === 4) c.innerHTML = `Ready to install · <em>${labelFor(state.backend)}</em> · <em>${esc(state.model_id)}</em>`;
     else c.innerHTML = '';
   }
   function refreshNextEnabled() {
@@ -1035,7 +1043,7 @@
     const pane = $('#installPane');
     pane.classList.remove('done', 'error');
     $('#installTitle').textContent = 'Installing…';
-    $('#installSummary').innerHTML = `<code>${labelFor(state.backend)}</code> · <code>${state.model_id}</code>`;
+    $('#installSummary').innerHTML = `<code>${labelFor(state.backend)}</code> · <code>${esc(state.model_id)}</code>`;
     $('#installSub').innerHTML = 'Talking to <code>POST /model/install</code> · downloading, probing, and writing config keys. This window stays put — don\'t close.';
     $('#installLog').innerHTML = '';
     appendLog(`▸ POST ${BASE}/model/install`);
@@ -1097,7 +1105,7 @@
   function renderInstallDoneFooter() {
     const foot = $('.wiz-foot');
     foot.innerHTML = `
-      <div class="ctx">Install complete · <em>${state.model_id}</em></div>
+      <div class="ctx">Install complete · <em>${esc(state.model_id)}</em></div>
       <button type="button" class="btn btn-ghost" id="installAgain">Install another</button>
       <a href="chat.html" class="btn btn-primary">▸ Open chat</a>
     `;

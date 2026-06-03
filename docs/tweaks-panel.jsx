@@ -217,6 +217,9 @@ function TweaksPanel({ title = 'Tweaks', children }) {
 
   React.useEffect(() => {
     const onMsg = (e) => {
+      // CodeQL js/missing-origin-check: only honor edit-mode control messages from
+      // our actual embedder (window.parent), not arbitrary cross-origin frames.
+      if (e.source !== window.parent) return;
       const t = e?.data?.type;
       if (t === '__activate_edit_mode') setOpen(true);
       else if (t === '__deactivate_edit_mode') setOpen(false);

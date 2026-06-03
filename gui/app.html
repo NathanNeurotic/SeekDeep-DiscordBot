@@ -4102,7 +4102,11 @@ const SEEKDEEP_BASE = (function() {
     function setStatus(text, cls) {
       refs.status.className = 'pill ' + (cls || '') + ' ';
       refs.status.style.padding = '3px 10px';
-      refs.status.innerHTML = `<span class="dot"></span>${text}`;
+      // CodeQL js/xss-through-dom: image-error callers pass server-supplied text in
+      // here; render it as a text node (dot stays markup) so a hostile AI-server
+      // error string can't inject HTML.
+      refs.status.innerHTML = '<span class="dot"></span>';
+      refs.status.appendChild(document.createTextNode(text == null ? '' : String(text)));
     }
 
     // ---- Source image handling (drop / paste / click) ----

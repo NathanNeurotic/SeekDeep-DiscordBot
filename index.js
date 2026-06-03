@@ -16748,7 +16748,9 @@ function seekdeepResolveEmojiForReact(emoji, guild) {
 // image_only (🖼️) claims it instead. (A user posting a GIF was getting 🔗.)
 function seekdeepUrlLooksLikeMedia(url = '') {
   const u = String(url || '').toLowerCase();
-  if (/(?:tenor|giphy|gfycat)\.com/.test(u)) return true;
+  // Anchor the host match (CodeQL js/regex/missing-regexp-anchor): require a host
+  // boundary so "tenor.com.evil.com" or "...?x=tenor.com" no longer count as media.
+  if (/(?:^|\/\/|\.)(?:tenor|giphy|gfycat)\.com(?:[\/:?#]|$)/.test(u)) return true;
   const pathPart = u.split(/[?#]/)[0];
   return /\.(?:gif|gifv|png|jpe?g|webp|avif|bmp|mp4|webm|mov)$/.test(pathPart);
 }

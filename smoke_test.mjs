@@ -2250,6 +2250,17 @@ if (typeof T.seekdeepImageQueueAdmission === 'function' && globalThis.__seekdeep
   }
 }
 
+// -- #113 (CodeQL js/regex/missing-regexp-anchor): seekdeepUrlLooksLikeMedia
+//    anchors the GIF-host match so a look-alike host isn't misclassified as media. --
+if (typeof T.seekdeepUrlLooksLikeMedia === 'function') {
+  check('media-url: real tenor link is media', T.seekdeepUrlLooksLikeMedia('https://tenor.com/view/abc-123') === true);
+  check('media-url: giphy subdomain is media', T.seekdeepUrlLooksLikeMedia('https://media.giphy.com/x.gif') === true);
+  check('media-url: bare tenor.com is media', T.seekdeepUrlLooksLikeMedia('tenor.com') === true);
+  check('media-url: look-alike tenor.com.evil.com is NOT media', T.seekdeepUrlLooksLikeMedia('https://tenor.com.evil.com/x') === false);
+  check('media-url: tenor.com in a query param is NOT media', T.seekdeepUrlLooksLikeMedia('https://example.com/?u=tenor.com') === false);
+  check('media-url: direct .gif is still media', T.seekdeepUrlLooksLikeMedia('https://cdn.example.com/a.gif') === true);
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
