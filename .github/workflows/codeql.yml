@@ -1,0 +1,42 @@
+# SeekDeep CI · CodeQL static analysis (deep-audit CI-3)
+# Free SAST on public repos. Scans the JavaScript (index.js + gui/*.js) and
+# Python (local_ai_server.py, gui_endpoints.py, …) for injection, traversal,
+# and other security-relevant patterns. Results land in the Security tab.
+# (Rust/Tauri is not covered by default CodeQL; cargo-audit handles its deps.)
+
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 9 * * 1'   # Mondays 09:00 UTC
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript-typescript', 'python']
+    steps:
+      - uses: actions/checkout@v5
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
