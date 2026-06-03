@@ -229,6 +229,7 @@ function TweaksPanel({
   }, [open, clampToViewport]);
   React.useEffect(() => {
     const onMsg = e => {
+      if (e.source !== window.parent) return;
       const t = e?.data?.type;
       if (t === '__activate_edit_mode') setOpen(true);else if (t === '__deactivate_edit_mode') setOpen(false);
     };
