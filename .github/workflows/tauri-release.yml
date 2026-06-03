@@ -162,7 +162,7 @@ jobs:
       - name: Checkout
         # v5 runs on Node.js 24. v4 still works but emits a deprecation
         # warning since 2026-Q2 when GH Actions started forcing Node 24.
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Node 20
         # setup-node@v5 is the Node 24-based runner of this action;
