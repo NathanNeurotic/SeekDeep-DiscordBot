@@ -131,6 +131,6 @@
 
   function stub() {
     var noop = function () {};
-    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, setLoopVolume: noop, isLooping: function () { return false; }, music: noop, stopAllMusic: noop };
+    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, setLoopVolume: noop, isLooping: function () { return false; }, music: noop, stopAllMusic: noop, muted: false, toggleMute: function () { return false; } };
   }
 })();
