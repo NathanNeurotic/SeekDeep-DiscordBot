@@ -4384,6 +4384,39 @@ function seekdeepImageQueueCurrentPosition() {
   return seekdeepImageQueueState.pending.length + (seekdeepImageQueueState.active ? 1 : 0) + 1;
 }
 
+// BOT-2: bound the image queue so a spammed /image (or a runaway caller) cannot
+// grow `pending` without limit. 0 disables a cap. These are soft caps enforced at
+// the user-facing entry point (seekdeepSendImageWithButtons); admin / priority
+// jobs and the regenerate/emergency buttons bypass them.
+const SEEKDEEP_IMAGE_QUEUE_MAX_PENDING = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_QUEUE_MAX_PENDING || 50));
+const SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER || 5));
+
+function seekdeepImageQueueAdmission(userId, { isPriority = false } = {}) {
+  if (isPriority) return { ok: true };
+  const pending = seekdeepImageQueueState.pending || [];
+  if (SEEKDEEP_IMAGE_QUEUE_MAX_PENDING > 0 && pending.length >= SEEKDEEP_IMAGE_QUEUE_MAX_PENDING) {
+    return {
+      ok: false,
+      reason: 'queue-full',
+      text: `The image queue is full right now (${pending.length}/${SEEKDEEP_IMAGE_QUEUE_MAX_PENDING} waiting). Please try again in a moment.`,
+    };
+  }
+  if (SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER > 0 && userId) {
+    let mine = 0;
+    for (const entry of pending) {
+      if (String(entry?.job?.userId || '') === String(userId)) mine += 1;
+    }
+    if (mine >= SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER) {
+      return {
+        ok: false,
+        reason: 'user-limit',
+        text: `You already have ${mine} image job${mine === 1 ? '' : 's'} queued (limit ${SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER}). Let those finish before adding more.`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 function seekdeepCreateImageQueueJob({ source = 'unknown', userId = '', channelId = '', prompt = '', width = 1024, height = 1024, seed = null } = {}) {
   seekdeepImageQueueState.sequence += 1;
 
@@ -4975,7 +5008,6 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   // the working-loop key prefix uses the same convention.
   const loopKeyPrefix = isInteraction ? 'slash-image' : 'image';
   const targetId = isInteraction ? target?.id : target?.id;
-  const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
   const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
     source: isInteraction ? 'slash' : 'message',
@@ -4986,6 +5018,23 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
     height,
     seed,
   });
+
+  // BOT-2: refuse to grow the queue without bound. Checked before the typing /
+  // working loop starts so a rejected request leaves no dangling state. Admin /
+  // priority jobs (emergency buttons) bypass the cap.
+  const seekdeepQueueAdmission = seekdeepImageQueueAdmission(userId, { isPriority: Boolean(job.priorityAdmin) });
+  if (!seekdeepQueueAdmission.ok) {
+    if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-queue-limit', seekdeepQueueAdmission.reason);
+    seekdeepStopTypingSafelyForMessage(target);
+    return await seekdeepReplyToTarget(target, {
+      content: seekdeepAppendResponseFooter(seekdeepQueueAdmission.text, {
+        startedAt: requestStartedAt,
+        modelUsed: seekdeepNoModelLabel(),
+      }),
+    });
+  }
+
+  const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
 
   const startNotice = seekdeepImageQueueAckText(job, position);
   const ackLoadingGif = seekdeepLoadingGifAttachment();
@@ -23092,6 +23141,12 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
       dynamicMaxWords: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS,
       dynamicMaxChars: SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS,
       dynamicCacheTtlMs: SEEKDEEP_DYNAMIC_REFINE_CACHE_TTL_MS,
+    },
+    // BOT-2: image-queue admission (pending/per-user cap enforcement)
+    seekdeepImageQueueAdmission,
+    imageQueueConstants: {
+      maxPending: SEEKDEEP_IMAGE_QUEUE_MAX_PENDING,
+      maxPerUser: SEEKDEEP_IMAGE_QUEUE_MAX_PER_USER,
     },
     // Force-react picker constants (so tests can read them without re-declaring)
     forceReactConstants: {

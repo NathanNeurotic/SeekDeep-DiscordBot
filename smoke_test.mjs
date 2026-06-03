@@ -2223,6 +2223,33 @@ if (typeof T.readJsonSafe === 'function' && typeof T.writeJsonAtomic === 'functi
   try { pfs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
+// -- BOT-2: image-queue admission bounds pending depth + per-user in-flight jobs,
+//    while admin/priority jobs bypass the caps. --
+if (typeof T.seekdeepImageQueueAdmission === 'function' && globalThis.__seekdeepImageQueueState) {
+  const qs = globalThis.__seekdeepImageQueueState;
+  const savedPending = qs.pending;
+  const { maxPending, maxPerUser } = T.imageQueueConstants || {};
+  if (maxPending > 0 && maxPerUser > 0 && maxPending > maxPerUser) {
+    try {
+      qs.pending = [];
+      check('queue admission: empty queue admits', T.seekdeepImageQueueAdmission('u1').ok === true);
+      // Per-user cap: the user at their limit is refused; a different user is not.
+      qs.pending = Array.from({ length: maxPerUser }, () => ({ job: { userId: 'u1' } }));
+      const userBlocked = T.seekdeepImageQueueAdmission('u1');
+      check('queue admission: per-user cap blocks the over-limit user', userBlocked.ok === false && userBlocked.reason === 'user-limit');
+      check('queue admission: per-user cap is per-user (other user still admitted)', T.seekdeepImageQueueAdmission('u2').ok === true);
+      // Global cap: a full queue refuses even a brand-new user.
+      qs.pending = Array.from({ length: maxPending }, (_, i) => ({ job: { userId: `bulk_${i}` } }));
+      const full = T.seekdeepImageQueueAdmission('brand_new_user');
+      check('queue admission: global pending cap blocks when full', full.ok === false && full.reason === 'queue-full');
+      // Priority/admin jobs bypass the caps even when the queue is full.
+      check('queue admission: priority job bypasses a full queue', T.seekdeepImageQueueAdmission('admin', { isPriority: true }).ok === true);
+    } finally {
+      qs.pending = savedPending;
+    }
+  }
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

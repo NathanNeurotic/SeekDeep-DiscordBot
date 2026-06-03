@@ -316,6 +316,58 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 TEMP_DIR = ROOT / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# PYS-4: cap the on-disk image scratch dirs. Every image endpoint saves a PNG to
+# outputs/ that is redundant with the base64 payload we already return to the bot,
+# so without a cap a long-running server grows outputs/ without bound. 0 disables
+# a cap. outputs/ is bounded by count + age; temp/ is swept by age only (its files
+# are short-lived, so an age sweep only reclaims orphans left by a decode failure
+# and can never delete an in-flight file).
+SEEKDEEP_OUTPUTS_MAX_FILES = int(os.getenv("SEEKDEEP_OUTPUTS_MAX_FILES", "200") or 0)
+SEEKDEEP_OUTPUTS_MAX_AGE_HOURS = float(os.getenv("SEEKDEEP_OUTPUTS_MAX_AGE_HOURS", "72") or 0)
+
+
+def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> None:
+    """Best-effort cap on a scratch directory: delete by age first, then by count
+    (oldest first). Pure housekeeping -- never raises into the request path."""
+    try:
+        if max_files <= 0 and max_age_hours <= 0:
+            return
+        entries = []
+        for p in directory.iterdir():
+            try:
+                if p.is_file():
+                    entries.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        if max_age_hours and max_age_hours > 0:
+            cutoff = time.time() - max_age_hours * 3600.0
+            survivors = []
+            for mtime, p in entries:
+                if mtime < cutoff:
+                    try:
+                        p.unlink()
+                        continue
+                    except OSError:
+                        pass
+                survivors.append((mtime, p))
+            entries = survivors
+        if max_files and max_files > 0 and len(entries) > max_files:
+            entries.sort(key=lambda t: t[0])
+            for _mtime, p in entries[: len(entries) - max_files]:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
+def _output_path(safe_name: str):
+    """OUTPUT_DIR / safe_name, pruning stale outputs (and temp orphans) first."""
+    _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+    _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+    return OUTPUT_DIR / safe_name
+
 CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct")
 VISION_MODEL_ID = os.getenv("LOCAL_VISION_MODEL_ID", "Qwen/Qwen2.5-VL-3B-Instruct")
 IMAGE_MODEL_ID = os.getenv("LOCAL_IMAGE_MODEL_ID", "Lykon/dreamshaper-xl-1-0")
@@ -4814,7 +4866,7 @@ def image(req: ImageRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_image_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -4878,7 +4930,7 @@ def img2img(req: Img2ImgRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_img2img_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5074,7 +5126,7 @@ def upscale(req: UpscaleRequest):
         png_bytes = encode_image_bytes(img, "PNG")
         ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
         safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
-        out_path = OUTPUT_DIR / safe_name
+        out_path = _output_path(safe_name)
         out_path.write_bytes(selected["bytes"])
         result = {
             "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
@@ -5191,7 +5243,7 @@ def upscale(req: UpscaleRequest):
             png_bytes = encode_image_bytes(img, "PNG")
             ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
             safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
-            out_path = OUTPUT_DIR / safe_name
+            out_path = _output_path(safe_name)
             out_path.write_bytes(selected["bytes"])
             return {
                 "image_b64": base64.b64encode(selected["bytes"]).decode("ascii"),
@@ -5303,7 +5355,7 @@ def instruct_pix2pix_endpoint(req: InstructPix2PixRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_pix2pix_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5584,7 +5636,7 @@ def inpaint_endpoint(req: InpaintRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_inpaint_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     img.save(out_path)
 
     return {
@@ -5636,7 +5688,7 @@ def inpaint_mask_preview_endpoint(req: InpaintMaskPreviewRequest):
 
     ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
     safe_name = f"seekdeep_mask_preview_{ts}.png"
-    out_path = OUTPUT_DIR / safe_name
+    out_path = _output_path(safe_name)
     mask_img.save(out_path)
 
     return {
