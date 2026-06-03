@@ -59,13 +59,18 @@ Run after source edits:
 npm run preflight
 ```
 
-This single command runs:
+This single command runs 8 stages in order:
 
-1. `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`
-2. `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`
-3. `npm run smoke` — the regression smoke test
+1. `js` — `node --check` on every shipped JS file (`index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/*.js`, …)
+2. `html-js` — `node --check` on every inline `<script>` block in `gui/*.html`
+3. `py` — `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, and the two release-signing scripts
+4. `smoke` — `node smoke_test.mjs`, the regression smoke test
+5. `gui-smoke` — `python scripts/smoke_gui_endpoints.py` (self-skips when fastapi/httpx/pydantic absent)
+6. `rust` — `cargo check` on `src-tauri` (skip-with-warn when cargo / GTK libs absent)
+7. `docs` — fail-closed doc-drift guards
+8. `coverage` — `docs/ENDPOINT_COVERAGE.md` drift check
 
-Exit code 0 only when every stage passes. ~1 second total.
+Exit code 0 only when every stage passes (or was skipped).
 
 A `.git/hooks/pre-commit` hook runs the JS + Python parse checks before any commit lands. The hook is plain bash + node, no extra tooling required.
 

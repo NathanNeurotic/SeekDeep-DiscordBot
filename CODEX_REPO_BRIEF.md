@@ -17,7 +17,7 @@ Line numbers below are from the snapshot when this file was created and will dri
 - Repo root: `/mnt/c/Users/natha/SeekDeep-DiscordBot`
 - Branch at snapshot: `main`
 - Latest commit at snapshot: `7a73168 v10.31: context menus, mention commands, per-user memory, help rewrite` (historical; line/commit references in this brief are snapshot-time, not current)
-- Package version: now `10.35.0` in `package.json` (was `10.0.0-fresh-rebuild` at snapshot). Server `FastAPI(version=...)` reads from `package.json` via `_read_pkg_version()` rather than the old hard-coded literal.
+- Package version: now `10.36.0` in `package.json` (was `10.0.0-fresh-rebuild` at snapshot). Server `FastAPI(version=...)` reads from `package.json` via `_read_pkg_version()` rather than the old hard-coded literal.
 - Pre-existing dirty files before this brief was created:
   - `index.js`
   - `seekdeep_launcher.bat`
@@ -301,6 +301,7 @@ Slash commands registered in snapshot:
 
 Message context menu commands registered by default:
 
+- `Archive (SeekDeep)`
 - `Generate Image from this`
 - `Refine as Image Prompt`
 - `Inspect (SeekDeep)`
@@ -363,12 +364,12 @@ Important Python helpers:
 
 ## Data Persistence
 
-The docs describe JSON runtime state in `data/*.json`. Actual current write helpers use direct `fs.writeFileSync(...)` at the snapshot, not an obvious temp-file-plus-rename pattern. Verify before relying on atomic write semantics.
+The docs describe JSON runtime state in `data/*.json`. Writes go through `writeJsonAtomic` (`index.js:1343`), which writes to a temp file and then `fs.renameSync`s it into place — so a crash mid-write can't leave a truncated JSON file. Writes ARE atomic.
 
 Known data files:
 
 - `data/archive-guild-config.json`
-  - Tracked by git.
+  - Gitignored (contains Discord IDs); only `archive-guild-config.sample.json` is tracked as a schema reference.
   - Per-guild archive channel config and per-user/shared archive thread profiles.
   - Per-user count source: `seekdeep-archive-posts-v3`.
   - Shared count source: `seekdeep-shared-archive-posts-v1`.
@@ -437,11 +438,18 @@ Fast automated preflight after source edits:
 npm run preflight
 ```
 
-What it runs:
+What it runs — 8 stages in order:
 
-- `node --check` on `index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`
-- `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`
-- `node smoke_test.mjs`
+- `js` — `node --check` on every shipped JS file (`index.js`, `smoke_test.mjs`, `scripts/preflight.mjs`, `gui/*.js`, …)
+- `html-js` — `node --check` on every inline `<script>` block in `gui/*.html`
+- `py` — `python -m py_compile` on `local_ai_server.py`, `warmup_local_cache.py`, `gui_endpoints.py`, `release_signing.py`, `scripts/gen_release_keypair.py`, `scripts/sign_release_manifest.py` (6 files)
+- `smoke` — `node smoke_test.mjs` (no Discord login, no model load)
+- `gui-smoke` — `python scripts/smoke_gui_endpoints.py` (self-skips if fastapi/httpx/pydantic absent)
+- `rust` — `cargo check` on `src-tauri` (skip-with-warn when cargo / GTK libs absent)
+- `docs` — fail-closed doc-drift guards
+- `coverage` — `docs/ENDPOINT_COVERAGE.md` drift check
+
+Exit code 0 only when every stage passes (or was skipped).
 
 Individual checks:
 
@@ -597,7 +605,7 @@ Image generation/edit changes:
 
 - `index.js` is intentionally huge and organized by top-level helpers plus comment markers. Avoid broad refactors unless explicitly requested.
 - Multiple `interactionCreate` listeners exist. The main router is not the only listener; there are emergency button listeners near the end.
-- Some docs say all data writes are atomic, but current observed write helpers use direct `fs.writeFileSync`. Verify if atomicity matters.
+- Data writes ARE atomic: `writeJsonAtomic` (`index.js:1343`) writes to a temp file then `fs.renameSync`s it into place. Use it (not bare `fs.writeFileSync`) for any new `data/*.json` write.
 - `archive-guild-config.json` is gitignored to keep Discord IDs out of the repo (current policy); only `archive-guild-config.sample.json` is tracked.
 - Feature flags affect command registration and help text. If a command appears missing, check `.env` and whether registration has propagated.
 - `.env.default` defaults `SEEKDEEP_FEATURE_IMG2IMG=off` (code default in `index.js` is `off`); pix2pix and inpaint also default off even though v10.31 shipped their implementation. `.env.example` (the all-on reference) flips these on.
