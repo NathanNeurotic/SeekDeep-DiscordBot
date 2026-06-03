@@ -4113,27 +4113,28 @@ def register_gui_endpoints(
 
     @app.post("/archive/config", dependencies=[Depends(_require_gui_token)])
     def post_archive_config(patch: ArchiveConfigPatch):
-        cfg = _read_archive_config()
         updates = patch.updates or {}
-        if "mode" in updates:
-            new_mode = str(updates["mode"]).strip().lower()
-            if new_mode not in _ARCHIVE_MODES:
-                raise HTTPException(400, f"mode must be one of: {', '.join(sorted(_ARCHIVE_MODES))}")
-            cfg["mode"] = new_mode
-        if "notify_self" in updates:
-            cfg["notify_self"] = bool(updates["notify_self"])
-        if "channels" in updates and isinstance(updates["channels"], dict):
-            # Per-channel overrides: validate each value is a valid mode
-            chans = {}
-            for cid, mode in updates["channels"].items():
-                if not str(cid).strip():
-                    continue
-                m = str(mode).strip().lower()
-                if m in _ARCHIVE_MODES:
-                    chans[str(cid)] = m
-            cfg["channels"] = chans
-        _atomic_write_json(_archive_config_path, cfg)
-        return {"ok": True, "config": cfg}
+        with _seekdeep_file_lock(_archive_config_path):
+            cfg = _read_archive_config()
+            if "mode" in updates:
+                new_mode = str(updates["mode"]).strip().lower()
+                if new_mode not in _ARCHIVE_MODES:
+                    raise HTTPException(400, f"mode must be one of: {', '.join(sorted(_ARCHIVE_MODES))}")
+                cfg["mode"] = new_mode
+            if "notify_self" in updates:
+                cfg["notify_self"] = bool(updates["notify_self"])
+            if "channels" in updates and isinstance(updates["channels"], dict):
+                # Per-channel overrides: validate each value is a valid mode
+                chans = {}
+                for cid, mode in updates["channels"].items():
+                    if not str(cid).strip():
+                        continue
+                    m = str(mode).strip().lower()
+                    if m in _ARCHIVE_MODES:
+                        chans[str(cid)] = m
+                cfg["channels"] = chans
+            _atomic_write_json(_archive_config_path, cfg)
+            return {"ok": True, "config": cfg}
 
     @app.get("/config")
     def get_config():
@@ -4529,21 +4530,22 @@ def register_gui_endpoints(
         persona = (patch.persona or "").strip().lower() or None
 
         if action == "reset":
-            data = _read_persona_overrides()
-            if scope == "global":
-                data["global"] = None
-            elif scope == "channel":
-                cid = (patch.channel_id or "").strip()
-                if not cid:
-                    raise HTTPException(400, "scope='channel' reset requires channel_id")
-                data["channels"].pop(cid, None)
-            elif scope == "server":
-                gid = (patch.guild_id or "").strip()
-                if not gid:
-                    raise HTTPException(400, "scope='server' reset requires guild_id")
-                data["guilds"].pop(gid, None)
-            _atomic_write_json(_persona_overrides_path, data)
-            return {"ok": True, "scope": scope, "persona": None, "action": "reset"}
+            with _seekdeep_file_lock(_persona_overrides_path):
+                data = _read_persona_overrides()
+                if scope == "global":
+                    data["global"] = None
+                elif scope == "channel":
+                    cid = (patch.channel_id or "").strip()
+                    if not cid:
+                        raise HTTPException(400, "scope='channel' reset requires channel_id")
+                    data["channels"].pop(cid, None)
+                elif scope == "server":
+                    gid = (patch.guild_id or "").strip()
+                    if not gid:
+                        raise HTTPException(400, "scope='server' reset requires guild_id")
+                    data["guilds"].pop(gid, None)
+                _atomic_write_json(_persona_overrides_path, data)
+                return {"ok": True, "scope": scope, "persona": None, "action": "reset"}
 
         if not persona:
             raise HTTPException(400, "body must include either persona='...' or action='reset'")
@@ -4551,20 +4553,21 @@ def register_gui_endpoints(
             raise HTTPException(400, f"persona must be one of: {sorted(_valid_personas())} (got {persona!r})")
 
         entry = {"persona": persona, "setBy": _WEB_OWNER_ID, "setAt": _now_iso()}
-        data = _read_persona_overrides()
-        if scope == "global":
-            data["global"] = entry
-        elif scope == "channel":
-            cid = (patch.channel_id or "").strip()
-            if not cid:
-                raise HTTPException(400, "scope='channel' requires channel_id")
-            data["channels"][cid] = entry
-        elif scope == "server":
-            gid = (patch.guild_id or "").strip()
-            if not gid:
-                raise HTTPException(400, "scope='server' requires guild_id")
-            data["guilds"][gid] = entry
-        _atomic_write_json(_persona_overrides_path, data)
+        with _seekdeep_file_lock(_persona_overrides_path):
+            data = _read_persona_overrides()
+            if scope == "global":
+                data["global"] = entry
+            elif scope == "channel":
+                cid = (patch.channel_id or "").strip()
+                if not cid:
+                    raise HTTPException(400, "scope='channel' requires channel_id")
+                data["channels"][cid] = entry
+            elif scope == "server":
+                gid = (patch.guild_id or "").strip()
+                if not gid:
+                    raise HTTPException(400, "scope='server' requires guild_id")
+                data["guilds"][gid] = entry
+            _atomic_write_json(_persona_overrides_path, data)
         try:
             event_bus.publish_sync({"type": "route.changed",
                                      "data": {"scope": scope, "persona": persona}})
@@ -4626,53 +4629,55 @@ def register_gui_endpoints(
                 f"tone is too long — {len(tone)}/{_CUSTOM_PERSONA_TONE_MAX} chars; "
                 f"trim about {len(tone) - _CUSTOM_PERSONA_TONE_MAX}")
 
-        data = _read_custom_personas()
-        personas = data.get("personas")
-        if not isinstance(personas, dict):
-            personas = {}
-            data["personas"] = personas
-        existed = slug in personas
-        if not existed and len(personas) >= _CUSTOM_PERSONA_MAX_COUNT:
-            raise HTTPException(
-                400, f"custom persona cap reached ({_CUSTOM_PERSONA_MAX_COUNT}); remove one first")
+        with _seekdeep_file_lock(_custom_personas_path):
+            data = _read_custom_personas()
+            personas = data.get("personas")
+            if not isinstance(personas, dict):
+                personas = {}
+                data["personas"] = personas
+            existed = slug in personas
+            if not existed and len(personas) >= _CUSTOM_PERSONA_MAX_COUNT:
+                raise HTTPException(
+                    400, f"custom persona cap reached ({_CUSTOM_PERSONA_MAX_COUNT}); remove one first")
 
-        now = _now_iso()
-        prev = personas.get(slug) if isinstance(personas.get(slug), dict) else {}
-        # Preserve createdAt + the original createdBy across edits (a persona
-        # first authored in Discord keeps its Discord creator); only updatedAt
-        # moves. Structure is byte-for-byte what index.js writes.
-        personas[slug] = {
-            "tone": tone,
-            "createdBy": prev.get("createdBy") or _WEB_OWNER_ID,
-            "createdAt": prev.get("createdAt") or now,
-            "updatedAt": now,
-        }
-        _atomic_write_json(_custom_personas_path, data)
-        return {
-            "ok": True,
-            "slug": slug,
-            "created": not existed,
-            "updatedAt": now,
-            "count": len(personas),
-            "max": _CUSTOM_PERSONA_MAX_COUNT,
-        }
+            now = _now_iso()
+            prev = personas.get(slug) if isinstance(personas.get(slug), dict) else {}
+            # Preserve createdAt + the original createdBy across edits (a persona
+            # first authored in Discord keeps its Discord creator); only updatedAt
+            # moves. Structure is byte-for-byte what index.js writes.
+            personas[slug] = {
+                "tone": tone,
+                "createdBy": prev.get("createdBy") or _WEB_OWNER_ID,
+                "createdAt": prev.get("createdAt") or now,
+                "updatedAt": now,
+            }
+            _atomic_write_json(_custom_personas_path, data)
+            return {
+                "ok": True,
+                "slug": slug,
+                "created": not existed,
+                "updatedAt": now,
+                "count": len(personas),
+                "max": _CUSTOM_PERSONA_MAX_COUNT,
+            }
 
     @app.delete("/personas/{slug}", dependencies=[Depends(_require_gui_token)])
     def delete_persona(slug: str):
         s = (slug or "").strip().lower()
         if s in _BUILTIN_PERSONAS:
             raise HTTPException(404, f'"{s}" is a built-in persona and cannot be deleted')
-        data = _read_custom_personas()
-        personas = data.get("personas")
-        if not isinstance(personas, dict) or s not in personas:
-            raise HTTPException(404, f'no custom persona named "{s}"')
-        personas.pop(s, None)
-        data["personas"] = personas
-        _atomic_write_json(_custom_personas_path, data)
-        # Any channel/guild override pointing at this slug now fails
-        # seekdeepIsValidPersonaSlug on the bot side and falls back to the env
-        # default on the next message — no extra cleanup needed here.
-        return {"ok": True, "slug": s, "removed": True, "count": len(personas)}
+        with _seekdeep_file_lock(_custom_personas_path):
+            data = _read_custom_personas()
+            personas = data.get("personas")
+            if not isinstance(personas, dict) or s not in personas:
+                raise HTTPException(404, f'no custom persona named "{s}"')
+            personas.pop(s, None)
+            data["personas"] = personas
+            _atomic_write_json(_custom_personas_path, data)
+            # Any channel/guild override pointing at this slug now fails
+            # seekdeepIsValidPersonaSlug on the bot side and falls back to the env
+            # default on the next message — no extra cleanup needed here.
+            return {"ok": True, "slug": s, "removed": True, "count": len(personas)}
 
     # ----- GET /stats/counts -----
     # Source-of-truth counts that pages display in their stat tiles. Replaces
@@ -5331,6 +5336,62 @@ def register_gui_endpoints(
         except Exception:
             pass
 
+    class _seekdeep_file_lock:
+        """COUP-1 cross-process advisory lock — the twin of index.js's
+        seekdeepWithFileLock. Uses the SAME `<path>.lock` sentinel on the SAME
+        absolute data-file paths, so this server and the Node bot coordinate their
+        read-modify-write of the shared data/*.json files. Steals a stale lock
+        (crashed holder) after SEEKDEEP_FILE_LOCK_STALE_MS and FAILS OPEN after
+        SEEKDEEP_FILE_LOCK_TIMEOUT_MS — a rare lost update beats a hung request.
+
+        FUTURE (async upgrade): mirror index.js — swap the time.sleep wait for an
+        await-based one in an async sibling; call sites stay `with`-scoped here."""
+        _TIMEOUT_MS = max(0, int(os.getenv("SEEKDEEP_FILE_LOCK_TIMEOUT_MS", "2000") or 0))
+        _STALE_MS = max(1000, int(os.getenv("SEEKDEEP_FILE_LOCK_STALE_MS", "15000") or 0))
+
+        def __init__(self, path) -> None:
+            self._lock_path = str(path) + ".lock"
+            self._acquired = False
+
+        def __enter__(self):
+            start = time.time()
+            while True:
+                try:
+                    fd = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    try:
+                        os.write(fd, f"{os.getpid()} {time.time():.3f}".encode())
+                    finally:
+                        os.close(fd)
+                    self._acquired = True
+                    break
+                except FileExistsError:
+                    try:
+                        age_ms = (time.time() - os.path.getmtime(self._lock_path)) * 1000.0
+                        if age_ms > self._STALE_MS:
+                            try:
+                                os.unlink(self._lock_path)
+                            except OSError:
+                                pass
+                            continue
+                    except OSError:
+                        continue
+                    if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
+                        print(f"[SeekDeep] file lock timeout on {os.path.basename(self._lock_path)}; proceeding without it (fail-open).", flush=True)
+                        break
+                    time.sleep(0.025)
+                except OSError as exc:
+                    print(f"[SeekDeep] file lock error on {os.path.basename(self._lock_path)}: {exc}; proceeding.", flush=True)
+                    break
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            if self._acquired:
+                try:
+                    os.unlink(self._lock_path)
+                except OSError:
+                    pass
+            return False
+
     def _user_row_bytes(facts: list) -> int:
         try:
             return len(json.dumps(facts, ensure_ascii=False).encode("utf-8"))
@@ -5383,18 +5444,19 @@ def register_gui_endpoints(
             raise HTTPException(422, "fact text is required")
         if len(text) > _MEMORY_FACT_MAX_CHARS:
             raise HTTPException(422, f"fact exceeds {_MEMORY_FACT_MAX_CHARS}-char cap")
-        store = _read_facts_store()
-        store["users"] = store.get("users") or {}
-        row = store["users"].get(str(user_id)) or {"facts": [], "updatedAt": None}
-        if not isinstance(row.get("facts"), list):
-            row["facts"] = []
-        if len(row["facts"]) >= _MEMORY_FACTS_MAX:
-            raise HTTPException(422, f"user already has {_MEMORY_FACTS_MAX} facts (cap reached)")
-        row["facts"].append({"text": text, "at": int(time.time() * 1000)})
-        row["updatedAt"] = _now_iso()
-        store["users"][str(user_id)] = row
-        _atomic_write_json(_user_facts_path, store)
-        return {"ok": True, "index": len(row["facts"])}
+        with _seekdeep_file_lock(_user_facts_path):
+            store = _read_facts_store()
+            store["users"] = store.get("users") or {}
+            row = store["users"].get(str(user_id)) or {"facts": [], "updatedAt": None}
+            if not isinstance(row.get("facts"), list):
+                row["facts"] = []
+            if len(row["facts"]) >= _MEMORY_FACTS_MAX:
+                raise HTTPException(422, f"user already has {_MEMORY_FACTS_MAX} facts (cap reached)")
+            row["facts"].append({"text": text, "at": int(time.time() * 1000)})
+            row["updatedAt"] = _now_iso()
+            store["users"][str(user_id)] = row
+            _atomic_write_json(_user_facts_path, store)
+            return {"ok": True, "index": len(row["facts"])}
 
     @app.patch("/memory/user/{user_id}/fact/{n}", dependencies=[Depends(_require_gui_token)])
     def memory_update_fact(user_id: str, n: int, body: FactBody):
@@ -5404,50 +5466,53 @@ def register_gui_endpoints(
             raise HTTPException(422, "fact text is required")
         if len(text) > _MEMORY_FACT_MAX_CHARS:
             raise HTTPException(422, f"fact exceeds {_MEMORY_FACT_MAX_CHARS}-char cap")
-        store = _read_facts_store()
-        row = (store.get("users") or {}).get(str(user_id))
-        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
-            raise HTTPException(404, f"no memory row for user {user_id!r}")
-        idx = n - 1
-        if idx < 0 or idx >= len(row["facts"]):
-            raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
-        existing = row["facts"][idx]
-        if isinstance(existing, dict):
-            existing["text"] = text
-        else:
-            row["facts"][idx] = {"text": text, "at": int(time.time() * 1000)}
-        row["updatedAt"] = _now_iso()
-        store["users"][str(user_id)] = row
-        _atomic_write_json(_user_facts_path, store)
-        return {"ok": True}
+        with _seekdeep_file_lock(_user_facts_path):
+            store = _read_facts_store()
+            row = (store.get("users") or {}).get(str(user_id))
+            if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+                raise HTTPException(404, f"no memory row for user {user_id!r}")
+            idx = n - 1
+            if idx < 0 or idx >= len(row["facts"]):
+                raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
+            existing = row["facts"][idx]
+            if isinstance(existing, dict):
+                existing["text"] = text
+            else:
+                row["facts"][idx] = {"text": text, "at": int(time.time() * 1000)}
+            row["updatedAt"] = _now_iso()
+            store["users"][str(user_id)] = row
+            _atomic_write_json(_user_facts_path, store)
+            return {"ok": True}
 
     @app.delete("/memory/user/{user_id}/fact/{n}", dependencies=[Depends(_require_gui_token)])
     def memory_delete_fact(user_id: str, n: int):
         """Remove fact at 1-based index n. 404 if out of range."""
-        store = _read_facts_store()
-        row = (store.get("users") or {}).get(str(user_id))
-        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
-            raise HTTPException(404, f"no memory row for user {user_id!r}")
-        idx = n - 1
-        if idx < 0 or idx >= len(row["facts"]):
-            raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
-        removed = row["facts"].pop(idx)
-        row["updatedAt"] = _now_iso()
-        store["users"][str(user_id)] = row
-        _atomic_write_json(_user_facts_path, store)
-        return {"ok": True, "removed": removed if isinstance(removed, dict) else {"text": str(removed), "at": None}}
+        with _seekdeep_file_lock(_user_facts_path):
+            store = _read_facts_store()
+            row = (store.get("users") or {}).get(str(user_id))
+            if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+                raise HTTPException(404, f"no memory row for user {user_id!r}")
+            idx = n - 1
+            if idx < 0 or idx >= len(row["facts"]):
+                raise HTTPException(404, f"no fact at index {n} (user has {len(row['facts'])})")
+            removed = row["facts"].pop(idx)
+            row["updatedAt"] = _now_iso()
+            store["users"][str(user_id)] = row
+            _atomic_write_json(_user_facts_path, store)
+            return {"ok": True, "removed": removed if isinstance(removed, dict) else {"text": str(removed), "at": None}}
 
     @app.delete("/memory/user/{user_id}", dependencies=[Depends(_require_gui_token)])
     def memory_clear_user(user_id: str):
         """Wipe every fact for a user. 404 if no row to begin with."""
-        store = _read_facts_store()
-        row = (store.get("users") or {}).get(str(user_id))
-        if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
-            raise HTTPException(404, f"no memory row for user {user_id!r}")
-        removed_n = len(row["facts"])
-        del store["users"][str(user_id)]
-        _atomic_write_json(_user_facts_path, store)
-        return {"ok": True, "removed_facts": removed_n}
+        with _seekdeep_file_lock(_user_facts_path):
+            store = _read_facts_store()
+            row = (store.get("users") or {}).get(str(user_id))
+            if not isinstance(row, dict) or not isinstance(row.get("facts"), list):
+                raise HTTPException(404, f"no memory row for user {user_id!r}")
+            removed_n = len(row["facts"])
+            del store["users"][str(user_id)]
+            _atomic_write_json(_user_facts_path, store)
+            return {"ok": True, "removed_facts": removed_n}
 
     @app.get("/memory/user/{user_id}/export", dependencies=[Depends(_require_gui_token)])
     def memory_export_user(user_id: str):
@@ -5489,11 +5554,12 @@ def register_gui_endpoints(
             if k not in seen:
                 seen.add(k)
                 deduped.append(k)
-        store = _read_presets_store()
-        store["users"] = store.get("users") or {}
-        store["users"][str(user_id)] = {"presets": deduped, "updatedAt": _now_iso()}
-        _atomic_write_json(_memory_presets_path, store)
-        return {"ok": True}
+        with _seekdeep_file_lock(_memory_presets_path):
+            store = _read_presets_store()
+            store["users"] = store.get("users") or {}
+            store["users"][str(user_id)] = {"presets": deduped, "updatedAt": _now_iso()}
+            _atomic_write_json(_memory_presets_path, store)
+            return {"ok": True}
 
     # =====================================================================
     # Prompt templates — GUI write endpoints. The bot already writes to
@@ -5568,26 +5634,27 @@ def register_gui_endpoints(
             v = m.group(1).lower()
             if v not in vars_seen:
                 vars_seen.append(v)
-        store = _read_prompt_templates_store()
-        g = store["guilds"].setdefault(guild_id, {})
-        u = g.setdefault(owner_user_id, {})
-        now = _now_iso()
-        existing = u.get(name) if isinstance(u.get(name), dict) else None
-        u[name] = {
-            "prompt":    prompt,
-            "vars":      vars_seen,
-            "createdAt": (existing or {}).get("createdAt") or now,
-            "updatedAt": now,
-            "usedCount": int((existing or {}).get("usedCount") or 0),
-        }
-        _atomic_write_json(_prompt_templates_path, store)
-        return {
-            "ok": True,
-            "id": f"{guild_id}:{owner_user_id}:{name}",
-            "created": existing is None,
-            "vars": vars_seen,
-            "char_count": len(prompt),
-        }
+        with _seekdeep_file_lock(_prompt_templates_path):
+            store = _read_prompt_templates_store()
+            g = store["guilds"].setdefault(guild_id, {})
+            u = g.setdefault(owner_user_id, {})
+            now = _now_iso()
+            existing = u.get(name) if isinstance(u.get(name), dict) else None
+            u[name] = {
+                "prompt":    prompt,
+                "vars":      vars_seen,
+                "createdAt": (existing or {}).get("createdAt") or now,
+                "updatedAt": now,
+                "usedCount": int((existing or {}).get("usedCount") or 0),
+            }
+            _atomic_write_json(_prompt_templates_path, store)
+            return {
+                "ok": True,
+                "id": f"{guild_id}:{owner_user_id}:{name}",
+                "created": existing is None,
+                "vars": vars_seen,
+                "char_count": len(prompt),
+            }
 
     @app.delete("/prompts/template/{template_id:path}", dependencies=[Depends(_require_gui_token)])
     def delete_prompt_template(template_id: str):
@@ -5595,19 +5662,20 @@ def register_gui_endpoints(
         if len(parts) != 3:
             raise HTTPException(400, "template_id must be '<guild_id>:<owner_user_id>:<name>'")
         guild_id, owner_user_id, name = parts
-        store = _read_prompt_templates_store()
-        g = store["guilds"].get(guild_id) or {}
-        u = g.get(owner_user_id) or {}
-        if name not in u:
-            raise HTTPException(404, f"no template {template_id}")
-        del u[name]
-        # Prune empty branches so the file doesn't accumulate orphan keys.
-        if not u:
-            del g[owner_user_id]
-        if not g:
-            del store["guilds"][guild_id]
-        _atomic_write_json(_prompt_templates_path, store)
-        return {"ok": True, "removed": template_id}
+        with _seekdeep_file_lock(_prompt_templates_path):
+            store = _read_prompt_templates_store()
+            g = store["guilds"].get(guild_id) or {}
+            u = g.get(owner_user_id) or {}
+            if name not in u:
+                raise HTTPException(404, f"no template {template_id}")
+            del u[name]
+            # Prune empty branches so the file doesn't accumulate orphan keys.
+            if not u:
+                del g[owner_user_id]
+            if not g:
+                del store["guilds"][guild_id]
+            _atomic_write_json(_prompt_templates_path, store)
+            return {"ok": True, "removed": template_id}
 
     # =====================================================================
     # Auto-react rules — GUI write endpoints. Same persistence-gap fix
@@ -5688,65 +5756,68 @@ def register_gui_endpoints(
             raise HTTPException(400, "scope was set but target is empty")
         if len(pattern) > 400:
             raise HTTPException(400, "pattern exceeds 400 chars")
-        store = _read_auto_reactions_store()
-        g = store["guilds"].setdefault(guild_id, {})
-        rules = g.setdefault("rules", [])
-        rule = {
-            "id":       _new_rule_id(),
-            "emoji":    emoji,
-            "pattern":  pattern,
-            "enabled":  bool(enabled),
-            "hits":     0,
-            "createdAt": _now_iso(),
-        }
-        if scope:
-            rule["scope"] = scope
-            rule["target"] = target
-        rules.append(rule)
-        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
-        return {"ok": True, "rule": rule}
+        with _seekdeep_file_lock(_auto_reactions_path):
+            store = _read_auto_reactions_store()
+            g = store["guilds"].setdefault(guild_id, {})
+            rules = g.setdefault("rules", [])
+            rule = {
+                "id":       _new_rule_id(),
+                "emoji":    emoji,
+                "pattern":  pattern,
+                "enabled":  bool(enabled),
+                "hits":     0,
+                "createdAt": _now_iso(),
+            }
+            if scope:
+                rule["scope"] = scope
+                rule["target"] = target
+            rules.append(rule)
+            _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
+            return {"ok": True, "rule": rule}
 
     @app.patch("/reacts/rule/{rule_id}", dependencies=[Depends(_require_gui_token)])
     def patch_reacts_rule(rule_id: str, body: dict):
         # Locate the rule across guilds — GUI may not know which guild
         # owns it from the id alone.
-        store = _read_auto_reactions_store()
-        for gid, g in store["guilds"].items():
-            for r in (g.get("rules") or []):
-                if r.get("id") == rule_id:
-                    if "emoji" in body and body["emoji"]:
-                        r["emoji"] = str(body["emoji"])
-                    if "pattern" in body and body["pattern"]:
-                        if len(str(body["pattern"])) > 400:
-                            raise HTTPException(400, "pattern exceeds 400 chars")
-                        r["pattern"] = str(body["pattern"])
-                    if "enabled" in body:
-                        r["enabled"] = bool(body["enabled"])
-                    if "scope" in body:
-                        s = str(body["scope"] or "").lower()
-                        if s and s not in ("channel", "user"):
-                            raise HTTPException(400, "scope must be 'channel' or 'user'")
-                        if s:
-                            r["scope"] = s
-                            r["target"] = str(body.get("target") or r.get("target") or "")
-                        else:
-                            r.pop("scope", None); r.pop("target", None)
-                    r["updatedAt"] = _now_iso()
-                    _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
-                    return {"ok": True, "rule": r, "guild_id": gid}
-        raise HTTPException(404, f"no rule {rule_id}")
+        with _seekdeep_file_lock(_auto_reactions_path):
+            store = _read_auto_reactions_store()
+            for gid, g in store["guilds"].items():
+                for r in (g.get("rules") or []):
+                    if r.get("id") == rule_id:
+                        if "emoji" in body and body["emoji"]:
+                            r["emoji"] = str(body["emoji"])
+                        if "pattern" in body and body["pattern"]:
+                            if len(str(body["pattern"])) > 400:
+                                raise HTTPException(400, "pattern exceeds 400 chars")
+                            r["pattern"] = str(body["pattern"])
+                        if "enabled" in body:
+                            r["enabled"] = bool(body["enabled"])
+                        if "scope" in body:
+                            s = str(body["scope"] or "").lower()
+                            if s and s not in ("channel", "user"):
+                                raise HTTPException(400, "scope must be 'channel' or 'user'")
+                            if s:
+                                r["scope"] = s
+                                r["target"] = str(body.get("target") or r.get("target") or "")
+                            else:
+                                r.pop("scope", None); r.pop("target", None)
+                        r["updatedAt"] = _now_iso()
+                        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
+                        return {"ok": True, "rule": r, "guild_id": gid}
+            raise HTTPException(404, f"no rule {rule_id}")
 
     @app.delete("/reacts/rule/{rule_id}", dependencies=[Depends(_require_gui_token)])
     def delete_reacts_rule(rule_id: str):
-        store = _read_auto_reactions_store()
-        for gid, g in store["guilds"].items():
-            rules = g.get("rules") or []
-            for i, r in enumerate(rules):
-                if r.get("id") == rule_id:
-                    rules.pop(i)
-                    _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
-                    return {"ok": True, "removed": rule_id, "guild_id": gid}
-        raise HTTPException(404, f"no rule {rule_id}")
+        with _seekdeep_file_lock(_auto_reactions_path):
+            store = _read_auto_reactions_store()
+            for gid, g in store["guilds"].items():
+                rules = g.get("rules") or []
+                for i, r in enumerate(rules):
+                    if r.get("id") == rule_id:
+                        rules.pop(i)
+                        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
+                        return {"ok": True, "removed": rule_id, "guild_id": gid}
+            raise HTTPException(404, f"no rule {rule_id}")
 
     @app.post("/reacts/builtin/{key}", dependencies=[Depends(_require_gui_token)])
     def post_reacts_builtin(key: str, body: dict):
@@ -5758,20 +5829,21 @@ def register_gui_endpoints(
         ALLOWED_BUILTINS = {"long_message", "forwarded", "code_block", "image_only", "link_only"}
         if key not in ALLOWED_BUILTINS:
             raise HTTPException(400, f"unknown builtin key {key!r}; allowed: {sorted(ALLOWED_BUILTINS)}")
-        store = _read_auto_reactions_store()
-        g = store["guilds"].setdefault(guild_id, {})
-        builtins = g.setdefault("builtins", {})
-        b = builtins.setdefault(key, {})
-        if "enabled" in body:  b["enabled"] = bool(body["enabled"])
-        if "threshold" in body and body["threshold"] is not None:
-            try:
-                b["threshold"] = int(body["threshold"])
-            except (TypeError, ValueError):
-                raise HTTPException(400, "threshold must be an integer")
-        if "emoji" in body and body["emoji"]:
-            b["emoji"] = str(body["emoji"])
-        _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
-        return {"ok": True, "key": key, "guild_id": guild_id, "value": b}
+        with _seekdeep_file_lock(_auto_reactions_path):
+            store = _read_auto_reactions_store()
+            g = store["guilds"].setdefault(guild_id, {})
+            builtins = g.setdefault("builtins", {})
+            b = builtins.setdefault(key, {})
+            if "enabled" in body:  b["enabled"] = bool(body["enabled"])
+            if "threshold" in body and body["threshold"] is not None:
+                try:
+                    b["threshold"] = int(body["threshold"])
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "threshold must be an integer")
+            if "emoji" in body and body["emoji"]:
+                b["emoji"] = str(body["emoji"])
+            _atomic_write_json(_auto_reactions_path, _prune_empty_guilds(store))
+            return {"ok": True, "key": key, "guild_id": guild_id, "value": b}
 
     # ----- Heartbeat producer -----
     # Emits {"type":"heartbeat","data":{"server_time_ms":...,"subscribers":N}}

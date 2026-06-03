@@ -1392,6 +1392,127 @@ function readJsonSafe(filePath, fallback) {
   }
 }
 
+// COUP-1: cross-process advisory lock for the data/*.json files that BOTH this
+// Node bot and the Python server (gui_endpoints.py) read-modify-write — user-facts,
+// prompt-templates, persona-overrides, custom-personas, memory-presets,
+// auto-reactions, archive-config. writeJsonAtomic already prevents *corruption*;
+// this closes the remaining lost-update window when both processes mutate the same
+// file at the same instant (last-writer-wins, silent).
+//
+// Mechanism: a `<path>.lock` sentinel created with O_EXCL ('wx'). gui_endpoints.py's
+// _seekdeep_file_lock uses the SAME `<path>.lock` name on the SAME absolute paths,
+// so the two processes actually coordinate. Stale locks (holder crashed) are stolen
+// after SEEKDEEP_FILE_LOCK_STALE_MS. If the lock can't be taken within
+// SEEKDEEP_FILE_LOCK_TIMEOUT_MS we FAIL OPEN (proceed without it) — a rare lost
+// update is strictly better than freezing the bot's event loop.
+//
+// FUTURE — async upgrade path (kept deliberately cheap): every shared-file
+// read-modify-write funnels through seekdeepMutateJson() below. To remove the
+// (rare, bounded) sync event-loop block, add an async sibling whose wait loop
+// `await`s instead of using Atomics.wait, and convert the seekdeepMutateJson call
+// sites to `await`. Because they are ALL centralized on this one function, that
+// migration is a mechanical grep — not a re-architecture.
+const SEEKDEEP_FILE_LOCK_TIMEOUT_MS = Math.max(0, Number(process.env.SEEKDEEP_FILE_LOCK_TIMEOUT_MS || 2000));
+const SEEKDEEP_FILE_LOCK_STALE_MS = Math.max(1000, Number(process.env.SEEKDEEP_FILE_LOCK_STALE_MS || 15000));
+const seekdeepFileLockWaitBuf = new Int32Array(new SharedArrayBuffer(4));
+
+function seekdeepWithFileLock(filePath, fn) {
+  const lockPath = String(filePath) + '.lock';
+  const start = Date.now();
+  let acquired = false;
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx'); // wx = O_CREAT|O_EXCL: fails if it exists
+      try { fs.writeSync(fd, `${process.pid} ${Date.now()}`); } catch {}
+      fs.closeSync(fd);
+      acquired = true;
+      break;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') {
+        // Someone holds it. Steal it if it's stale (the holder likely crashed).
+        try {
+          const st = fs.statSync(lockPath);
+          if (Date.now() - st.mtimeMs > SEEKDEEP_FILE_LOCK_STALE_MS) {
+            try { fs.unlinkSync(lockPath); } catch {}
+            continue;
+          }
+        } catch {
+          continue; // lock vanished between open and stat — retry immediately
+        }
+        if (Date.now() - start >= SEEKDEEP_FILE_LOCK_TIMEOUT_MS) {
+          console.warn(`[SeekDeep] file lock timeout on ${path.basename(lockPath)}; proceeding without it (fail-open).`);
+          break;
+        }
+        // Short synchronous wait (~25ms) before retrying. Realistic contention is
+        // a few ms (the other side's write is fast); the timeout above bounds it.
+        try { Atomics.wait(seekdeepFileLockWaitBuf, 0, 0, 25); } catch {}
+      } else {
+        // Unexpected (perms, etc.) — never let locking block a write; fail open.
+        console.warn(`[SeekDeep] file lock error on ${path.basename(lockPath)}: ${err?.message || err}; proceeding.`);
+        break;
+      }
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (acquired) { try { fs.unlinkSync(lockPath); } catch {} }
+  }
+}
+
+// The single chokepoint for cross-process-safe mutation of a shared data file.
+// Holds the lock across read -> mutate -> write so a concurrent writer in the
+// other process can't clobber the change. `mutator` may edit `data` in place or
+// return a replacement object.
+function seekdeepMutateJson(filePath, fallback, mutator) {
+  return seekdeepWithFileLock(filePath, () => {
+    const data = readJsonSafe(filePath, fallback);
+    const result = mutator(data);
+    const toWrite = (result === undefined) ? data : result;
+    writeJsonAtomic(filePath, toWrite);
+    return toWrite;
+  });
+}
+
+// COUP-1 per-file mutate wrappers — reuse each file's existing read/write helpers
+// (so their normalization + error handling is preserved) but hold the shared
+// `<path>.lock` across the whole read->mutate->write. Convert any
+// `const d = seekdeepReadX(); /* mutate d */; seekdeepWriteX(d);` to
+// `seekdeepMutateX((d) => { /* mutate d */ });`. The functions referenced resolve
+// at call time (runtime), so defining the wrappers here is safe. These (plus
+// seekdeepMutateJson) are the ONLY shared-data writers — the future async upgrade
+// changes just these.
+function seekdeepMutateUserFacts(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_USER_FACTS_PATH, () => {
+    const data = seekdeepReadUserFacts(); mutator(data); seekdeepWriteUserFacts(data); return data;
+  });
+}
+function seekdeepMutatePromptTemplates(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_PROMPT_TEMPLATES_PATH, () => {
+    const data = seekdeepReadPromptTemplates(); mutator(data); seekdeepWritePromptTemplates(data); return data;
+  });
+}
+function seekdeepMutateAutoReactions(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_AUTO_REACTIONS_PATH, () => {
+    const data = seekdeepReadAutoReactions(); mutator(data); seekdeepWriteAutoReactions(data); return data;
+  });
+}
+function seekdeepMutatePersonaOverrides(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_PERSONA_OVERRIDES_PATH, () => {
+    const data = seekdeepReadPersonaOverrides(); mutator(data); seekdeepWritePersonaOverrides(data); return data;
+  });
+}
+function seekdeepMutateCustomPersonas(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_CUSTOM_PERSONAS_PATH, () => {
+    const data = seekdeepReadCustomPersonas(); mutator(data); seekdeepWriteCustomPersonas(data); return data;
+  });
+}
+function seekdeepMutateMemoryPresets(mutator) {
+  return seekdeepWithFileLock(SEEKDEEP_MEMORY_PRESETS_PATH, () => {
+    const data = seekdeepReadMemoryPresets(); mutator(data); seekdeepWriteMemoryPresets(data); return data;
+  });
+}
+
 // SEEKDEEP_FINAL_REPLY_DEDUPE_START
 const SEEKDEEP_FINAL_REPLY_TTL_MS = Number(process.env.SEEKDEEP_FINAL_REPLY_TTL_MS || 180000);
 const seekdeepFinalReplyClaims = new Map();
@@ -13768,20 +13889,22 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
       await message.reply({ content: `"${slug}" is reserved (used by the persona command itself); pick a different name.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    const data = seekdeepReadCustomPersonas();
-    if (!data.personas) data.personas = {};
-    if (Object.keys(data.personas).length >= SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT && !data.personas[slug]) {
+    let capReached = false, existed = false;
+    seekdeepMutateCustomPersonas((d) => {              // d = fresh under lock
+      if (!d.personas) d.personas = {};
+      if (Object.keys(d.personas).length >= SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT && !d.personas[slug]) { capReached = true; return; }
+      existed = !!d.personas[slug];
+      d.personas[slug] = {
+        tone,
+        createdBy: message.author?.id || '',
+        createdAt: d.personas[slug]?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (capReached) {
       await message.reply({ content: `Custom persona cap reached (${SEEKDEEP_CUSTOM_PERSONA_MAX_COUNT}). Remove one with \`@SeekDeep persona remove <slug>\` first.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    const existed = !!data.personas[slug];
-    data.personas[slug] = {
-      tone,
-      createdBy: message.author?.id || '',
-      createdAt: data.personas[slug]?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    seekdeepWriteCustomPersonas(data);
     await message.reply({ content: `Persona "${slug}" ${existed ? 'updated' : 'created'}. Activate with \`@SeekDeep persona ${slug}\` (channel) or \`@SeekDeep persona server ${slug}\`.`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -13797,13 +13920,15 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
       await message.reply({ content: `"${slug}" is built-in and can't be removed. Use \`@SeekDeep persona reset\` to clear an override.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    const data = seekdeepReadCustomPersonas();
-    if (!data.personas?.[slug]) {
+    let notFound = false;
+    seekdeepMutateCustomPersonas((d) => {              // d = fresh under lock
+      if (!d.personas?.[slug]) { notFound = true; return; }
+      delete d.personas[slug];
+    });
+    if (notFound) {
       await message.reply({ content: `No custom persona named "${slug}".`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    delete data.personas[slug];
-    seekdeepWriteCustomPersonas(data);
     await message.reply({ content: `Removed custom persona "${slug}". Any channel/guild override that was pointing at it will fall back to the env default on next message.`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -13851,11 +13976,11 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
     return true;
   }
 
-  const data = seekdeepReadPersonaOverrides();
   if (action === 'reset') {
-    if (scope === 'channel') delete data.channels[String(message.channel?.id || '')];
-    else delete data.guilds[String(message.guild?.id || '')];
-    seekdeepWritePersonaOverrides(data);
+    seekdeepMutatePersonaOverrides((d) => {           // d = fresh under lock
+      if (scope === 'channel') delete d.channels[String(message.channel?.id || '')];
+      else delete d.guilds[String(message.guild?.id || '')];
+    });
     await message.reply({ content: `Persona override removed (scope: ${scope}).`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -13870,12 +13995,13 @@ async function seekdeepHandlePersonaCommand(message, raw = '') {
     return true;
   }
 
-  if (scope === 'channel') {
-    data.channels[String(message.channel?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
-  } else {
-    data.guilds[String(message.guild?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
-  }
-  seekdeepWritePersonaOverrides(data);
+  seekdeepMutatePersonaOverrides((d) => {             // d = fresh under lock
+    if (scope === 'channel') {
+      d.channels[String(message.channel?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
+    } else {
+      d.guilds[String(message.guild?.id || '')] = { persona: action, setBy: message.author?.id || '', setAt: new Date().toISOString() };
+    }
+  });
   await message.reply({ content: `Persona for this ${scope} set to: ${action}`, allowedMentions: { repliedUser: false } });
   return true;
 }
@@ -14056,13 +14182,13 @@ async function seekdeepHandlePersonaModalSubmit(interaction) {
   const scope = String(interaction.fields.getTextInputValue('scope') || 'channel').toLowerCase().trim();
 
   if (persona === 'reset') {
-    const data = seekdeepReadPersonaOverrides();
-    if (scope === 'server' || scope === 'guild') {
-      delete data.guilds[String(interaction.guild?.id || '')];
-    } else {
-      delete data.channels[String(interaction.channel?.id || '')];
-    }
-    seekdeepWritePersonaOverrides(data);
+    seekdeepMutatePersonaOverrides((d) => {           // d = fresh under lock
+      if (scope === 'server' || scope === 'guild') {
+        delete d.guilds[String(interaction.guild?.id || '')];
+      } else {
+        delete d.channels[String(interaction.channel?.id || '')];
+      }
+    });
     await interaction.reply({ content: `Persona override removed (scope: ${scope}).`, flags: MessageFlags.Ephemeral });
     return true;
   }
@@ -14079,14 +14205,14 @@ async function seekdeepHandlePersonaModalSubmit(interaction) {
     return true;
   }
 
-  const data = seekdeepReadPersonaOverrides();
   const entry = { persona, setBy: interaction.user?.id || '', setAt: new Date().toISOString() };
-  if (scope === 'server' || scope === 'guild') {
-    data.guilds[String(interaction.guild?.id || '')] = entry;
-  } else {
-    data.channels[String(interaction.channel?.id || '')] = entry;
-  }
-  seekdeepWritePersonaOverrides(data);
+  seekdeepMutatePersonaOverrides((d) => {             // d = fresh under lock
+    if (scope === 'server' || scope === 'guild') {
+      d.guilds[String(interaction.guild?.id || '')] = entry;
+    } else {
+      d.channels[String(interaction.channel?.id || '')] = entry;
+    }
+  });
   await interaction.reply({ content: `Persona for this ${scope} set to: **${persona}**`, flags: MessageFlags.Ephemeral });
   return true;
 }
@@ -14233,8 +14359,9 @@ async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
   }
 
   if (clearMatch) {
-    delete data.users[userId];
-    seekdeepWriteMemoryPresets(data);
+    seekdeepMutateMemoryPresets((d) => {              // d = fresh under lock
+      delete d.users[userId];
+    });
     await message.reply({ content: 'Cleared all your memory presets.', allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -14247,14 +14374,18 @@ async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
       await message.reply({ content: `Unknown preset key(s): ${unknown.join(', ')}. Run \`@SeekDeep memory preset list\` for the supported keys.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    if (action === 'add' || action === 'set') {
-      for (const k of keys) cur.add(k);
-    } else if (action === 'remove') {
-      for (const k of keys) cur.delete(k);
-    }
-    data.users[userId] = { presets: [...cur], updatedAt: new Date().toISOString() };
-    seekdeepWriteMemoryPresets(data);
-    await message.reply({ content: `Memory presets updated: ${[...cur].join(', ') || '(none)'}`, allowedMentions: { repliedUser: false } });
+    let resultPresets = [];
+    seekdeepMutateMemoryPresets((d) => {              // d = fresh under lock
+      const curd = new Set((d.users[userId]?.presets || []).map((s) => String(s).toLowerCase()));
+      if (action === 'add' || action === 'set') {
+        for (const k of keys) curd.add(k);
+      } else if (action === 'remove') {
+        for (const k of keys) curd.delete(k);
+      }
+      resultPresets = [...curd];
+      d.users[userId] = { presets: resultPresets, updatedAt: new Date().toISOString() };
+    });
+    await message.reply({ content: `Memory presets updated: ${resultPresets.join(', ') || '(none)'}`, allowedMentions: { repliedUser: false } });
     return true;
   }
 
@@ -14373,18 +14504,24 @@ async function seekdeepHandleRememberCommand(message, raw = '') {
     }
     // Dedupe: if the exact (case-insensitive) fact is already there, no-op.
     const lower = fact.toLowerCase();
-    if (entry.facts.some((f) => String(f.text || '').toLowerCase() === lower)) {
+    let dupFact = false, storedCount = 0;
+    seekdeepMutateUserFacts((d) => {                  // d = fresh under lock
+      const e = (d.users[userKey] && typeof d.users[userKey] === 'object') ? d.users[userKey] : { facts: [], updatedAt: null };
+      if (!Array.isArray(e.facts)) e.facts = [];
+      if (e.facts.some((f) => String(f.text || '').toLowerCase() === lower)) { dupFact = true; storedCount = e.facts.length; return; }
+      e.facts.push({ text: fact, at: Date.now() });
+      // Cap oldest-out
+      while (e.facts.length > SEEKDEEP_USER_FACTS_MAX) e.facts.shift();
+      e.updatedAt = new Date().toISOString();
+      d.users[userKey] = e;
+      storedCount = e.facts.length;
+    });
+    if (dupFact) {
       await message.reply({ content: 'Already remembered that. Run `@SeekDeep recall` to see the list.', allowedMentions: { repliedUser: false } });
       return true;
     }
-    entry.facts.push({ text: fact, at: Date.now() });
-    // Cap oldest-out
-    while (entry.facts.length > SEEKDEEP_USER_FACTS_MAX) entry.facts.shift();
-    entry.updatedAt = new Date().toISOString();
-    data.users[userKey] = entry;
-    seekdeepWriteUserFacts(data);
     await message.reply({
-      content: `Remembered. (${entry.facts.length}/${SEEKDEEP_USER_FACTS_MAX} facts stored.)`,
+      content: `Remembered. (${storedCount}/${SEEKDEEP_USER_FACTS_MAX} facts stored.)`,
       allowedMentions: { repliedUser: false },
     });
     return true;
@@ -14397,38 +14534,51 @@ async function seekdeepHandleRememberCommand(message, raw = '') {
       return true;
     }
     if (/^all$/i.test(target)) {
-      const removed = entry.facts.length;
-      delete data.users[userKey];
-      seekdeepWriteUserFacts(data);
+      let removed = 0;
+      seekdeepMutateUserFacts((d) => {                // d = fresh under lock
+        const e = d.users[userKey];
+        removed = (e && Array.isArray(e.facts)) ? e.facts.length : 0;
+        delete d.users[userKey];
+      });
       await message.reply({ content: `Cleared ${removed} fact${removed === 1 ? '' : 's'}.`, allowedMentions: { repliedUser: false } });
       return true;
     }
     const indexMatch = /^#?(\d+)$/.exec(target);
     if (indexMatch) {
       const idx = Number(indexMatch[1]) - 1;
-      if (idx < 0 || idx >= entry.facts.length) {
-        await message.reply({ content: `No fact at index ${idx + 1}. You have ${entry.facts.length}. Run \`@SeekDeep recall\`.`, allowedMentions: { repliedUser: false } });
+      let outOfRange = false, curLen = 0, dropped = null;
+      seekdeepMutateUserFacts((d) => {                // d = fresh under lock
+        const e = (d.users[userKey] && typeof d.users[userKey] === 'object') ? d.users[userKey] : { facts: [], updatedAt: null };
+        if (!Array.isArray(e.facts)) e.facts = [];
+        if (idx < 0 || idx >= e.facts.length) { outOfRange = true; curLen = e.facts.length; return; }
+        dropped = e.facts.splice(idx, 1)[0];
+        e.updatedAt = new Date().toISOString();
+        d.users[userKey] = e;
+      });
+      if (outOfRange) {
+        await message.reply({ content: `No fact at index ${idx + 1}. You have ${curLen}. Run \`@SeekDeep recall\`.`, allowedMentions: { repliedUser: false } });
         return true;
       }
-      const dropped = entry.facts.splice(idx, 1)[0];
-      entry.updatedAt = new Date().toISOString();
-      data.users[userKey] = entry;
-      seekdeepWriteUserFacts(data);
       await message.reply({ content: `Forgot: "${String(dropped?.text || '').slice(0, 140)}"`, allowedMentions: { repliedUser: false } });
       return true;
     }
     // Substring match (case-insensitive)
     const needle = target.toLowerCase();
-    const before = entry.facts.length;
-    entry.facts = entry.facts.filter((f) => !String(f.text || '').toLowerCase().includes(needle));
-    const removed = before - entry.facts.length;
+    let removed = 0;
+    seekdeepMutateUserFacts((d) => {                  // d = fresh under lock
+      const e = (d.users[userKey] && typeof d.users[userKey] === 'object') ? d.users[userKey] : { facts: [], updatedAt: null };
+      if (!Array.isArray(e.facts)) e.facts = [];
+      const before = e.facts.length;
+      e.facts = e.facts.filter((f) => !String(f.text || '').toLowerCase().includes(needle));
+      removed = before - e.facts.length;
+      if (!removed) return;
+      e.updatedAt = new Date().toISOString();
+      d.users[userKey] = e;
+    });
     if (!removed) {
       await message.reply({ content: `No facts matched "${target}". Run \`@SeekDeep recall\` to see what's stored.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    entry.updatedAt = new Date().toISOString();
-    data.users[userKey] = entry;
-    seekdeepWriteUserFacts(data);
     await message.reply({ content: `Forgot ${removed} fact${removed === 1 ? '' : 's'} matching "${target}".`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -14480,34 +14630,37 @@ function seekdeepSaveUserTemplate(guildId, userId, name, prompt) {
   const safePrompt = String(prompt || '').trim().slice(0, SEEKDEEP_TEMPLATE_PROMPT_MAX);
   if (!safeName || !safePrompt || !guildId || !userId) return null;
 
-  const data = seekdeepReadPromptTemplates();
-  if (!data.guilds[guildId]) data.guilds[guildId] = {};
-  if (!data.guilds[guildId][userId]) data.guilds[guildId][userId] = {};
-  const userTemplates = data.guilds[guildId][userId];
+  let result = null;
+  seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
+    if (!d.guilds[guildId]) d.guilds[guildId] = {};
+    if (!d.guilds[guildId][userId]) d.guilds[guildId][userId] = {};
+    const userTemplates = d.guilds[guildId][userId];
 
-  if (Object.keys(userTemplates).length >= SEEKDEEP_MAX_TEMPLATES_PER_USER && !userTemplates[safeName]) {
-    return { error: `You already have ${SEEKDEEP_MAX_TEMPLATES_PER_USER} templates. Delete one first.` };
-  }
+    if (Object.keys(userTemplates).length >= SEEKDEEP_MAX_TEMPLATES_PER_USER && !userTemplates[safeName]) {
+      result = { error: `You already have ${SEEKDEEP_MAX_TEMPLATES_PER_USER} templates. Delete one first.` };
+      return;
+    }
 
-  // Preserve sharedAs across saves so editing the template body doesn't
-  // orphan an existing #prompts share. The share-edit hook on the
-  // `template save` command path uses this to push the new body into
-  // the live embed.
-  const existing = userTemplates[safeName] || {};
-  userTemplates[safeName] = {
-    prompt: safePrompt,
-    createdAt: existing.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    usedCount: existing.usedCount || 0,
-    ...(existing.sharedAs ? { sharedAs: existing.sharedAs } : {}),
-  };
-  seekdeepWritePromptTemplates(data);
-  return {
-    name: safeName,
-    prompt: safePrompt,
-    sharedAs: userTemplates[safeName].sharedAs || null,
-    wasUpdate: !!existing.prompt,
-  };
+    // Preserve sharedAs across saves so editing the template body doesn't
+    // orphan an existing #prompts share. The share-edit hook on the
+    // `template save` command path uses this to push the new body into
+    // the live embed.
+    const existing = userTemplates[safeName] || {};
+    userTemplates[safeName] = {
+      prompt: safePrompt,
+      createdAt: existing.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      usedCount: existing.usedCount || 0,
+      ...(existing.sharedAs ? { sharedAs: existing.sharedAs } : {}),
+    };
+    result = {
+      name: safeName,
+      prompt: safePrompt,
+      sharedAs: userTemplates[safeName].sharedAs || null,
+      wasUpdate: !!existing.prompt,
+    };
+  });
+  return result;
 }
 
 function seekdeepDeleteUserTemplate(guildId, userId, name) {
@@ -14515,12 +14668,14 @@ function seekdeepDeleteUserTemplate(guildId, userId, name) {
   // share, if any) or null if no such template existed.
   const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!safeName || !guildId || !userId) return null;
-  const data = seekdeepReadPromptTemplates();
-  const existing = data?.guilds?.[guildId]?.[userId]?.[safeName];
-  if (!existing) return null;
-  delete data.guilds[guildId][userId][safeName];
-  seekdeepWritePromptTemplates(data);
-  return { name: safeName, ...existing };
+  let result = null;
+  seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
+    const existing = d?.guilds?.[guildId]?.[userId]?.[safeName];
+    if (!existing) return;
+    delete d.guilds[guildId][userId][safeName];
+    result = { name: safeName, ...existing };
+  });
+  return result;
 }
 
 function seekdeepSetTemplateShareRef(guildId, userId, name, ref) {
@@ -14530,37 +14685,41 @@ function seekdeepSetTemplateShareRef(guildId, userId, name, ref) {
   // get written so older code paths keep working.
   const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!safeName || !guildId || !userId) return false;
-  const data = seekdeepReadPromptTemplates();
-  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
-  if (!tmpl) return false;
-  if (ref) {
-    const ts = ref.sharedAt || ref.posted_at || new Date().toISOString();
-    tmpl.sharedAs = {
-      messageId: String(ref.messageId || ''),
-      channelId: String(ref.channelId || ''),
-      sharedAt: ts,
-      posted_at: ts,
-      ...(ref.edit_count !== undefined ? { edit_count: Number(ref.edit_count) || 0 } : {}),
-      ...(ref.last_edited_at ? { last_edited_at: ref.last_edited_at } : {}),
-      ...(ref.prior_msg_id ? { prior_msg_id: String(ref.prior_msg_id) } : {}),
-    };
-  } else {
-    delete tmpl.sharedAs;
-  }
-  seekdeepWritePromptTemplates(data);
-  return true;
+  let ok = false;
+  seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
+    const tmpl = d?.guilds?.[guildId]?.[userId]?.[safeName];
+    if (!tmpl) return;
+    if (ref) {
+      const ts = ref.sharedAt || ref.posted_at || new Date().toISOString();
+      tmpl.sharedAs = {
+        messageId: String(ref.messageId || ''),
+        channelId: String(ref.channelId || ''),
+        sharedAt: ts,
+        posted_at: ts,
+        ...(ref.edit_count !== undefined ? { edit_count: Number(ref.edit_count) || 0 } : {}),
+        ...(ref.last_edited_at ? { last_edited_at: ref.last_edited_at } : {}),
+        ...(ref.prior_msg_id ? { prior_msg_id: String(ref.prior_msg_id) } : {}),
+      };
+    } else {
+      delete tmpl.sharedAs;
+    }
+    ok = true;
+  });
+  return ok;
 }
 
 function seekdeepBumpShareEditCount(guildId, userId, name) {
   const safeName = String(name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!safeName || !guildId || !userId) return false;
-  const data = seekdeepReadPromptTemplates();
-  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
-  if (!tmpl?.sharedAs) return false;
-  tmpl.sharedAs.edit_count = Number(tmpl.sharedAs.edit_count || 0) + 1;
-  tmpl.sharedAs.last_edited_at = new Date().toISOString();
-  seekdeepWritePromptTemplates(data);
-  return true;
+  let ok = false;
+  seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
+    const tmpl = d?.guilds?.[guildId]?.[userId]?.[safeName];
+    if (!tmpl?.sharedAs) return;
+    tmpl.sharedAs.edit_count = Number(tmpl.sharedAs.edit_count || 0) + 1;
+    tmpl.sharedAs.last_edited_at = new Date().toISOString();
+    ok = true;
+  });
+  return ok;
 }
 
 const SEEKDEEP_PROMPTS_RESHARE_MAX_AGE_DAYS = (() => {
@@ -14583,12 +14742,12 @@ function seekdeepPromptsShareAgeDays(ref) {
 
 function seekdeepIncrementTemplateUse(guildId, userId, name) {
   const safeName = String(name || '').trim().toLowerCase();
-  const data = seekdeepReadPromptTemplates();
-  const tmpl = data?.guilds?.[guildId]?.[userId]?.[safeName];
-  if (!tmpl) return;
-  tmpl.usedCount = (tmpl.usedCount || 0) + 1;
-  tmpl.lastUsedAt = new Date().toISOString();
-  seekdeepWritePromptTemplates(data);
+  seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
+    const tmpl = d?.guilds?.[guildId]?.[userId]?.[safeName];
+    if (!tmpl) return;
+    tmpl.usedCount = (tmpl.usedCount || 0) + 1;
+    tmpl.lastUsedAt = new Date().toISOString();
+  });
 }
 
 function seekdeepTemplateNameSanitize(raw = '') {
@@ -16083,16 +16242,19 @@ async function seekdeepHandleDigestChannelCommand(message, raw = '') {
     await message.reply({ content: 'Only admins / Manage Server can change the digest channel.', allowedMentions: { repliedUser: false } });
     return true;
   }
-  const overrides = seekdeepReadPersonaOverrides();
   const guildId = String(message.guild?.id || '');
-  if (!overrides.guilds[guildId]) overrides.guilds[guildId] = {};
-  if (/off/i.test(m[1])) {
-    delete overrides.guilds[guildId].digestChannelId;
-    seekdeepWritePersonaOverrides(overrides);
+  const digestOff = /off/i.test(m[1]);
+  seekdeepMutatePersonaOverrides((d) => {             // d = fresh under lock
+    if (!d.guilds[guildId]) d.guilds[guildId] = {};
+    if (digestOff) {
+      delete d.guilds[guildId].digestChannelId;
+    } else {
+      d.guilds[guildId].digestChannelId = String(message.channel?.id || '');
+    }
+  });
+  if (digestOff) {
     await message.reply({ content: 'Daily digest channel disabled for this server.', allowedMentions: { repliedUser: false } });
   } else {
-    overrides.guilds[guildId].digestChannelId = String(message.channel?.id || '');
-    seekdeepWritePersonaOverrides(overrides);
     await message.reply({ content: `Daily digest will post here once it’s enabled: SeekDeep app → All Settings (search “digest”) → turn it on → ↻ Restart bot.`, allowedMentions: { repliedUser: false } });
   }
   return true;
@@ -16228,16 +16390,19 @@ async function seekdeepHandleAutoTranslateChannelCommand(message, raw = '') {
     await message.reply({ content: 'Only admins / Manage Server can change the auto-translate channel.', allowedMentions: { repliedUser: false } });
     return true;
   }
-  const overrides = seekdeepReadPersonaOverrides();
   const guildId = String(message.guild?.id || '');
-  if (!overrides.guilds[guildId]) overrides.guilds[guildId] = {};
-  if (/off/i.test(m[1])) {
-    delete overrides.guilds[guildId].autoTranslateChannelId;
-    seekdeepWritePersonaOverrides(overrides);
+  const translateOff = /off/i.test(m[1]);
+  seekdeepMutatePersonaOverrides((d) => {             // d = fresh under lock
+    if (!d.guilds[guildId]) d.guilds[guildId] = {};
+    if (translateOff) {
+      delete d.guilds[guildId].autoTranslateChannelId;
+    } else {
+      d.guilds[guildId].autoTranslateChannelId = String(message.channel?.id || '');
+    }
+  });
+  if (translateOff) {
     await message.reply({ content: 'Auto-translate channel disabled for this server.', allowedMentions: { repliedUser: false } });
   } else {
-    overrides.guilds[guildId].autoTranslateChannelId = String(message.channel?.id || '');
-    seekdeepWritePersonaOverrides(overrides);
     await message.reply({ content: 'Auto-translate enabled for this channel. Non-Latin messages will be auto-translated to English.', allowedMentions: { repliedUser: false } });
   }
   return true;
@@ -16579,17 +16744,17 @@ async function seekdeepHandleReactToggleComponent(interaction) {
   // command) can't read the same baseline and clobber each other on write.
   let data;
   await seekdeepWithArchiveCountLock(`reacts:${guild.id}`, async () => {
-    data = seekdeepReadAutoReactions();
-    const b = seekdeepGetGuildReactionsBucket(data, String(guild.id));
-    if (action === 'toggle' && arg && b.builtins[arg]) {
-      b.builtins[arg].enabled = !b.builtins[arg].enabled;
-    } else if (action === 'all') {
-      const want = arg === 'on';
-      for (const k of Object.keys(b.builtins)) {
-        if (b.builtins[k]) b.builtins[k].enabled = want;
+    data = seekdeepMutateAutoReactions((d) => {       // d = fresh under cross-process lock
+      const b = seekdeepGetGuildReactionsBucket(d, String(guild.id));
+      if (action === 'toggle' && arg && b.builtins[arg]) {
+        b.builtins[arg].enabled = !b.builtins[arg].enabled;
+      } else if (action === 'all') {
+        const want = arg === 'on';
+        for (const k of Object.keys(b.builtins)) {
+          if (b.builtins[k]) b.builtins[k].enabled = want;
+        }
       }
-    }
-    seekdeepWriteAutoReactions(data);
+    });
   });
 
   // Update ONLY the components — the new on/off state shows in the button colors
@@ -16622,10 +16787,10 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
     try { await interaction.reply({ content: `Couldn't use ${rawEmoji ? `\`${rawEmoji}\`` : 'that'} as a reaction. Use a standard emoji (paste it), or a server custom emoji as \`:name:\` / \`<:name:id>\`.`, flags: MessageFlags.Ephemeral }); } catch {}
     return;
   }
-  const data = seekdeepReadAutoReactions();
-  const bucket = seekdeepGetGuildReactionsBucket(data, String(guild.id));
-  if (bucket.builtins[key]) bucket.builtins[key].emoji = rawEmoji;
-  seekdeepWriteAutoReactions(data);
+  const data = seekdeepMutateAutoReactions((d) => {   // d = fresh under lock
+    const bucket = seekdeepGetGuildReactionsBucket(d, String(guild.id));
+    if (bucket.builtins[key]) bucket.builtins[key].emoji = rawEmoji;
+  });
   // Components-only update: the new emoji shows on the button + dropdown; the
   // static embed (and its loading.gif thumbnail) is left in place, so it doesn't
   // restart. (Omitting `embeds`/`files` keeps the existing ones.)
@@ -16917,8 +17082,9 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       createdBy: message.author?.id || '',
       createdAt: new Date().toISOString(),
     };
-    bucket.rules.push(rule);
-    seekdeepWriteAutoReactions(data);
+    seekdeepMutateAutoReactions((d) => {              // d = fresh under lock
+      seekdeepGetGuildReactionsBucket(d, String(message.guild.id)).rules.push(rule);
+    });
     const scopeText = rule.scope === 'channel' ? ` in <#${rule.target}>` : rule.scope === 'user' ? ` for <@${rule.target}>` : '';
     await message.reply({ content: `Added reaction rule \`${rule.id}\`: ${emoji} when \`${pattern || '(always)'}\`${scopeText}`, allowedMentions: { parse: [] } });
     return true;
@@ -16928,13 +17094,17 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
   const removeMatch = subcommand.match(/^remove\s+(\S+)\s*$/i);
   if (removeMatch) {
     const id = removeMatch[1];
-    const idx = bucket.rules.findIndex((r) => r.id === id);
-    if (idx < 0) {
+    let notFound = false;
+    seekdeepMutateAutoReactions((d) => {              // d = fresh under lock
+      const b = seekdeepGetGuildReactionsBucket(d, String(message.guild.id));
+      const idx = b.rules.findIndex((r) => r.id === id);
+      if (idx < 0) { notFound = true; return; }
+      b.rules.splice(idx, 1);
+    });
+    if (notFound) {
       await message.reply({ content: `No rule with id \`${id}\`.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    bucket.rules.splice(idx, 1);
-    seekdeepWriteAutoReactions(data);
     await message.reply({ content: `Removed rule \`${id}\`.`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -16943,14 +17113,19 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
   const toggleMatch = subcommand.match(/^toggle\s+(\S+)\s*$/i);
   if (toggleMatch) {
     const id = toggleMatch[1];
-    const r = bucket.rules.find((rule) => rule.id === id);
-    if (!r) {
+    let notFound = false, nowEnabled = false;
+    seekdeepMutateAutoReactions((d) => {              // d = fresh under lock
+      const b = seekdeepGetGuildReactionsBucket(d, String(message.guild.id));
+      const r = b.rules.find((rule) => rule.id === id);
+      if (!r) { notFound = true; return; }
+      r.enabled = !r.enabled;
+      nowEnabled = r.enabled;
+    });
+    if (notFound) {
       await message.reply({ content: `No rule with id \`${id}\`.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    r.enabled = !r.enabled;
-    seekdeepWriteAutoReactions(data);
-    await message.reply({ content: `Rule \`${id}\` is now ${r.enabled ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
+    await message.reply({ content: `Rule \`${id}\` is now ${nowEnabled ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
     return true;
   }
 
@@ -16959,12 +17134,16 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
   if (builtinMatch) {
     const key = builtinMatch[1].toLowerCase();
     const onOff = /^(on|enable)$/i.test(builtinMatch[2]);
-    if (!bucket.builtins[key]) {
+    let unknownBuiltin = false;
+    seekdeepMutateAutoReactions((d) => {              // d = fresh under lock
+      const b = seekdeepGetGuildReactionsBucket(d, String(message.guild.id));
+      if (!b.builtins[key]) { unknownBuiltin = true; return; }
+      b.builtins[key].enabled = onOff;
+    });
+    if (unknownBuiltin) {
       await message.reply({ content: `Unknown builtin "${key}". Valid: ${Object.keys(SEEKDEEP_BUILTIN_REACTIONS_DEFAULT).join(', ')}`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    bucket.builtins[key].enabled = onOff;
-    seekdeepWriteAutoReactions(data);
     await message.reply({ content: `Builtin \`${key}\` is now ${onOff ? 'on' : 'off'}.`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -16984,8 +17163,10 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       await message.reply({ content: `Couldn't use ${rawEmoji ? `\`${rawEmoji}\`` : 'that'} as a reaction. Use a standard emoji (paste it directly), or a server custom emoji as \`:name:\` or \`<:name:id>\`.`, allowedMentions: { repliedUser: false } });
       return true;
     }
-    bucket.builtins[key].emoji = rawEmoji;
-    seekdeepWriteAutoReactions(data);
+    seekdeepMutateAutoReactions((d) => {              // d = fresh under lock
+      const b = seekdeepGetGuildReactionsBucket(d, String(message.guild.id));
+      if (b.builtins[key]) b.builtins[key].emoji = rawEmoji;
+    });
     await message.reply({ content: `Builtin \`${key}\` now reacts with ${rawEmoji}.`, allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -17016,9 +17197,10 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       const text = await res.text();
       const parsed = JSON.parse(text);
       let droppedRules = 0;
+      let clean = null;
       if (Array.isArray(parsed.rules)) {
         const SEEKDEEP_REACT_RULES_MAX = 200;
-        const clean = [];
+        clean = [];
         for (const r of parsed.rules.slice(0, SEEKDEEP_REACT_RULES_MAX)) {
           // Reject ReDoS/oversized/invalid patterns at import — an imported rule
           // is a persistent, restart-surviving event-loop bomb otherwise.
@@ -17026,15 +17208,19 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
           clean.push({ ...r, id: r.id || seekdeepNewReactionRuleId() });
         }
         droppedRules += Math.max(0, parsed.rules.length - SEEKDEEP_REACT_RULES_MAX);
-        bucket.rules = clean;
       }
-      if (parsed.builtins && typeof parsed.builtins === 'object') {
-        for (const [key, val] of Object.entries(parsed.builtins)) {
-          if (bucket.builtins[key]) Object.assign(bucket.builtins[key], val);
+      let finalRuleCount = 0;
+      seekdeepMutateAutoReactions((d) => {            // d = fresh under lock
+        const b = seekdeepGetGuildReactionsBucket(d, String(message.guild.id));
+        if (clean) b.rules = clean;
+        if (parsed.builtins && typeof parsed.builtins === 'object') {
+          for (const [key, val] of Object.entries(parsed.builtins)) {
+            if (b.builtins[key]) Object.assign(b.builtins[key], val);
+          }
         }
-      }
-      seekdeepWriteAutoReactions(data);
-      await message.reply({ content: `Imported ${bucket.rules.length} rule(s)${droppedRules ? ` (dropped ${droppedRules} unsafe/invalid)` : ''} + builtins.`, allowedMentions: { repliedUser: false } });
+        finalRuleCount = b.rules.length;
+      });
+      await message.reply({ content: `Imported ${finalRuleCount} rule(s)${droppedRules ? ` (dropped ${droppedRules} unsafe/invalid)` : ''} + builtins.`, allowedMentions: { repliedUser: false } });
     } catch (err) {
       await message.reply({ content: 'Import failed: ' + (err?.message || err), allowedMentions: { repliedUser: false } });
     }
@@ -17715,28 +17901,32 @@ function seekdeepArchiveResolveMode(channelId) {
 
 function seekdeepArchiveBumpSent24h() {
   // Lightweight counter that decays after 24h. Best-effort; on failure
-  // just skip the increment.
+  // just skip the increment. The read->modify->write is held under the
+  // shared archive-config lock so a concurrent writer (Python side or a
+  // mode change) can't clobber the counter (COUP-1). Reads fresh inside.
   try {
-    let data = { sent_24h: 0, window_start: Date.now() };
-    if (fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_CONFIG_PATH, 'utf8'));
-      // Merge defaults with what's on disk: defaults first, parsed overrides.
-      // Previous `{ ...parsed, ...data, ...parsed }` had ...data overwritten
-      // by the trailing ...parsed anyway, making the middle spread dead
-      // weight — and the defaults were unconditionally clobbered, so a
-      // half-written file would still get the on-disk window_start. AUD-024.
-      if (parsed && typeof parsed === 'object') data = { ...data, ...parsed };
-    }
-    const now = Date.now();
-    const winStart = Number(data.window_start || 0) || now;
-    // Reset window if more than 24h elapsed since the first count in this window.
-    if (now - winStart > 24 * 60 * 60 * 1000) {
-      data.sent_24h = 1;
-      data.window_start = now;
-    } else {
-      data.sent_24h = Number(data.sent_24h || 0) + 1;
-    }
-    writeJsonAtomic(SEEKDEEP_ARCHIVE_CONFIG_PATH, data);
+    seekdeepWithFileLock(SEEKDEEP_ARCHIVE_CONFIG_PATH, () => {
+      let data = { sent_24h: 0, window_start: Date.now() };
+      if (fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
+        const parsed = JSON.parse(fs.readFileSync(SEEKDEEP_ARCHIVE_CONFIG_PATH, 'utf8'));
+        // Merge defaults with what's on disk: defaults first, parsed overrides.
+        // Previous `{ ...parsed, ...data, ...parsed }` had ...data overwritten
+        // by the trailing ...parsed anyway, making the middle spread dead
+        // weight — and the defaults were unconditionally clobbered, so a
+        // half-written file would still get the on-disk window_start. AUD-024.
+        if (parsed && typeof parsed === 'object') data = { ...data, ...parsed };
+      }
+      const now = Date.now();
+      const winStart = Number(data.window_start || 0) || now;
+      // Reset window if more than 24h elapsed since the first count in this window.
+      if (now - winStart > 24 * 60 * 60 * 1000) {
+        data.sent_24h = 1;
+        data.window_start = now;
+      } else {
+        data.sent_24h = Number(data.sent_24h || 0) + 1;
+      }
+      writeJsonAtomic(SEEKDEEP_ARCHIVE_CONFIG_PATH, data);
+    });
   } catch {}
 }
 
@@ -23286,6 +23476,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepPendingImageQueuePlan,
     seekdeepContextGenerateImageLooksLikeStatusMessage,
     seekdeepContextMenuExtractPromptLine,
+    // COUP-1 cross-process advisory lock primitive
+    seekdeepWithFileLock,
+    seekdeepMutateJson,
     // User-facts module (remember/forget/recall)
     seekdeepReadUserFacts,
     seekdeepWriteUserFacts,

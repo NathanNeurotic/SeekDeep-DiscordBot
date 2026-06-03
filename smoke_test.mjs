@@ -2261,6 +2261,37 @@ if (typeof T.seekdeepUrlLooksLikeMedia === 'function') {
   check('media-url: direct .gif is still media', T.seekdeepUrlLooksLikeMedia('https://cdn.example.com/a.gif') === true);
 }
 
+// -- COUP-1: cross-process lock primitive. seekdeepMutateJson holds <path>.lock
+//    across read->modify->write; stale locks (crashed holder) are stolen. --
+if (typeof T.seekdeepMutateJson === 'function') {
+  const lfs = await import('node:fs');
+  const los = await import('node:os');
+  const lpath = await import('node:path');
+  const ldir = lfs.mkdtempSync(lpath.join(los.tmpdir(), 'sd-lock-'));
+  const lf = lpath.join(ldir, 'shared.json');
+  const lock = lf + '.lock';
+  try {
+    T.seekdeepMutateJson(lf, { users: {} }, (d) => { d.users.alice = 1; });
+    const b1 = JSON.parse(lfs.readFileSync(lf, 'utf8'));
+    check('lock: mutateJson read-modify-write round-trips', !!(b1.users && b1.users.alice === 1));
+    check('lock: lockfile released after mutateJson', !lfs.existsSync(lock));
+    T.seekdeepMutateJson(lf, { users: {} }, (d) => { d.users.bob = 2; });
+    const b2 = JSON.parse(lfs.readFileSync(lf, 'utf8'));
+    check('lock: second mutate preserves the first write', b2.users.alice === 1 && b2.users.bob === 2);
+    // Stale lock: a leftover .lock with an old mtime must be stolen, not block forever.
+    lfs.writeFileSync(lock, '999999 stale');
+    const old = (Date.now() / 1000) - 3600; // 1h ago, well past the 15s stale threshold
+    lfs.utimesSync(lock, old, old);
+    let ran = false;
+    T.seekdeepMutateJson(lf, { users: {} }, (d) => { d.users.carol = 3; ran = true; });
+    const b3 = JSON.parse(lfs.readFileSync(lf, 'utf8'));
+    check('lock: stale lock is stolen + mutate proceeds', ran && b3.users.carol === 3);
+    check('lock: stale lockfile cleaned up after takeover', !lfs.existsSync(lock));
+  } finally {
+    try { lfs.rmSync(ldir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
