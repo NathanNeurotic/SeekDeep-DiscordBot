@@ -422,6 +422,10 @@
        Discord's iframe, Control Center isn't reachable). -->
   <a id="sd-return-cc" href="../app.html" hidden>&#8592; CONTROL CENTER</a>
   <style>
+    /* An author rule for `display` beats the UA `[hidden]{display:none}` regardless
+       of specificity, so without this the link would stay visible even with the
+       hidden attribute (e.g. inside Discord). Restore the hide explicitly. */
+    #sd-return-cc[hidden] { display: none; }
     #sd-return-cc {
       position: fixed; left: 14px; bottom: 14px; z-index: 99999;
       display: inline-flex; align-items: center; gap: 7px;

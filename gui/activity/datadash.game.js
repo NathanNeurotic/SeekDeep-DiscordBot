@@ -2861,6 +2861,7 @@
   let last = performance.now();
   function frame(now) {
     if (!W || !H) resize();   // self-heal if the canvas sized to 0 (first-launch race)
+    if (!W || !H) { last = now; requestAnimationFrame(frame); return; } // still 0 (layout not ready) — wait; don't run physics/render at 0 dims (NaN / div-by-zero)
     let dt = (now - last) / 1000;
     last = now;
     dt = Math.max(0, Math.min(0.05, dt)); // guard against negative / huge deltas
@@ -2905,7 +2906,8 @@
       }, { passive: false });
       zone.addEventListener("touchmove", (e) => {
         e.preventDefault();
-        for (const t of e.changedTouches) {
+        for (let i = 0; i < e.changedTouches.length; i++) {   // indexed loop: TouchList isn't iterable on some old/embedded webviews
+          const t = e.changedTouches[i];
           if (t.identifier !== id) continue;
           const r = uiRect(); const dx = (t.clientX - r.left) - ox, dy = (t.clientY - r.top) - oy;
           const m = Math.hypot(dx, dy) || 1, cl = m > MAXR ? MAXR / m : 1;
@@ -2914,7 +2916,8 @@
         }
       }, { passive: false });
       function end(e) {
-        for (const t of e.changedTouches) {
+        for (let i = 0; i < e.changedTouches.length; i++) {   // indexed loop: TouchList isn't iterable on some old/embedded webviews
+          const t = e.changedTouches[i];
           if (t.identifier !== id) continue;
           id = null; stick.classList.remove("show"); knob.style.transform = "translate(-50%,-50%)"; onEnd();
         }
