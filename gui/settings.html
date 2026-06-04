@@ -218,7 +218,8 @@
       const meta = document.createElement('div');
       meta.className = 'meta';
       const lock = f.kind === 'secret' ? '<span class="lock">SECRET</span>' : '';
-      meta.innerHTML = `<div class="key">${f.key}${lock}</div>` + (f.desc ? `<div class="desc"></div>` : '');
+      meta.innerHTML = `<div class="key">${lock}</div>` + (f.desc ? `<div class="desc"></div>` : '');
+      meta.querySelector('.key').insertAdjacentText('afterbegin', f.key);  // FE-5: render the config key as text, never interpolated HTML
       if (f.desc) meta.querySelector('.desc').textContent = f.desc;
       row.appendChild(meta);
 
