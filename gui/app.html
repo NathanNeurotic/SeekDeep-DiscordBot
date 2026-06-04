@@ -5176,7 +5176,7 @@ const SEEKDEEP_BASE = (function() {
       }
     }
     function escapeHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
     send.addEventListener('click', doSend);
@@ -6369,7 +6369,7 @@ root.render(/*#__PURE__*/React.createElement(App, null));
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
               <span class="mono" style="color:var(--hull-1);font-size:13px;">${entry.repo_id.replace(/[<>"&]/g, '')}</span>
               ${backendBadge}
-              <span class="tiny" style="padding:1px 8px;border:1px solid var(--stroke);border-radius:8px;font-family:var(--font-mono);color:${tierColor(entry.tier)};font-size:10px;letter-spacing:0.08em;text-transform:uppercase;">${entry.tier} · ${entry.size_gb} GB</span>
+              <span class="tiny" style="padding:1px 8px;border:1px solid var(--stroke);border-radius:8px;font-family:var(--font-mono);color:${tierColor(entry.tier)};font-size:10px;letter-spacing:0.08em;text-transform:uppercase;">${String(entry.tier).replace(/[<>"&]/g,'')} · ${String(entry.size_gb).replace(/[<>"&]/g,'')} GB</span>
               ${gated ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--warn);border-radius:8px;font-family:var(--font-mono);color:var(--warn);font-size:10px;letter-spacing:0.08em;">⚠ gated</span>' : ''}
               ${isCached ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--good);border-radius:8px;font-family:var(--font-mono);color:var(--good);font-size:10px;letter-spacing:0.08em;">✓ cached</span>' : ''}
               ${!fits ? '<span class="tiny" style="padding:1px 8px;border:1px solid var(--bad);border-radius:8px;font-family:var(--font-mono);color:var(--bad);font-size:10px;letter-spacing:0.08em;">won\'t fit</span>' : ''}

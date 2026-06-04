@@ -1032,7 +1032,7 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
 
   let bodyHTML;
   if (body && body.__image) {
-    bodyHTML = `<div class="resp-image"><img src="${body.url}" alt="response image" /></div>`;
+    bodyHTML = `<div class="resp-image"><img src="${escapeAttr(body.url)}" alt="response image" /></div>`;
   } else {
     bodyHTML = `
       <div class="resp-body">
@@ -1053,7 +1053,7 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
       <h2>RESPONSE</h2>
       <span class="resp-status ${ok ? 'ok' : 'err'}" id="respStatus">${ok ? status + ' OK' : 'OFFLINE · unreachable'}</span>
     </div>
-    ${error ? `<div style="color:var(--bad); font-family:var(--font-mono); font-size:12px; padding:8px 12px; background: rgba(255,107,107,0.05); border:1px solid rgba(255,107,107,0.3); border-radius: var(--r-sm); margin-bottom: 14px;">▸ FETCH ERROR · ${error} · showing canned sample response below</div>` : ''}
+    ${error ? `<div style="color:var(--bad); font-family:var(--font-mono); font-size:12px; padding:8px 12px; background: rgba(255,107,107,0.05); border:1px solid rgba(255,107,107,0.3); border-radius: var(--r-sm); margin-bottom: 14px;">▸ FETCH ERROR · ${escape(error)} · showing canned sample response below</div>` : ''}
     ${meta}
     ${inspectorHTML}
     ${bodyHTML}
@@ -1095,7 +1095,7 @@ function renderRouteInspector(r) {
          <div class="ri-chain">
            <div class="ri-node primary">
              <div class="ri-node-h">
-               <span class="ri-role">${r.role_resolved}</span>
+               <span class="ri-role">${escape(r.role_resolved)}</span>
                ${backendTag(r.backend)}
              </div>
              <div class="ri-model">${escape(r.model_id || '—')}</div>
@@ -1115,7 +1115,7 @@ function renderRouteInspector(r) {
     : `<div class="ri-section"><div class="ri-section-h">FALLBACK CHAIN</div><div class="ri-empty">· no fallback configured · this role is the terminal stop</div></div>`;
 
   const resolvedDiff = r.role_resolved !== r.role_requested
-    ? `<div class="ri-note ri-warn">▸ requested role <span class="mono">${r.role_requested}</span> resolved to <span class="mono">${r.role_resolved}</span> (the requested role isn’t configured · the AI server fell through)</div>`
+    ? `<div class="ri-note ri-warn">▸ requested role <span class="mono">${escape(r.role_requested)}</span> resolved to <span class="mono">${escape(r.role_resolved)}</span> (the requested role isn’t configured · the AI server fell through)</div>`
     : '';
 
   const promptPreview = r.prompt_preview
@@ -1127,7 +1127,7 @@ function renderRouteInspector(r) {
       <div class="ri-head">
         <div>
           <h3>ROUTE INSPECTOR</h3>
-          <div class="ri-sub">dispatch plan for role <span class="mono" style="color:var(--cyan-1)">${r.role_resolved}</span></div>
+          <div class="ri-sub">dispatch plan for role <span class="mono" style="color:var(--cyan-1)">${escape(r.role_resolved)}</span></div>
         </div>
         ${stateTag}
       </div>
