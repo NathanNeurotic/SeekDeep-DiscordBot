@@ -8851,6 +8851,21 @@ function seekdeepConsumePendingImageSubjectRequestV2(message, prompt = '') {
   return { ...state, prompt: subject };
 }
 
+// SEEKDEEP_IMAGE_SUBJECT_CONTEXT_GUARD_START
+// A usable image subject is compact and descriptive. A chat reply — e.g. a long
+// persona ramble — is neither, and feeding it in verbatim is how a bare "draw it"
+// right after a wordy answer drew the ENTIRE reply: AI-refine bails with
+// "subject-not-preserved" and the whole thing leaks into the prompt. Gate the
+// recent-context auto-fill below on this so those cases ask for a real subject.
+function seekdeepContextTextUsableAsImageSubject(text = '') {
+  const s = normalizeUserText(text).trim();
+  if (!s) return false;
+  if (s.length > 300) return false;                                // prose, not a subject
+  if ((s.match(/[.!?](?:\s|$)/g) || []).length >= 3) return false; // multi-sentence chat
+  return true;
+}
+// SEEKDEEP_IMAGE_SUBJECT_CONTEXT_GUARD_END
+
 async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', key = '') {
   if (!seekdeepIsMissingImageSubjectPromptV2(prompt)) return false;
 
@@ -8862,7 +8877,10 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
     ? seekdeepLastAssistantTextSafe(key)
     : '';
 
-  if (recentAssistant) {
+  // Only auto-fill from recent context when it actually reads like an image subject —
+  // not a long/multi-sentence chat reply (which is what produced "drew the ramble").
+  // Unusable context falls through to the "what should I generate?" ask below.
+  if (recentAssistant && seekdeepContextTextUsableAsImageSubject(recentAssistant)) {
     if (typeof seekdeepLogRoute === 'function') seekdeepLogRoute('image-missing-subject-context-fill', recentAssistant.slice(0, 80));
     if (typeof remember === 'function' && key) {
       remember(key, 'user', prompt);
@@ -20818,12 +20836,12 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
         // distribution of "what style is the user actually picking".
         imageStyle: seekdeepMessageImageModeOptions?.style || '',
       }); } catch {}
-      remember(key, 'user', `[natural-image] ${seekdeepRawImageRoutePrompt}`);
+      remember(key, 'user', `[natural-image] ${seekdeepClipForDiscord(seekdeepRawImageRoutePrompt, 200)}`);
       if (seekdeepShouldUsePromptChoicePreview(seekdeepMessageImageModeOptions)) {
-        remember(key, 'assistant', `Prepared image prompt choices for: ${imagePrompt}`);
+        remember(key, 'assistant', `Prepared image prompt choices for: ${seekdeepClipForDiscord(imagePrompt, 200)}`);
         await seekdeepSendImagePromptChoice(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       } else {
-        remember(key, 'assistant', `Queued image locally for: ${imagePrompt}`);
+        remember(key, 'assistant', `Queued image locally for: ${seekdeepClipForDiscord(imagePrompt, 200)}`);
         await seekdeepSendImageWithButtons(message, imagePrompt, 1024, 1024, null, seekdeepMessageImageModeOptions);
       }
       return;
