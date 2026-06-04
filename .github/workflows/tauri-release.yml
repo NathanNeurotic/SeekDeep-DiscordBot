@@ -173,13 +173,13 @@ jobs:
           cache: 'npm'
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           # Universal macOS binary needs both x86_64 + aarch64 toolchains
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build (src-tauri/target)
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: 'src-tauri -> target'
 
@@ -201,7 +201,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app + publish to rolling nightly release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Rolling nightly: the same `nightly` tag is force-moved on
