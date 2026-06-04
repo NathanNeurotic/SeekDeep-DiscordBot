@@ -19432,6 +19432,30 @@ client.on('messageCreate', async (message) => {
   }
 
   if (!prompt) {
+    // Image-only mention: if @SeekDeep is pinged with an image but no text, the
+    // user clearly wants something done with it -- run vision and describe it
+    // instead of nagging. Falls back to the nag below when there is no image.
+    const seekdeepMentionImages = (typeof seekdeepExtractImagesFromMessage === 'function')
+      ? seekdeepExtractImagesFromMessage(message) : [];
+    if (seekdeepMentionImages.length) {
+      try { await message.channel?.sendTyping?.(); } catch {}
+      let seekdeepVisionReply;
+      try {
+        const answer = await askVision(seekdeepMentionImages[0], 'Describe this image clearly and in detail.');
+        seekdeepVisionReply = (answer && answer.trim()) ? answer.trim().slice(0, MAX_DISCORD_CHARS) : '(no description returned)';
+      } catch (err) {
+        console.error('[SeekDeep] image-only mention vision failed:', err?.stack || err?.message || err);
+        seekdeepVisionReply = "Could not analyze that image: " + String(err?.message || 'unknown error').slice(0, 300);
+      }
+      await message.reply({
+        content: seekdeepAppendResponseFooter(seekdeepVisionReply, {
+          startedAt: message?.__seekdeepRequestStartedAt,
+          modelUsed: seekdeepVisionModelLabel(),
+        }),
+        allowedMentions: { repliedUser: false },
+      });
+      return;
+    }
     await message.reply({
       content: seekdeepAppendResponseFooter('No command text found after the bot mention. Try `@SeekDeep help`.', {
         startedAt: message?.__seekdeepRequestStartedAt,
