@@ -2329,6 +2329,20 @@ if (typeof T.remember === 'function' && typeof T.seekdeepRememberImageSubjectPro
   }
 }
 
+// BOT-4: cooldown-map TTL sweep — guards the image/translate cooldown Maps from
+// unbounded growth (one stale timestamp per unique user/channel, never removed).
+if (typeof T.seekdeepSweepExpiredCooldowns === 'function') {
+  const now = Date.now();
+  const m = new Map();
+  for (let i = 0; i < 600; i++) m.set('k' + i, i < 400 ? now - 100000 : now); // 400 expired + 200 fresh, > default 512 threshold
+  T.seekdeepSweepExpiredCooldowns(m, 5000); // 5s window
+  check('BOT-4: expired cooldown entries swept past threshold', m.size === 200);
+  check('BOT-4: fresh entries kept, oldest expired dropped', m.has('k599') && !m.has('k0'));
+  const small = new Map([['a', now - 100000]]);
+  T.seekdeepSweepExpiredCooldowns(small, 5000);
+  check('BOT-4: small map left untouched (below sweep threshold)', small.size === 1);
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {
