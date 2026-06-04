@@ -92,11 +92,11 @@
 | POST | `/chat` | token | api.html | yes |
 | GET | `/gpu` | open | api.html | yes |
 | GET | `/health` | open | add-model.html | yes |
-| POST | `/image` | token | api.html | no |
-| POST | `/img2img` | token | api.html | no |
-| POST | `/inpaint` | token | api.html | no |
-| POST | `/inpaint_mask_preview` | token | image-ab.html | no |
-| POST | `/instruct-pix2pix` | token | api.html | no |
+| POST | `/image` | token | api.html | yes |
+| POST | `/img2img` | token | api.html | yes |
+| POST | `/inpaint` | token | api.html | yes |
+| POST | `/inpaint_mask_preview` | token | image-ab.html | yes |
+| POST | `/instruct-pix2pix` | token | api.html | yes |
 | GET | `/ml_deps` | open | ml-deps.js | yes |
 | POST | `/model/install` | token | add-model.html | yes |
 | POST | `/model/uninstall` | token | app.html | yes |
@@ -104,17 +104,17 @@
 | GET | `/models/catalog` | open | installer.html | no |
 | GET | `/models/installed` | open | app.html | yes |
 | GET | `/route/debug` | open | api.html | yes |
-| POST | `/unload` | token | api.html | no |
-| POST | `/upscale` | token | api.html | no |
-| POST | `/vision` | token | api.html | no |
+| POST | `/unload` | token | api.html | yes |
+| POST | `/upscale` | token | api.html | yes |
+| POST | `/vision` | token | api.html | yes |
 | GET | `/vram` | open | — | no |
-| POST | `/warmup/chat` | token | — | no |
-| POST | `/warmup/image` | token | — | no |
-| POST | `/warmup/vision` | token | — | no |
+| POST | `/warmup/chat` | token | — | yes |
+| POST | `/warmup/image` | token | — | yes |
+| POST | `/warmup/vision` | token | — | yes |
 
 ## Summary
 
 - Total routes: **90**
 - Open (no token): **27**
-- Not referenced by any test suite: **36**
+- Not referenced by any test suite: **25**
 
