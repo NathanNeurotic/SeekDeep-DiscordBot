@@ -1674,6 +1674,29 @@ def main() -> int:
             check(f"POST {_p} without token -> 401 (token-gated)",
                   r.status_code == 401, f"got {r.status_code}")
 
+    # ---- TAU-5 / Phase A: browser-path CSP + security headers ---------------
+    # The /gui StaticFiles mount mirrors the desktop CSP + anti-framing headers
+    # onto GUI HTML — EXCEPT the Discord Activity (gui/activity/*), which must
+    # stay embeddable in Discord's iframe and able to load its esm.sh SDK.
+    r = cl.get("/gui/app.html")
+    if r.status_code == 200:
+        csp = r.headers.get("content-security-policy", "")
+        check("Phase A: GUI page carries the browser CSP (frame-ancestors 'none')",
+              "default-src 'self'" in csp and "frame-ancestors 'none'" in csp, f"csp={csp[:90]!r}")
+        connect = csp.split("connect-src", 1)[1].split(";", 1)[0] if "connect-src" in csp else ""
+        check("Phase A: connect-src is loopback-only (no bare https: token-egress)",
+              " https:" not in connect and "127.0.0.1" in connect, f"connect-src={connect!r}")
+        check("Phase A: GUI page has X-Frame-Options DENY + nosniff",
+              r.headers.get("x-frame-options") == "DENY"
+              and r.headers.get("x-content-type-options") == "nosniff",
+              f"xfo={r.headers.get('x-frame-options')!r}")
+    r = cl.get("/gui/activity/index.html")
+    if r.status_code == 200:
+        hk = {k.lower() for k in r.headers}
+        check("Phase A: Discord Activity exempt from CSP + X-Frame-Options (stays embeddable)",
+              "content-security-policy" not in hk and "x-frame-options" not in hk,
+              f"csp={r.headers.get('content-security-policy')!r} xfo={r.headers.get('x-frame-options')!r}")
+
     # ---- Summary ----
     n_ok = sum(1 for ok, _, _ in _results if ok)
     n_fail = sum(1 for ok, _, _ in _results if not ok)

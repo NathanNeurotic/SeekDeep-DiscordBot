@@ -937,6 +937,12 @@ class _SeekDeepNoCacheStaticFiles(StaticFiles):
         resp = await super().get_response(path, scope)
         if hasattr(resp, "headers"):
             ext = (path or "").lower().rsplit(".", 1)[-1]
+            # The Discord Activity (gui/activity/*) is INTENTIONALLY embedded in
+            # Discord's iframe and loads its SDK from esm.sh — so it must NOT get the
+            # anti-framing header or the strict GUI CSP (those would block Discord
+            # from embedding it and block the cross-origin SDK import). It runs under
+            # Discord's own context, not the SeekDeep GUI policy.
+            is_activity = (path or "").replace("\\", "/").lstrip("/").startswith("activity/")
             # HTML/JS/CSS/JSON are everything that mutates between SeekDeep
             # releases. SeekDeep ships as a Tauri desktop app serving over
             # loopback — there is no bandwidth case for caching the GUI.
@@ -952,10 +958,11 @@ class _SeekDeepNoCacheStaticFiles(StaticFiles):
                 # TAU-5: security headers on the browser path (the Tauri webview
                 # gets its CSP from tauri.conf.json; this loopback mount had none).
                 resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-                resp.headers.setdefault("X-Frame-Options", "DENY")
                 resp.headers.setdefault("Referrer-Policy", "no-referrer")
-                if ext in ("html", "htm"):
-                    resp.headers.setdefault("Content-Security-Policy", _SEEKDEEP_GUI_CSP)
+                if not is_activity:
+                    resp.headers.setdefault("X-Frame-Options", "DENY")
+                    if ext in ("html", "htm"):
+                        resp.headers.setdefault("Content-Security-Policy", _SEEKDEEP_GUI_CSP)
         return resp
 
 _GUI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui")
