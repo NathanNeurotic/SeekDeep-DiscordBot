@@ -4487,6 +4487,16 @@ const SEEKDEEP_IMAGE_COOLDOWN_MS = Math.max(0, Number(process.env.SEEKDEEP_IMAGE
 const seekdeepImageCooldowns = globalThis.__seekdeepImageCooldowns || new Map();
 globalThis.__seekdeepImageCooldowns = seekdeepImageCooldowns;
 
+// BOT-4: cooldown Maps key by user/channel and otherwise grow forever (one stale
+// timestamp per unique key, never removed). Shed entries whose cooldown window has
+// elapsed — opportunistically on write, and only once the map has grown past a
+// threshold so the O(n) sweep stays rare. An expired entry is dead (cooldown over).
+function seekdeepSweepExpiredCooldowns(map, windowMs, threshold = 512) {
+  if (map.size < threshold) return;
+  const cutoff = Date.now() - windowMs;
+  for (const [k, t] of map) { if (Number(t) <= cutoff) map.delete(k); }
+}
+
 function seekdeepImageCooldownRemaining(userId) {
   if (!SEEKDEEP_IMAGE_COOLDOWN_MS || !userId) return 0;
 
@@ -4499,6 +4509,7 @@ function seekdeepImageCooldownRemaining(userId) {
 function seekdeepRememberImageCooldown(userId) {
   if (!SEEKDEEP_IMAGE_COOLDOWN_MS || !userId) return;
   seekdeepImageCooldowns.set(String(userId), Date.now());
+  seekdeepSweepExpiredCooldowns(seekdeepImageCooldowns, SEEKDEEP_IMAGE_COOLDOWN_MS);
 }
 
 function seekdeepImageQueueCurrentPosition() {
@@ -16364,6 +16375,7 @@ async function seekdeepAutoTranslateMessage(message) {
   const lastAt = SEEKDEEP_AUTO_TRANSLATE_COOLDOWN.get(autoChannelId) || 0;
   if (now - lastAt < SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS) return false;
   SEEKDEEP_AUTO_TRANSLATE_COOLDOWN.set(autoChannelId, now);
+  seekdeepSweepExpiredCooldowns(SEEKDEEP_AUTO_TRANSLATE_COOLDOWN, SEEKDEEP_AUTO_TRANSLATE_COOLDOWN_MS);
 
   try {
     seekdeepSetActivityStatus('Translating...');
@@ -16533,9 +16545,22 @@ function seekdeepReadAutoReactions() {
   } catch { return { guilds: {} }; }
 }
 
+// BOT-3: the per-message auto-react path read + re-parsed this file on EVERY
+// message, and returned fresh rule objects so the per-rule `rule._compiled` regex
+// cache never survived (patterns recompiled every message too). Cache the parsed
+// data — the compiled regexes ride along on the cached rule objects — and
+// invalidate on write so rule edits take effect immediately. (Only Node writes
+// this file, so write-invalidation is sufficient.)
+let _seekdeepAutoReactionsCache = null;
+function seekdeepReadAutoReactionsCached() {
+  if (_seekdeepAutoReactionsCache === null) _seekdeepAutoReactionsCache = seekdeepReadAutoReactions();
+  return _seekdeepAutoReactionsCache;
+}
+
 function seekdeepWriteAutoReactions(data) {
   try {
     writeJsonAtomic(SEEKDEEP_AUTO_REACTIONS_PATH, data);
+    _seekdeepAutoReactionsCache = null;   // BOT-3: invalidate the per-message read cache
     return true;
   } catch (err) {
     console.warn('Failed to write auto-reactions:', err?.message || err);
@@ -16933,7 +16958,7 @@ async function seekdeepApplyAutoReactions(message) {
     if (!message?.guild?.id || message.author?.bot) return;
     const content = String(message.content || '');
 
-    const data = seekdeepReadAutoReactions();
+    const data = seekdeepReadAutoReactionsCached();
     const guildId = String(message.guild.id);
     const bucket = data.guilds[guildId];
     if (!bucket) return;
@@ -23316,6 +23341,7 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     // BOT-1/BOT-2: in-memory store eviction (unbounded-growth regression guards)
     remember,
     seekdeepRememberImageSubjectPrompt,
+    seekdeepSweepExpiredCooldowns,   // BOT-4: cooldown-map TTL sweep
     memoryStoreConstants: {
       maxKeys: SEEKDEEP_MEMORY_STORE_MAX_KEYS,
       recentImageSubjectsMax: SEEKDEEP_RECENT_IMAGE_SUBJECTS_MAX,
