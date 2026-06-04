@@ -1657,6 +1657,23 @@ def main() -> int:
                   and "unknown role" in str(body.get("error", "")),
                   f"body={body}")
 
+    # ---- TEST-4: generation / inference auth contract -----------------------
+    # Every inference + warmup + model-lifecycle POST on the AI server is gated
+    # by Depends(require_gui_token). Pin it: a request with NO X-SeekDeep-Token
+    # must get 401 and never reach the model. If someone drops the dependency
+    # from a route, this turns red. The token check is a route dependency, so it
+    # fires BEFORE body validation — an empty body still yields 401, no model
+    # load. (/model/install + /model/uninstall are covered above; this is the
+    # generation/inference/warmup surface that was previously untested.)
+    if token:
+        for _p in ("/chat", "/vision", "/image", "/img2img", "/upscale",
+                   "/instruct-pix2pix", "/inpaint", "/inpaint_mask_preview",
+                   "/chart", "/unload", "/warmup/chat", "/warmup/image",
+                   "/warmup/vision"):
+            r = cl.post(_p)  # no token header, no body
+            check(f"POST {_p} without token -> 401 (token-gated)",
+                  r.status_code == 401, f"got {r.status_code}")
+
     # ---- Summary ----
     n_ok = sum(1 for ok, _, _ in _results if ok)
     n_fail = sum(1 for ok, _, _ in _results if not ok)
