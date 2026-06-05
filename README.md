@@ -24,10 +24,10 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 > **Sister docs in this repo:**
 > - **[AGENTS.md](AGENTS.md)** — architecture reference: what each subsystem (chat / vision / image / web search / archive / routing) does and how they connect.
 > - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant picking up the repo cold.
+> - **[DISCLAIMER.md](DISCLAIMER.md)** — disclaimer, terms of use & liability notice: "as-is" no-warranty, the third-party-model boundary, your responsibilities, acceptable use, and the limitation of liability.
 > - **[INTEGRATION.md](INTEGRATION.md)** — how the GUI mounts onto the FastAPI server (`gui/` static mount, write endpoints, WebSocket bridge, archive bot bridge).
 > - **[MAINTAINER.md](MAINTAINER.md)** — playbook for merging designer-shipped GUI zips without losing audit/auth overrides.
 > - **[SECURITY.md](SECURITY.md)** — secrets, local-service binding, user-URL SSRF fetch policy, the self-update trust boundary (ref policy + Ed25519 signing), and the Tauri desktop-bridge controls.
-> - **[DISCLAIMER.md](DISCLAIMER.md)** — disclaimer, terms of use & liability notice: "as-is" no-warranty, the third-party-model boundary, your responsibilities, acceptable use, and the limitation of liability.
 >
 > This file is the **user-facing canonical**: install, configure, run, commands, feature flags. Internal architecture details live in `AGENTS.md`.
 

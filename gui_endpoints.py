@@ -4273,7 +4273,7 @@ def register_gui_endpoints(
             if status == 429 and attempt == 0:
                 _time.sleep(min(retry_after or 1.0, 8.0))
                 continue
-            msg = str(data.get("message")) if isinstance(data, dict) else ""
+            msg = str(data.get("message")) if isinstance(data, dict) and data.get("message") is not None else ""
             return {"name": name, "ok": False,
                     "error": (msg or f"HTTP {status}")[:160], "status": status}
         return {"name": name, "ok": False, "error": "rate-limited", "status": 429}
@@ -4302,12 +4302,13 @@ def register_gui_endpoints(
                     skipped.append({"name": fname, "reason": "batch limit (250) reached"})
                     continue
                 try:
+                    info = zf.getinfo(entry)
+                    if info.file_size == 0 or info.file_size > _EMOJI_MAX_IMAGE_BYTES:
+                        skipped.append({"name": fname, "reason": "image is empty or >256 KB"})
+                        continue
                     raw = zf.read(entry)
                 except Exception:
                     failed.append({"name": fname, "error": "could not read from zip"})
-                    continue
-                if not raw or len(raw) > _EMOJI_MAX_IMAGE_BYTES:
-                    skipped.append({"name": fname, "reason": "image is empty or >256 KB"})
                     continue
                 processed += 1
                 res = _emoji_create_one_sync(
@@ -4348,9 +4349,12 @@ def register_gui_endpoints(
             raise HTTPException(400, "invalid guild id")
         if not _EMOJI_GUILD_ID_RE.match(emoji_id or ""):
             raise HTTPException(400, "invalid emoji id")
-        status, data, _ = await asyncio.to_thread(
-            _discord_emoji_write_sync, "DELETE",
-            f"/guilds/{guild_id}/emojis/{emoji_id}", token, None)
+        try:
+            status, data, _ = await asyncio.to_thread(
+                _discord_emoji_write_sync, "DELETE",
+                f"/guilds/{guild_id}/emojis/{emoji_id}", token, None)
+        except Exception as exc:
+            raise HTTPException(502, f"Discord API connection failed: {str(exc)[:120]}")
         if status in (200, 204):
             _seekdeep_audit("emoji-vault-delete", guild=guild_id, emoji=emoji_id)
             return {"ok": True}
@@ -4360,7 +4364,7 @@ def register_gui_endpoints(
             raise HTTPException(404, "That emoji no longer exists.")
         if status == 429:
             raise HTTPException(503, "Discord rate-limited the delete; retry shortly.")
-        msg = str(data.get("message")) if isinstance(data, dict) else ""
+        msg = str(data.get("message")) if isinstance(data, dict) and data.get("message") is not None else ""
         raise HTTPException(502, (msg or f"Discord API error {status}")[:160])
 
     # ----- Force React config (read/write) · SEEKDEEP_FEATURE_FORCE_REACT -----
@@ -4461,19 +4465,23 @@ def register_gui_endpoints(
             raise HTTPException(400, "allowed_emoji_ids list is too long (max 2000)")
         allowed = [str(x) for x in allowed if re.fullmatch(r"\d{5,25}", str(x))]
         # Serialize the read-modify-write through the cross-process advisory lock
-        # (COUP-1) so concurrent POSTs / the bot's own writer can't clobber each other.
-        with _seekdeep_file_lock(_force_react_config_file):
-            all_cfg = _force_react_read_all()
-            all_cfg.setdefault("guilds", {})[str(guild_id)] = {
-                "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
-            }
-            try:
-                _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
-                tmp = _force_react_config_file.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
-                tmp.replace(_force_react_config_file)
-            except Exception as exc:
-                raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
+        # (COUP-1) so concurrent POSTs / the bot's own writer can't clobber each
+        # other — offloaded to a thread so the blocking lock + sync file I/O don't
+        # stall the asyncio event loop.
+        def _save_force_react():
+            with _seekdeep_file_lock(_force_react_config_file):
+                all_cfg = _force_react_read_all()
+                all_cfg.setdefault("guilds", {})[str(guild_id)] = {
+                    "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
+                }
+                try:
+                    _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = _force_react_config_file.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
+                    tmp.replace(_force_react_config_file)
+                except Exception as exc:
+                    raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
+        await asyncio.to_thread(_save_force_react)
         _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
         return {"ok": True, "config": {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}}
 
