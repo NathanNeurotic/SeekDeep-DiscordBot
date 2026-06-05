@@ -8,10 +8,10 @@ Last full audit: 2026-05-24 (GUI + backend stack). Latest security audit: 2026-0
 
 ## Security Hardening — Remaining
 
-The 2026-06-03 audit came back with **0 P0 / 0 P1 security** findings; the P2/P3 round-2 backlog has since been worked through. CSP **Phase A is shipped**: the Tauri WebView policy in `src-tauri/tauri.conf.json` (with `dangerousDisableAssetCspModification` for `script-src`+`style-src`) is mirrored on the loopback browser path by `_SEEKDEEP_GUI_CSP` in `local_ai_server.py`, with the Discord Activity (`gui/activity/*`) exempt. Two hardening items remain:
+The 2026-06-03 audit came back with **0 P0 / 0 P1 security** findings; the P2/P3 round-2 backlog has been worked through; and the CSP capstone is now complete. The Tauri WebView policy in `src-tauri/tauri.conf.json` (with `dangerousDisableAssetCspModification` for `script-src`+`style-src`) is mirrored on the loopback browser path by `_SEEKDEEP_GUI_CSP` in `local_ai_server.py`.
 
-1. **Drop `'unsafe-inline'` from `script-src`.** Defense-in-depth, not a fix for any known issue. Requires externalizing the 35 inline `<script>` blocks (across 24 files) + converting the ~28 inline `on*=` event-handler attributes to `addEventListener`, then flipping the CSP. Auto-hashing is a dead end; extraction is the path. Sequenced, with the packaged-app verification caveat, in [docs/audits/CSP_TIGHTENING_PLAN.md](docs/audits/CSP_TIGHTENING_PLAN.md). Currently parked (no near-term date).
-2. **Split the `index.js` monolith** (~24.5 K lines) — maintainability, not security. See item 5 under "Needs a 'go' from the user" below. Only `lib/url-fetch-policy.js` has been extracted so far.
+1. ✅ **`'unsafe-inline'` dropped from `script-src` — DONE (v10.38.63).** Both CSPs are now `script-src 'self'`. All 34 inline `<script>` blocks were externalized and all 24 inline `on*=` handlers converted to delegated `addEventListener` (extraction, not auto-hashing — the proven path; PRs #82–#90). `e2e/csp.spec.mjs` enforces zero violations in CI. `style-src` keeps `'unsafe-inline'` by design (pervasive inline `style=`, low risk — out of scope). The Discord Activity page (`gui/activity/index.html`) was also externalized so the global Tauri WebView CSP doesn't break DATA DASH in the installed app.
+2. **Split the `index.js` monolith** (~24.5 K lines) — maintainability, not security. Deprioritized by Nathan ("that's what I have you for"). Only `lib/url-fetch-policy.js` has been extracted so far.
 
 ---
 
