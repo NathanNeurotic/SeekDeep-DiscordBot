@@ -120,8 +120,7 @@
             // installer.page7.js, which loads AFTER this file — so at parse
             // time it's still in the temporal dead zone and a direct call
             // would throw. By DOMContentLoaded page7 has run.
-            window.addEventListener('DOMContentLoaded', () => {
-              onVisible();
-              setInterval(onVisible, 4000);
-            });
+            const startProbe = () => { onVisible(); setInterval(onVisible, 4000); };
+            if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', startProbe);
+            else startProbe();
           })();

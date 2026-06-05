@@ -24,12 +24,14 @@
             // at parse time hits the temporal dead zone (even `typeof` throws
             // on a TDZ const). Defer to DOMContentLoaded, by which point
             // page7 has initialized `state`.
-            window.addEventListener('DOMContentLoaded', () => {
+            const restoreState = () => {
               if (typeof state === 'object' && state) {
                 if (state.ollama_base_url) base.value = state.ollama_base_url;
                 if (state.ollama_api_key)  key.value  = state.ollama_api_key;
               }
-            });
+            };
+            if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', restoreState);
+            else restoreState();
 
             function wireBus() {
               if (!window.SeekDeepEvents) return false;
