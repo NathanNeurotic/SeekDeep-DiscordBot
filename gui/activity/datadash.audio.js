@@ -62,12 +62,21 @@
     var src = ctx.createBufferSource();
     src.buffer = rec.buffer;
     var g = ctx.createGain();
-    g.gain.value = (opts.volume != null ? opts.volume : vol(key)) * (opts.gain != null ? opts.gain : 1);
-    src.connect(g); g.connect(MUSIC[key] ? musicBus : master);
+    var now = ctx.currentTime;
+    var target = (opts.volume != null ? opts.volume : vol(key)) * (opts.gain != null ? opts.gain : 1);
     var dur = Math.max(0.02, rec.end - rec.start);
+    // optional fade-in: ramp gain 0 -> target over opts.fadeIn seconds
+    if (opts.fadeIn > 0) { g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(Math.max(0.0001, target), now + Math.min(opts.fadeIn, dur)); }
+    else { g.gain.value = target; }
+    src.connect(g); g.connect(MUSIC[key] ? musicBus : master);
     if (opts.loop) { src.loop = true; src.loopStart = rec.start; src.loopEnd = rec.end; src.start(0, rec.start); }
-    else { src.start(0, rec.start, dur); if (!MUSIC[key]) duck(opts.duck != null ? opts.duck : 0.32, dur); }
-    return { src: src, gain: g };
+    else {
+      src.start(0, rec.start, dur);
+      // optional fade-out: ease gain to 0 over the clip's final opts.fadeOut seconds
+      if (opts.fadeOut > 0 && opts.fadeOut < dur) { g.gain.setTargetAtTime(0.0001, now + dur - opts.fadeOut, Math.max(0.05, opts.fadeOut / 3)); }
+      if (!MUSIC[key]) duck(opts.duck != null ? opts.duck : 0.32, dur);
+    }
+    return { src: src, gain: g, dur: dur };
   }
 
   // sidechain-style ducking: briefly dip the music bus while SFX play so they cut through
@@ -106,6 +115,8 @@
       else { try { node.src.stop(); } catch (e) {} }
     },
     isLooping: function (key) { return !!loopNodes[key]; },
+    // trimmed playback duration of a decoded clip (seconds), or 0 if not loaded
+    clipDuration: function (key) { var r = buffers[key]; return r ? Math.max(0, r.end - r.start) : 0; },
     // live-adjust a running loop's gain (used for proximity-based SFX)
     setLoopVolume: function (key, v) {
       var node = loopNodes[key]; if (!node) return;
@@ -131,6 +142,6 @@
 
   function stub() {
     var noop = function () {};
-    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, setLoopVolume: noop, isLooping: function () { return false; }, music: noop, stopAllMusic: noop, muted: false, toggleMute: function () { return false; } };
+    return { init: noop, resume: noop, ready: function () { return false; }, play: noop, startLoop: noop, stopLoop: noop, setLoopVolume: noop, isLooping: function () { return false; }, clipDuration: function () { return 0; }, music: noop, stopAllMusic: noop, muted: false, toggleMute: function () { return false; } };
   }
 })();

@@ -596,7 +596,7 @@
     state = STATE.DEAD;
     clearKeys();
     game.shooting = false;
-    if (window.DDAudio) { window.DDAudio.stopLoop("malwareLoop"); window.DDAudio.stopLoop("invincibleLoop"); window.DDAudio.stopLoop("chargeLoop"); window.DDAudio.play("gameOver"); window.DDAudio.music("menuMusic"); }
+    if (window.DDAudio) { window.DDAudio.stopLoop("malwareLoop"); if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }window.DDAudio.stopLoop("chargeLoop"); window.DDAudio.play("gameOver"); window.DDAudio.music("menuMusic"); }
     spawnParticles(game.px, game.py, C.danger, 40, 460);
     const beat = game.bytes > best;
     if (beat) { best = Math.floor(game.bytes); localStorage.setItem("datadash.best", best); }
@@ -666,7 +666,7 @@
     game.gross += Math.max(0, dx) * T.bytesPerPx;   // gross accumulation drives Pepe
     // bytes = spendable DATA / score: rewind un-streams it, shooting spends it.
     game.bytes = Math.max(0, game.bytes + dx * T.bytesPerPx);
-    if (game.invincible > 0) { game.invincible -= dt; if (game.invincible <= 0 && window.DDAudio) window.DDAudio.stopLoop("invincibleLoop", true); }
+    if (game.invincible > 0) { game.invincible -= dt; if (game.invincible <= 0) { if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; } } }
     if (game.flashT > 0) game.flashT = Math.max(0, game.flashT - dt * 2.5);
 
     advanceTerrain(dx);
@@ -925,8 +925,17 @@
   function triggerRandomEvent() {
     game.nextEventT = game.t + T.eventEveryMin + Math.random() * (T.eventEveryMax - T.eventEveryMin);
     const r = Math.random();
-    const kind = r < 0.10 ? "doubleboss" : (r < 0.40 ? "database" : (r < 0.72 ? "ddos" : "pepe"));
-    if (kind === "doubleboss") { spawnDoubleBoss(); return; }
+    // doubleboss -15% (0.10 -> 0.085); Overclock Cache (kind "pepe") occurrence halved
+    // (0.28 -> 0.14) with DDoS taking up the slack.
+    let kind = r < 0.085 ? "doubleboss" : (r < 0.40 ? "database" : (r < 0.86 ? "ddos" : "pepe"));
+    if (kind === "doubleboss") {
+      // Never a double daemon within 10s of ANY boss fight — active, imminent, or just-ended.
+      const bossNear = game._bossesActive
+        || (T.bossEverySeconds - game.bossClock) < 10
+        || (game.t - (game.lastBossEndT != null ? game.lastBossEndT : -999)) < 10;
+      if (bossNear) { kind = Math.random() < 0.5 ? "ddos" : "database"; }
+      else { spawnDoubleBoss(); return; }
+    }
     const spacing = kind === "database" ? T.colW * T.dbSpacingCols
                   : kind === "ddos" ? T.colW * T.ddosSpacingCols
                   : T.colW * T.pepeGridCols;
@@ -934,10 +943,10 @@
     const meta = {
       database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
       ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
-      pepe:     ["🐸  PEPE PACKETS", "grab everything — go wild", "#72ffcf"],
+      pepe:     ["⚡  OVERCLOCK CACHE", "grab the packs + overclocks — go fast", "#72ffcf"],
     }[kind];
     showBanner(meta[0], meta[1], meta[2], 2.4);
-    SFX(kind === "ddos" ? "malwareSpawn" : (kind === "pepe" ? "pepe" : "packet"));
+    SFX(kind === "ddos" ? "malwareSpawn" : (kind === "pepe" ? "powerUp" : "packet"));
     if (kind === "ddos" && window.DDAudio) window.DDAudio.startLoop("malwareLoop");
   }
 
@@ -970,13 +979,15 @@
         game.bots.push({ x: x + 30, y, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: game.streamed, static: true });
       }
     } else if (ev.kind === "pepe") {
+      // OVERCLOCK CACHE: lots of KB/MB DATA packs + sprinkled overclock power-ups —
+      // NO Pepe jackpots here (those stay on their own rare timer).
       const rows = T.pepeGridRows;
       for (let rI = 0; rI < rows; rI++) {
         if ((rI + ev.step) % 2 !== 0) continue;   // checkerboard
         ev.spot++;
         const y = top + span * ((rI + 0.5) / rows);
-        const od = (ev.spot % 5 === 0) || (ev.spot % 7 === 0);   // overdrive sprinkled in
-        game.pickups.push({ x, y, grabbed: false, bob: Math.random() * 6, kind: od ? "upgrade" : "pepe", eventGift: true });
+        const od = (ev.spot % 6 === 0);   // overclock power-up sprinkled in among the packs
+        game.pickups.push({ x, y, grabbed: false, bob: Math.random() * 6, kind: od ? "upgrade" : "packet", eventGift: true });
       }
     }
   }
@@ -1052,12 +1063,19 @@
           game.floaters.push({ x: p.x, y: p.y, t: 0, txt: "+10KB", col: C.accentSoft });
         } else if (p.kind === "pepe") {
           const wasInv = game.invincible > 0;
-          game.invincible = Math.max(game.invincible, T.pepeInvincible);   // refresh (no unbounded stack)
+          // Invincibility lasts EXACTLY as long as the music clip (which fades in/out);
+          // each grab restarts the clip so audio + timer never drift apart.
+          let invDur = T.pepeInvincible;
+          if (window.DDAudio && window.DDAudio.clipDuration) { const d = window.DDAudio.clipDuration("invincibleLoop"); if (d > 0.5) invDur = d; }
+          game.invincible = invDur;
+          if (window.DDAudio) {
+            if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }
+            game._invSfx = window.DDAudio.play("invincibleLoop", { fadeIn: 0.3, fadeOut: Math.min(0.7, invDur * 0.25) });
+          }
           if (!wasInv) {
             game.flashT = 1; game.shake = 22;
             SFX("pepe");
-            if (window.DDAudio) window.DDAudio.startLoop("invincibleLoop");
-            showBanner("💰 PEPE JACKPOT", T.pepeInvincible + "s INVINCIBLE — SMASH EVERYTHING", "#ffe66b");
+            showBanner("💰 PEPE JACKPOT", Math.round(invDur) + "s INVINCIBLE — SMASH EVERYTHING", "#ffe66b");
           } else {
             game.flashT = Math.max(game.flashT, 0.35);
           }
@@ -1290,6 +1308,7 @@
     if (game.boss2 && game.boss2._dead) game.boss2 = null;
     if (game._bossesActive && !game.boss && !game.boss2) {
       game._bossesActive = false;
+      game.lastBossEndT = game.t;   // "no double-boss within 10s of a boss fight" rule
       game.bullets = []; game.bars = []; game.bombs = [];
       game.bossClock = 0;
       hud.timerWrap.classList.add("hidden");
