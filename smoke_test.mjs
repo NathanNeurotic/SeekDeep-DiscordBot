@@ -1164,6 +1164,35 @@ check('visual override: "draw step-by-step panels" is natural image prompt',
   T.isNaturalImagePrompt('draw step-by-step panels') === true
 );
 
+// Test 11.h Code / markup requests are text, not pictures — they must NOT route to
+// image (regression: "give me an html header" became an image of "html header,
+// stylized illustration"). The guard runs AFTER the explicit "draw/show ..." check,
+// so a real image request that mentions a homonym language still routes to image.
+check('code-route: "give me an html header" is code/markup',
+  T.seekdeepLooksLikeCodeOrMarkupRequest('give me an html header') === true
+);
+check('code-route: "give me an html header" is NOT a natural image prompt',
+  T.isNaturalImagePrompt('give me an html header') === false
+);
+check('code-route: "make me a css grid" is NOT a natural image prompt',
+  T.isNaturalImagePrompt('make me a css grid') === false
+);
+check('code-route: "write a python function to sort a list" is NOT a natural image prompt',
+  T.isNaturalImagePrompt('write a python function to sort a list') === false
+);
+check('code-route: "give me a regex for emails" is code/markup',
+  T.seekdeepLooksLikeCodeOrMarkupRequest('give me a regex for emails') === true
+);
+check('code-route control: "draw a python snake in a jungle" STILL routes to image',
+  T.isNaturalImagePrompt('draw a python snake in a jungle') === true
+);
+check('code-route control: "a red glass apple on a table" is not flagged as code',
+  T.seekdeepLooksLikeCodeOrMarkupRequest('a red glass apple on a table') === false
+);
+check('code-route: "give me an html header" selects the reasoning_code model',
+  T.seekdeepSelectChatModelRole('give me an html header', 'chat') === 'reasoning_code'
+);
+
 // Test 11.g Model selection tests for lightweight conversational model
 process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID = 'phi-3';
 check('model role: tutorial follow-up selects lightweight_chat',

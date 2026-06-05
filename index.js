@@ -2690,6 +2690,9 @@ const SEEKDEEP_REASONING_CODE_PATTERNS = [
   /\bnpm\b/i,
   /\bpip\b/i,
   /\bgit\b/i,
+  // Markup / web / data languages so "give me an html header", "a css grid", "a json
+  // schema" route to the code model instead of the 8B default.
+  /\b(html|xhtml|css|scss|sass|xml|json|ya?ml|toml|sql|graphql|jsx|tsx|php|regex|regexp|markdown|svg|webpack|vite|stylesheet|boilerplate|flexbox)\b/i,
 ];
 
 const SEEKDEEP_QUALITY_TEXT_PATTERNS = [
@@ -10735,11 +10738,56 @@ function seekdeepHasLikelyVisualDescription(p = '') {
   return false;
 }
 
+// SEEKDEEP_CODE_OR_MARKUP_GUARD_START
+// Code / markup / text-artifact requests ("give me an html header", "a css grid",
+// "a python function", "a regex for emails") are text the user wants WRITTEN — not a
+// picture. They were leaking into the image router: seekdeepHasLikelyVisualDescription
+// treats "give me an X" as visual unless X hits a nonVisualIntent blocklist that has no
+// code terms, so "give me an html header" became an image of "html header, stylized
+// illustration". Keep these as chat; the model router then sends them to reasoning_code.
+// NOTE: callers must run this AFTER any explicit "draw/show/make ..." image-verb check,
+// so "draw a python snake" still routes to image.
+// STRONG: markup / data / web languages + code artifacts that are NEVER an image
+// subject. These win even over an explicit "make me a ..." image verb (nobody wants a
+// *picture* of "a css grid"), so callers check this BEFORE the explicit-image gate.
+function seekdeepLooksLikeStrongCodeRequest(p = '') {
+  const s = String(p || '').toLowerCase();
+  if (!s.trim()) return false;
+  // A literal HTML/XML tag or a code fence — unambiguously code.
+  if (/<\/?[a-z][\w-]*>|```/.test(s)) return true;
+  if (/\b(html|xhtml|css|scss|sass|xml|json|jsonc|ya?ml|toml|sql|graphql|markdown|mdx|latex|rege(?:x|xp)|powershell|dockerfile|makefile|jsx|tsx|javascript|typescript|php|node\.js|webpack|vite|stylesheet|css\s+selector|media\s+query|flexbox|css\s+grid|boilerplate)\b/.test(s)) return true;
+  if (/c\+\+|c#|\.net/.test(s)) return true;
+  return false;
+}
+
+// FULL set: strong code + weaker, homonym-prone terms ("python" the snake, "function",
+// "method", "component"). These are only treated as code when there is NO explicit image
+// verb, so "draw a python snake" still images but "give me a python function" is code.
+function seekdeepLooksLikeCodeOrMarkupRequest(p = '') {
+  if (seekdeepLooksLikeStrongCodeRequest(p)) return true;
+  const s = String(p || '').toLowerCase();
+  if (/\b(python|function|method|react\s+component|react\s+hook|api\s+endpoint|database\s+query|json\s+schema|code\s*snippet|code\s*block)\b/.test(s)) return true;
+  return false;
+}
+// SEEKDEEP_CODE_OR_MARKUP_GUARD_END
+
 function seekdeepShouldStayChatInsteadOfImage(p = '') {
   if (!p) return true;
 
+  // Unambiguous code/markup ("make me a css grid", "an html header") is text, not an
+  // image — this wins even over the explicit-image heuristic below.
+  if (seekdeepLooksLikeStrongCodeRequest(p)) {
+    return true;
+  }
+
   if (seekdeepHasExplicitImageRequest(p)) {
     return false;
+  }
+
+  // Weaker code signals ("a python function") — only after the explicit-image gate,
+  // so "draw a python snake" still routes to image.
+  if (seekdeepLooksLikeCodeOrMarkupRequest(p)) {
+    return true;
   }
 
   if (seekdeepHasTextListIntent(p)) {
@@ -11584,6 +11632,11 @@ function seekdeepShouldKeepPromptAsChatBeforeImage(prompt = '') {
   // just because they mention a visual franchise/entity.
   if (/^(what|who|why|how|when|where|is|are|do|does|did|can|could|would|should)\b/.test(p)) return true;
   if (/\b(explain|tell me about|summarize|summary|define|definition|what happens|how does|how do|why does|why do|difference between|compare|comparison|pros\/cons|pros and cons|look up|search|internet|web)\b/.test(p)) return true;
+
+  // Code / markup / text-artifact requests ("give me an html header") are text, not
+  // images — keep them as chat. Explicit "draw/show/make ..." image verbs are handled
+  // earlier in this function, so those still route to image.
+  if (seekdeepLooksLikeCodeOrMarkupRequest(p)) return true;
 
   return false;
 }
@@ -23621,6 +23674,7 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepBuildChatPromptWithContextBlock,
     seekdeepHasExplicitImageRequest,
     isNaturalImagePrompt,
+    seekdeepLooksLikeCodeOrMarkupRequest,
     shouldAutoSearch,
     searchWeb,
     buildSystem,
