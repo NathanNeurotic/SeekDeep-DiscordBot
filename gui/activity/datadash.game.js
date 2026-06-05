@@ -1041,11 +1041,15 @@
         }
       }
       const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize)));
-      // never let a collectible sit inside/touching a tower — clamp into clear span
-      const span = freeSpanAt(p.x);
-      const pad = psz / 2 + 6;
-      if (span[1] - span[0] > pad * 2) p.y = Math.max(span[0] + pad, Math.min(span[1] - pad, p.y));
-      else p.y = (span[0] + span[1]) / 2;
+      // never let a collectible sit inside/touching a tower — clamp into the clear span
+      // across the pickup's FULL width (left + centre + right), not just its centre
+      // column, so its edges can't clip a tower one column over.
+      const half = psz / 2 + 6;
+      const sL = freeSpanAt(p.x - half), sC = freeSpanAt(p.x), sR = freeSpanAt(p.x + half);
+      const spanTop = Math.max(sL[0], sC[0], sR[0]);
+      const spanBot = Math.min(sL[1], sC[1], sR[1]);
+      if (spanBot - spanTop > half * 2) p.y = Math.max(spanTop + half, Math.min(spanBot - half, p.y));
+      else p.y = (spanTop + spanBot) / 2;
       if (rectsHit(hb.x, hb.y, HBX, HBY, p.x - psz / 2, p.y - psz / 2, psz, psz)) {
         p.grabbed = true;
         if (p.kind === "bonus") {
@@ -1548,6 +1552,7 @@
       drawBars();
       drawPlayerBullets();
       drawAimReticle();
+      drawPowerupAura();
       drawPlayer();
       drawParticles();
       drawFloaters();
@@ -1582,6 +1587,25 @@
     const f = Math.max(0, game.invincible / T.pepeInvincible);
     ctx.fillStyle = hexA("#ffe66b", 0.9); ctx.fillRect(0, 0, W * f, 4);
     ctx.restore();
+  }
+
+  // rotating signature ring around the player for whatever power-up is active —
+  // covers the scroll-warps (overclock/slow/revert) that otherwise have no body aura.
+  function drawPowerupAura() {
+    const pc = powerupColor();
+    if (!pc) return;
+    const r = 32, pulse = 0.5 + 0.3 * Math.sin(game.t * 7);
+    ctx.save();
+    ctx.translate(game.px, game.py);
+    ctx.shadowColor = pc; ctx.shadowBlur = 14;
+    ctx.rotate(game.t * 1.6);                          // outer ring spins one way
+    ctx.strokeStyle = hexA(pc, 0.5 + 0.3 * pulse); ctx.lineWidth = 3;
+    for (let k = 0; k < 3; k++) { const a = (k / 3) * Math.PI * 2; ctx.beginPath(); ctx.arc(0, 0, r, a, a + Math.PI * 0.5); ctx.stroke(); }
+    ctx.rotate(-game.t * 3.0);                         // inner ring counter-spins
+    ctx.strokeStyle = hexA(pc, 0.3 + 0.25 * pulse); ctx.lineWidth = 2;
+    for (let k = 0; k < 3; k++) { const a = (k / 3) * Math.PI * 2 + 0.5; ctx.beginPath(); ctx.arc(0, 0, r * 0.68, a, a + Math.PI * 0.45); ctx.stroke(); }
+    ctx.restore();
+    ctx.shadowBlur = 0;
   }
 
   // crackling lightning forking across the whole screen during the transform
@@ -1619,16 +1643,29 @@
   for (let i = 0; i < 26; i++) {
     STREAKS.push({ y: Math.random(), x: Math.random(), len: 40 + Math.random() * 120, z: 0.4 + Math.random() * 0.9 });
   }
+  // active power-up -> its signature colour (null = none). Drives the streak tint + aura.
+  function powerupColor() {
+    if (game.invincible > 0) return "#ffe66b";                  // Pepe invincibility — gold
+    if (game.scrollFx) {
+      if (game.scrollFx.kind === "fast") return "#5dff8f";      // overclock / performance — green
+      if (game.scrollFx.kind === "slow") return "#5db8ff";      // slow-mo — blue
+      if (game.scrollFx.kind === "reverse") return C.mystery;   // revert — purple
+    }
+    if (game.freeAmmo) return "#ffffff";                        // overdrive — white
+    return null;
+  }
+
   function drawStreaks() {
     const spd = game ? game.scroll : 0;
     const norm = Math.min(1, (spd - T.scrollStart) / Math.max(1, T.scrollMax - T.scrollStart));
+    const streakCol = powerupColor() || "#6df0ff";   // tint the streamers with the active power-up
     ctx.lineCap = "round";
     for (const s of STREAKS) {
       const len = s.len * (0.5 + norm) * s.z;
       const travel = (game ? game.dist : 0) * (0.9 + s.z * 1.4);
       let x = (s.x * (W + 300) - (travel % (W + 300)));
       const y = s.y * H;
-      ctx.strokeStyle = `rgba(109,240,255,${0.07 + norm * 0.18 * s.z})`;
+      ctx.strokeStyle = hexA(streakCol, 0.07 + norm * 0.18 * s.z);
       ctx.lineWidth = s.z * 1.6;
       ctx.beginPath();
       ctx.moveTo(x, y);
@@ -1927,7 +1964,7 @@
         if (blk.smashed) continue;
         const bw = T.colW * (blk.span || 1);
         const top = blk.from === "top";
-        const OV = 14;
+        const OV = blk.h;   // buried length == exposed length → towers never float
         // base derives from THIS column's wall → chip is ALWAYS grounded
         const by = top ? col.ceil - OV : (H - col.floor) - blk.h;
         const bh = blk.h + OV;
