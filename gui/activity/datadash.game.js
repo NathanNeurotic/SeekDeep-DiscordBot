@@ -1489,7 +1489,7 @@
             const d = Math.abs(bar.x - newX);
             if (d < nd) { nd = d; nearest = bar; }
           }
-          if (nearest) {
+          if (nearest && T.barSpeed > 0) {   // guard /0 if firewalls are configured stationary
             const reach = T.vMax * (nd / T.barSpeed) * 0.6;
             gy = Math.max(nearest.gapY - reach, Math.min(nearest.gapY + reach, gy));
             gy = Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, gy));
