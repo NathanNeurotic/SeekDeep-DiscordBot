@@ -723,10 +723,11 @@
     // trailing data-streamers off the bot so he feels alive (not during rewind)
     const rewinding = game.scrollFx && game.scrollFx.kind === "reverse";
     if (state === STATE.PLAY && !paused && !rewinding && Math.random() < 0.9) {
-      const col = game.freeAmmo ? "#ffffff" : C.accentSoft;
+      const col = game.freeAmmo ? "#ffffff" : (powerupColor() || C.accentSoft);
       game.particles.push({ x: game.px - PW * 0.5, y: game.py + (Math.random() - 0.5) * PH * 0.5,
         vx: -120 - Math.random() * 80 - game.scroll * 0.15, vy: (Math.random() - 0.5) * 30,
-        life: 0.4 + Math.random() * 0.3, max: 0.7, color: col, r: 1.5 + Math.random() * 2 });
+        life: 0.4 + Math.random() * 0.3, max: 0.7, color: col, r: 1.5 + Math.random() * 2,
+        ch: Math.random() < 0.5 ? "0" : "1" });   // binary exhaust — rendered as a tiny 0/1 glyph
     }
     const xmin = W * T.hMargin, xmax = W * (1 - T.hMargin);
     if (game.px < xmin) { game.px = xmin; game.vx = Math.max(0, game.vx); }
@@ -1075,14 +1076,21 @@
       }
       const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize)));
       // never let a collectible sit inside/touching a tower — clamp into the clear span
-      // across the pickup's FULL width (left + centre + right), not just its centre
-      // column, so its edges can't clip a tower one column over.
-      const half = psz / 2 + 6;
-      const sL = freeSpanAt(p.x - half), sC = freeSpanAt(p.x), sR = freeSpanAt(p.x + half);
-      const spanTop = Math.max(sL[0], sC[0], sR[0]);
-      const spanBot = Math.min(sL[1], sC[1], sR[1]);
-      if (spanBot - spanTop > half * 2) p.y = Math.max(spanTop + half, Math.min(spanBot - half, p.y));
-      else p.y = (sC[0] + sC[1]) / 2;   // fallback: centre column's own midpoint (always in its clear span)
+      // sampled at EVERY column the sprite covers (a thin tower can hide between sparse
+      // samples), with margin for the ±5px draw bob so even the bobbing sprite never
+      // kisses a tower edge.
+      const halfW = psz / 2 + 4;
+      const need = psz / 2 + 9;            // 5px bob + ~4px visible gap
+      let spanTop = 0, spanBot = H;
+      for (let sx = p.x - halfW; ; sx += T.colW) {
+        const q = Math.min(sx, p.x + halfW);
+        const sp = freeSpanAt(q);
+        if (sp[0] > spanTop) spanTop = sp[0];
+        if (sp[1] < spanBot) spanBot = sp[1];
+        if (q >= p.x + halfW) break;
+      }
+      if (spanBot - spanTop > need * 2) p.y = Math.max(spanTop + need, Math.min(spanBot - need, p.y));
+      else p.y = (spanTop + spanBot) / 2;   // tightest gap — dead-centre across the full width
       if (rectsHit(hb.x, hb.y, HBX, HBY, p.x - psz / 2, p.y - psz / 2, psz, psz)) {
         p.grabbed = true;
         if (p.kind === "bonus") {
@@ -2869,10 +2877,18 @@
     for (const p of game.particles) {
       ctx.globalAlpha = Math.max(0, p.life / p.max);
       ctx.fillStyle = p.color;
-      ctx.shadowColor = p.color; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.2, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowColor = p.color; ctx.shadowBlur = p.ch ? 8 : 10;
+      if (p.ch) {
+        // binary exhaust glyph — tiny mono 0/1 streaming off the tail
+        ctx.font = `700 ${Math.round(9 + p.r * 2)}px ${FONTS.mono}`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(p.ch, p.x, p.y);
+      } else {
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.2, 0, Math.PI * 2); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   }
 
   // ---- main-menu sprite : pixel-perfect power-up / power-down ----------------
