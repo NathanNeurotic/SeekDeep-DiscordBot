@@ -4483,6 +4483,47 @@ const seekdeepImageQueueState = globalThis.__seekdeepImageQueueState || {
 
 globalThis.__seekdeepImageQueueState = seekdeepImageQueueState;
 
+// SEEKDEEP_DEFER_HEAVY_CHAT_HELPERS_START
+// Snapshot the image-job IDs currently active or pending — "the jobs ahead of me
+// right now". Used to defer a heavy chat reply behind the image queue so it can
+// use the reasoning/quality model instead of falling back to the 8B under VRAM
+// pressure. Newly-added jobs are intentionally NOT captured, so a continuous
+// stream of new image requests can't starve the waiting chat reply.
+function seekdeepImageQueueJobsAhead() {
+  const st = seekdeepImageQueueState || {};
+  const ids = [];
+  if (st.active && st.active.id) ids.push(st.active.id);
+  for (const entry of (st.pending || [])) {
+    const id = entry && entry.job && entry.job.id;
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+// Resolve once every snapshot job has left active+pending (done/failed), or once
+// capMs elapses. Polls (1s) rather than hooking the pump, to stay decoupled from
+// the queue internals. Returns true if drained, false on timeout.
+async function seekdeepWaitForImageJobsToDrain(ids, capMs) {
+  if (!Array.isArray(ids) || !ids.length) return true;
+  const want = new Set(ids);
+  const startedAt = Date.now();
+  const stillAhead = () => {
+    const st = seekdeepImageQueueState || {};
+    if (st.active && st.active.id && want.has(st.active.id)) return true;
+    for (const entry of (st.pending || [])) {
+      const id = entry && entry.job && entry.job.id;
+      if (id && want.has(id)) return true;
+    }
+    return false;
+  };
+  while (stillAhead()) {
+    if (Date.now() - startedAt >= capMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return true;
+}
+// SEEKDEEP_DEFER_HEAVY_CHAT_HELPERS_END
+
 const SEEKDEEP_IMAGE_COOLDOWN_MS = Math.max(0, Number(process.env.SEEKDEEP_IMAGE_COOLDOWN_MS || 0));
 const seekdeepImageCooldowns = globalThis.__seekdeepImageCooldowns || new Map();
 globalThis.__seekdeepImageCooldowns = seekdeepImageCooldowns;
@@ -20871,6 +20912,48 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     seekdeepLogRoute('chat', prompt);
+
+    // SEEKDEEP_DEFER_HEAVY_CHAT_FOR_VRAM_START
+    // If this turn needs a heavy chat model (code/reasoning or quality) but the
+    // image queue is busy, the server's VRAM "fallback" policy would refuse the
+    // role swap and answer from the resident 8B (weak code/answers). Instead,
+    // hold the reply until the image jobs already queued finish — then VRAM is
+    // free and askChat() loads the better model. Capped so a long or continuously
+    // fed queue can't hang the reply (falls back to the 8B after the cap).
+    try {
+      const seekdeepChatRole = typeof seekdeepSelectChatModelRole === 'function'
+        ? seekdeepSelectChatModelRole(prompt, 'chat')
+        : 'default_chat';
+      const seekdeepHeavyChatRole = seekdeepChatRole === 'reasoning_code' || seekdeepChatRole === 'quality_text';
+      const seekdeepDeferOn = String(process.env.SEEKDEEP_DEFER_HEAVY_CHAT_FOR_VRAM ?? 'on').trim().toLowerCase() !== 'off';
+      if (seekdeepDeferOn && seekdeepHeavyChatRole) {
+        const seekdeepJobsAhead = seekdeepImageQueueJobsAhead();
+        if (seekdeepJobsAhead.length) {
+          const seekdeepDeferCapMs = Math.max(15000, Number(process.env.SEEKDEEP_DEFER_HEAVY_CHAT_MAX_MS || 120000));
+          const seekdeepRoleLabel = seekdeepChatRole === 'reasoning_code' ? 'code/reasoning' : 'quality';
+          const seekdeepDeferNote = `⏳ Holding this for the ${seekdeepRoleLabel} model until the image queue finishes — ${seekdeepJobsAhead.length} job(s) ahead. Back shortly…`;
+          // Reuse the loading-GIF placeholder (cleaned up by the finally) when
+          // present; otherwise post one and hand it to the same cleanup path.
+          try {
+            const seekdeepPlaceholder = message.__seekdeepLoadingReply;
+            if (seekdeepPlaceholder && typeof seekdeepPlaceholder.edit === 'function') {
+              await seekdeepPlaceholder.edit({ content: seekdeepDeferNote, embeds: [], attachments: [] });
+            } else {
+              message.__seekdeepLoadingReply = await message.reply({
+                content: seekdeepDeferNote,
+                allowedMentions: { repliedUser: false },
+              });
+            }
+          } catch (_) { /* placeholder is best-effort; the wait proceeds regardless */ }
+          const seekdeepDrained = await seekdeepWaitForImageJobsToDrain(seekdeepJobsAhead, seekdeepDeferCapMs);
+          seekdeepLogRoute(seekdeepDrained ? 'chat-deferred-drain' : 'chat-deferred-timeout', prompt);
+        }
+      }
+    } catch (seekdeepDeferErr) {
+      console.warn('[SeekDeep] heavy-chat VRAM defer skipped:', seekdeepDeferErr?.message || seekdeepDeferErr);
+    }
+    // SEEKDEEP_DEFER_HEAVY_CHAT_FOR_VRAM_END
+
     const personaOverride = typeof seekdeepGetEffectivePersona === 'function'
       ? seekdeepGetEffectivePersona(message.channel?.id, message.guild?.id)
       : '';
