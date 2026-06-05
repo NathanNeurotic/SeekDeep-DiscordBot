@@ -188,9 +188,10 @@ window.DATADASH = {
     towerMax:          0.18,   //   cap (maxGapFrac − minGapFrac − 0.02 ≈ 0.185) so towers stay varied,
                                //   not clamped flat. Re-fit whenever maxGapFrac/minGapFrac move.
     wallStepFrac:      0.055,  // walls snap to this vertical grid → blocky chip towers (not smooth ramps)
-    pinchAmt:          0.19,   // how far an archway pinch closes (fraction of H) — near the ~0.185 cap (tightest gate)
-    centerStepMin:     0.14,   // base-channel meander per feature (fraction H) — cranked for more
-    centerStepMax:     0.32,   //   vertical travel; wallSlopePx still caps per-column move (followable)
+    pinchAmt:          0.17,   // how far an archway pinch closes (fraction of H) — under the ~0.185 cap so pinches vary (still the tightest feature)
+    centerStepMin:     0.14,   // base-channel meander per feature (fraction H) — cranked for more vertical
+    centerStepMax:     0.24,   //   travel. CAP at the half-range (0.45 − maxGapFrac/2 = 0.24): a larger step
+                               //   from mid-channel overshoots BOTH bounds → degenerate slam to an edge.
     featMin:           6,      // base feature length range (columns) for open/ramp stretches
     featMax:           13,
     corridorRampBytes: 80000,  // distance over which towers get a touch taller/more frequent
