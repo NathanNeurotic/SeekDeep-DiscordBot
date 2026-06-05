@@ -387,9 +387,9 @@ const NODES = {
   index: {
     layer: 'bot', x: 460, y: 96, w: 180,
     title: 'index.js',
-    meta: 'Node · 951 KB',
+    meta: 'Node · ~24.5k lines',
     summary: 'The Discord bot entry point. Handles three top-level event hooks and dispatches everything downstream.',
-    fields: { runtime: 'Node 20+', size: '951 KB', entry: 'node index.js' },
+    fields: { runtime: 'Node 20+', size: '~24.5k lines ESM', entry: 'node index.js' },
     talks: ['discord', 'msgCreate', 'interaction', 'reactionAdd', 'persistence'],
   },
 
@@ -465,7 +465,7 @@ const NODES = {
     title: 'local_ai_server.py',
     meta: 'FastAPI · :7865 · task-LRU',
     summary: 'Python FastAPI server. Holds one chat model resident at a time (task-LRU), serves SDXL + Qwen-VL pipelines, manages VRAM safety budget and singleflight request serialization.',
-    fields: { runtime: 'Python 3.10+', port: '7865', strategy: 'MODEL_KEEP_MODE=task-lru', singleflight: 'one request at a time per pipeline' },
+    fields: { runtime: 'Python 3.11+', port: '7865', strategy: 'MODEL_KEEP_MODE=task-lru', singleflight: 'one request at a time per pipeline' },
     talks: ['chatAgent', 'imageAgent', 'visionAgent', 'health', 'chatEp', 'imageEp', 'visionEp', 'editEp', 'utilEp'],
   },
 
@@ -522,7 +522,7 @@ const NODES = {
     layer: 'data', x: 50, y: 360, w: 60,
     title: 'data/*',
     meta: 'JSON store',
-    summary: 'On-disk state. Read-on-demand, atomic writes. 7 files cover archive config, persona overrides, server stats, memory presets, prompt templates, auto-reactions, archive index.',
+    summary: 'On-disk state. Read-on-demand, atomic writes. 6 files cover archive config, persona overrides, server stats, memory presets, prompt templates, and auto-reactions.',
     fields: {
       'archive-guild-config.json': 'guild archive channel + threads',
       'persona-overrides.json': 'channel/server persona + feature toggles',
