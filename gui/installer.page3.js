@@ -30,9 +30,11 @@
                 if (state.ollama_api_key)  key.value  = state.ollama_api_key;
               }
             };
-            // ALWAYS wait for DOMContentLoaded (page7 defines `state`); a readyState
-            // 'else' branch would run before page7 under defer → TDZ.
-            window.addEventListener('DOMContentLoaded', restoreState);
+            // page7 defines `state`; DOMContentLoaded fires after all parser scripts.
+            // Guard on 'complete' (not 'interactive' — under defer that's before page7
+            // → TDZ) so a post-load insertion still runs.
+            if (document.readyState === 'complete') restoreState();
+            else window.addEventListener('DOMContentLoaded', restoreState);
 
             function wireBus() {
               if (!window.SeekDeepEvents) return false;

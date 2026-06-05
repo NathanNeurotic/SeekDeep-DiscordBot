@@ -121,9 +121,10 @@
             // time it's still in the temporal dead zone and a direct call
             // would throw. By DOMContentLoaded page7 has run.
             const startProbe = () => { onVisible(); setInterval(onVisible, 4000); };
-            // ALWAYS wait for DOMContentLoaded (not a readyState guard): it fires
-            // after EVERY parser-inserted script incl. page7 (defines SEEKDEEP_BASE),
-            // for sync OR defer. A readyState 'else' branch would run under defer
-            // before page7 → TDZ on SEEKDEEP_BASE.
-            window.addEventListener('DOMContentLoaded', startProbe);
+            // page7 (defines SEEKDEEP_BASE) runs during parse; DOMContentLoaded fires
+            // after EVERY parser-inserted script (sync OR defer) → page7 is defined by
+            // then. Guard on 'complete' (NOT 'interactive', which under defer is before
+            // page7 → TDZ) so a post-load insertion still runs instead of missing the event.
+            if (document.readyState === 'complete') startProbe();
+            else window.addEventListener('DOMContentLoaded', startProbe);
           })();
