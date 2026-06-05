@@ -45,7 +45,7 @@ window.DATADASH = {
       bossDead:      "Boss_defeatedcrashed_3-1780472556720.mp3",
     },
     loops: ["menuMusic", "music", "bossMusic", "chargeLoop", "malwareLoop"],
-    volumes: { music: 1.7, menuMusic: 1.7, bossMusic: 1.8, shot: 0.42, packet: 0.34, malwareLoop: 0.4, malwareDie: 0.95, malwareSpawn: 0.85, kernel: 1.6, bossShot: 0.36, bossIncoming: 1.1, bossBomb: 1.15, bossDead: 1.05, damage: 0.95, gameOver: 1.0, invincibleLoop: 1.4 },
+    volumes: { music: 1.7, menuMusic: 1.7, bossMusic: 1.8, shot: 0.42, packet: 0.34, malwareLoop: 0.4, malwareDie: 0.95, malwareSpawn: 0.85, kernel: 1.6, bossShot: 0.36, bossIncoming: 1.1, bossBomb: 1.15, bossDead: 1.05, damage: 0.95, gameOver: 1.0, invincibleLoop: 2.8 },
   },
 
   /* --- BRANDING / COPY ---------------------------------------------------

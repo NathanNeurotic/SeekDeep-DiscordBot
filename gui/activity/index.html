@@ -446,38 +446,15 @@
     }
     @media (max-width: 640px) { #sd-return-cc { font-size: 10px; padding: 7px 11px; letter-spacing: .1em; } }
   </style>
-  <script>
-    (function () {
-      try {
-        // Show the "back to Control Center" affordance only when this is NOT a
-        // Discord Activity — Discord launches with a ?frame_id and iframes the
-        // page, where Control Center isn't reachable. In the SeekDeep GUI it's a
-        // normal top-level page, so offer the way back.
-        var inDiscord = !!new URLSearchParams(location.search).get('frame_id') || window.self !== window.top;
-        if (!inDiscord) { var el = document.getElementById('sd-return-cc'); if (el) el.hidden = false; }
-      } catch (e) {}
-    })();
-  </script>
+  <!-- Return-link reveal — external so it runs under the Tauri webview's strict
+       CSP (script-src 'self'); inline scripts are blocked there, which hid the
+       "back to Control Center" link in the installed app. -->
+  <script src="index.boot.js"></script>
 
-  <!-- Discord Embedded App SDK — lets this run as a Discord Activity. Guarded so it
-       also works as a plain web page (outside Discord it just no-ops). -->
-  <script>
-    window.SEEKDEEP_DISCORD_CLIENT_ID = "1500739883046670346";
-  </script>
-  <script type="module">
-    (async () => {
-      try {
-        const params = new URLSearchParams(location.search);
-        // Only attempt the handshake when actually launched inside Discord.
-        if (!params.get("frame_id")) return;
-        const { DiscordSDK } = await import("https://esm.sh/@discord/embedded-app-sdk@1.9.0");
-        const sdk = new DiscordSDK(window.SEEKDEEP_DISCORD_CLIENT_ID);
-        await sdk.ready();
-        window.__discordSDK = sdk;
-        document.documentElement.classList.add("discord-activity-ready");
-      } catch (e) { /* not in Discord / SDK unavailable — run as normal web page */ }
-    })();
-  </script>
+  <!-- Discord Embedded App SDK loader — external for the same reason. Guarded:
+       outside Discord (no ?frame_id) it returns before any esm.sh import, so the
+       strict CSP is never exercised in the desktop app. -->
+  <script type="module" src="index.discord.js"></script>
   <script src="datadash.config.js"></script>
   <script src="datadash.audio.js"></script>
   <script src="datadash.game.js"></script>
