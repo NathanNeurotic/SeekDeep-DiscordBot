@@ -498,7 +498,7 @@
     { id: 'changelog',    title: 'Changelog',           path: 'changelog.html',    glyph: '⊞', meta: '09 · v10.x history' },
     { id: 'memory',       title: 'Memory',              path: 'memory.html',       glyph: '⌗', meta: '10 · user-facts · live' },
     { id: 'image_ab',     title: 'Image A/B',           path: 'image-ab.html',     glyph: '▩', meta: '11 · 4 pipelines side-by-side' },
-    { id: 'prompts',      title: 'Prompts',             path: 'prompts.html',      glyph: '◩', meta: '12 · #prompts channel marketplace' },
+    { id: 'prompts',      title: 'Prompt Templates',    path: 'prompts.html',      glyph: '◩', meta: '12 · local template library + #prompts share flow' },
     { id: 'boot',         title: 'Boot sequence',       path: 'boot.html',         glyph: '◉', meta: '13 · splash' },
     { id: 'add_model',    title: 'Add a Model',         path: 'add-model.html',    glyph: '+', meta: '14 · wizard · POST /model/install' },
     { id: 'setup_wizard', title: 'Setup Wizard',        path: 'setup-wizard.html', glyph: '◇', meta: '15 · zero-terminal first-run · auto-detect + auto-fix' },

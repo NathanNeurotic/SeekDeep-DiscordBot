@@ -67,6 +67,67 @@
     font-size: 13px;
   }
 
+  /* ===== Capability band — what SeekDeep actually does ===== */
+  .caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: -16px 0 4px;
+  }
+  .caps .cap {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--hull-2);
+    padding: 5px 11px;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 22%, transparent);
+    border-radius: 2px;
+    background: color-mix(in oklab, var(--cyan-1) 5%, transparent);
+    white-space: nowrap;
+  }
+  .caps .cap b {
+    color: var(--cyan-1);
+    font-weight: 500;
+  }
+
+  /* ===== KPI strip — live counts via data-stat-* ===== */
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    margin: 20px 0 44px;
+    border: 1px solid color-mix(in oklab, var(--cyan-1) 12%, transparent);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: color-mix(in oklab, var(--cyan-1) 10%, transparent);
+  }
+  .kpis .kpi {
+    background: linear-gradient(165deg, rgba(13,33,82,0.30), rgba(5,11,28,0.50));
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .kpis .kpi .n {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 26px;
+    letter-spacing: -0.02em;
+    color: var(--hull);
+    line-height: 1;
+  }
+  .kpis .kpi .l {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--hull-3);
+  }
+  @media (max-width: 760px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .kpis .kpi .n { font-size: 22px; }
+  }
+
   /* ===== Section heading ===== */
   .sec-head {
     display: flex; align-items: baseline; justify-content: space-between;
@@ -149,6 +210,8 @@
   .dir-badge.live     { color: var(--good); border-color: color-mix(in oklab, var(--good)  45%, transparent); }
   .dir-badge.mock     { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 45%, transparent); }
   .dir-badge.empty    { visibility: hidden; }
+  /* Two badges in one row's badge cell (e.g. Operator + Live) */
+  .dir-badges { display: inline-flex; gap: 6px; align-items: baseline; justify-content: flex-end; }
   .dir-path {
     font-family: var(--font-mono);
     font-size: 11px;
@@ -226,12 +289,27 @@
     padding-top: 24px;
     border-top: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
     display: flex; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 12px;
     color: var(--hull-3);
     font-family: var(--font-mono);
     font-size: 11px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
   }
+  .footer .disclaimer {
+    flex: 1 0 100%;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--hull-3);
+    line-height: 1.5;
+  }
+  .footer .disclaimer a {
+    color: var(--hull-2);
+    text-decoration: none;
+    border-bottom: 1px dotted color-mix(in oklab, var(--cyan-1) 30%, transparent);
+  }
+  .footer .disclaimer a:hover { color: var(--cyan-1); }
 
   /* Ambient-motion tone-down now lives globally in styles.css
      (.bubbles span default opacity = 0.22). */
@@ -402,6 +480,32 @@
     </div>
   </header>
 
+  <!-- ===== CAPABILITY BAND — what the bot actually does ===== -->
+  <div class="caps">
+    <span class="cap"><b>Local chat</b></span>
+    <span class="cap">5-model <b>role router</b></span>
+    <span class="cap"><b>Vision</b> · Qwen-VL</span>
+    <span class="cap"><b>SDXL</b> image gen</span>
+    <span class="cap">img2img · pix2pix · inpaint · upscale</span>
+    <span class="cap"><b>Web search</b> · SearXNG</span>
+    <span class="cap">Image archive</span>
+    <span class="cap">Personas</span>
+    <span class="cap">Memory</span>
+    <span class="cap">Emoji Vault</span>
+    <span class="cap">Force React</span>
+    <span class="cap"><b>DataDash</b> Activity</span>
+    <span class="cap">Tauri desktop app</span>
+    <span class="cap">5 chat backends</span>
+  </div>
+
+  <!-- ===== KPI STRIP — live counts via stats.js → /stats/counts ===== -->
+  <div class="kpis">
+    <div class="kpi"><span class="n" data-stat-releases>35</span><span class="l">Releases</span></div>
+    <div class="kpi"><span class="n" data-stat-smoke_tests>565</span><span class="l">Smoke tests</span></div>
+    <div class="kpi"><span class="n" data-stat-surfaces>18</span><span class="l">Surfaces</span></div>
+    <div class="kpi"><span class="n" data-stat-commands>109</span><span class="l">Commands</span></div>
+  </div>
+
   <!-- ===== PRIMARY ===== -->
   <div class="sec-head">
     <h2>Primary surfaces</h2>
@@ -412,14 +516,14 @@
       <span class="dir-num">01</span>
       <span class="dir-name">Control Center</span>
       <span class="dir-desc">Launcher, GPU/VRAM monitor, model manager, config editor, log tail, archive browser.</span>
-      <span class="dir-badge featured">Operator</span>
+      <span class="dir-badges"><span class="dir-badge featured">Operator</span><span class="dir-badge live">Live</span></span>
       <span class="dir-path">app.html <span class="dir-arrow">→</span></span>
     </a>
     <a class="dir-row" href="chat.html">
       <span class="dir-num">02</span>
       <span class="dir-name">Chat</span>
       <span class="dir-desc">Conversation client with servers, threads, attachments, persona overrides. PWA-installable.</span>
-      <span class="dir-badge featured">Client</span>
+      <span class="dir-badges"><span class="dir-badge featured">Client</span><span class="dir-badge live">Live</span></span>
       <span class="dir-path">chat.html <span class="dir-arrow">→</span></span>
     </a>
     <a class="dir-row" href="installer.html">
@@ -488,9 +592,9 @@
     </a>
     <a class="dir-row" href="prompts.html">
       <span class="dir-num">11</span>
-      <span class="dir-name">Prompt marketplace</span>
-      <span class="dir-desc">Local templates + share-to-<span class="mono">#prompts</span> embed. Discord-side flows are wired in the bot; the GUI panel is a design preview pending a <span class="mono">GET /data/prompt-templates.json</span> hookup.</span>
-      <span class="dir-badge empty">Design</span>
+      <span class="dir-name">Prompt Templates</span>
+      <span class="dir-desc">A local library of reusable image-prompt templates + the Discord <span class="mono">#prompts</span> share/import flow.</span>
+      <span class="dir-badge empty">·</span>
       <span class="dir-path">prompts.html <span class="dir-arrow">→</span></span>
     </a>
     <a class="dir-row" href="tts.html">
@@ -575,6 +679,7 @@
   <div class="footer">
     <span>SEEKDEEP · <span data-version>v—</span> · LOCAL</span>
     <span>No telemetry · No cloud · Runs on your machine</span>
+    <span class="disclaimer">SeekDeep is provided as-is; you are responsible for your own use — see the <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/DISCLAIMER.md" target="_blank" rel="noopener">Disclaimer</a>.</span>
   </div>
 </main>
 

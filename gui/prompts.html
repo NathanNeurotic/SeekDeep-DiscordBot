@@ -210,6 +210,9 @@
 
     <!-- ===== LEFT · TEMPLATE LIST ===== -->
     <aside class="col">
+      <div class="info-banner" style="background: rgba(45,212,255,0.04); border-color: color-mix(in oklab, var(--cyan-1) 22%, transparent);">
+        <strong>▸ What this page is.</strong> Your <em>local library</em> of reusable image-prompt templates. To actually share one to a server's <span class="mono" style="color:var(--cyan-1)">#prompts</span> channel, run <span class="mono" style="color:var(--cyan-1)">@SeekDeep template share &lt;name&gt;</span> in Discord — the bot posts it there with Import / Copy buttons. This page does <em>not</em> join, create, or manage Discord servers.
+      </div>
       <div>
         <h2>Templates</h2>
         <div class="sub" style="margin-top: 4px;">▸ <span id="tplSource">data/prompt-templates.json</span> · <span id="tplBackendTag" style="color: var(--hull-3);">probing…</span></div>
@@ -221,7 +224,7 @@
         <input type="text" id="tplGuildId" placeholder="guild ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 4px;" />
         <input type="text" id="tplOwnerId" placeholder="your Discord user ID" style="width: 100%; padding: 6px 8px; background:#000; border:1px solid var(--stroke); border-radius:var(--r-sm); color:var(--hull-1); font-family:var(--font-mono); font-size: 11px; margin-bottom: 6px;" />
         <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.05em; line-height: 1.55;">
-          Enter your Discord server (guild) ID and your user ID to create/edit templates here. In Discord with Developer Mode on, right-click the server icon / your avatar → Copy ID.
+          Templates are saved per Discord server. Paste the <strong style="color:var(--cyan-1)">server (guild) ID</strong> you want this library tied to — with Developer Mode on, right-click a server → Copy Server ID — plus your own user ID (right-click your avatar → Copy User ID). This only labels <em>where your templates live</em>; it does <em>not</em> join or create a server.
         </div>
       </div>
 
@@ -355,6 +358,9 @@
       <option>(demo guild)</option>
       <option disabled>— other servers: cross-server sharing disabled —</option>
     </select>
+    <div style="font-family: var(--font-mono); font-size: 9.5px; color: var(--hull-3); letter-spacing: 0.05em; line-height: 1.5; margin-top: 4px;">
+      ▸ Preview only — this modal illustrates the flow. Real sharing happens via <span class="mono" style="color:var(--cyan-1)">@SeekDeep template share</span> in Discord, not from this GUI.
+    </div>
   </div>
   <div class="field">
     <label>NOTE TO READERS &middot; optional</label>

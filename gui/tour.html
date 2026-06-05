@@ -183,6 +183,7 @@ function go(i) {
     if (t) {
       const r = t.getBoundingClientRect();
       spot.style.opacity = '1';
+      spot.style.boxShadow = '';
       spot.style.top = (r.top - 6) + 'px';
       spot.style.left = (r.left - 6) + 'px';
       spot.style.width = (r.width + 12) + 'px';
@@ -196,6 +197,7 @@ function go(i) {
     }
   } else {
     spot.style.opacity = '0';
+    spot.style.boxShadow = 'none';
     spot.style.top = '50%'; spot.style.left = '50%';
     spot.style.width = '0px'; spot.style.height = '0px';
     // Center the card

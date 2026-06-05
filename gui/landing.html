@@ -19,6 +19,8 @@
   .hero .meta { display: flex; gap: 20px; margin-top: 40px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; color: var(--hull-3); letter-spacing: 0.14em; text-transform: uppercase; }
   .hero .meta span { display: inline-flex; align-items: center; gap: 6px; }
   .hero .meta span::before { content: "▸"; color: var(--cyan-1); }
+  .hero .meta.also { margin-top: 18px; gap: 14px; color: var(--hull-2); }
+  .hero .meta.also::before { content: "ALSO INCLUDES"; color: var(--hull-3); align-self: center; }
 
   .hero .stage {
     aspect-ratio: 1; max-width: 520px; margin-left: auto;
@@ -195,6 +197,13 @@
         <span>No telemetry</span>
         <span>GPL-2.0</span>
       </div>
+      <div class="meta also">
+        <span>Emoji Vault</span>
+        <span>Force React</span>
+        <span>DataDash · in-Discord game</span>
+        <span>Native Tauri desktop app</span>
+        <span>5 chat backends · HF / Ollama / OpenAI-compatible / Anthropic / Gemini</span>
+      </div>
     </div>
     <div class="stage">
       <div class="ring r2"></div>
@@ -361,10 +370,144 @@
     </div>
   </section>
 
+  <!-- FEATURE 4: VISION -->
+  <section class="feature">
+    <div class="feature-row reverse">
+      <div>
+        <div class="eyebrow">Vision</div>
+        <h3 style="margin-top:14px;">Drop an image. Ask anything.</h3>
+        <p>Paste or drop an image and <span class="mono" style="color:var(--cyan-1);">Qwen2.5-VL</span> describes it, answers follow-up questions, and reads text on demand. Say <span class="mono" style="color:var(--cyan-1);">read this</span> for OCR mode — captions, signs, screenshots, and handwriting.</p>
+        <ul>
+          <li>@SeekDeep + image · describe · explain · identify</li>
+          <li>"read this" · OCR mode for text in images</li>
+          <li>Multi-turn Q&amp;A grounded on the attachment</li>
+          <li>Runs local on the GPU · no upload off-host</li>
+        </ul>
+      </div>
+      <div class="visual">
+        <div class="vchat">
+          <div class="vmsg">
+            <div class="av">N</div>
+            <div class="body">
+              <div class="who">nautilus</div>
+              <div class="text"><span class="cmd">@SeekDeep</span> [trench-sonar.png] what does this readout show?</div>
+            </div>
+          </div>
+          <div class="vmsg bot">
+            <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
+            <div class="body">
+              <div class="who">SeekDeep <span style="font-family: var(--font-mono); font-size:10px; color: var(--hull-3); letter-spacing:0.14em;">· QWEN2.5-VL · 0.9s</span></div>
+              <div class="text">A side-scan sonar sweep. The bright arc at center-left is a hard return ~120m off; the banded shadow below it reads as a soft sediment shelf.</div>
+            </div>
+          </div>
+          <div class="vmsg">
+            <div class="av">N</div>
+            <div class="body">
+              <div class="who">nautilus</div>
+              <div class="text"><span class="cmd">@SeekDeep</span> read this</div>
+            </div>
+          </div>
+          <div class="vmsg bot">
+            <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
+            <div class="body">
+              <div class="who">SeekDeep <span style="font-family: var(--font-mono); font-size:10px; color: var(--hull-3); letter-spacing:0.14em;">· OCR MODE</span></div>
+              <div class="text" style="color:var(--cyan-1);">DEPTH 10,194 M · TEMP 1.6°C · CONTACT 047</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURE 5: WEB-ROUTED -->
+  <section class="feature">
+    <div class="feature-row">
+      <div>
+        <div class="eyebrow">Web-routed answers</div>
+        <h3 style="margin-top:14px;">Local search, folded into chat.</h3>
+        <p>A self-hosted <span class="mono" style="color:var(--cyan-1);">SearXNG</span> instance feeds live results straight into the answer. <span class="mono" style="color:var(--cyan-1);">web:auto</span> lets the router decide; <span class="mono" style="color:var(--cyan-1);">web:always</span> forces a round-trip — and replies come back with compact cited sources.</p>
+        <ul>
+          <li>web:auto · router decides when to search</li>
+          <li>web:always · force a SearXNG round-trip</li>
+          <li>Compact inline citations on every answer</li>
+          <li>Metasearch stays on your host · no API keys</li>
+        </ul>
+      </div>
+      <div class="visual">
+        <div class="vchat">
+          <div class="vmsg">
+            <div class="av">N</div>
+            <div class="body">
+              <div class="who">nautilus</div>
+              <div class="text"><span class="cmd">@SeekDeep</span> <span class="cmd">web:always</span> latest abyssal-zone pressure tolerances?</div>
+            </div>
+          </div>
+          <div class="vmsg bot">
+            <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
+            <div class="body">
+              <div class="who">SeekDeep <span style="font-family: var(--font-mono); font-size:10px; color: var(--hull-3); letter-spacing:0.14em;">· SEARXNG · 4 SOURCES</span></div>
+              <div class="text">Recent surveys put hadal piezolyte concentrations highest below 8,000m, correlating with TMAO buildup. Sources: &lt;noaa.gov/...&gt; &lt;nature.com/...&gt; &lt;jstor.org/...&gt;</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURE 6: ARCHIVE · PERSONAS · MEMORY -->
+  <section class="feature">
+    <div class="feature-row reverse">
+      <div>
+        <div class="eyebrow">Archive · Personas · Memory</div>
+        <h3 style="margin-top:14px;">It remembers, and it can be someone else.</h3>
+        <p>Every render can drop into a per-user archive thread you can revisit and re-refine. Switch personas to change voice mid-channel. And persistent <span class="mono" style="color:var(--cyan-1);">remember</span> / <span class="mono" style="color:var(--cyan-1);">recall</span> facts let the bot carry context across sessions.</p>
+        <ul>
+          <li>Per-user image archive threads · re-refine later</li>
+          <li>Switchable personas · per-channel voice</li>
+          <li>remember "fact" · recall · persistent across restarts</li>
+          <li>All stored on the host · private by default</li>
+        </ul>
+      </div>
+      <div class="visual">
+        <div class="vchat">
+          <div class="vmsg">
+            <div class="av">N</div>
+            <div class="body">
+              <div class="who">nautilus</div>
+              <div class="text"><span class="cmd">@SeekDeep</span> <span class="cmd">remember</span> my home trench is Mariana</div>
+            </div>
+          </div>
+          <div class="vmsg bot">
+            <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
+            <div class="body">
+              <div class="who">SeekDeep <span style="font-family: var(--font-mono); font-size:10px; color: var(--hull-3); letter-spacing:0.14em;">· MEMORY SAVED</span></div>
+              <div class="text" style="color:var(--cyan-1);">▸ Noted. I'll recall that.</div>
+            </div>
+          </div>
+          <div class="vmsg">
+            <div class="av">N</div>
+            <div class="body">
+              <div class="who">nautilus</div>
+              <div class="text"><span class="cmd">@SeekDeep</span> <span class="cmd">persona:cartographer</span> chart a route home</div>
+            </div>
+          </div>
+          <div class="vmsg bot">
+            <div class="av"><img src="assets/seekdeep-mark.webp" alt="" /></div>
+            <div class="body">
+              <div class="who">SeekDeep <span style="font-family: var(--font-mono); font-size:10px; color: var(--hull-3); letter-spacing:0.14em;">· PERSONA · CARTOGRAPHER</span></div>
+              <div class="text">Plotting from your last fix toward the Mariana Trench — bearing 118°, three waypoints logged to your archive thread.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- INSTALL -->
   <section class="install">
     <div class="eyebrow center">Setup · Windows 11 · ~6 minutes</div>
-    <h2>Four steps.</h2>
+    <h2>4-command quickstart.</h2>
+    <p style="text-align:center; color:var(--hull-3); font-size:14px; max-width:60ch; margin:-16px auto 0;">The fast path below gets you running. Prefer hand-holding? The guided installer walks all 9 steps.</p>
     <div class="steps">
       <div class="step">
         <div class="n">01</div>
@@ -397,6 +540,9 @@
   <div class="foot">
     <span>SeekDeep · <span data-version>v—</span> · local</span>
     <span>Open source · GPL-2.0 licensed</span>
+  </div>
+  <div class="foot" style="border-top:none; padding-top:0; justify-content:center; text-transform:none; letter-spacing:0.04em;">
+    <span style="color:var(--hull-3); text-align:center;">SeekDeep is provided as-is; you are responsible for your own use — see the <a href="https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/DISCLAIMER.md" target="_blank" rel="noopener noreferrer" style="color:var(--cyan-1);">Disclaimer</a>.</span>
   </div>
 
 </div>
