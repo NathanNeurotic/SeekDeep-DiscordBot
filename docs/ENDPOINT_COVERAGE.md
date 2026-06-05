@@ -12,12 +12,13 @@
 > references it. `—` / `no` are drift signals, not necessarily bugs (some routes
 > are tray-only or future-facing); investigate before assuming coverage.
 
-## gui_endpoints.py (76 routes)
+## gui_endpoints.py (77 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
 | GET | `/archive/config` | open | app.html | yes |
 | POST | `/archive/config` | token | app.html | yes |
+| POST | `/bot/command` | token | — | yes |
 | POST | `/cache/prune` | token | api.html | no |
 | GET | `/config` | open | app.html | yes |
 | POST | `/config` | token | app.html | yes |
@@ -123,7 +124,7 @@
 
 ## Summary
 
-- Total routes: **99**
+- Total routes: **100**
 - Open (no token): **27**
 - Not referenced by any test suite: **25**
 
