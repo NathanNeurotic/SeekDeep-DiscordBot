@@ -87,10 +87,13 @@
           <label for="ev-guild">Server</label>
           <select id="ev-guild"><option value="">Loading servers…</option></select>
           <button id="ev-backup" class="ev-btn" disabled>Download backup (.zip)</button>
+          <button id="ev-import" class="ev-btn" disabled>Import .zip…</button>
+          <input id="ev-import-file" type="file" accept=".zip,application/zip,application/x-zip-compressed" class="ev-hidden" />
           <span id="ev-summary" class="ev-summary"></span>
         </div>
       </div>
       <div id="ev-error" class="ev-msg err ev-hidden"></div>
+      <div id="ev-importresult" class="ev-msg ev-hidden"></div>
       <div id="ev-grid" class="ev-grid"></div>
     </div>
   </div>

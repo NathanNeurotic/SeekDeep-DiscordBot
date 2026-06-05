@@ -517,6 +517,12 @@ def main() -> int:
         r = c.get(ep)
         check(f"GET {ep} without token -> 401", r.status_code == 401, f"got {r.status_code}")
 
+    # ---- Auth: Emoji Vault writes (import / delete) without token -> 401 ---
+    r = c.post("/emoji-vault/123456789012345678/import")
+    check("POST /emoji-vault/{guild}/import without token -> 401", r.status_code == 401, f"got {r.status_code}")
+    r = c.delete("/emoji-vault/123456789012345678/emojis/123456789012345678")
+    check("DELETE /emoji-vault/{guild}/emojis/{id} without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
     # ---- Auth: Force React config GUI endpoints without token -> 401 ------
     for ep in ("/force-react/guilds",
                "/force-react/123456789012345678/emojis",

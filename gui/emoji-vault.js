@@ -37,7 +37,7 @@
 
   let currentGuild = '';
 
-  function renderEmojis(data) {
+  function renderEmojis(data, guildId) {
     const grid = $('ev-grid');
     const sum = $('ev-summary');
     if (sum) {
@@ -50,6 +50,7 @@
     (data.emojis || []).forEach((e) => {
       const tile = document.createElement('div');
       tile.className = 'ev-tile';
+      tile.style.position = 'relative';
       const img = document.createElement('img');
       img.loading = 'lazy';
       img.src = e.url;
@@ -67,6 +68,17 @@
         a.textContent = 'GIF';
         tile.appendChild(a);
       }
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'ev-del';
+      del.textContent = '×';
+      del.title = 'Delete :' + e.name + ':';
+      del.setAttribute('aria-label', 'Delete ' + e.name);
+      del.style.cssText = 'position:absolute;top:3px;right:3px;width:20px;height:20px;line-height:17px;'
+        + 'padding:0;border-radius:50%;border:1px solid rgba(255,90,90,.55);background:rgba(25,0,0,.74);'
+        + 'color:#ff6b6b;font-size:14px;cursor:pointer;';
+      del.addEventListener('click', () => deleteEmoji(guildId, e.id, e.name, tile));
+      tile.appendChild(del);
       grid.appendChild(tile);
     });
   }
@@ -76,15 +88,20 @@
     const grid = $('ev-grid');
     const sum = $('ev-summary');
     const backup = $('ev-backup');
+    const imp = $('ev-import');
     if (backup) backup.disabled = true;
+    if (imp) imp.disabled = true;
     if (!guildId) { if (grid) grid.textContent = ''; if (sum) sum.textContent = ''; return; }
     if (sum) sum.textContent = 'Loading emojis…';
     if (grid) grid.textContent = '';
     try {
       const data = await getJSON('/emoji-vault/' + encodeURIComponent(guildId) + '/emojis');
-      renderEmojis(data);
+      if (currentGuild !== guildId) return;  // a newer server selection won the race
+      renderEmojis(data, guildId);
       if (backup) backup.disabled = !(data.count > 0);
+      if (imp) imp.disabled = false;  // import is allowed even into an empty server
     } catch (err) {
+      if (currentGuild !== guildId) return;
       if (sum) sum.textContent = '';
       setError('Could not load emojis: ' + err.message);
     }
@@ -125,6 +142,59 @@
         backup.textContent = label || 'Download backup (.zip)';
         if (currentGuild === guildId) backup.disabled = false;
       }
+    }
+  }
+
+  async function deleteEmoji(guildId, emojiId, name, tile) {
+    if (!guildId || !emojiId) return;
+    if (!window.confirm('Delete :' + name + ': permanently from this server? This cannot be undone.')) return;
+    setError('');
+    try {
+      await getJSON('/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), { method: 'DELETE' });
+      if (tile && tile.parentNode) tile.parentNode.removeChild(tile);
+      if (currentGuild === guildId) loadEmojis(guildId);  // refresh counts honestly
+    } catch (err) {
+      setError('Delete failed: ' + err.message);
+    }
+  }
+
+  function showImportResult(res) {
+    const box = $('ev-importresult');
+    if (!box) return;
+    const s = (res && res.summary) || { created: 0, skipped: 0, failed: 0 };
+    let txt = 'Import: created ' + s.created + ' · skipped ' + s.skipped + ' · failed ' + s.failed + '.';
+    const fails = (res && res.failed) || [];
+    if (fails.length) {
+      txt += ' Failures: ' + fails.slice(0, 8).map((f) => (f.name || '?') + ' (' + (f.error || 'error') + ')').join(', ')
+        + (fails.length > 8 ? ', …' : '');
+    }
+    box.textContent = txt;
+    box.classList.toggle('err', s.created === 0 && s.failed > 0);
+    show(box, true);
+  }
+
+  async function importZip(guildId, file) {
+    if (!guildId || !file) return;
+    const imp = $('ev-import');
+    const label = imp ? imp.textContent : '';
+    if (imp) { imp.disabled = true; imp.textContent = 'Importing…'; }
+    setError('');
+    show($('ev-importresult'), false);
+    try {
+      // Raw .zip bytes as the body; nav.js attaches the GUI token to the POST.
+      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/import', { method: 'POST', body: file });
+      let body = null;
+      try { body = await r.json(); } catch (_) {}
+      if (!r.ok) {
+        const d = (body && (body.detail || body.error)) || ('HTTP ' + r.status);
+        throw new Error(d);
+      }
+      showImportResult(body || {});
+      if (currentGuild === guildId) loadEmojis(guildId);
+    } catch (err) {
+      setError('Import failed: ' + err.message);
+    } finally {
+      if (imp) { imp.textContent = label || 'Import .zip…'; imp.disabled = (currentGuild !== guildId); }
     }
   }
 
@@ -175,6 +245,16 @@
     const sel = $('ev-guild');
     const backup = $('ev-backup');
     if (backup) backup.addEventListener('click', downloadBackup);
+    const imp = $('ev-import');
+    const impFile = $('ev-import-file');
+    if (imp && impFile) {
+      imp.addEventListener('click', () => { if (!imp.disabled) impFile.click(); });
+      impFile.addEventListener('change', () => {
+        const f = impFile.files && impFile.files[0];
+        impFile.value = '';  // let the user re-pick the same file later
+        if (f && currentGuild) importZip(currentGuild, f);
+      });
+    }
     if (sel) {
       sel.addEventListener('change', () => {
         currentGuild = sel.value || '';
