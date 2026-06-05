@@ -179,18 +179,18 @@ window.DATADASH = {
     // independently with a guaranteed min channel + flyable slopes (never impossible).
     colW:              20,     // terrain column width (px)
     edgeMargin:        0.05,   // walls never enter this margin of the screen edges
-    minGapFrac:        0.235,  // narrowest safe channel (fraction of H) — fairer tightest clearance
-    maxGapFrac:        0.50,   // open channel width — tighter so screen-centre is no longer auto-safe
-                               // (centre used to always sit inside the gap; you must follow it up/down now)
+    minGapFrac:        0.215,  // narrowest safe channel (fraction of H) — tightest pinch clearance
+    maxGapFrac:        0.42,   // open channel width — below 0.45 so the gap sometimes sits fully
+                               // above/below screen-centre (centre is no longer a guaranteed free ride)
     wallSlopePx:       12,     // max wall move per column (px) — kept followable at 2× speed
     rampFrac:          0.3,    // fraction of a tower spent ramping (rest is flat top → ziggurat)
-    towerMin:          0.12,   // tower/overhang height range — rescaled to keep variation under the
-    towerMax:          0.24,   //   feature-height cap (≈ maxGapFrac − minGapFrac − 0.02 = 0.245);
-                               //   without this every tower clamps to the cap → flat, uniform terrain.
+    towerMin:          0.09,   // tower/overhang height range — kept under the shared feature-height
+    towerMax:          0.18,   //   cap (maxGapFrac − minGapFrac − 0.02 ≈ 0.185) so towers stay varied,
+                               //   not clamped flat. Re-fit whenever maxGapFrac/minGapFrac move.
     wallStepFrac:      0.055,  // walls snap to this vertical grid → blocky chip towers (not smooth ramps)
-    pinchAmt:          0.22,   // how far an archway pinch closes (fraction of H) — also under the 0.245 cap
-    centerStepMin:     0.1,    // base-channel meander per feature (fraction H)
-    centerStepMax:     0.28,
+    pinchAmt:          0.19,   // how far an archway pinch closes (fraction of H) — near the ~0.185 cap (tightest gate)
+    centerStepMin:     0.14,   // base-channel meander per feature (fraction H) — cranked for more
+    centerStepMax:     0.32,   //   vertical travel; wallSlopePx still caps per-column move (followable)
     featMin:           6,      // base feature length range (columns) for open/ramp stretches
     featMax:           13,
     corridorRampBytes: 80000,  // distance over which towers get a touch taller/more frequent
