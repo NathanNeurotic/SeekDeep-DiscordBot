@@ -19,7 +19,7 @@
 | GET | `/archive/config` | open | app.html | yes |
 | POST | `/archive/config` | token | app.html | yes |
 | POST | `/bot/command` | token | bot-bridge.js | yes |
-| POST | `/cache/prune` | token | api.html | no |
+| POST | `/cache/prune` | token | api.page.js | no |
 | GET | `/config` | open | app.html | yes |
 | POST | `/config` | token | app.html | yes |
 | GET | `/config/features` | open | bot-bridge.js | no |
@@ -43,7 +43,7 @@
 | GET | `/force-react/guilds` | token | force-react.js | yes |
 | POST | `/launcher/{service}/{action}` | token | app.html | yes |
 | POST | `/launcher/bot/kill-all` | token | nav.js | yes |
-| GET | `/launchers/status` | open | api.html | yes |
+| GET | `/launchers/status` | open | api.page.js | yes |
 | GET | `/logs/stream` | token* | app.html | no |
 | GET | `/logs/tail` | token | — | no |
 | GET | `/memory/presets/{user_id}` | token | — | yes |
@@ -54,10 +54,10 @@
 | POST | `/memory/user/{user_id}/fact` | token | — | yes |
 | DELETE | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
 | PATCH | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
-| GET | `/memory/users` | token | api.html | yes |
+| GET | `/memory/users` | token | api.page.js | yes |
 | POST | `/model/warm` | token | app.html | yes |
-| GET | `/persona` | open | api.html | yes |
-| POST | `/persona` | token | api.html | yes |
+| GET | `/persona` | open | api.page.js | yes |
+| POST | `/persona` | token | api.page.js | yes |
 | GET | `/personas` | open | personas.page.js | yes |
 | POST | `/personas` | token | personas.page.js | yes |
 | DELETE | `/personas/{slug}` | token | — | yes |
@@ -69,7 +69,7 @@
 | DELETE | `/reacts/rule/{rule_id}` | token | — | yes |
 | PATCH | `/reacts/rule/{rule_id}` | token | — | yes |
 | GET | `/stats/counts` | open | stats.js | yes |
-| GET | `/stats/snapshot` | open | api.html | yes |
+| GET | `/stats/snapshot` | open | api.page.js | yes |
 | POST | `/system/bootstrap` | token | installer.html | no |
 | GET | `/system/bootstrap-status` | open | installer.html | no |
 | GET | `/system/detect-venv` | open | — | yes |
@@ -98,26 +98,26 @@
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
-| POST | `/chart` | token | api.html | yes |
-| POST | `/chat` | token | api.html | yes |
-| GET | `/gpu` | open | api.html | yes |
+| POST | `/chart` | token | api.page.js | yes |
+| POST | `/chat` | token | api.page.js | yes |
+| GET | `/gpu` | open | api.page.js | yes |
 | GET | `/health` | open | add-model.page.js | yes |
-| POST | `/image` | token | api.html | yes |
-| POST | `/img2img` | token | api.html | yes |
-| POST | `/inpaint` | token | api.html | yes |
+| POST | `/image` | token | api.page.js | yes |
+| POST | `/img2img` | token | api.page.js | yes |
+| POST | `/inpaint` | token | api.page.js | yes |
 | POST | `/inpaint_mask_preview` | token | image-ab.page.js | yes |
-| POST | `/instruct-pix2pix` | token | api.html | yes |
+| POST | `/instruct-pix2pix` | token | api.page.js | yes |
 | GET | `/ml_deps` | open | ml-deps.js | yes |
 | POST | `/model/install` | token | add-model.page.js | yes |
 | POST | `/model/uninstall` | token | app.html | yes |
 | GET | `/models/available` | open | app.html | no |
 | GET | `/models/catalog` | open | installer.html | no |
 | GET | `/models/installed` | open | app.html | yes |
-| GET | `/route/debug` | open | api.html | yes |
+| GET | `/route/debug` | open | api.page.js | yes |
 | POST | `/tts` | token | tts.js | yes |
-| POST | `/unload` | token | api.html | yes |
-| POST | `/upscale` | token | api.html | yes |
-| POST | `/vision` | token | api.html | yes |
+| POST | `/unload` | token | api.page.js | yes |
+| POST | `/upscale` | token | api.page.js | yes |
+| POST | `/vision` | token | api.page.js | yes |
 | GET | `/vram` | open | — | no |
 | POST | `/warmup/chat` | token | — | yes |
 | POST | `/warmup/image` | token | — | yes |
