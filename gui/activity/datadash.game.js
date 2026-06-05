@@ -126,6 +126,7 @@
       pickups: [],             // {x,y,grabbed,kind}
       bots: [],
       scrollFx: null,          // { kind:'fast'|'slow'|'reverse', t }
+      revertGrace: 0,          // wall-immunity timer set during a rewind (anti-trap)
       // boss
       boss: null,
       boss2: null,             // second daemon during a Double Boss event
@@ -655,7 +656,7 @@
       if (game.scrollFx.t <= 0) game.scrollFx = null;
       else if (game.scrollFx.kind === "fast") base *= T.mysteryFastMult;
       else if (game.scrollFx.kind === "slow") base *= T.mysterySlowMult;
-      else if (game.scrollFx.kind === "reverse") base *= T.mysteryReverseMult;
+      else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace; }
     }
     game.scroll = base;
     const dx = game.scroll * dt;
@@ -710,11 +711,14 @@
     }
 
     if (game.invuln > 0) game.invuln -= dt;
+    if (game.revertGrace > 0) game.revertGrace -= dt;
     if (game.shake > 0) game.shake = Math.max(0, game.shake - dt * 60);
 
     // solid terrain — resolve position every frame; damage only on a fresh impact
     const touching = resolveTerrain();
-    if (touching && game.invuln <= 0) loseLife("wall");
+    // No wall death during/just-after a rewind — the player can't be expected to dodge
+    // a config the rewind generated under them. resolveTerrain still nudges them clear.
+    if (touching && game.invuln <= 0 && !(game.revertGrace > 0)) loseLife("wall");
 
     updateProgression();
     updateEvent(dt);

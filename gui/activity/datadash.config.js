@@ -260,6 +260,8 @@ window.DATADASH = {
     mysteryFastMult:   1.45,   // scroll multiplier: overclock (flashes GREEN)
     mysterySlowMult:   0.5,    // scroll multiplier: throttle (flashes GREEN)
     mysteryReverseMult:-0.8,   // scroll multiplier: rewind (flashes RED, negative = backwards)
+    revertGrace:       1.2,    // wall-damage immunity (s) DURING a rewind + this long after it
+                               // ends, so a rewind-generated impassable config can't unfairly kill
 
     // RANDOM EVENTS — special hallway segments that trigger unpredictably (not on a
     // fixed cadence) and can be any one of: double-boss, DATA Base, DDoS, Pepe Packets.
