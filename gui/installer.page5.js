@@ -33,7 +33,11 @@
             // /system/firstrun's chat_model check as the canary because it
             // verifies the model files are physically present in the HF
             // cache directory (not just that .env names one).
-            (async function probeWarmupState() {
+            // Deferred to DOMContentLoaded: this probe reads SEEKDEEP_BASE,
+            // a const declared in installer.page7.js which loads AFTER this
+            // file — calling it at parse time would hit the temporal dead
+            // zone and silently fail. page7 has run by DOMContentLoaded.
+            async function probeWarmupState() {
               try {
                 const r = await fetch(SEEKDEEP_BASE + '/system/firstrun', {
                   cache: 'no-store', signal: AbortSignal.timeout(8000),
@@ -48,7 +52,8 @@
                   if (tg && tg.classList.contains('on')) tg.classList.remove('on');
                 }
               } catch (_) { /* server offline; leave toggle off */ }
-            })();
+            }
+            window.addEventListener('DOMContentLoaded', probeWarmupState);
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
               runBtn.textContent = '… DOWNLOADING';

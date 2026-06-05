@@ -209,17 +209,21 @@
     // We can't kill the .bat-launched server from a browser, so the user
     // has to do this in the same shell their .bat is running.
     const cmd = `pip uninstall -y torch torchvision torchaudio\npip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/${variant}`;
+    // gpuName comes from /health (nvidia_smi.name) and cmd embeds `variant`;
+    // both are interpolated into innerHTML below, so HTML-escape them to keep
+    // a hostile value from injecting markup into the modal.
+    const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
     const modal = document.createElement('div');
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:grid;place-items:center;';
     modal.innerHTML = `
       <div style="background:var(--substrate-2);border:1px solid var(--stroke);border-radius:var(--r-md);padding:24px;max-width:640px;color:var(--hull-2);font-family:var(--font-mono);">
-        <h3 style="margin:0 0 8px 0;color:var(--cyan-1);">Torch reinstall · ${gpuName}</h3>
+        <h3 style="margin:0 0 8px 0;color:var(--cyan-1);">Torch reinstall · ${escapeHtml(gpuName)}</h3>
         <p style="color:var(--hull-3);font-size:13px;margin-bottom:12px;line-height:1.5;">
           Browser mode can't bounce the .bat-launched AI server. Stop the server
           (Ctrl+C in its PowerShell window), run these in the activated .venv,
           then restart with <code>seekdeep_launcher.bat</code> option 4.
         </p>
-        <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${cmd}</pre>
+        <pre style="background:#000;border:1px solid var(--stroke);border-radius:var(--r-sm);padding:12px;color:var(--cyan-1);font-size:12px;overflow:auto;user-select:all;">${escapeHtml(cmd)}</pre>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
           <button id="torchCopyBtn" style="background:var(--cyan-2);color:#000;border:0;padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Copy</button>
           <button id="torchCloseBtn" style="background:transparent;color:var(--hull-2);border:1px solid var(--stroke);padding:8px 14px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-mono);">Close</button>

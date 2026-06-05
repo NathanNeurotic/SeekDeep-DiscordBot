@@ -203,6 +203,13 @@
               }
             } catch { /* if firstrun probe fails, fall through to NEXT */ }
           }
+          // Restrict the redirect target to known local pages. nextHref is
+          // seeded from the user-controllable ?next= param, so without this an
+          // attacker-crafted URL could redirect off-app (CodeQL
+          // js/client-side-unvalidated-url-redirection). Anything unexpected
+          // falls back to the default chat page.
+          const ALLOWED = ['chat.html', 'setup-wizard.html', 'index.html', 'app.html'];
+          if (!ALLOWED.includes(nextHref)) nextHref = 'chat.html';
           setStage('opening ' + nextHref + '…');
           setTimeout(() => { location.href = nextHref; }, 300);
           return;

@@ -113,7 +113,13 @@
       try {
         body.image_b64 = await srcToB64(src);
       } catch (err) {
-        out.innerHTML = `<span style="color:var(--bad);">▸ couldn't fetch source · ${String(err.message || err).slice(0, 120)}</span>`;
+        // Untrusted error text — build the span via the DOM and set textContent
+        // so a hostile fetch error can't be reinterpreted as HTML (CodeQL).
+        out.textContent = '';
+        const span = document.createElement('span');
+        span.style.color = 'var(--bad)';
+        span.textContent = '▸ couldn\'t fetch source · ' + String(err.message || err).slice(0, 120);
+        out.appendChild(span);
         setStatus(panel, 'NO SOURCE', 'bad');
         return;
       }
@@ -139,6 +145,10 @@
       if (ct.includes('image/')) {
         const blob = await r.blob();
         out.classList.add('has-image');
+        // Revoke any prior object URL before replacing the <img> so blob: URLs
+        // from earlier generations don't leak.
+        const oldImg = out.querySelector('img');
+        if (oldImg && oldImg.src && oldImg.src.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
         out.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="" />`;
         setStatus(panel, 'OK', 'on');
       } else {
@@ -224,7 +234,12 @@
     try {
       image_b64 = await srcToB64(src);
     } catch (err) {
-      out.innerHTML = `<span style="color:var(--bad);">▸ couldn't fetch source · ${String(err.message || err).slice(0, 120)}</span>`;
+      // Untrusted error text — DOM-construct + textContent (CodeQL).
+      out.textContent = '';
+      const span = document.createElement('span');
+      span.style.color = 'var(--bad)';
+      span.textContent = '▸ couldn\'t fetch source · ' + String(err.message || err).slice(0, 120);
+      out.appendChild(span);
       setStatus('NO SOURCE', 'bad');
       return;
     }
@@ -238,6 +253,9 @@
       const ct = r.headers.get('Content-Type') || '';
       if (ct.startsWith('image/')) {
         const blob = await r.blob();
+        // Revoke any prior object URL before replacing the <img> (no leak).
+        const oldImg = out.querySelector('img');
+        if (oldImg && oldImg.src && oldImg.src.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
         out.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="mask preview" style="max-width:100%;" />`;
         setStatus('MASK OK', 'on');
       } else {
