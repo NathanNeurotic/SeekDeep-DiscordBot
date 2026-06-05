@@ -53,7 +53,8 @@
                 }
               } catch (_) { /* server offline; leave toggle off */ }
             }
-            window.addEventListener('DOMContentLoaded', probeWarmupState);
+            if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', probeWarmupState);
+            else probeWarmupState();
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
               runBtn.textContent = '… DOWNLOADING';

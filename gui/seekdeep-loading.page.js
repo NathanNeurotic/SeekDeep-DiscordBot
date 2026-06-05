@@ -209,7 +209,12 @@
           // js/client-side-unvalidated-url-redirection). Anything unexpected
           // falls back to the default chat page.
           const ALLOWED = ['chat.html', 'setup-wizard.html', 'index.html', 'app.html'];
-          if (!ALLOWED.includes(nextHref)) nextHref = 'chat.html';
+          // Parse relative to our origin so a target with a #hash or ?query still
+          // validates by filename, while an absolute off-origin URL is rejected.
+          try {
+            const u = new URL(nextHref, location.origin);
+            if (u.origin !== location.origin || !ALLOWED.includes(u.pathname.split('/').pop())) nextHref = 'chat.html';
+          } catch (_) { nextHref = 'chat.html'; }
           setStage('opening ' + nextHref + '…');
           setTimeout(() => { location.href = nextHref; }, 300);
           return;
