@@ -19,12 +19,15 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
 >
 > Anything collected by those services is governed by *their* terms, not SeekDeep's. Run with the defaults (loopback FastAPI + local SearXNG + local Ollama + 127.0.0.1 binding on port 7865) to minimize the surface area.
 
+> **Disclaimer.** SeekDeep is free, open-source software provided **"as is", with no warranty**, and is a **frontend / orchestration layer over third-party AI models and services the maintainer does not create, own, or control.** **You are solely responsible for how you use it, for anything you generate, and for complying with the law and with each third-party service's terms** (Discord, model providers, etc.). The author is **not liable** for misuse. Full notice — no-warranty, acceptable use, limitation of liability — in **[DISCLAIMER.md](DISCLAIMER.md)** *(not legal advice)*.
+
 > **Sister docs in this repo:**
 > - **[AGENTS.md](AGENTS.md)** — architecture reference: what each subsystem (chat / vision / image / web search / archive / routing) does and how they connect.
 > - **[CODEX_REPO_BRIEF.md](CODEX_REPO_BRIEF.md)** — onboarding brief for an AI assistant picking up the repo cold.
 > - **[INTEGRATION.md](INTEGRATION.md)** — how the GUI mounts onto the FastAPI server (`gui/` static mount, write endpoints, WebSocket bridge, archive bot bridge).
 > - **[MAINTAINER.md](MAINTAINER.md)** — playbook for merging designer-shipped GUI zips without losing audit/auth overrides.
 > - **[SECURITY.md](SECURITY.md)** — secrets, local-service binding, user-URL SSRF fetch policy, the self-update trust boundary (ref policy + Ed25519 signing), and the Tauri desktop-bridge controls.
+> - **[DISCLAIMER.md](DISCLAIMER.md)** — disclaimer, terms of use & liability notice: "as-is" no-warranty, the third-party-model boundary, your responsibilities, acceptable use, and the limitation of liability.
 >
 > This file is the **user-facing canonical**: install, configure, run, commands, feature flags. Internal architecture details live in `AGENTS.md`.
 
