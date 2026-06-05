@@ -4194,6 +4194,14 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
         )
         quant_config = None  # _try_load reads this via closure -> full-precision branch;
                              # also makes the .to('cuda') below run for the reloaded model.
+        # Free the partial quantized load first — full precision needs ~3x the VRAM,
+        # and the failed bnb attempt may still pin GPU tensors, so the retry could OOM.
+        try:
+            import gc, torch
+            gc.collect()
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
         chat_model = _try_load(AutoModelForCausalLM, what="model")
 
     # Only move manually when NOT using bnb quant — bnb already placed the weights.
