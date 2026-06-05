@@ -1806,6 +1806,7 @@
 
   function drawTerrain() {
     const edge = 3;
+    drawChipBlocks();   // item 12: towers FIRST so the cave walls draw over their buried base
     // ceiling fill
     ctx.fillStyle = C.terrain;
     ctx.beginPath();
@@ -1906,8 +1907,12 @@
       ctx.beginPath(); ctx.arc(fx, fyy, 2.4, 0, Math.PI * 2); ctx.fill();
     }
     ctx.shadowBlur = 0;
+  }
 
-    // blocks — extrusions of the wall, detailed like chips on a board
+  // chip towers — extruded from the walls, detailed like chips on a board. Drawn
+  // as its own pass that drawTerrain() calls BEFORE the wall fills, so each
+  // tower's wall-buried base is hidden and the tower/wall seam disappears (item 12).
+  function drawChipBlocks() {
     for (let i = 0; i < game.cols.length; i++) {
       const col = game.cols[i];
       if (!col.blocks.length) continue;
