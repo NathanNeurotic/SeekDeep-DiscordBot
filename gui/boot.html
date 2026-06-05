@@ -140,6 +140,8 @@
   }
   @keyframes logIn { from { opacity: 0; } to { opacity: 1; } }
 
+  #bootLines { max-height: 38vh; overflow-y: auto; }
+
   .boot-log::before {
     content: ""; position: absolute;
     inset: 6px;
@@ -367,6 +369,7 @@ function addStep(step) {
     <span class="res">${step.res}</span>
   `;
   linesEl.appendChild(row);
+  linesEl.scrollTop = linesEl.scrollHeight;
   // trigger fade-in
   requestAnimationFrame(() => row.classList.add('in'));
   // update progress
