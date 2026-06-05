@@ -4187,6 +4187,154 @@ def register_gui_endpoints(
             headers={"Content-Disposition": f'attachment; filename="emoji-backup-{guild_id}.zip"'},
         )
 
+    # ----- Emoji Vault writes (import + delete) · same gate as read-only -----
+    # Mutating parity for the emoji vault: bulk-import a backup .zip as new guild
+    # emojis, and delete individual emojis. Both need the GUI token AND the feature
+    # flag, and both hit Discord's REST API with the bot token — which must have
+    # "Manage Expressions/Emojis" in the target guild or Discord answers 403.
+    _EMOJI_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
+    _EMOJI_IMPORT_MAX_FILES = 250                 # cap one import batch
+    _EMOJI_IMPORT_MAX_UPLOAD = 64 * 1024 * 1024   # 64 MB zip ceiling
+    _EMOJI_MAX_IMAGE_BYTES = 256 * 1024           # Discord's per-emoji image limit
+    _EMOJI_MIME = {"png": "image/png", "gif": "image/gif", "jpg": "image/jpeg",
+                   "jpeg": "image/jpeg", "webp": "image/webp"}
+
+    def _sanitize_emoji_name(raw: str) -> str:
+        # Discord emoji names are 2-32 chars of [A-Za-z0-9_].
+        base = _EMOJI_NAME_RE.sub("_", str(raw or "")).strip("_")
+        if len(base) < 2:
+            base = (base + "_emoji").strip("_")
+        return base[:32] or "emoji"
+
+    def _discord_emoji_write_sync(method: str, path: str, token: str, json_body=None):
+        # Returns (status_code, parsed_json_or_None, retry_after_seconds).
+        import requests
+        r = requests.request(
+            method, f"{_DISCORD_API}{path}",
+            headers={"Authorization": f"Bot {token}",
+                     "User-Agent": "SeekDeep-DiscordBot (control-center, 1.0)"},
+            json=json_body, timeout=30,
+        )
+        try:
+            data = r.json()
+        except Exception:
+            data = None
+        retry_after = 0.0
+        if r.status_code == 429:
+            try:
+                retry_after = float((data or {}).get("retry_after")
+                                    or r.headers.get("Retry-After") or 1.0)
+            except Exception:
+                retry_after = 1.0
+        return r.status_code, data, retry_after
+
+    def _emoji_create_one_sync(guild_id: str, token: str, name: str, mime: str, raw: bytes) -> dict:
+        import base64 as _b64
+        import time as _time
+        data_uri = f"data:{mime};base64,{_b64.b64encode(raw).decode('ascii')}"
+        payload = {"name": name, "image": data_uri, "roles": []}
+        for attempt in range(2):
+            try:
+                status, data, retry_after = _discord_emoji_write_sync(
+                    "POST", f"/guilds/{guild_id}/emojis", token, payload)
+            except Exception as exc:
+                return {"name": name, "ok": False, "error": f"network: {str(exc)[:120]}"}
+            if status in (200, 201):
+                return {"name": str((data or {}).get("name") or name), "ok": True,
+                        "id": str((data or {}).get("id") or "")}
+            if status == 429 and attempt == 0:
+                _time.sleep(min(retry_after or 1.0, 8.0))
+                continue
+            msg = str(data.get("message")) if isinstance(data, dict) else ""
+            return {"name": name, "ok": False,
+                    "error": (msg or f"HTTP {status}")[:160], "status": status}
+        return {"name": name, "ok": False, "error": "rate-limited", "status": 429}
+
+    def _emoji_import_zip_sync(guild_id: str, token: str, blob: bytes) -> dict:
+        created: list[dict] = []
+        skipped: list[dict] = []
+        failed: list[dict] = []
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(blob))
+        except Exception:
+            raise HTTPException(400, "Uploaded file is not a valid .zip archive.")
+        processed = 0
+        with zf:
+            for entry in zf.namelist():
+                if entry.endswith("/"):
+                    continue
+                fname = entry.rsplit("/", 1)[-1]
+                if not fname or fname.upper() == "MANIFEST.TXT":
+                    continue
+                ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+                if ext not in _EMOJI_MIME:
+                    skipped.append({"name": fname, "reason": "not an image"})
+                    continue
+                if processed >= _EMOJI_IMPORT_MAX_FILES:
+                    skipped.append({"name": fname, "reason": "batch limit (250) reached"})
+                    continue
+                try:
+                    raw = zf.read(entry)
+                except Exception:
+                    failed.append({"name": fname, "error": "could not read from zip"})
+                    continue
+                if not raw or len(raw) > _EMOJI_MAX_IMAGE_BYTES:
+                    skipped.append({"name": fname, "reason": "image is empty or >256 KB"})
+                    continue
+                processed += 1
+                res = _emoji_create_one_sync(
+                    guild_id, token, _sanitize_emoji_name(fname.rsplit(".", 1)[0]),
+                    _EMOJI_MIME[ext], raw)
+                (created if res.get("ok") else failed).append(res)
+        return {"ok": True, "created": created, "skipped": skipped, "failed": failed,
+                "summary": {"created": len(created), "skipped": len(skipped),
+                            "failed": len(failed)}}
+
+    @app.post("/emoji-vault/{guild_id}/import", dependencies=[Depends(_require_gui_token)])
+    async def emoji_vault_import(guild_id: str, request: Request):
+        # Body is the raw .zip bytes (no multipart dep). The frontend POSTs the
+        # File object directly; nav.js attaches the GUI token.
+        token = _emoji_vault_token()
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        try:
+            clen = int(request.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            clen = 0
+        if clen > _EMOJI_IMPORT_MAX_UPLOAD:
+            raise HTTPException(413, "zip too large (max 64 MB)")
+        blob = await request.body()
+        if not blob:
+            raise HTTPException(400, "empty upload — POST a .zip backup as the request body")
+        if len(blob) > _EMOJI_IMPORT_MAX_UPLOAD:
+            raise HTTPException(413, "zip too large (max 64 MB)")
+        result = await asyncio.to_thread(_emoji_import_zip_sync, guild_id, token, blob)
+        _seekdeep_audit("emoji-vault-import", guild=guild_id,
+                        created=result["summary"]["created"], failed=result["summary"]["failed"])
+        return result
+
+    @app.delete("/emoji-vault/{guild_id}/emojis/{emoji_id}", dependencies=[Depends(_require_gui_token)])
+    async def emoji_vault_delete(guild_id: str, emoji_id: str):
+        token = _emoji_vault_token()
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        if not _EMOJI_GUILD_ID_RE.match(emoji_id or ""):
+            raise HTTPException(400, "invalid emoji id")
+        status, data, _ = await asyncio.to_thread(
+            _discord_emoji_write_sync, "DELETE",
+            f"/guilds/{guild_id}/emojis/{emoji_id}", token, None)
+        if status in (200, 204):
+            _seekdeep_audit("emoji-vault-delete", guild=guild_id, emoji=emoji_id)
+            return {"ok": True}
+        if status == 403:
+            raise HTTPException(502, "Discord refused (403) — the bot needs Manage Emojis in that server.")
+        if status == 404:
+            raise HTTPException(404, "That emoji no longer exists.")
+        if status == 429:
+            raise HTTPException(503, "Discord rate-limited the delete; retry shortly.")
+        msg = str(data.get("message")) if isinstance(data, dict) else ""
+        raise HTTPException(502, (msg or f"Discord API error {status}")[:160])
+
     # ----- Force React config (read/write) · SEEKDEEP_FEATURE_FORCE_REACT -----
     # GUI for the existing right-click Force React picker: pick a server, set the
     # per-user-per-message cap + cooldown, and choose which emojis the picker offers.
