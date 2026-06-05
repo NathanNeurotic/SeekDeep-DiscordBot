@@ -287,6 +287,7 @@ window.DATADASH = {
     barGap:            0.26,   // gap height in the firewall you fly through (fraction of H)
     barWarn:           0.55,   // telegraph time before the firewall goes lethal (s)
     barThickness:      30,     // firewall wall thickness (px)
+    barAlignThreshold: 240,    // x-distance within which a new firewall snaps to an existing one's gap (anti-solid-wall)
 
     // Player return fire (CLICK) — costs DATA: spend bytes to shoot. Out of data =
     // no fire, but bosses still expire on their own timer; bullets just speed it up.

@@ -6282,7 +6282,6 @@ def tts(req: TTSRequest):
                      "detail": "tts-deps-missing"},
         )
     except Exception as exc:  # noqa: BLE001 — log the full trace, return a static body
-        import traceback
         print(f"[SeekDeep Local AI] /tts synthesis error: {exc}")
         traceback.print_exc()
         return JSONResponse(

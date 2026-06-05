@@ -79,6 +79,7 @@
 
   // Format a millisecond duration as a compact h/m/s string.
   function fmtDuration(ms) {
+    if (ms == null) return '—';
     const n = Number(ms);
     if (!isFinite(n) || n < 0) return '—';
     let s = Math.floor(n / 1000);
@@ -167,7 +168,7 @@
   }
 
   function renderGuilds(result) {
-    const guilds = (result && result.guilds) || [];
+    const guilds = (result && Array.isArray(result.guilds)) ? result.guilds : [];
     const wrap = document.createElement('div');
     const head = document.createElement('div');
     const count = (result && result.count != null) ? result.count : guilds.length;

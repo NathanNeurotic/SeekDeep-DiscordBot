@@ -1433,11 +1433,11 @@
           // Align to any firewall already sweeping in at nearly the same x — a second
           // simultaneous pattern (or the other daemon in a double-boss) could otherwise
           // stack a wall whose gap doesn't overlap, leaving NO passable lane (solid wall).
-          const near = game.bars.find((bar) => !bar.breaking && Math.abs(bar.x - (b.x - 30)) < 240);
+          const near = game.bars.find((bar) => !bar.breaking && Math.abs(bar.x - (b.x - T.barThickness)) < (T.barAlignThreshold || 240));
           const gy = near ? near.gapY
                           : Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, game.py + (Math.random() - 0.5) * H * 0.18));
           const gh = near ? near.gapH : gapH;
-          game.bars.push({ x: b.x - 30, vx: -T.barSpeed, w: T.barThickness, gapY: gy, gapH: gh, life: 0, warn: T.barWarn }); }
+          game.bars.push({ x: b.x - T.barThickness, vx: -T.barSpeed, w: T.barThickness, gapY: gy, gapH: gh, life: 0, warn: T.barWarn }); }
         break;
     }
   }
