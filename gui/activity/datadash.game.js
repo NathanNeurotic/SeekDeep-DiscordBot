@@ -2010,7 +2010,7 @@
         if (blk.smashed) continue;
         const bw = T.colW * (blk.span || 1);
         const top = blk.from === "top";
-        const OV = blk.h;   // buried length == exposed length → towers never float
+        const OV = top ? col.ceil : col.floor;   // bury all the way to the screen edge → never floats, even when the wall ramps down across the chip's span
         // base derives from THIS column's wall → chip is ALWAYS grounded
         const by = top ? col.ceil - OV : (H - col.floor) - blk.h;
         const bh = blk.h + OV;
