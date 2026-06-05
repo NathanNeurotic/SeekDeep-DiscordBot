@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Bot Bridge</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .app-wrap { padding: 22px 28px 44px; }
+  .bb-win { width: 100%; max-width: 1080px; margin: 0 auto; }
+  .bb-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .bb-head h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; color: var(--hull); margin: 0; }
+  .bb-head h1 em { font-style: normal; color: var(--cyan-1); }
+  .bb-sub { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-1); }
+  .bb-lead { color: var(--hull-2, #c7d6f0); margin: 4px 0 20px; max-width: 74ch; line-height: 1.55; }
+  .bb-lead code { font-family: var(--font-mono); color: var(--cyan-1); font-size: 0.92em; }
+  .bb-card { border: 1px solid var(--stroke); border-radius: var(--r-md, 12px); background: linear-gradient(180deg, rgba(10,26,48,0.55), rgba(6,18,31,0.75)); padding: 16px 20px; margin-bottom: 18px; }
+  .bb-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .bb-pill { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--stroke); background: rgba(6,18,31,0.55); color: var(--hull-2, #c7d6f0); }
+  .bb-pill .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hull-3, #7d92b8); box-shadow: 0 0 8px rgba(125,146,184,0.6); }
+  .bb-pill.on { border-color: rgba(70,220,140,0.45); color: #aef0c8; }
+  .bb-pill.on .dot { background: var(--good, #58e6a1); box-shadow: 0 0 10px rgba(88,230,161,0.7); }
+  .bb-pill.off { border-color: rgba(255,184,77,0.45); color: #ffd79a; }
+  .bb-pill.off .dot { background: var(--warn, #ffb84d); box-shadow: 0 0 10px rgba(255,184,77,0.7); }
+  .bb-btn { cursor: pointer; background: rgba(45,212,255,0.12); color: var(--cyan-1); border: 1px solid rgba(45,212,255,0.4); border-radius: 8px; padding: 9px 16px; font-size: 14px; font-weight: 600; }
+  .bb-btn:hover:not([disabled]) { background: rgba(45,212,255,0.2); }
+  .bb-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+  .bb-btn.ghost { background: transparent; font-weight: 500; padding: 6px 12px; }
+  .bb-out { font-family: var(--font-mono); font-size: 13px; color: var(--hull-2, #c7d6f0); margin-top: 12px; line-height: 1.6; }
+  .bb-out strong { color: var(--hull); }
+  .bb-out .k { color: var(--cyan-1); }
+  .bb-pre { font-family: var(--font-mono); font-size: 12px; color: var(--hull-2, #c7d6f0); background: rgba(6,18,31,0.55); border: 1px solid var(--stroke); border-radius: 8px; padding: 12px 14px; margin: 10px 0 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+  .bb-guilds { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .bb-guilds li { font-family: var(--font-mono); font-size: 12px; color: var(--hull-2, #c7d6f0); border: 1px solid var(--stroke); border-radius: 8px; padding: 8px 12px; background: rgba(6,18,31,0.55); }
+  .bb-guilds li b { color: var(--hull); }
+  .bb-guilds .sub { color: var(--hull-3, #8aa0c0); }
+  .bb-msg { padding: 14px 16px; border-radius: 10px; font-size: 14px; line-height: 1.5; }
+  .bb-msg code { font-family: var(--font-mono); color: var(--cyan-1); }
+  .bb-msg.err { border: 1px solid rgba(255,90,90,0.4); background: rgba(255,90,90,0.08); color: #ffb3b3; margin-bottom: 14px; }
+  .bb-msg.info { border: 1px solid var(--stroke); background: rgba(6,18,31,0.5); color: var(--hull-2, #c7d6f0); }
+  .bb-hidden { display: none !important; }
+</style>
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill cyan" id="liveModePill" title="WebSocket bus · /events">
+      <span class="dot"></span>PROBING
+    </span>
+    <span class="pill"><span class="dot"></span><span data-version>v—</span> · LOCAL</span>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <div class="bb-win">
+    <div class="bb-head">
+      <h1>Bot <em>Bridge</em></h1>
+      <span class="bb-sub">GUI → bot command bridge · GUI</span>
+    </div>
+    <p class="bb-lead">
+      Send whitelisted commands straight to the running Discord bot over the local bridge — no
+      Discord needed. Read-only: <code>ping</code>, <code>status</code>, and <code>guilds</code>
+      only. Needs <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> and the bot connected.
+    </p>
+
+    <div id="bb-disabled" class="bb-msg info bb-hidden">
+      The Bot Bridge feature is off. Set <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> in your
+      <code>.env</code> and restart the server to use it.
+    </div>
+
+    <div id="bb-main" class="bb-hidden">
+      <div class="bb-card">
+        <div class="bb-row">
+          <span id="bb-pill" class="bb-pill"><span class="dot"></span><span id="bb-pill-text">Checking…</span></span>
+          <button id="bb-refresh" class="bb-btn ghost" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div id="bb-error" class="bb-msg err bb-hidden"></div>
+
+      <div class="bb-card">
+        <div class="bb-row">
+          <button id="bb-ping" class="bb-btn" type="button">Ping</button>
+          <button id="bb-status" class="bb-btn" type="button">Bot status</button>
+          <button id="bb-guilds" class="bb-btn" type="button">Guilds</button>
+        </div>
+        <div id="bb-out" class="bb-out"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="nav.js" defer></script>
+<script src="bot-bridge.js" defer></script>
+</body>
+</html>

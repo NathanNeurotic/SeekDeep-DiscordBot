@@ -439,7 +439,15 @@ function seekdeepConnectCommandBridge() {
   let ws;
   try { ws = new WebSocket(wsUrl); } catch (_) { setTimeout(seekdeepConnectCommandBridge, seekdeepBridgeRetryMs); return; }
   seekdeepBridgeWs = ws;
-  ws.on('open', () => { seekdeepBridgeRetryMs = 1000; });
+  ws.on('open', () => {
+    seekdeepBridgeRetryMs = 1000;
+    // Announce ourselves so the server can tell the bot apart from browser tabs.
+    try {
+      ws.send(JSON.stringify({ type: 'bot.bridge.hello', data: {
+        user: client.user?.tag || null, guilds: client.guilds?.cache?.size || 0,
+      } }));
+    } catch (_) {}
+  });
   ws.on('message', (data) => seekdeepHandleBridgeFrame(typeof data === 'string' ? data : data.toString('utf8')));
   ws.on('error', () => { try { ws.close(); } catch (_) {} });
   ws.on('close', () => {
