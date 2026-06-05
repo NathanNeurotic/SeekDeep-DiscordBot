@@ -656,7 +656,7 @@
       if (game.scrollFx.t <= 0) game.scrollFx = null;
       else if (game.scrollFx.kind === "fast") base *= T.mysteryFastMult;
       else if (game.scrollFx.kind === "slow") base *= T.mysterySlowMult;
-      else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace; }
+      else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace || 0; }
     }
     game.scroll = base;
     const dx = game.scroll * dt;
@@ -718,7 +718,7 @@
     const touching = resolveTerrain();
     // No wall death during/just-after a rewind — the player can't be expected to dodge
     // a config the rewind generated under them. resolveTerrain still nudges them clear.
-    if (touching && game.invuln <= 0 && !(game.revertGrace > 0)) loseLife("wall");
+    if (touching && game.invuln <= 0 && game.revertGrace <= 0) loseLife("wall");
 
     updateProgression();
     updateEvent(dt);
