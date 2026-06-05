@@ -964,11 +964,14 @@ from starlette.responses import Response as _SDResponse
 # the same policy whether opened in the Tauri webview or a normal browser. connect-src
 # is loopback-only (no bare https:) so a compromised page can't exfiltrate the GUI
 # token to an external host; no iframes exist anywhere in gui/, so framing is denied.
-# NOTE: 'unsafe-inline' in script-src is retained here for now and dropped in the
-# inline-script-extraction pass — kept in lockstep with the tauri.conf.json CSP.
+# NOTE: script-src is 'self' only — NO 'unsafe-inline'. Every GUI inline <script>
+# block + on*= handler was extracted to an external file (PRs #82-#87), so the
+# browser/webview rejects any inline script injection. Kept in lockstep with the
+# tauri.conf.json CSP. style-src KEEPS 'unsafe-inline' on purpose (inline style=
+# is pervasive + low-risk; tightening it is a separate, much larger job).
 _SEEKDEEP_GUI_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "img-src 'self' data: blob: https:; "
     "font-src 'self' data: https://fonts.gstatic.com; "
