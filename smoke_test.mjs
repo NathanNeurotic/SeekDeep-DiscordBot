@@ -212,6 +212,26 @@ check('picker: bucket size = 25', T.forceReactConstants.bucketSize === 25);
 check('picker: buckets per page = 4', T.forceReactConstants.bucketsPerPage === 4);
 check('picker: emoji per page = 100', T.forceReactConstants.emojiPerPage === 100);
 check('picker: max selected = 5', T.forceReactConstants.maxSelected === 5);
+
+// Force React per-guild config + cumulative per-user-per-message cap (the
+// anti-pile-on safeguard). Default cap is env-tunable, so assert relationships
+// (not a hard 3) to stay hermetic.
+check('force-react: default cap clamped to [1,20]',
+  T.forceReactConstants.defaultCap >= 1 && T.forceReactConstants.defaultCap <= 20);
+check('force-react: unconfigured guild uses the default cap',
+  T.seekdeepForceReactGuildConfig('0').cap === T.forceReactConstants.defaultCap);
+check('force-react: unconfigured guild offers all emojis (empty allow-list)',
+  T.seekdeepForceReactGuildConfig('0').allowedEmojiIds instanceof Set
+  && T.seekdeepForceReactGuildConfig('0').allowedEmojiIds.size === 0);
+T.seekdeepForceReactAppliedAdd('u-smoke', 'm-smoke', 2);
+check('force-react: cumulative counter accrues',
+  T.seekdeepForceReactAppliedGet('u-smoke', 'm-smoke').count === 2);
+T.seekdeepForceReactAppliedAdd('u-smoke', 'm-smoke', 1);
+check('force-react: cumulative counter holds across re-opens (caps stack)',
+  T.seekdeepForceReactAppliedGet('u-smoke', 'm-smoke').count === 3);
+check('force-react: counters are per (user,message)',
+  T.seekdeepForceReactAppliedGet('u-smoke', 'm-other').count === 0);
+
 check('picker: page 0 bucket 0 starts at 0', T.seekdeepForceReactBucketRange(0, 0).start === 0);
 check('picker: page 0 bucket 3 ends at 100', T.seekdeepForceReactBucketRange(0, 3).end === 100);
 check('picker: page 1 bucket 0 starts at 100', T.seekdeepForceReactBucketRange(1, 0).start === 100);

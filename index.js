@@ -22203,6 +22203,80 @@ const SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE =
 const SEEKDEEP_FORCE_REACT_MAX_SELECTED = 5;
 const seekdeepForceReactState = new Map();
 
+// SEEKDEEP_FORCE_REACT_CONFIG_START
+// Per-guild Force React config (data/force-react-config.json). The GUI writes it;
+// the bot reads it here. Controls the per-user-per-message reaction CAP (hard +
+// cumulative across re-opens of the picker), an optional per-user cooldown, and an
+// optional emoji allow-list. Absent/empty => sane defaults. Cache + invalidate-on-
+// write, mirroring the auto-reactions store.
+const SEEKDEEP_FORCE_REACT_CONFIG_PATH = path.join(__dirname, 'data', 'force-react-config.json');
+const SEEKDEEP_FORCE_REACT_CAP_CEILING = 20; // Discord allows at most 20 distinct reactions per message.
+const SEEKDEEP_FORCE_REACT_DEFAULT_CAP = Math.max(1, Math.min(
+  SEEKDEEP_FORCE_REACT_CAP_CEILING, Number(process.env.SEEKDEEP_FORCE_REACT_DEFAULT_CAP || 3)));
+let _seekdeepForceReactConfigCache = null;
+
+function seekdeepReadForceReactConfig() {
+  if (_seekdeepForceReactConfigCache !== null) return _seekdeepForceReactConfigCache;
+  let parsed = { guilds: {} };
+  try {
+    if (fs.existsSync(SEEKDEEP_FORCE_REACT_CONFIG_PATH)) {
+      const raw = readJsonSafe(SEEKDEEP_FORCE_REACT_CONFIG_PATH, { guilds: {} });
+      if (raw && typeof raw === 'object' && raw.guilds && typeof raw.guilds === 'object') parsed = raw;
+    }
+  } catch {}
+  _seekdeepForceReactConfigCache = parsed;
+  return parsed;
+}
+
+function seekdeepWriteForceReactConfig(data) {
+  try {
+    writeJsonAtomic(SEEKDEEP_FORCE_REACT_CONFIG_PATH, data);
+    _seekdeepForceReactConfigCache = null;
+    return true;
+  } catch (err) {
+    console.warn('Failed to write force-react config:', err?.message || err);
+    return false;
+  }
+}
+
+// Resolved per-guild settings with defaults. cap clamped to [1, ceiling];
+// allowedEmojiIds empty => every server emoji is offered in the picker.
+function seekdeepForceReactGuildConfig(guildId) {
+  const bucket = (seekdeepReadForceReactConfig().guilds || {})[String(guildId || '')] || {};
+  let cap = Number(bucket.cap);
+  if (!Number.isFinite(cap) || cap < 1) cap = SEEKDEEP_FORCE_REACT_DEFAULT_CAP;
+  cap = Math.max(1, Math.min(SEEKDEEP_FORCE_REACT_CAP_CEILING, Math.floor(cap)));
+  let cooldownMs = Number(bucket.cooldown_ms);
+  if (!Number.isFinite(cooldownMs) || cooldownMs < 0) cooldownMs = 0;
+  const allowedEmojiIds = Array.isArray(bucket.allowed_emoji_ids)
+    ? new Set(bucket.allowed_emoji_ids.map((x) => String(x)))
+    : new Set();
+  return { cap, cooldownMs, allowedEmojiIds };
+}
+
+// Cumulative "reactions this user has force-applied to this message" + last-apply
+// time, so the cap holds across multiple picker opens. TTL-swept like picker state.
+const seekdeepForceReactApplied = new Map(); // `${userId}:${msgId}` -> { count, at }
+function seekdeepForceReactAppliedKey(userId, msgId) { return `${userId}:${msgId}`; }
+function seekdeepForceReactAppliedGet(userId, msgId) {
+  const v = seekdeepForceReactApplied.get(seekdeepForceReactAppliedKey(userId, msgId));
+  if (!v) return { count: 0, at: 0 };
+  if ((v.at || 0) + SEEKDEEP_FORCE_REACT_TTL_MS < Date.now()) {
+    seekdeepForceReactApplied.delete(seekdeepForceReactAppliedKey(userId, msgId));
+    return { count: 0, at: 0 };
+  }
+  return v;
+}
+function seekdeepForceReactAppliedAdd(userId, msgId, n) {
+  const cur = seekdeepForceReactAppliedGet(userId, msgId);
+  seekdeepForceReactApplied.set(seekdeepForceReactAppliedKey(userId, msgId), { count: cur.count + n, at: Date.now() });
+  if (seekdeepForceReactApplied.size > 500) {
+    const cutoff = Date.now() - SEEKDEEP_FORCE_REACT_TTL_MS;
+    for (const [k, val] of seekdeepForceReactApplied) { if ((val.at || 0) < cutoff) seekdeepForceReactApplied.delete(k); }
+  }
+}
+// SEEKDEEP_FORCE_REACT_CONFIG_END
+
 function seekdeepForceReactKey(userId, targetMsgId) {
   return `${String(userId || '')}:${String(targetMsgId || '')}`;
 }
@@ -22246,9 +22320,12 @@ function seekdeepForceReactDelete(userId, targetMsgId) {
 // across renders so the bucket math doesn't drift mid-flow.
 function seekdeepForceReactGuildEmojis(guild) {
   if (!guild?.emojis?.cache) return [];
-  return guild.emojis.cache
-    .map((e) => ({ id: e.id, name: e.name || 'emoji', animated: !!e.animated }))
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const allowed = seekdeepForceReactGuildConfig(guild?.id).allowedEmojiIds;
+  let list = guild.emojis.cache
+    .map((e) => ({ id: e.id, name: e.name || 'emoji', animated: !!e.animated }));
+  // Empty allow-list => offer every server emoji; otherwise restrict to the picks.
+  if (allowed && allowed.size) list = list.filter((e) => allowed.has(String(e.id)));
+  return list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 // Inclusive [start, end) emoji index range for a (page, bucketIdx) cell.
@@ -22260,9 +22337,10 @@ function seekdeepForceReactBucketRange(page, bucketIdx) {
 // Picker components: up to 4 select menus + 1 nav row.
 function seekdeepBuildForceReactComponents(targetMsgId, guild, state) {
   const emojis = seekdeepForceReactGuildEmojis(guild);
+  const cap = seekdeepForceReactGuildConfig(guild?.id).cap;
   const totalPages = Math.max(1, Math.ceil(emojis.length / SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE));
   const page = Math.max(0, Math.min(totalPages - 1, Number(state.page || 0)));
-  const slotsLeft = Math.max(0, SEEKDEEP_FORCE_REACT_MAX_SELECTED - state.selected.size);
+  const slotsLeft = Math.max(0, cap - state.selected.size);
 
   const rows = [];
   for (let b = 0; b < SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE; b++) {
@@ -22278,7 +22356,7 @@ function seekdeepBuildForceReactComponents(targetMsgId, guild, state) {
       .setCustomId(`seekdeep:fr:sel:${targetMsgId}:${b}`)
       .setPlaceholder(placeholder)
       .setMinValues(0)
-      .setMaxValues(Math.max(1, Math.min(SEEKDEEP_FORCE_REACT_MAX_SELECTED, slice.length)));
+      .setMaxValues(Math.max(1, Math.min(cap, slice.length)));
 
     for (const e of slice) {
       const value = `${e.name}:${e.id}`;
@@ -22317,7 +22395,7 @@ function seekdeepBuildForceReactComponents(targetMsgId, guild, state) {
   navButtons.push(
     new ButtonBuilder()
       .setCustomId(`seekdeep:fr:apply:${targetMsgId}`)
-      .setLabel(`\u{1F4A5} Apply (${state.selected.size}/${SEEKDEEP_FORCE_REACT_MAX_SELECTED})`)
+      .setLabel(`\u{1F4A5} Apply (${state.selected.size}/${cap})`)
       .setStyle(ButtonStyle.Success)
       .setDisabled(state.selected.size === 0)
   );
@@ -22342,7 +22420,7 @@ function seekdeepBuildForceReactContent(state, guild) {
     const animated = cache?.get?.(id)?.animated ? 'a' : '';
     return `<${animated}:${name}:${id}>`;
   });
-  return `✅ Selected (${state.selected.size}/${SEEKDEEP_FORCE_REACT_MAX_SELECTED}): ${previews.join(' ')}`;
+  return `✅ Selected (${state.selected.size}/${seekdeepForceReactGuildConfig(guild?.id).cap}): ${previews.join(' ')}`;
 }
 
 async function seekdeepHandleContextMenuForceReact(interaction, targetMessage) {
@@ -22478,9 +22556,10 @@ async function seekdeepHandleForceReactComponent(interaction) {
     for (const v of bucketValues) newSelected.delete(v);
     for (const v of (interaction.values || [])) newSelected.add(v);
 
-    // Hard-cap to MAX_SELECTED keeping insertion order.
-    if (newSelected.size > SEEKDEEP_FORCE_REACT_MAX_SELECTED) {
-      const trimmed = Array.from(newSelected).slice(0, SEEKDEEP_FORCE_REACT_MAX_SELECTED);
+    // Hard-cap to the per-guild cap, keeping insertion order.
+    const frPickCap = seekdeepForceReactGuildConfig(state.guildId).cap;
+    if (newSelected.size > frPickCap) {
+      const trimmed = Array.from(newSelected).slice(0, frPickCap);
       newSelected.clear();
       for (const v of trimmed) newSelected.add(v);
     }
@@ -22525,9 +22604,27 @@ async function seekdeepHandleForceReactComponent(interaction) {
       return true;
     }
 
+    // Hard, cumulative per-user-per-message cap (holds across re-opens of the
+    // picker) + optional cooldown — the anti-pile-on safeguard. Config is per-guild.
+    const frCfg = seekdeepForceReactGuildConfig(state.guildId || targetMessage.guild?.id);
+    const prior = seekdeepForceReactAppliedGet(userId, targetMsgId);
+    if (frCfg.cooldownMs > 0 && prior.at && (Date.now() - prior.at) < frCfg.cooldownMs) {
+      const waitS = Math.ceil((frCfg.cooldownMs - (Date.now() - prior.at)) / 1000);
+      try { await interaction.editReply({ content: `Slow down — try again in ${waitS}s.`, components: [] }); } catch {}
+      seekdeepForceReactDelete(userId, targetMsgId);
+      return true;
+    }
+    const remaining = Math.max(0, frCfg.cap - prior.count);
+    if (remaining <= 0) {
+      try { await interaction.editReply({ content: `You've reached the limit of ${frCfg.cap} reaction(s) on this message.`, components: [] }); } catch {}
+      seekdeepForceReactDelete(userId, targetMsgId);
+      return true;
+    }
+    const toApply = selectedValues.slice(0, remaining);
+
     let applied = 0;
     const failed = [];
-    for (const v of selectedValues) {
+    for (const v of toApply) {
       try {
         await targetMessage.react(v);
         applied += 1;
@@ -22535,8 +22632,12 @@ async function seekdeepHandleForceReactComponent(interaction) {
         failed.push(`${v} (${(err?.message || 'rejected').slice(0, 60)})`);
       }
     }
+    if (applied > 0) seekdeepForceReactAppliedAdd(userId, targetMsgId, applied);
 
-    const lines = [`Applied ${applied}/${selectedValues.length} reaction(s).`];
+    const lines = [`Applied ${applied}/${selectedValues.length} reaction(s) (cap ${frCfg.cap}/message).`];
+    if (selectedValues.length > toApply.length) {
+      lines.push(`Skipped ${selectedValues.length - toApply.length} — you're at the ${frCfg.cap}-reaction cap for this message.`);
+    }
     if (failed.length) lines.push(`Failed: ${failed.join(', ')}`);
     try { await interaction.editReply({ content: lines.join('\n'), components: [] }); } catch {}
     seekdeepForceReactDelete(userId, targetMsgId);
@@ -23575,7 +23676,11 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
       bucketsPerPage: SEEKDEEP_FORCE_REACT_BUCKETS_PER_PAGE,
       emojiPerPage: SEEKDEEP_FORCE_REACT_EMOJI_PER_PAGE,
       maxSelected: SEEKDEEP_FORCE_REACT_MAX_SELECTED,
+      defaultCap: SEEKDEEP_FORCE_REACT_DEFAULT_CAP,
     },
+    seekdeepForceReactGuildConfig,
+    seekdeepForceReactAppliedAdd,
+    seekdeepForceReactAppliedGet,
     emojiVaultConstants: {
       pageSize: SEEKDEEP_EMOJI_VAULT_PAGE_SIZE,
     },
