@@ -3996,6 +3996,16 @@ def register_gui_endpoints(
             return {"ok": True, "role": role, "loaded": True,
                     "result": str(result)[:200] if result is not None else None}
         except Exception as e:
+            # Log the FULL traceback server-side — the GUI only surfaces str(e),
+            # which hides WHERE a warm actually failed (e.g. a NameError bubbling
+            # up from the transformers/bitsandbytes 4-bit load path). flush so it
+            # lands in the console + Logs viewer immediately.
+            import traceback as _tb
+            print(
+                f"[SeekDeep] /model/warm failed (role={role!r}): "
+                f"{type(e).__name__}: {e}\n{_tb.format_exc()}",
+                flush=True,
+            )
             return {"ok": False, "error": str(e)}
 
     # ----- GET /config/status -----
