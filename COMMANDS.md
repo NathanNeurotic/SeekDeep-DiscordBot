@@ -174,7 +174,7 @@ Archive entries include an `Archive Key`. Repeated Archive/Shared Archive clicks
 |---------|---------|------------|
 | `@SeekDeep persona [channel\|server] [neurotic\|unsettling\|clinical\|chaotic\|reset\|show]` | Set or display the persona. | Admin |
 | `/persona` | Open the persona editor modal (interactive popup). | Manage Guild |
-| `@SeekDeep memory preset add <preset-name>` | Layer a behavior preset. Presets: `brief`, `expert`, `no-emoji`, `formal`, `casual`. | Everyone |
+| `@SeekDeep memory preset add <preset-name>` | Layer a behavior preset. Presets: `brief`, `expert`, `no-emoji`, `no-followup-questions`, `formal`, `casual`. | Everyone |
 | `@SeekDeep memory preset list` | Show your active presets. | Everyone |
 | `@SeekDeep memory preset remove <key>` | Remove a preset. | Everyone |
 | `@SeekDeep memory preset clear` | Clear all your presets. | Everyone |
@@ -220,6 +220,7 @@ Right-click any message → **Apps** → SeekDeep submenu.
 | **Refine as Image Prompt** | Rewrite as a stronger image prompt. | Everyone |
 | **Describe Image (SeekDeep)** | Run vision analysis on an image attachment (ephemeral). | Everyone |
 | **Upscale Image (SeekDeep)** | Upscale an image attachment 2x. | Everyone |
+| **Archive (SeekDeep)** | Archive any image (user upload or bot) from the message to your personal archive thread. | Everyone |
 | **img2img from this** *(feature-flagged)* | Use text as img2img prompt on the attached or most recent bot image. Requires `SEEKDEEP_FEATURE_IMG2IMG=on`. | Everyone |
 | **Edit Image (SeekDeep)** *(feature-flagged)* | Edit the attached image with InstructPix2Pix. Requires `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX=on`. | Everyone |
 | **Remove Object (SeekDeep)** *(feature-flagged)* | Remove something from the attached image via CLIPSeg + inpaint. Requires `SEEKDEEP_FEATURE_INPAINT=on`. | Everyone |

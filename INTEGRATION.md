@@ -526,7 +526,7 @@ The Archive pane in `app.html` reads `data/archive-snapshot.json`. The bot is th
 ### 4.1 · Step-by-step walkthrough (hand this to anyone setting up the bridge)
 
 1. **Open** [`index.js`](index.js) in your editor.
-2. **Find the existing block** that starts with `// SEEKDEEP_ARCHIVE_CHANNEL_CONFIG_START` (around line 4978). This is where the bot's archive helpers already live.
+2. **Find the existing block** that starts with `// SEEKDEEP_ARCHIVE_CHANNEL_CONFIG_START` (around line 5669). This is where the bot's archive helpers already live.
 3. **Scroll down** to the matching `// SEEKDEEP_ARCHIVE_CHANNEL_CONFIG_END` line.
 4. **Paste the snippet below immediately after** that end marker. It uses the same conventions as the surrounding code (`fs` sync API, `writeJsonAtomic`, `seekdeepReadArchiveGuildConfig`, `client.once('clientReady', ...)`).
 5. **Save the file.**

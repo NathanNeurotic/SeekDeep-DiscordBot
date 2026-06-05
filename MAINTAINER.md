@@ -69,11 +69,11 @@ When designer ships a deep audit of the repo (not just a zip drop), some finding
 | "Stale vendor-drop folders in the repo" (`seekdeep-designer-drop/`, `seekdeep-gui-cumulative/`, `seekdeep-zip-35/`, etc.) | `ls -d seekdeep-* 2>/dev/null` (should return nothing) | These dirs exist INSIDE designer's zips, never extracted to main. Don't try to delete them. |
 | "Legacy v1 files (index v1.html, landing v1.html, pitch v1.html)" | `ls gui/*v1*.html 2>/dev/null` (should return nothing) | Designer's local backup copies. Not in main. |
 | "Move gui_endpoints.py, local_ai_server.py, index.js, smoke_test.mjs into reference/" | Those files ARE the bot. We're a bot + GUI mono-repo. | Moving them breaks every script, import, and CI workflow. They belong at root. |
-| "Four copies of HANDOFF_CLAUDE_CODE.md" | `find . -name HANDOFF_CLAUDE_CODE.md` (should return exactly 1) | One copy at root. The "extras" exist only in designer's zip dirs. |
+| "Four copies of HANDOFF_CLAUDE_CODE.md" | `find . -name HANDOFF_CLAUDE_CODE.md` (should return exactly 1) | One copy, at `docs/audits/HANDOFF_CLAUDE_CODE.md`. The "extras" exist only in designer's zip dirs. |
 | "v10.35 hardcoded in 78 cells, never gets rewritten" | Verify `[data-version]` is on the element and `version.js` is loaded via `nav.js`'s autoLoadSiblings | The literal `v10.35` is the **offline fallback** for `[data-version]` cells. When `version.js` runs (auto-injected on every page via nav.js), it rewrites them all to whatever `/health.version` returns. The literal only shows if `version.js` didn't load OR `/health` is unreachable. |
 | "INTEGRATION.md is a stub" | `wc -l INTEGRATION.md` (should be 500+) | Our INTEGRATION.md is fully populated. Designer may be looking at a stub copy inside one of their zips. |
 
-**Latest audit response:** see [`AUDIT_DESIGNER_2026-05-25.md`](AUDIT_DESIGNER_2026-05-25.md) for the full 30-finding breakdown of which were real vs misconception. Real findings folded into PLANNED.md as items G/H/I/J.
+**Latest audit response:** see [`AUDIT_DESIGNER_2026-05-25.md`](docs/audits/AUDIT_DESIGNER_2026-05-25.md) for the full 30-finding breakdown of which were real vs misconception. Real findings folded into PLANNED.md as items G/H/I/J.
 
 ---
 
@@ -262,12 +262,14 @@ print('GUI routes:',
 "
 ```
 
-Expected GUI routes after a healthy merge:
+Expected GUI routes after a healthy merge — the live output is a superset
+(config/model/launcher sub-routes have grown over time); these core routes
+must all be present:
 
 ```
 ['/config', '/config/status', '/data/{file}', '/gui',
  '/launcher/{service}/{action}', '/logs/stream', '/logs/tail',
- '/model/warm', '/token']
+ '/model/warm', '/model/install', '/models/installed', '/token']
 ```
 
 And the one-liner that catches the recurring designer slip-ups:

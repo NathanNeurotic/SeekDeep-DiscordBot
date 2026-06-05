@@ -1,14 +1,20 @@
-> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
-> Archived from the repo root (audit DOC-4). Figures here (endpoint
-> counts, LOC, "unverified" flags) reflect the date in the filename
-> and contradict the live code. Kept for provenance only; do not cite
-> as current state.
+> **HISTORICAL HANDOFF — the backend capabilities below are still accurate; the
+> verification figures and version strings are from 2026-05-25 and have drifted.**
+> The "what changed" sections (5 chat backends, `/model/install` + `/uninstall`,
+> `/route/debug`, the `/events` bus, the memory store, version SoT) all verify
+> against the live code at **v10.38.24**. What's stale: the preflight stage/check
+> counts in "How to verify" (now **8 stages** — `js`, `html-js`, `py`, `smoke`,
+> `gui-smoke`, `rust`, `docs`, `coverage` — with ~648 smoke + 256 gui-smoke checks,
+> not "4 ok · 504 · 52"), and the hardcoded `v10.35` examples (live version comes
+> from `/health.version`). Newer GUI surfaces have since shipped: `settings.html`,
+> `personas.html`, `setup-wizard.html`. Release **signing is OFF by default**
+> (the build ships unsigned).
 
 # Handoff · backend → GUI work (for Claude Designer)
 
 Hand this file to Claude Designer along with the repo. Mirrors `HANDOFF_CLAUDE_CODE.md` but going the other direction: this is what Claude Code shipped while you were away, and the GUI work that's now unblocked because of it.
 
-Last updated: 2026-05-25 · `main` at `1c38336`
+Last updated: 2026-05-25 · `main` at `1c38336` (capabilities current; see status block above for what drifted)
 
 ---
 
@@ -399,7 +405,7 @@ Run preflight before zipping:
 npm run preflight
 ```
 
-Expected: `4 ok · 0 fail · 0 skipped`. The four stages are `js` (node --check on all JS), `py` (py_compile on all Python), `smoke` (504 unit-level checks), `gui-smoke` (52 endpoint-level checks via FastAPI TestClient).
+Expected: all stages green (`N ok · 0 fail`). Preflight now runs **8 stages**: `js` (node --check on all JS), `html-js` (node --check on every inline `<script>` block in `gui/*.html`), `py` (py_compile on all Python), `smoke` (~648 unit-level checks), `gui-smoke` (256 endpoint-level checks via FastAPI TestClient), `rust` (`cargo check` on `src-tauri`), `docs` (doc-drift / version-sync / release-file guards), and `coverage` (endpoint-coverage map). Check counts grow over time — read the live tally from the run, not this doc.
 
 CI runs the same `npm run preflight` on every push and PR (see `.github/workflows/ci.yml`). If you push a regressed `local_ai_server.py` or `gui_endpoints.py`, the red X on the commit will tell you within ~30 seconds — don't wait for local feedback.
 
@@ -419,7 +425,7 @@ Visual smoke (optional but appreciated): start the bot + AI server and load `htt
 - **Task 4 models pane**: every installed model has the right status + backend badges. Remote-backend models show the ⚠ pill.
 - **Task 5 logs viewer**: with `SEEKDEEP_EMIT_LOG_LINES=on`, new log lines appear in the viewer with <1s latency. With it off, the viewer falls back to poll mode and shows the disabled-pill.
 - **Task 6 LIVE pill**: kill the AI server → pill goes red within 30s (WS keepalive timeout). Restart → pill goes green within 5s.
-- **Task 7 `data-version`**: every version cell across 15 files reads `v10.35` (or whatever the live version is); no `v10.20` / `v10.34` strays remain on screen.
+- **Task 7 `data-version`**: every version cell reads the live `/health.version` (currently `v10.38.24`); no stale hardcoded version strings remain on screen.
 
 ---
 

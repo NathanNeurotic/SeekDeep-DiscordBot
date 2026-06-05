@@ -24,11 +24,22 @@ By default, SeekDeep expects local services on loopback:
 
 Do not expose these ports publicly unless you have added authentication, firewall rules, and a clear deployment plan.
 
+## GUI Control Plane — Token Gating
+
+Every **mutating** GUI endpoint on the local AI server (config writes, launcher start/stop/kill, `/system/self-update`, `/model/install` + `/model/uninstall`, persona/archive/memory writes, etc.) is guarded by a per-install token via the `require_gui_token` FastAPI dependency (`gui_endpoints.py`). Callers must send the secret as the `X-SeekDeep-Token` header; a missing or wrong token returns `401`.
+
+- The token lives in `.env` as `SEEKDEEP_GUI_TOKEN` (auto-generated on first run if absent). The GUI fetches it via `GET /token`, which only answers loopback callers.
+- Read-only diagnostics that don't expose secrets stay unauthenticated (e.g. `/health`; `GET /config` returns a redacted env map with token/key/secret values masked to `*****`).
+- Sensitive reads — the log tail (`/logs/tail`) and the sensitive data files — are token-gated, not unauthenticated.
+- `SEEKDEEP_GUI_TOKEN_DISABLED=1` removes the gate for local development only — never set it on an exposed install.
+
 ## Desktop Shell (Tauri) Bridge (AUD-003)
 
 The Tauri desktop shell exposes a small set of `#[tauri::command]` functions to the bundled GUI. The `open_external` command — which opens a frontend-supplied URL in the system browser — is allowlisted (`open_external_url_allowed` in `src-tauri/src/lib.rs`): only `https://` to a short product host list (github, discord, python.org, huggingface, pytorch, ollama, docker, nvidia) plus the first-party `discord://` deep-link are opened; `http:`, `file:`, `javascript:`, `data:`, and other custom schemes are refused. This keeps a hypothetical GUI XSS from turning the bridge into an arbitrary-URL / local-protocol-handler opener. Unit tests cover the allow/deny cases (`open_external_tests`).
 
-The WebView CSP has been tightened: `'unsafe-eval'` is dropped (verified unused), the monolithic `default-src` is split into explicit directives, and `script-src` is scoped to `'self' 'unsafe-inline'` (no arbitrary `https:` script origins). A regression harness (`e2e/csp.spec.mjs`) injects the shipped CSP onto every GUI page and asserts zero violations, in `npm run test:e2e` + CI. `'unsafe-inline'` is still required by 34 inline `<script>` blocks + 26 inline event-handler attributes, and `withGlobalTauri` is still on; removing those is the remaining sequenced work in [docs/audits/CSP_TIGHTENING_PLAN.md](docs/audits/CSP_TIGHTENING_PLAN.md) (it needs page-by-page externalization + packaged-app/interaction testing).
+The WebView CSP has been tightened: `'unsafe-eval'` is dropped (verified unused), the monolithic `default-src` is split into explicit directives, and `script-src` is scoped to `'self' 'unsafe-inline'` (no arbitrary `https:` script origins). The desktop policy lives in `src-tauri/tauri.conf.json` (`app.security.csp`, with `dangerousDisableAssetCspModification` set to `["script-src", "style-src"]` so Tauri's asset-protocol rewriting doesn't override those two directives). The browser path — the GUI served over loopback at `/gui/*` — mirrors the same policy: `local_ai_server.py` emits an equivalent `Content-Security-Policy` header (`_SEEKDEEP_GUI_CSP`) plus `X-Frame-Options: DENY` / `X-Content-Type-Options: nosniff` / `Referrer-Policy: no-referrer` on every HTML response. The Discord Activity sub-app (`gui/activity/*`) is intentionally **exempt** from the anti-framing header and the strict CSP — it runs inside Discord's own iframe and loads its SDK cross-origin. A regression harness (`e2e/csp.spec.mjs`) injects the shipped CSP onto every top-level GUI page and asserts zero violations, in `npm run test:e2e` + CI.
+
+`'unsafe-inline'` is still required by 35 inline `<script>` blocks (across 24 files) + ~28 inline `on*=` event-handler attributes, and `withGlobalTauri` is still on; removing those is the remaining sequenced work in [docs/audits/CSP_TIGHTENING_PLAN.md](docs/audits/CSP_TIGHTENING_PLAN.md) (it needs page-by-page externalization + packaged-app/interaction testing).
 
 ## Discord Permissions
 

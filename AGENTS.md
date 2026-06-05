@@ -7,7 +7,7 @@
 >
 > This file is the **architecture canonical**: what each subsystem does and where the key entry points live. Update this in the same change as the code edit.
 
-SeekDeep is a single-file Node bot (`index.js`, ~24k lines as of v10.35.47) plus a Python FastAPI local AI server (`local_ai_server.py`, ~5.7k lines) and a GUI/control-center backend (`gui_endpoints.py`, ~6.4k lines). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. A few leaf modules now live alongside `index.js` — notably [`lib/url-fetch-policy.js`](lib/url-fetch-policy.js) (the user-URL SSRF fetch policy, imported by `index.js`) and [`release_signing.py`](release_signing.py) (Ed25519 self-update signature verification). This document maps each subsystem to the key entry points so future edits don't have to grep blind.
+SeekDeep is a single-file Node bot (`index.js`, ~24k lines as of v10.38.24) plus a Python FastAPI local AI server (`local_ai_server.py`, ~5.8k lines) and a GUI/control-center backend (`gui_endpoints.py`, ~6.6k lines). The Node side organizes its work into named "agents" that share top-level state through hoisted helper functions. A few leaf modules now live alongside `index.js` — notably [`lib/url-fetch-policy.js`](lib/url-fetch-policy.js) (the user-URL SSRF fetch policy, imported by `index.js`) and [`release_signing.py`](release_signing.py) (Ed25519 self-update signature verification). This document maps each subsystem to the key entry points so future edits don't have to grep blind.
 
 Function names are stable enough to grep for. If you find a stale reference here while reading the code, please update this file in the same change.
 
