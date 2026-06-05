@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fetch from 'node-fetch';
+import WebSocket from 'ws';
 // AUD-008: URL fetch policy extracted to its own leaf module. Imported AFTER
 // `import 'dotenv/config'` (first import above) so the module's env-derived
 // constants see the loaded .env. index.js re-exports these on __seekdeepTest.
@@ -378,6 +379,76 @@ async function seekdeepEmitGuiEvent(type, data) {
     // Server might be offline; bot must keep working regardless.
   }
 }
+
+// SEEKDEEP_BOT_BRIDGE_START
+// GUI->bot command bridge (opt-in, default OFF via SEEKDEEP_FEATURE_BOT_BRIDGE).
+// The bot connects to the Python server's /events WebSocket as a CLIENT and
+// listens for `bot.command` frames; it runs a whitelisted, read-only command and
+// sends back a correlated `bot.command.result`. Reuses the loopback
+// SEEKDEEP_GUI_TOKEN the bot already fetches — no new port, no inbound surface.
+// Inert (no socket opened) when the flag is off.
+const SEEKDEEP_BOT_BRIDGE_ENABLED = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.SEEKDEEP_FEATURE_BOT_BRIDGE || '').trim().toLowerCase());
+let seekdeepBridgeWs = null;
+let seekdeepBridgeRetryMs = 1000;
+
+async function seekdeepDispatchBotCommand(action, args) {
+  // Whitelisted, read-only commands that need the bot's LIVE in-process state
+  // (things Python can't get from Discord REST). Unknown actions are rejected.
+  switch (String(action || '')) {
+    case 'ping':
+      return { wsPing: Math.round(client.ws?.ping ?? 0), uptimeMs: Date.now() - seekdeepBotMetrics.startedAt };
+    case 'status':
+      return { text: await statusText(!!(args && args.verbose)) };
+    case 'guilds':
+      return {
+        count: client.guilds?.cache?.size || 0,
+        guilds: Array.from(client.guilds?.cache?.values() || []).map((g) => ({
+          id: g.id, name: g.name, members: g.memberCount ?? null, channels: g.channels?.cache?.size ?? null,
+        })),
+      };
+    default:
+      throw new Error(`unknown action: ${action}`);
+  }
+}
+
+function seekdeepHandleBridgeFrame(raw) {
+  let msg = null;
+  try { msg = JSON.parse(raw); } catch (_) { return; }
+  if (!msg || msg.type !== 'bot.command') return;
+  const cid = msg.data && msg.data.cid;
+  if (!cid) return;
+  Promise.resolve()
+    .then(() => seekdeepDispatchBotCommand(msg.data.action, msg.data.args || {}))
+    .then((result) => ({ ok: true, result }))
+    .catch((err) => ({ ok: false, error: String((err && err.message) || err).slice(0, 300) }))
+    .then((payload) => {
+      try {
+        if (seekdeepBridgeWs && seekdeepBridgeWs.readyState === WebSocket.OPEN) {
+          seekdeepBridgeWs.send(JSON.stringify({ type: 'bot.command.result', data: { cid, ...payload } }));
+        }
+      } catch (_) {}
+    });
+}
+
+function seekdeepConnectCommandBridge() {
+  if (!SEEKDEEP_BOT_BRIDGE_ENABLED) return;
+  const tok = process.env.SEEKDEEP_GUI_TOKEN;
+  if (!tok) { setTimeout(seekdeepConnectCommandBridge, 1500); return; }  // token not hydrated yet
+  const wsUrl = LOCAL_AI_BASE_URL.replace(/^http/i, 'ws') + '/events?token=' + encodeURIComponent(tok);
+  let ws;
+  try { ws = new WebSocket(wsUrl); } catch (_) { setTimeout(seekdeepConnectCommandBridge, seekdeepBridgeRetryMs); return; }
+  seekdeepBridgeWs = ws;
+  ws.on('open', () => { seekdeepBridgeRetryMs = 1000; });
+  ws.on('message', (data) => seekdeepHandleBridgeFrame(typeof data === 'string' ? data : data.toString('utf8')));
+  ws.on('error', () => { try { ws.close(); } catch (_) {} });
+  ws.on('close', () => {
+    seekdeepBridgeWs = null;
+    setTimeout(seekdeepConnectCommandBridge, seekdeepBridgeRetryMs);
+    seekdeepBridgeRetryMs = Math.min(Math.round(seekdeepBridgeRetryMs * 1.8), 15000);
+  });
+}
+// SEEKDEEP_BOT_BRIDGE_END
 
 // Path for the bot's Discord-readiness heartbeat file. The launcher card in
 // the GUI reads this so its pill reflects ACTUAL Discord connectivity, not
@@ -9613,6 +9684,10 @@ client.once('clientReady', async () => {
     }, 15000);
     if (typeof seekdeepHeartbeatTimer.unref === 'function') seekdeepHeartbeatTimer.unref();
   }
+
+  // Opt-in GUI->bot command bridge (default off). Start now that Discord is live
+  // and client.guilds.cache is populated; no-op unless SEEKDEEP_FEATURE_BOT_BRIDGE=on.
+  try { seekdeepConnectCommandBridge(); } catch (_) {}
 
   try {
     await client.application.commands.set(commands);

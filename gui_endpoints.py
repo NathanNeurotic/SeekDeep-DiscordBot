@@ -98,6 +98,15 @@ class EventPayload(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)  # AUD-019 — Field over mutable {}
 
 
+class BotCommandBody(BaseModel):
+    """Body of POST /bot/command. `action` selects a whitelisted bot command,
+    `args` is an arbitrary JSON object the bot's dispatcher interprets, and
+    `timeout` bounds how long Python waits for the bot's correlated reply."""
+    action: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    timeout: float | None = None
+
+
 class FactBody(BaseModel):
     """Body for POST /memory/user/{id}/fact and PATCH /memory/user/{id}/fact/{n}."""
     text: str
@@ -240,6 +249,25 @@ class _EventBus:
 # Module-level singleton. Importable from local_ai_server.py so producers can
 # call `from gui_endpoints import event_bus` and `await event_bus.publish(...)`.
 event_bus = _EventBus()
+
+
+# ---- Bot command-bridge: correlation registry --------------------------------
+# POST /bot/command parks an asyncio.Future here keyed by a correlation id and
+# publishes a `bot.command` event; the bot (a WS client on /events) runs the
+# command and sends back a `bot.command.result` frame, which the /events
+# receive-loop routes to _resolve_bot_command() to complete the Future.
+# Module-level so it survives the idempotent re-registration of the route table.
+_bot_command_pending = {}  # cid -> asyncio.Future
+
+def _resolve_bot_command(cid, payload):
+    if not cid:
+        return
+    fut = _bot_command_pending.get(cid)
+    if fut is not None and not fut.done():
+        try:
+            fut.set_result(payload or {})
+        except Exception:
+            pass
 
 
 # Whitelist of services the launcher endpoint may control.
@@ -5648,9 +5676,17 @@ def register_gui_endpoints(
             pass
         try:
             while True:
-                # We don't expect inbound messages from the client; just keep the
-                # connection alive and detect disconnect via the receive timeout.
-                await websocket.receive_text()
+                # Browsers never send frames; the bot command-bridge client DOES —
+                # it replies to `bot.command` with a `bot.command.result` frame,
+                # which we route to the waiting Future. Anything else is ignored.
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(msg, dict) and msg.get("type") == "bot.command.result":
+                    d = msg.get("data") or {}
+                    _resolve_bot_command(d.get("cid"), d)
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -5673,6 +5709,43 @@ def register_gui_endpoints(
     @app.get("/events/status")
     async def get_events_status():
         return {"ok": True, "subscribers": event_bus.subscriber_count, "server_time_ms": int(time.time() * 1000)}
+
+    # ----- POST /bot/command (GUI -> bot command bridge) -----
+    # Feature-gated parity bridge: relay a whitelisted command to the running
+    # Discord bot (a WS client on /events) and wait for its correlated reply.
+    # 404 when SEEKDEEP_FEATURE_BOT_BRIDGE is off; 503 when nothing is on the bus;
+    # 504 on no/slow reply. The bot only whitelists read-only, live-state actions.
+    def _bot_bridge_enabled() -> bool:
+        return str(_read_env_kv(_env_path).get("SEEKDEEP_FEATURE_BOT_BRIDGE") or "").strip().lower() in ("1", "true", "yes", "on")
+
+    @app.post("/bot/command", dependencies=[Depends(_require_gui_token)])
+    async def post_bot_command(cmd: BotCommandBody):
+        if not _bot_bridge_enabled():
+            raise HTTPException(404, "Bot bridge is disabled (set SEEKDEEP_FEATURE_BOT_BRIDGE=on).")
+        action = (cmd.action or "").strip()
+        if not action:
+            raise HTTPException(400, "action is required")
+        if event_bus.subscriber_count == 0:
+            raise HTTPException(503, "the bot is not connected to the event bus")
+        cid = secrets.token_hex(8)
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        _bot_command_pending[cid] = fut
+        try:
+            await event_bus.publish({"type": "bot.command",
+                                     "data": {"cid": cid, "action": action, "args": cmd.args or {}}})
+            timeout = max(1.0, min(float(cmd.timeout or 8.0), 30.0))
+            try:
+                result = await asyncio.wait_for(fut, timeout=timeout)
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "the bot did not respond in time")
+        finally:
+            _bot_command_pending.pop(cid, None)
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": "malformed bot reply"}
+        _seekdeep_audit("bot-command", action=action, ok=bool(result.get("ok")))
+        return {"ok": bool(result.get("ok", True)), "cid": cid,
+                "result": result.get("result"), "error": result.get("error")}
 
     # ====================================================================
     # MEMORY  (read/write per-user facts + presets for memory.html GUI)
