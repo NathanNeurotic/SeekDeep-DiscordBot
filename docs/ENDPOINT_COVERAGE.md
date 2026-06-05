@@ -28,7 +28,7 @@
 | GET | `/config/status` | open | nav.js | yes |
 | GET | `/data/{file}` | token* | app.html | yes |
 | POST | `/deps/install` | token | fix-action.js | yes |
-| POST | `/docker/start-searxng` | token | installer.html | yes |
+| POST | `/docker/start-searxng` | token | installer.page4.js | yes |
 | GET | `/emoji-vault/{guild_id}/backup.zip` | token | — | yes |
 | GET | `/emoji-vault/{guild_id}/emojis` | token | — | yes |
 | DELETE | `/emoji-vault/{guild_id}/emojis/{emoji_id}` | token | — | yes |
@@ -70,28 +70,28 @@
 | PATCH | `/reacts/rule/{rule_id}` | token | — | yes |
 | GET | `/stats/counts` | open | stats.js | yes |
 | GET | `/stats/snapshot` | open | api.page.js | yes |
-| POST | `/system/bootstrap` | token | installer.html | no |
-| GET | `/system/bootstrap-status` | open | installer.html | no |
+| POST | `/system/bootstrap` | token | installer.page2.js | no |
+| GET | `/system/bootstrap-status` | open | installer.page2.js | no |
 | GET | `/system/detect-venv` | open | — | yes |
-| GET | `/system/docker` | open | installer.html | yes |
-| POST | `/system/doctor` | token | installer.html | no |
+| GET | `/system/docker` | open | installer.page7.js | yes |
+| POST | `/system/doctor` | token | installer.page1.js | no |
 | GET | `/system/firstrun` | open | app.html | yes |
 | POST | `/system/install-docker` | token | — | yes |
 | POST | `/system/install-ollama` | token | — | no |
 | POST | `/system/install-python` | token | — | yes |
 | POST | `/system/kill-all` | token | launcher.js | no |
-| POST | `/system/launch-all` | token | installer.html | no |
-| POST | `/system/lock-cache` | token | installer.html | no |
-| POST | `/system/ollama-signin` | token | installer.html | no |
-| GET | `/system/ollama-status` | open | installer.html | no |
+| POST | `/system/launch-all` | token | installer.page6.js | no |
+| POST | `/system/lock-cache` | token | installer.page5.js | no |
+| POST | `/system/ollama-signin` | token | installer.page3.js | no |
+| GET | `/system/ollama-status` | open | installer.page3.js | no |
 | POST | `/system/reinstall-torch` | token | — | no |
-| GET | `/system/runtime` | open | installer.html | yes |
+| GET | `/system/runtime` | open | installer.page7.js | yes |
 | POST | `/system/self-update` | token | launcher.js | yes |
 | POST | `/system/smoke` | token | launcher.js | no |
 | POST | `/system/start-ollama` | token | — | no |
 | POST | `/system/use-venv` | token | — | yes |
 | POST | `/system/verify` | token | launcher.js | no |
-| POST | `/system/warmup` | token | installer.html | no |
+| POST | `/system/warmup` | token | installer.page5.js | no |
 | GET | `/token` | open | nav.js | yes |
 
 ## local_ai_server.py (24 routes)
@@ -111,7 +111,7 @@
 | POST | `/model/install` | token | add-model.page.js | yes |
 | POST | `/model/uninstall` | token | app.html | yes |
 | GET | `/models/available` | open | app.html | no |
-| GET | `/models/catalog` | open | installer.html | no |
+| GET | `/models/catalog` | open | installer.page7.js | no |
 | GET | `/models/installed` | open | app.html | yes |
 | GET | `/route/debug` | open | api.page.js | yes |
 | POST | `/tts` | token | tts.js | yes |
