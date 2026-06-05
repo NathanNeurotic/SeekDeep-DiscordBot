@@ -32,7 +32,7 @@ window.DATADASH = {
       powerDown:     "Power_Down_(overdriv_3-1780471064621.mp3",
       shieldHeld:    "Shield_Held_(1st_hit_3-1780471122557.mp3",
       pepe:          "Video_game_Pepe_Jack_2-1780471380872.mp3",
-      invincibleLoop:"Hyper_techno_invinci_3-1780471703583.mp3",
+      invincibleLoop:"invincible_pepe.mp3",
       malwareSpawn:  "minimalwarespawn.mp3",
       malwareLoop:   "Mini-malware_present_2-1780475702345.mp3",
       malwareDie:    "Malware_destroyed_~0_4-1780472064737.mp3",
@@ -44,8 +44,8 @@ window.DATADASH = {
       bossBomb:      "Boss_bomb_detonation_3-1780472438259.mp3",
       bossDead:      "Boss_defeatedcrashed_3-1780472556720.mp3",
     },
-    loops: ["menuMusic", "music", "bossMusic", "chargeLoop", "malwareLoop", "invincibleLoop"],
-    volumes: { music: 1.7, menuMusic: 1.7, bossMusic: 1.8, shot: 0.42, packet: 0.34, malwareLoop: 0.4, malwareDie: 0.95, malwareSpawn: 0.85, kernel: 1.6, bossShot: 0.36, bossIncoming: 1.1, bossBomb: 1.15, bossDead: 1.05, damage: 0.95, gameOver: 1.0 },
+    loops: ["menuMusic", "music", "bossMusic", "chargeLoop", "malwareLoop"],
+    volumes: { music: 1.7, menuMusic: 1.7, bossMusic: 1.8, shot: 0.42, packet: 0.34, malwareLoop: 0.4, malwareDie: 0.95, malwareSpawn: 0.85, kernel: 1.6, bossShot: 0.36, bossIncoming: 1.1, bossBomb: 1.15, bossDead: 1.05, damage: 0.95, gameOver: 1.0, invincibleLoop: 1.4 },
   },
 
   /* --- BRANDING / COPY ---------------------------------------------------
@@ -301,8 +301,8 @@ window.DATADASH = {
 
     // PEPE COIN — jackpot: time-gated random spawn, AT MOST once every 60s of play.
     // The clock restarts on every spawn (collected or not) — it never queues up.
-    pepeEverySec:      60,      // minimum seconds between Pepe spawns (hard cap)
-    pepeRandSec:       35,      // extra random seconds on top so timing stays unpredictable
+    pepeEverySec:      120,     // minimum seconds between Pepe spawns (hard cap) — halved frequency
+    pepeRandSec:       70,      // extra random seconds on top so timing stays unpredictable
     pepeSize:          76,
     pepeInvincible:    15,      // seconds of invincibility on collect
 
