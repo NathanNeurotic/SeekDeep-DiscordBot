@@ -13,13 +13,15 @@
   .stage { position: fixed; inset: 0; display: grid; place-items: center; }
 
   /* Background mock — abstracted control center silhouette */
-  .bg-mock { position: absolute; inset: 60px; border-radius: var(--r-md); border: 1px solid rgba(45,212,255,0.15); display: grid; grid-template-columns: 200px 1fr; opacity: 0.4; pointer-events: none; }
-  .bg-mock .sb { background: rgba(2,6,15,0.6); border-right: 1px solid rgba(45,212,255,0.12); padding: 20px 14px; }
-  .bg-mock .sb .item { padding: 8px 10px; margin: 4px 0; height: 30px; background: rgba(45,212,255,0.04); border-radius: var(--r-sm); }
-  .bg-mock .main { padding: 24px; display: grid; grid-template-rows: 50px 1fr; gap: 14px; }
-  .bg-mock .main .h { height: 50px; background: rgba(45,212,255,0.04); border-radius: var(--r-sm); }
-  .bg-mock .main .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-  .bg-mock .main .cell { height: 80px; background: rgba(45,212,255,0.05); border: 1px solid rgba(45,212,255,0.10); border-radius: var(--r-sm); }
+  .bg-mock { position: absolute; inset: 60px; border-radius: var(--r-md); border: 1px solid rgba(45,212,255,0.20); display: grid; grid-template-columns: 210px 1fr; opacity: 0.9; pointer-events: none; overflow: hidden; background: rgba(2,6,15,0.4); }
+  .bg-mock .sb { background: rgba(2,6,15,0.6); border-right: 1px solid rgba(45,212,255,0.14); padding: 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .bg-mock .sb .brand { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; padding: 4px 8px 10px; }
+  .bg-mock .sb .item { display: flex; align-items: center; gap: 9px; padding: 0 11px; height: 34px; background: rgba(45,212,255,0.07); border: 1px solid rgba(45,212,255,0.12); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 12px; color: var(--hull-2); }
+  .bg-mock .sb .item .ic { color: var(--cyan-1); font-size: 13px; width: 15px; text-align: center; }
+  .bg-mock .main { padding: 22px; display: grid; grid-template-rows: 48px 1fr; gap: 16px; }
+  .bg-mock .main .h { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 48px; background: rgba(45,212,255,0.07); border: 1px solid rgba(45,212,255,0.12); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; color: var(--hull); text-transform: uppercase; }
+  .bg-mock .main .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-content: start; }
+  .bg-mock .main .cell { display: grid; place-items: center; height: 84px; background: rgba(45,212,255,0.05); border: 1px solid rgba(45,212,255,0.12); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--hull-2); text-transform: uppercase; }
 
   /* Backdrop dim */
   .backdrop { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 0%, rgba(2,6,15,0.6) 50%, rgba(2,6,15,0.85) 100%); z-index: 1; }
@@ -57,7 +59,8 @@
 
   /* Hide-on-mobile */
   @media (max-width: 800px) {
-    .bg-mock { display: none; }
+    .bg-mock { grid-template-columns: 140px 1fr; inset: 28px; }
+    .bg-mock .sb .item { font-size: 11px; gap: 6px; padding: 0 8px; }
   }
 </style>
 </head>
@@ -76,19 +79,20 @@
 <div class="stage">
   <div class="bg-mock">
     <div class="sb">
-      <div class="item" id="m-sb-1"></div>
-      <div class="item" id="m-sb-2"></div>
-      <div class="item" id="m-sb-3"></div>
-      <div class="item" id="m-sb-4"></div>
-      <div class="item" id="m-sb-5"></div>
+      <div class="brand">◇ SeekDeep</div>
+      <div class="item" id="m-sb-1"><span class="ic">⚡</span> Launcher</div>
+      <div class="item" id="m-sb-2"><span class="ic">▥</span> GPU &amp; VRAM</div>
+      <div class="item" id="m-sb-3"><span class="ic">◈</span> Models</div>
+      <div class="item" id="m-sb-4"><span class="ic">⚙</span> Config</div>
+      <div class="item" id="m-sb-5"><span class="ic">▦</span> Logs</div>
     </div>
     <div class="main">
-      <div class="h" id="m-head"></div>
+      <div class="h" id="m-head">◰ Control Center</div>
       <div class="grid">
-        <div class="cell" id="m-c1"></div>
-        <div class="cell" id="m-c2"></div>
-        <div class="cell" id="m-c3"></div>
-        <div class="cell" id="m-c4"></div>
+        <div class="cell" id="m-c1">Chat</div>
+        <div class="cell" id="m-c2">Image</div>
+        <div class="cell" id="m-c3">Archive</div>
+        <div class="cell" id="m-c4">Stats</div>
       </div>
     </div>
   </div>
