@@ -3997,15 +3997,13 @@ def register_gui_endpoints(
                     "result": str(result)[:200] if result is not None else None}
         except Exception as e:
             # Log the FULL traceback server-side — the GUI only surfaces str(e),
-            # which hides WHERE a warm actually failed (e.g. a NameError bubbling
-            # up from the transformers/bitsandbytes 4-bit load path). flush so it
-            # lands in the console + Logs viewer immediately.
+            # which hides WHERE a warm actually failed (e.g. a NameError bubbling up
+            # from the transformers/bitsandbytes 4-bit load path). Route to stderr so
+            # the _Tee log wrapper tags the whole block ERR (not just the Traceback
+            # lines), and let print_exc append the type+message itself (no duplication).
             import traceback as _tb
-            print(
-                f"[SeekDeep] /model/warm failed (role={role!r}): "
-                f"{type(e).__name__}: {e}\n{_tb.format_exc()}",
-                flush=True,
-            )
+            print(f"[SeekDeep] /model/warm failed (role={role!r}):", file=sys.stderr, flush=True)
+            _tb.print_exc(file=sys.stderr)
             return {"ok": False, "error": str(e)}
 
     # ----- GET /config/status -----

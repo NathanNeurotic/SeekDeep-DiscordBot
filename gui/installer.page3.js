@@ -30,9 +30,14 @@
                 if (state.ollama_api_key)  key.value  = state.ollama_api_key;
               }
             };
-            // ALWAYS wait for DOMContentLoaded (page7 defines `state`); a readyState
-            // 'else' branch would run before page7 under defer → TDZ.
-            window.addEventListener('DOMContentLoaded', restoreState);
+            // Run once page7's `state` exists. Check the dependency DIRECTLY (not a
+            // readyState proxy): typeof throws for a TDZ const → caught → wait for
+            // DOMContentLoaded (after every parser script incl page7); if already
+            // defined (any post-parse insertion), run now.
+            var hasState = false;
+            try { hasState = typeof state !== 'undefined'; } catch (_) {}
+            if (hasState) restoreState();
+            else window.addEventListener('DOMContentLoaded', restoreState);
 
             function wireBus() {
               if (!window.SeekDeepEvents) return false;

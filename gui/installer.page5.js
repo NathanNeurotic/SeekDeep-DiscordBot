@@ -53,9 +53,14 @@
                 }
               } catch (_) { /* server offline; leave toggle off */ }
             }
-            // ALWAYS wait for DOMContentLoaded (page7 defines SEEKDEEP_BASE); a
-            // readyState 'else' branch would run before page7 under defer → TDZ.
-            window.addEventListener('DOMContentLoaded', probeWarmupState);
+            // Run once page7's SEEKDEEP_BASE exists. Check the dependency DIRECTLY
+            // (not a readyState proxy): typeof throws for a TDZ const → caught → wait
+            // for DOMContentLoaded (after every parser script incl page7); if already
+            // defined (any post-parse insertion), run now.
+            var hasBase = false;
+            try { hasBase = typeof SEEKDEEP_BASE !== 'undefined'; } catch (_) {}
+            if (hasBase) probeWarmupState();
+            else window.addEventListener('DOMContentLoaded', probeWarmupState);
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
               runBtn.textContent = '… DOWNLOADING';

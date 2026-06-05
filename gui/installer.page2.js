@@ -121,9 +121,12 @@
             // time it's still in the temporal dead zone and a direct call
             // would throw. By DOMContentLoaded page7 has run.
             const startProbe = () => { onVisible(); setInterval(onVisible, 4000); };
-            // ALWAYS wait for DOMContentLoaded (not a readyState guard): it fires
-            // after EVERY parser-inserted script incl. page7 (defines SEEKDEEP_BASE),
-            // for sync OR defer. A readyState 'else' branch would run under defer
-            // before page7 → TDZ on SEEKDEEP_BASE.
-            window.addEventListener('DOMContentLoaded', startProbe);
+            // Run once page7's SEEKDEEP_BASE exists. Check the dependency DIRECTLY
+            // (not a readyState proxy): typeof throws for a TDZ const → caught →
+            // not-yet-defined → wait for DOMContentLoaded (fires after every parser
+            // script incl page7). If already defined (any post-parse insertion), run now.
+            var hasBase = false;
+            try { hasBase = typeof SEEKDEEP_BASE !== 'undefined'; } catch (_) {}
+            if (hasBase) startProbe();
+            else window.addEventListener('DOMContentLoaded', startProbe);
           })();
