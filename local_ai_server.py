@@ -5311,11 +5311,13 @@ def img2img(req: Img2ImgRequest):
         "strength": float(req.strength),
         "seed": seed,
     }
-def _resolve_realesrgan_weights() -> "Path | None":
+def _resolve_realesrgan_weights(scale: "int | None" = None) -> "Path | None":
     """Locate the Real-ESRGAN .pth to use, or None if none is configured.
 
     Priority: explicit SEEKDEEP_REALESRGAN_MODEL_PATH (the documented knob) ->
-    any *.pth dropped into <MODEL_CACHE_DIR>/realesrgan (legacy convenience).
+    any *.pth dropped into <MODEL_CACHE_DIR>/realesrgan (legacy convenience). When
+    `scale` is given, a fallback-dir file whose name contains `x{scale}` wins so a
+    2x/3x/4x request still picks the matching weight (legacy behavior).
     No weights are bundled with the repo, so this returns None until the user
     provides one and the caller then falls back to Lanczos.
     """
@@ -5327,7 +5329,13 @@ def _resolve_realesrgan_weights() -> "Path | None":
     if not realesrgan_dir.exists():
         return None
     pth_files = list(realesrgan_dir.glob("*.pth"))
-    return pth_files[0] if pth_files else None
+    if not pth_files:
+        return None
+    if scale is not None:
+        for p in pth_files:
+            if f"x{scale}" in p.name.lower():
+                return p
+    return pth_files[0]
 
 
 def check_realesrgan_available() -> tuple[bool, str]:
@@ -5569,7 +5577,7 @@ def upscale(req: UpscaleRequest):
             # Weights: explicit SEEKDEEP_REALESRGAN_MODEL_PATH first, else a
             # *.pth in <cache>/realesrgan. check_realesrgan_available() already
             # guaranteed one resolves; guard anyway so we degrade, never 500.
-            model_path = _resolve_realesrgan_weights()
+            model_path = _resolve_realesrgan_weights(scale)
             if model_path is None:
                 raise RuntimeError("Real-ESRGAN weights vanished between check and load")
 
@@ -6273,8 +6281,10 @@ def tts(req: TTSRequest):
             content={"ok": False, "error": "TTS engine not installed (pip install piper-tts).",
                      "detail": "tts-deps-missing"},
         )
-    except Exception as exc:  # noqa: BLE001 — log the detail, return a static body
+    except Exception as exc:  # noqa: BLE001 — log the full trace, return a static body
+        import traceback
         print(f"[SeekDeep Local AI] /tts synthesis error: {exc}")
+        traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content={"ok": False, "error": "TTS synthesis failed."},

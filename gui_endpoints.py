@@ -4473,19 +4473,22 @@ def register_gui_endpoints(
         # other — offloaded to a thread so the blocking lock + sync file I/O don't
         # stall the asyncio event loop.
         def _save_force_react():
+            # Plain exceptions only — the coroutine below maps any failure (lock,
+            # read, or write) to a 500. Keeping HTTPException out of the thread
+            # avoids coupling worker-thread logic to the web framework.
             with _seekdeep_file_lock(_force_react_config_file):
                 all_cfg = _force_react_read_all()
                 all_cfg.setdefault("guilds", {})[str(guild_id)] = {
                     "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
                 }
-                try:
-                    _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = _force_react_config_file.with_suffix(".json.tmp")
-                    tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
-                    tmp.replace(_force_react_config_file)
-                except Exception as exc:
-                    raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
-        await asyncio.to_thread(_save_force_react)
+                _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
+                tmp = _force_react_config_file.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
+                tmp.replace(_force_react_config_file)
+        try:
+            await asyncio.to_thread(_save_force_react)
+        except Exception as exc:
+            raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
         _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
         return {"ok": True, "config": {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}}
 
