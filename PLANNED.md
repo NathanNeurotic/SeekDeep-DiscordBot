@@ -293,7 +293,7 @@ CLIPSeg mask: threshold 0.4->0.3, MaxFilter(21) dilation, GaussianBlur(8) feathe
 **Remaining improvement ideas:**
   - [x] Mask preview option (`mask_preview:true`) — shipped in Phase C (`@SeekDeep mask preview <target>`)
   - [ ] Multi-prompt CLIPSeg for complex targets
-  - [ ] Stronger segmentation model (SAM, GroundingDINO)
+  - [x] Stronger segmentation model (SAM, GroundingDINO) — wired in `local_ai_server.py` behind `SEEKDEEP_FEATURE_SAM_SEGMENT` + `SEEKDEEP_SAM_MODEL_PATH`/`SEEKDEEP_GROUNDINGDINO_MODEL_PATH`; model not bundled, falls back to CLIPSeg
 
 ### 7. Pix2Pix image_guidance_scale ✅ fixed
 Now adaptive: heavy edits (scene/style transforms) get 1.2, light edits (brightness/color tweaks) get 2.0, default 1.5. Was hardcoded at 1.0.
@@ -350,7 +350,7 @@ Model router now routes to `lightweight_chat` (gemma-3n-E4B-it) for: translation
 
 ## Next Up
 
-- **Real-ESRGAN model download** -- scaffolded in v10.25 but needs user approval for the model cache.
+- **Real-ESRGAN model download** -- code path is **wired** (set `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on` + `SEEKDEEP_REALESRGAN_MODEL_PATH` to a `.pth` to enable; model **not bundled**, falls back to Lanczos until then). Remaining lift is purely the user-side model download.
 - **TTS voice model download** -- the `/tts` backend is wired (Piper + XTTS), but no voice is bundled. Drop in a Piper `.onnx` voice and set `SEEKDEEP_TTS_PIPER_VOICE`; the remaining lift is the Discord voice-channel connection + per-channel opt-in (the synthesis side is done).
 
 ## Optional Features (Scaffolded, Off By Default)
@@ -384,7 +384,8 @@ Voice-channel TTS reader (Piper or XTTS). **Synthesis backend wired** — token-
 - **Scale Issues**: Very small objects or background elements fail to excite the text encoder, returning empty or incomplete masks.
 
 ### Future Path: SAM & GroundingDINO Integration
-- **GroundingDINO**: A zero-shot object detector that will generate high-quality bounding boxes from text queries.
+> **Status: wired (model-gated).** The GroundingDINO→SAM mask path is implemented in `local_ai_server.py` (`generate_mask_sam` → `generate_mask` dispatcher, VRAM-budget-gated, mask-first). Turn on `SEEKDEEP_FEATURE_SAM_SEGMENT` and point `SEEKDEEP_SAM_MODEL_PATH` + `SEEKDEEP_GROUNDINGDINO_MODEL_PATH` at local models (optional `SEEKDEEP_GROUNDINGDINO_CONFIG_PATH`), or leave them unset to auto-download the HF repo ids on first use. Models are **not bundled**; on any miss (flag off, no CUDA, weights/deps missing, VRAM pressure, nothing detected, runtime error) the inpaint mask silently falls back to CLIPSeg. The notes below are the original deferral rationale (footprint/VRAM), retained for context.
+- **GroundingDINO**: A zero-shot object detector that generates high-quality bounding boxes from text queries.
 - **Segment Anything Model (SAM)**: Uses GroundingDINO's bounding boxes as prompts to produce high-resolution, pixel-perfect instance segmentations.
 - **Expected Benefits**: Sharp, high-fidelity mask edges, distinct object separation, and robust detection of small/obscured objects.
 

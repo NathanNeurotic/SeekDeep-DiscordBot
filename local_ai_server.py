@@ -5308,28 +5308,53 @@ def img2img(req: Img2ImgRequest):
         "strength": float(req.strength),
         "seed": seed,
     }
+def _resolve_realesrgan_weights() -> "Path | None":
+    """Locate the Real-ESRGAN .pth to use, or None if none is configured.
+
+    Priority: explicit SEEKDEEP_REALESRGAN_MODEL_PATH (the documented knob) ->
+    any *.pth dropped into <MODEL_CACHE_DIR>/realesrgan (legacy convenience).
+    No weights are bundled with the repo, so this returns None until the user
+    provides one and the caller then falls back to Lanczos.
+    """
+    explicit = (os.getenv("SEEKDEEP_REALESRGAN_MODEL_PATH") or "").strip()
+    if explicit:
+        p = Path(explicit)
+        return p if p.is_file() else None
+    realesrgan_dir = MODEL_CACHE_DIR / "realesrgan"
+    if not realesrgan_dir.exists():
+        return None
+    pth_files = list(realesrgan_dir.glob("*.pth"))
+    return pth_files[0] if pth_files else None
+
+
 def check_realesrgan_available() -> tuple[bool, str]:
     """
     Checks if Real-ESRGAN dependencies and models are available.
     Returns (is_available, error_message).
+
+    Gated on: feature flag on, basicsr/realesrgan importable, and a weights file
+    resolvable via SEEKDEEP_REALESRGAN_MODEL_PATH (or the legacy realesrgan/ dir).
+    Any miss -> (False, reason) and the /upscale path falls back to Lanczos.
     """
     if os.getenv("SEEKDEEP_FEATURE_UPSCALE_REALESRGAN") != "on":
         return False, "Real-ESRGAN feature flag (SEEKDEEP_FEATURE_UPSCALE_REALESRGAN) is not 'on'."
     try:
-        import torch
-        from basicsr.archs.rrdbnet_arch import RRDBNet
-        from realesrgan import RealESRGANer
+        import torch  # noqa: F401
+        from basicsr.archs.rrdbnet_arch import RRDBNet  # noqa: F401
+        from realesrgan import RealESRGANer  # noqa: F401
     except ImportError as e:
         return False, f"Missing Python dependency for Real-ESRGAN: {e}"
 
-    realesrgan_dir = MODEL_CACHE_DIR / "realesrgan"
-    if not realesrgan_dir.exists():
-        return False, f"Real-ESRGAN model directory not found at {realesrgan_dir}"
-    
-    pth_files = list(realesrgan_dir.glob("*.pth"))
-    if not pth_files:
-        return False, f"No Real-ESRGAN model weights (.pth) found in {realesrgan_dir}"
-        
+    weights = _resolve_realesrgan_weights()
+    if weights is None:
+        explicit = (os.getenv("SEEKDEEP_REALESRGAN_MODEL_PATH") or "").strip()
+        if explicit:
+            return False, f"SEEKDEEP_REALESRGAN_MODEL_PATH does not point to a file: {explicit}"
+        return False, (
+            "No Real-ESRGAN weights configured; set SEEKDEEP_REALESRGAN_MODEL_PATH to a "
+            f".pth (or drop one in {MODEL_CACHE_DIR / 'realesrgan'}). Model not bundled."
+        )
+
     return True, ""
 
 
@@ -5523,39 +5548,42 @@ def upscale(req: UpscaleRequest):
     resolved_method, is_avail, err_msg = select_upscale_method(req.method)
     if resolved_method == "realesrgan":
         if not is_avail:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "ok": False,
-                    "method": "realesrgan",
-                    "error": "Real-ESRGAN is enabled but dependencies/model are missing..."
-                }
+            # Requested Real-ESRGAN but it's not usable (flag off / no weights /
+            # deps missing). Graceful fallback to Lanczos so the request still
+            # succeeds with today's behavior; upgrades automatically once a
+            # model + flag are configured. (Model not bundled.)
+            print(
+                f"[SeekDeep Local AI] Real-ESRGAN unavailable ({err_msg}); "
+                "falling back to Lanczos upscale.",
+                flush=True,
             )
+            return finish_pil_upscale(f"Real-ESRGAN unavailable, used Lanczos: {err_msg}")
         try:
             import numpy as np
             from basicsr.archs.rrdbnet_arch import RRDBNet
             from realesrgan import RealESRGANer
 
-            realesrgan_dir = MODEL_CACHE_DIR / "realesrgan"
-            pth_files = list(realesrgan_dir.glob("*.pth"))
-            model_path = None
-            for p in pth_files:
-                if f"x{scale}" in p.name.lower():
-                    model_path = p
-                    break
-            if not model_path:
-                model_path = pth_files[0]
+            # Weights: explicit SEEKDEEP_REALESRGAN_MODEL_PATH first, else a
+            # *.pth in <cache>/realesrgan. check_realesrgan_available() already
+            # guaranteed one resolves; guard anyway so we degrade, never 500.
+            model_path = _resolve_realesrgan_weights()
+            if model_path is None:
+                raise RuntimeError("Real-ESRGAN weights vanished between check and load")
 
-            num_block = 23
-            if "anime" in model_path.name.lower():
-                num_block = 6
+            # Optional arch override (e.g. RealESRGAN_x4plus / *_anime_6B). When
+            # unset we infer the arch from the weights filename, matching the
+            # legacy behavior.
+            model_name = (os.getenv("SEEKDEEP_REALESRGAN_MODEL_NAME") or "").strip()
+            name_hint = (model_name or model_path.name).lower()
+
+            num_block = 6 if ("anime" in name_hint or "6b" in name_hint) else 23
 
             model_scale = 4
-            if "x2" in model_path.name.lower():
+            if "x2" in name_hint:
                 model_scale = 2
-            elif "x3" in model_path.name.lower():
+            elif "x3" in name_hint:
                 model_scale = 3
-            elif "x4" in model_path.name.lower():
+            elif "x4" in name_hint:
                 model_scale = 4
 
             model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=model_scale)
@@ -5634,14 +5662,15 @@ def upscale(req: UpscaleRequest):
                 "max_bytes": max_bytes,
             }
         except Exception as exc:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "ok": False,
-                    "method": "realesrgan",
-                    "error": f"Real-ESRGAN is enabled but dependencies/model are missing: Failed to execute: {exc}"
-                }
+            # Load/run error with deps+weights present: degrade to Lanczos
+            # rather than failing the request (identical result to today's
+            # zero-model path). The user still gets an upscaled image.
+            print(
+                f"[SeekDeep Local AI] Real-ESRGAN run failed ({exc}); "
+                "falling back to Lanczos upscale.",
+                flush=True,
             )
+            return finish_pil_upscale(f"Real-ESRGAN run failed, used Lanczos: {exc}")
 
     note = ""
     if req.method == "realesrgan" and not is_avail:
@@ -5797,8 +5826,19 @@ def generate_mask_clipseg(image: Image.Image, target: str) -> Image.Image:
 # and on ANY failure (flag off, weights/deps missing, no CUDA, VRAM pressure,
 # nothing detected, runtime error) returns None so the caller degrades to
 # CLIPSeg → full mask. A jagged mask always beats an OOM. Default OFF.
-SAM_MODEL_ID = os.getenv("LOCAL_SAM_MODEL_ID", "facebook/sam-vit-huge")
-GROUNDING_DINO_MODEL_ID = os.getenv("LOCAL_GROUNDING_DINO_MODEL_ID", "IDEA-Research/grounding-dino-base")
+# Model sources. The documented knobs are SEEKDEEP_SAM_MODEL_PATH /
+# SEEKDEEP_GROUNDINGDINO_MODEL_PATH (an absolute path to a local model dir or a
+# single weights file — from_pretrained accepts either). When unset we fall
+# back to the HF repo ids (LOCAL_*_MODEL_ID), which auto-download on first use.
+# Nothing is bundled, so with neither configured + offline the load fails and
+# generate_mask_sam() degrades to CLIPSeg.
+SAM_MODEL_PATH = (os.getenv("SEEKDEEP_SAM_MODEL_PATH") or "").strip()
+GROUNDING_DINO_MODEL_PATH = (os.getenv("SEEKDEEP_GROUNDINGDINO_MODEL_PATH") or "").strip()
+# Optional GroundingDINO config (e.g. a GroundingDINO_SwinB.cfg.py). Only some
+# loaders need it; passed through to the loader when present.
+GROUNDING_DINO_CONFIG_PATH = (os.getenv("SEEKDEEP_GROUNDINGDINO_CONFIG_PATH") or "").strip()
+SAM_MODEL_ID = SAM_MODEL_PATH or os.getenv("LOCAL_SAM_MODEL_ID", "facebook/sam-vit-huge")
+GROUNDING_DINO_MODEL_ID = GROUNDING_DINO_MODEL_PATH or os.getenv("LOCAL_GROUNDING_DINO_MODEL_ID", "IDEA-Research/grounding-dino-base")
 SAM_BOX_THRESHOLD = float(os.getenv("SEEKDEEP_SAM_BOX_THRESHOLD", "0.25") or "0.25")
 SAM_TEXT_THRESHOLD = float(os.getenv("SEEKDEEP_SAM_TEXT_THRESHOLD", "0.25") or "0.25")
 
@@ -5816,9 +5856,11 @@ def check_sam_available() -> tuple[bool, str]:
     """(ok, reason) — mirrors check_realesrgan_available(). Gates the high-
     fidelity mask path on: feature flag on, CUDA present (SAM on CPU is
     impractically slow), and the transformers SAM/GroundingDINO classes
-    importable. Weights download on first use (like CLIPSeg) when
-    HF_LOCAL_FILES_ONLY is false; if absent + offline the load fails and the
-    caller falls back to CLIPSeg."""
+    importable. Models come from SEEKDEEP_SAM_MODEL_PATH /
+    SEEKDEEP_GROUNDINGDINO_MODEL_PATH when set, else the HF repo ids (download
+    on first use when HF_LOCAL_FILES_ONLY is false). Nothing is bundled; if the
+    weights are absent + offline the load fails and the caller falls back to
+    CLIPSeg."""
     if not sam_segment_enabled():
         return False, "SAM segmentation flag (SEEKDEEP_FEATURE_SAM_SEGMENT) is not 'on'."
     if not cuda_available():
@@ -5850,10 +5892,21 @@ def _load_sam_models() -> None:
     device = "cuda" if cuda_available() else "cpu"
     print(f"[SeekDeep] loading GroundingDINO ({GROUNDING_DINO_MODEL_ID}) + SAM ({SAM_MODEL_ID}) for high-fidelity masks", flush=True)
     if gdino_model is None:
+        # Optional explicit config (SEEKDEEP_GROUNDINGDINO_CONFIG_PATH). When set
+        # we hand from_pretrained a parsed config so a bare-weights checkpoint
+        # still loads; absent, from_pretrained reads the config from the repo /
+        # model dir as usual.
+        gdino_kwargs = dict(cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY)
+        if GROUNDING_DINO_CONFIG_PATH:
+            try:
+                from transformers import AutoConfig
+                gdino_kwargs["config"] = AutoConfig.from_pretrained(GROUNDING_DINO_CONFIG_PATH)
+            except Exception as cfg_exc:
+                print(f"[SeekDeep] GroundingDINO config {GROUNDING_DINO_CONFIG_PATH!r} ignored: {cfg_exc}", flush=True)
         gdino_processor = AutoProcessor.from_pretrained(
             GROUNDING_DINO_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY)
         gdino_model = GroundingDinoForObjectDetection.from_pretrained(
-            GROUNDING_DINO_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY).to(device)
+            GROUNDING_DINO_MODEL_ID, **gdino_kwargs).to(device)
     if sam_model is None:
         sam_processor = SamProcessor.from_pretrained(
             SAM_MODEL_ID, cache_dir=str(MODEL_CACHE_DIR), local_files_only=HF_LOCAL_FILES_ONLY)
