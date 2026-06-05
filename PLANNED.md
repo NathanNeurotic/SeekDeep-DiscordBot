@@ -2,7 +2,16 @@
 
 This file tracks everything that's been discussed, scoped, or partially scaffolded but not yet shipped. Items here are not commitments — they're a parking lot for "next time we sit down with this codebase, here's what's on deck."
 
-Last full audit: 2026-05-24 (GUI + backend stack)
+Last full audit: 2026-05-24 (GUI + backend stack). Latest security audit: 2026-06-03 ([docs/audits/SEEKDEEP_AUDIT_2026-06-03.md](docs/audits/SEEKDEEP_AUDIT_2026-06-03.md)).
+
+---
+
+## Security Hardening — Remaining
+
+The 2026-06-03 audit came back with **0 P0 / 0 P1 security** findings; the P2/P3 round-2 backlog has since been worked through. CSP **Phase A is shipped**: the Tauri WebView policy in `src-tauri/tauri.conf.json` (with `dangerousDisableAssetCspModification` for `script-src`+`style-src`) is mirrored on the loopback browser path by `_SEEKDEEP_GUI_CSP` in `local_ai_server.py`, with the Discord Activity (`gui/activity/*`) exempt. Two hardening items remain:
+
+1. **Drop `'unsafe-inline'` from `script-src`.** Defense-in-depth, not a fix for any known issue. Requires externalizing the 35 inline `<script>` blocks (across 24 files) + converting the ~28 inline `on*=` event-handler attributes to `addEventListener`, then flipping the CSP. Auto-hashing is a dead end; extraction is the path. Sequenced, with the packaged-app verification caveat, in [docs/audits/CSP_TIGHTENING_PLAN.md](docs/audits/CSP_TIGHTENING_PLAN.md). Currently parked (no near-term date).
+2. **Split the `index.js` monolith** (~24.5 K lines) — maintainability, not security. See item 5 under "Needs a 'go' from the user" below. Only `lib/url-fetch-policy.js` has been extracted so far.
 
 ---
 

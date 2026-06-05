@@ -6,34 +6,42 @@
 > tests. CSP tightening is sequenced here because it **can break GUI pages** and
 > must be rolled out page-by-page with regression testing, not in one flip.
 
-> **Status — DEFERRED (low priority, not scheduled).** The verifiable wins
-> shipped (dropped `'unsafe-eval'`, scoped `script-src`, added the
-> `e2e/csp.spec.mjs` harness). The remaining `'unsafe-inline'` removal
-> (Steps 1/2/5 below) is **intentionally parked** with no near-term date. It is
-> defense-in-depth, not a fix for any known issue: there is no known GUI XSS,
-> and the highest-value escalation path (`open_external`) is already locked down.
-> It requires a 24-file inline-script/handler externalization that can only be
-> verified by clicking through the **packaged** desktop app. Pick it up only when
-> there's appetite for that hands-on pass; until then this is a conscious "won't
-> do yet", not an oversight.
+> **Status — Phase A SHIPPED + CONFIRMED; remaining `'unsafe-inline'` removal
+> DEFERRED (low priority, not scheduled).** Phase A landed and is confirmed good:
+> dropped `'unsafe-eval'`, scoped `script-src`, split the monolithic `default-src`
+> into explicit directives, dropped bare `https:` from `connect-src` (loopback-only),
+> set `frame-src`/`frame-ancestors` to `'none'`, mirrored the policy onto the
+> browser-served GUI (`_SEEKDEEP_GUI_CSP` in `local_ai_server.py`, with the Discord
+> Activity exempt), and added the `e2e/csp.spec.mjs` harness. The remaining
+> `'unsafe-inline'` removal (Steps 1/2/5 below) is **intentionally parked** with no
+> near-term date. It is defense-in-depth, not a fix for any known issue: there is no
+> known GUI XSS, and the highest-value escalation path (`open_external`) is already
+> locked down. It requires extracting the ~35 inline `<script>` blocks + the inline
+> `on*` handlers — only verifiable by clicking through the **packaged** desktop app.
+> Auto-hashing those blocks is a known dead end (the WebView re-serializes the DOM,
+> so build-time hashes don't match what executes); **extraction is the path**. Keep
+> `style-src 'unsafe-inline'`. Pick it up only when there's appetite for that
+> hands-on pass; until then this is a conscious "won't do yet", not an oversight.
 
-## Current state (intentionally permissive)
+## Current state (Phase A shipped — see "What's been done")
 
 `src-tauri/tauri.conf.json`:
 
 ```jsonc
 "security": {
-  "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' https:",
+  "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; frame-ancestors 'none'",
   "dangerousDisableAssetCspModification": ["script-src", "style-src"]
 }
 ```
 
-This is the **already-tightened** policy (see "What's been done"). The original was a single permissive `default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: …` line.
+This is the **Phase-A-tightened** policy (see "What's been done"). The original was a single permissive `default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: …` line. Phase A additionally dropped the bare `https:` from `connect-src` (loopback-only now, so a compromised page can't exfiltrate the GUI token to an external host) and replaced `frame-src 'self' https:` with `frame-src 'none'` + `frame-ancestors 'none'` (no iframes exist anywhere in `gui/`).
+
+A **mirrored browser CSP** ships alongside the Tauri policy: `local_ai_server.py`'s `_SEEKDEEP_GUI_CSP` (the `_SeekDeepNoCacheStaticFiles` static mount) applies the same directives as a response header on every `gui/*.html` served over loopback, so the identical assets enforce the same policy in a normal browser as in the Tauri webview. The Discord Activity (`gui/activity/*`) is **EXEMPT** — it is intentionally embedded in Discord's iframe and imports its SDK from `esm.sh`, so it gets neither the strict CSP nor the anti-framing header.
 
 `app.withGlobalTauri = true` still exposes the full `window.__TAURI__` bridge to every page.
 
 What still keeps it from `script-src 'self'` alone:
-- The GUI is a large set of designer-shipped HTML pages with **34 inline `<script>` blocks** across 24 files **plus 26 inline event-handler attributes** (`onclick=`, …) in `app.html` / `image-ab.html` / `seekdeep-loading.html`. All of those require `script-src 'unsafe-inline'`.
+- The GUI is a large set of designer-shipped HTML pages with **35 inline `<script>` blocks** across 24 files (the live `html-js` preflight count) **plus ~28 inline `on*=` event-handler attributes** — mostly `onclick=` in `app.html` (≈22), with a couple of `onchange=` and a handful of `onerror=` image fallbacks across other pages. All of those require `script-src 'unsafe-inline'`.
 - (`'unsafe-eval'` is NOT needed — verified: zero `eval(` / `new Function(` / `type="text/babel"` in `gui/`. It has been dropped.)
 
 The blast radius: if any XSS lands in the GUI, `'unsafe-inline'` + the global Tauri bridge make it easy to escalate. The `open_external` allowlist already removed the "open any URL / any local protocol handler" escalation; the remaining CSP work removes the inline-script escalation.
@@ -42,10 +50,12 @@ The blast radius: if any XSS lands in the GUI, `'unsafe-inline'` + the global Ta
 
 - **Verification harness** — `e2e/csp.spec.mjs` reads the shipped CSP from `tauri.conf.json`, injects it as a response header on every top-level `gui/*.html`, and asserts zero `securitypolicyviolation` events. Runs in `npm run test:e2e` (and the `e2e` CI job). This is what makes CSP changes verifiable without a packaged build — it caught the Google-Fonts dependency that a naive tightening would have broken.
 - **Dropped `'unsafe-eval'`** and **split the monolithic `default-src` into explicit directives**, narrowing `script-src` to `'self' 'unsafe-inline'` (no more arbitrary `https:` script origins) and scoping the Google-Fonts origins explicitly. Verified green by the harness across all 24 pages.
+- **Dropped bare `https:` from `connect-src`** (now loopback-only: `127.0.0.1` / `localhost` over http + ws) and **set `frame-src` + `frame-ancestors` to `'none'`** — closing the token-exfil and clickjacking gaps. Harness green.
+- **Mirrored the policy onto the browser-served GUI** — `_SEEKDEEP_GUI_CSP` in `local_ai_server.py` emits the same directives as a `Content-Security-Policy` header on every `gui/*.html` served over loopback (plus `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`). The Discord Activity (`gui/activity/*`) is exempt so Discord can still embed it and it can import its SDK from `esm.sh`.
 
 ## Inventory mechanism (already in CI)
 
-`scripts/preflight.mjs` `html-js` stage already enumerates every inline `<script>` block in `gui/*.html` (it extracts and `node --check`s each one). Its count line (`N inline blocks across M html files`) is the live inventory to drive the remaining work — when it reaches near-zero inline blocks AND the 26 inline event handlers are converted to `addEventListener`, `'unsafe-inline'` can drop.
+`scripts/preflight.mjs` `html-js` stage already enumerates every inline `<script>` block in `gui/*.html` (it extracts and `node --check`s each one). Its count line (`N inline blocks across M html files` — currently `35 inline blocks across 24 html files`) is the live inventory to drive the remaining work — when it reaches near-zero inline blocks AND the ~28 inline event handlers are converted to `addEventListener`, `'unsafe-inline'` can drop.
 
 ## Staged rollout
 
@@ -88,7 +98,8 @@ Roll back by restoring the prior `csp` string; it's config-only, no code change.
 - [x] `open_external` scheme + host allowlist (shipped; `open_external_url_allowed` + unit tests).
 - [x] **CSP verification harness** — `e2e/csp.spec.mjs` (injects the shipped CSP, asserts zero violations across all top-level GUI pages; in `npm run test:e2e` + CI).
 - [x] **Step 3 — drop `'unsafe-eval'`** (verified unused; harness green).
-- [x] **Step 4 — split `default-src` into explicit directives + narrow `script-src` to `'self' 'unsafe-inline'`** (no more arbitrary `https:` script origins; Google-Fonts origins scoped). `connect-src`/`img-src`/`frame-src` intentionally still allow `https:` to avoid breaking unexercised flows — a later pass can scope these once interaction-level CSP coverage exists.
-- [ ] Step 1 — externalize the 34 inline `<script>` blocks + convert the 26 inline event-handler attributes to `addEventListener` (the prerequisite for dropping `'unsafe-inline'`). Needs interaction-level harness coverage or a packaged-app pass.
+- [x] **Step 4 — split `default-src` into explicit directives + narrow `script-src` to `'self' 'unsafe-inline'`** (no more arbitrary `https:` script origins; Google-Fonts origins scoped). Phase A also dropped bare `https:` from `connect-src` (loopback-only) and set `frame-src`/`frame-ancestors` to `'none'`. `img-src` intentionally still allows `https:` to avoid breaking remote-thumbnail flows — a later pass can scope it once interaction-level CSP coverage exists.
+- [x] **Phase A mirror — apply the same CSP to the browser-served GUI** (`_SEEKDEEP_GUI_CSP` in `local_ai_server.py`, header on every `gui/*.html`; Discord Activity `gui/activity/*` exempt so it stays embeddable). Confirmed good.
+- [ ] Step 1 — externalize the 35 inline `<script>` blocks + convert the ~28 inline event-handler attributes to `addEventListener` (the prerequisite for dropping `'unsafe-inline'`). Auto-hashing is a dead end; extraction is the path. Needs interaction-level harness coverage or a packaged-app pass.
 - [ ] Step 2 — drop `'unsafe-inline'` from `script-src` (and then `style-src`).
 - [ ] Step 5 — disable `withGlobalTauri`.

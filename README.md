@@ -47,7 +47,7 @@ SeekDeep is a local AI-powered Discord bot for chat, vision, image generation, w
                     +--------+--------+
                     |  index.js (Node) |
                     |  Discord bot     |
-                    |  ~22k lines ESM  |
+                    |  ~24k lines ESM  |
                     +--------+--------+
                              |
               +--------------+--------------+

@@ -1,10 +1,23 @@
 # SeekDeep GUI surface audit — 2026-05-29
 
-The desktop GUI ships **~21 HTML page surfaces**, but the top nav exposes only
-**8**. The rest are reachable only via the ⌘K jump palette (which lists 20),
-so real features are undiscoverable and non-functional demo/mock pages ship
-alongside them. This table classifies every page so keep / cut / promote calls
-can be made deliberately, per-page.
+> **Status update — most recommendations have since landed.** The promote/cut
+> calls from the "Recommended sequence" below were acted on in `gui/nav.js`:
+> the ⌘K palette now drops `tts` / `landing` / `pitch` / `tour` / `mobile` (the
+> self-labeled mocks/marketing pages) and surfaces the real hidden features.
+> New real surfaces have also shipped since this audit — `settings.html`
+> ("All Settings", the typed `.env` editor), `personas.html`, `setup-wizard.html`
+> — so the page inventory below is the 2026-05-29 snapshot, not the live count.
+> The repo now carries **24 top-level `gui/*.html` pages plus the Discord Activity
+> at `gui/activity/index.html` (DataDash)**. The cut pages still ship in the bundle
+> (`gui/**/*` globs everything) for the web/marketing context; they're just no
+> longer offered as in-app navigation targets. Re-run the method below before
+> trusting any specific row.
+
+The desktop GUI shipped **~21 HTML page surfaces** at audit time (now 24 + the
+Activity), but the top nav exposes only **~8**. The rest are reachable only via
+the ⌘K jump palette, so real features were undiscoverable and non-functional
+demo/mock pages shipped alongside them. This table classifies every page so
+keep / cut / promote calls can be made deliberately, per-page.
 
 Method: live-wiring = count of real endpoint/`fetch()` references; mock-signal
 = count of mock/placeholder/demo markers; plus a read of the ambiguous ones
@@ -57,18 +70,23 @@ Method: live-wiring = count of real endpoint/`fetch()` references; mock-signal
 | `boot.html` | Startup splash | INFRA — keep |
 | `seekdeep-loading.html` | Tauri loading splash (polls `/health`, 17 live) | INFRA — keep |
 
-## Recommended sequence (when you decide to act)
+## Recommended sequence (status noted inline)
 
-1. **Lowest-risk, highest-value:** promote `memory`, `image-ab`, `prompts`,
-   `add-model` into a nav "More ▾" menu (purely additive; no page changes).
-2. **De-clutter:** drop `tts`, `mobile`, `pitch`, `landing` from the Tauri
-   bundle's `resources` glob so the desktop app stops shipping dead/marketing
-   surfaces, and prune them from the ⌘K palette list in `nav.js`. Keep the
-   files in-repo for the web/marketing context.
-3. **Decide `tour`:** make it real onboarding or cut it.
+1. **[DONE] Lowest-risk, highest-value:** promote the real hidden features into
+   the ⌘K palette / nav (purely additive). `memory`, `image-ab`, `prompts`,
+   `add-model` — plus the newer `settings` / `personas` / `setup-wizard` — are
+   now offered as in-app navigation targets in `nav.js`.
+2. **[PARTIAL] De-clutter:** `tts`, `mobile`, `pitch`, `landing` (and `tour`)
+   were pruned from the ⌘K palette list in `nav.js` so they no longer appear as
+   jump targets. They are **still bundled** — the Tauri `resources` glob is
+   `gui/**/*`, which ships every page; dropping them from the desktop bundle was
+   *not* done (kept in-repo + bundled for the web/marketing context).
+3. **[DONE] Decide `tour`:** cut from in-app navigation (removed from the ⌘K
+   palette alongside the marketing mocks); file retained in-repo.
 4. **`prompts` polish:** swap the `@offline-demo` sample rows for a proper
    empty-state so the marketplace doesn't look pre-populated with fake data.
+   (Verify against the current `prompts.html` before acting.)
 
 Each of these is independently shippable and behavior-preserving except the
-deliberate cuts. None block the deferred Phase-4 de-monolith or the canonical-
+deliberate cuts. None block the deferred de-monolith or the canonical-
 status-file migration.

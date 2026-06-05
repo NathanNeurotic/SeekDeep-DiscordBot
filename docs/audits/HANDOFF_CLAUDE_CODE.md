@@ -1,8 +1,35 @@
-> **SUPERSEDED 2026-05-29 — historical snapshot, not current.**
-> Archived from the repo root (audit DOC-4). Figures here (endpoint
-> counts, LOC, "unverified" flags) reflect the date in the filename
-> and contradict the live code. Kept for provenance only; do not cite
-> as current state.
+> **HISTORICAL HANDOFF — most of this shipped. Read the status block, not the
+> task bodies, for current state.** This was the GUI→backend task list circa
+> 2026-05-29; the figures in the task bodies (endpoint counts, LOC, "unverified"
+> flags, `v10.35`) reflect that date and contradict the live code. Kept for
+> provenance + the task specs that are still useful as design intent.
+>
+> **Current reality (verified against code at v10.38.24):**
+> - **Task 1 (token auth) — DONE.** `gui_endpoints.py` and `local_ai_server.py`
+>   gate every mutating route with `X-SeekDeep-Token` (`_require_gui_token` /
+>   `require_gui_token` deps); the inference POSTs (`/chat`, `/vision`, `/image`,
+>   …) are token-guarded too. `GET /token` exists.
+> - **Task 2 (WebSocket bridge) — DONE.** `GET /events` WS + `POST /events/emit`
+>   + `GET /events/status` live; GUI consumes via `gui/events.js`
+>   (`window.SeekDeepEvents`).
+> - **Task 3 (version SoT) — DONE.** `/health` exposes `version`; `gui/version.js`
+>   rewrites `[data-version]` cells.
+> - **Task 8 (CI) — DONE and then some.** `.github/workflows/ci.yml` runs
+>   `npm run preflight`; there are also `e2e.yml`, `codeql.yml`,
+>   `security-scan.yml`, `tauri-release.yml`, `ml-deps-resolution.yml`.
+>   Preflight is now **8 stages** (`js`, `html-js`, `py`, `smoke`, `gui-smoke`,
+>   `rust`, `docs`, `coverage`), not the single `js/py/smoke` step sketched in
+>   Task 8.
+> - **Tasks 4 + 5 (docs / env consolidation) — NOT done.** `AGENTS.md` and
+>   `CODEX_REPO_BRIEF.md` both still exist at full size (not stubbed into
+>   `README.md`); `.env.example` and `.env.default` both still ship (both
+>   referenced by the Tauri `resources` bundle).
+> - **Still open:** the `index.js` split (Task 6 — `lib/` holds only
+>   `url-fetch-policy.js`, the per-feature modules were never extracted) and the
+>   `smoke_test.mjs` split (Task 7). The CSP `'unsafe-inline'` removal is tracked
+>   separately in `CSP_TIGHTENING_PLAN.md`. Release **signing is OFF by default**
+>   (the nightly/`tauri-release.yml` build ships unsigned; `certificateThumbprint`
+>   / `signingIdentity` are `null`).
 
 # Handoff · GUI → backend work (for Claude Code)
 

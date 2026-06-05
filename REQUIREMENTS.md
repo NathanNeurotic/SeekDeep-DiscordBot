@@ -43,13 +43,24 @@ Current direct dependencies from `package.json`:
 
 ## Python Packages
 
-Install with:
+Python dependencies are split into two files:
+
+- `requirements-local.txt` — **boot deps** (~30 MB): FastAPI, uvicorn, pydantic, python-dotenv, pillow, requests, huggingface_hub, matplotlib, psutil, plus the tiktoken/sentencepiece tokenizer backends. This is the minimum needed for `local_ai_server.py` to start, bind 7865, serve `/gui/`, and answer `/health`. **No PyTorch.**
+- `requirements-ml.txt` — **heavy ML deps** (~2 GB): PyTorch CUDA wheels (`torch`/`torchvision` `+cu128`), Transformers, Diffusers, accelerate, bitsandbytes, safetensors, Qwen vision utilities, and image/video support packages. Required only for local `/chat`, `/image`, and `/vision` (remote-only chat backends never need it).
+
+Install the boot deps with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r .\requirements-local.txt
 ```
 
-The local requirements file includes PyTorch CUDA wheels plus FastAPI, Transformers, Diffusers, Qwen vision utilities, and image/video support packages.
+Install the heavy ML deps when you intend to run models locally:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\requirements-ml.txt
+```
+
+The server starts fine with only the boot deps; ML-dependent handlers return `ML_DEPS_MISSING` until the ML libraries are installed (the Tauri shell offers an in-app "Install ML libraries" prompt via `POST /deps/install`).
 
 ## External Services
 
@@ -188,9 +199,13 @@ The server uses task-LRU model loading, so switching from chat refinement to ima
    ```powershell
    npm install
    ```
-3. Create or activate the Python virtual environment, then install Python dependencies:
+3. Create or activate the Python virtual environment, then install Python dependencies. Boot deps first:
    ```powershell
    .\.venv\Scripts\python.exe -m pip install -r .\requirements-local.txt
+   ```
+   Then the heavy ML deps (PyTorch + Transformers + Diffusers) if you want local chat/image/vision:
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -r .\requirements-ml.txt
    ```
 4. Copy `.env.default` to `.env` if `.env` does not exist.
 5. Set `DISCORD_TOKEN` in `.env`.
