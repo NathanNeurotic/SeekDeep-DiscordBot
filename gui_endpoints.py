@@ -4148,22 +4148,26 @@ def register_gui_endpoints(
         used: set[str] = set()
         manifest: list[str] = []
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for it in items:
-                ext = "gif" if it["animated"] else "png"
-                base = re.sub(r"[^A-Za-z0-9_.-]+", "_", it["name"]).strip("_") or "emoji"
-                fname = f"{base}.{ext}"
-                n = 1
-                while fname in used:
-                    fname = f"{base}_{n}.{ext}"
-                    n += 1
-                used.add(fname)
-                try:
-                    img = requests.get(it["url"], timeout=20)
-                    if img.status_code == 200 and img.content:
-                        zf.writestr(fname, img.content)
-                        manifest.append(f":{it['name']}: -> {fname}")
-                except Exception:
-                    pass
+            # One pooled session: every emoji image lives on cdn.discordapp.com,
+            # so connection reuse avoids a fresh TCP+TLS handshake per emoji (a
+            # server can have 50-250) — much faster and less socket churn.
+            with requests.Session() as session:
+                for it in items:
+                    ext = "gif" if it["animated"] else "png"
+                    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", it["name"]).strip("_") or "emoji"
+                    fname = f"{base}.{ext}"
+                    n = 1
+                    while fname in used:
+                        fname = f"{base}_{n}.{ext}"
+                        n += 1
+                    used.add(fname)
+                    try:
+                        img = session.get(it["url"], timeout=20)
+                        if img.status_code == 200 and img.content:
+                            zf.writestr(fname, img.content)
+                            manifest.append(f":{it['name']}: -> {fname}")
+                    except Exception:
+                        pass
             zf.writestr("MANIFEST.txt", "SeekDeep emoji backup\n" + "\n".join(manifest) + "\n")
         return buf.getvalue()
 

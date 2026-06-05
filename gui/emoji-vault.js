@@ -91,13 +91,17 @@
   }
 
   async function downloadBackup() {
-    if (!currentGuild) return;
+    // Capture the active guild up front: the user can switch servers mid-build
+    // (the fetch can take seconds on emoji-heavy servers). Using the snapshot
+    // keeps the filename + the finally-block state tied to the guild we backed up.
+    const guildId = currentGuild;
+    if (!guildId) return;
     const backup = $('ev-backup');
     const label = backup ? backup.textContent : '';
     if (backup) { backup.disabled = true; backup.textContent = 'Building…'; }
     setError('');
     try {
-      const r = await fetch('/emoji-vault/' + encodeURIComponent(currentGuild) + '/backup.zip');
+      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/backup.zip');
       if (!r.ok) {
         let detail = 'HTTP ' + r.status;
         try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (_) {}
@@ -107,7 +111,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'emoji-backup-' + currentGuild + '.zip';
+      a.download = 'emoji-backup-' + guildId + '.zip';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -115,7 +119,12 @@
     } catch (err) {
       setError('Backup failed: ' + err.message);
     } finally {
-      if (backup) { backup.textContent = label || 'Download backup (.zip)'; backup.disabled = !currentGuild; }
+      // Only restore THIS guild's button; if the user switched servers mid-build,
+      // loadEmojis() already set the correct disabled state for the new one.
+      if (backup) {
+        backup.textContent = label || 'Download backup (.zip)';
+        if (currentGuild === guildId) backup.disabled = false;
+      }
     }
   }
 
