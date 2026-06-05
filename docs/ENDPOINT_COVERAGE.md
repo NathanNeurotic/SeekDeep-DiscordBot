@@ -12,7 +12,7 @@
 > references it. `—` / `no` are drift signals, not necessarily bugs (some routes
 > are tray-only or future-facing); investigate before assuming coverage.
 
-## gui_endpoints.py (70 routes)
+## gui_endpoints.py (74 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -34,6 +34,10 @@
 | WEBSOCKET | `/events` | token* | events.js | no |
 | POST | `/events/emit` | token | — | yes |
 | GET | `/events/status` | open | — | yes |
+| GET | `/force-react/{guild_id}/config` | token | — | yes |
+| POST | `/force-react/{guild_id}/config` | token | — | yes |
+| GET | `/force-react/{guild_id}/emojis` | token | — | yes |
+| GET | `/force-react/guilds` | token | force-react.js | yes |
 | POST | `/launcher/{service}/{action}` | token | app.html | yes |
 | POST | `/launcher/bot/kill-all` | token | nav.js | yes |
 | GET | `/launchers/status` | open | api.html | yes |
@@ -117,7 +121,7 @@
 
 ## Summary
 
-- Total routes: **93**
+- Total routes: **97**
 - Open (no token): **27**
 - Not referenced by any test suite: **25**
 
