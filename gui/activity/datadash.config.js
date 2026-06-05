@@ -167,8 +167,8 @@ window.DATADASH = {
     hMargin:           0.1,      // player stays within this margin of the screen edges
     crashGravity:      900,     // pull used only for the boss death-spiral
 
-    scrollStart:       640,    // world speed px/s at start (2× faster — more challenge)
-    scrollMax:         1040,   // caps out here
+    scrollStart:       560,    // world speed px/s at start — eased (was 640; transitions too fast to clear)
+    scrollMax:         860,    // caps out here — eased (was 1040) so wall ramps stay clearable vs vMax 840
     scrollRampBytes:   90000,  // bytes over which speed ramps to max
 
     bytesPerPx:        14,     // distance → bytes multiplier
@@ -182,7 +182,7 @@ window.DATADASH = {
     minGapFrac:        0.215,  // narrowest safe channel (fraction of H) — tightest pinch clearance
     maxGapFrac:        0.44,   // open channel width — eased from 0.42 (too hard); still <0.45 so the
                                // gap occasionally sits off screen-centre (centre not a guaranteed free ride)
-    wallSlopePx:       12,     // max wall move per column (px) — kept followable at 2× speed
+    wallSlopePx:       8,      // max wall move per column (px) — gentler ramps; worst-case wall close (~1.5×) stays < vMax even at full scroll
     rampFrac:          0.3,    // fraction of a tower spent ramping (rest is flat top → ziggurat)
     towerMin:          0.09,   // tower/overhang height range — kept under the shared feature-height
     towerMax:          0.18,   //   cap (maxGapFrac − minGapFrac − 0.02 ≈ 0.185) so towers stay varied,
