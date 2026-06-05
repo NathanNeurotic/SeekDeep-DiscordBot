@@ -4281,18 +4281,23 @@ def register_gui_endpoints(
         allowed = body.get("allowed_emoji_ids", [])
         if not isinstance(allowed, list):
             raise HTTPException(400, "allowed_emoji_ids must be a list")
-        allowed = [str(x) for x in allowed if re.fullmatch(r"\d{5,25}", str(x))][:2000]
-        all_cfg = _force_react_read_all()
-        all_cfg.setdefault("guilds", {})[str(guild_id)] = {
-            "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
-        }
-        try:
-            _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _force_react_config_file.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
-            tmp.replace(_force_react_config_file)
-        except Exception as exc:
-            raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
+        if len(allowed) > 2000:
+            raise HTTPException(400, "allowed_emoji_ids list is too long (max 2000)")
+        allowed = [str(x) for x in allowed if re.fullmatch(r"\d{5,25}", str(x))]
+        # Serialize the read-modify-write through the cross-process advisory lock
+        # (COUP-1) so concurrent POSTs / the bot's own writer can't clobber each other.
+        with _seekdeep_file_lock(_force_react_config_file):
+            all_cfg = _force_react_read_all()
+            all_cfg.setdefault("guilds", {})[str(guild_id)] = {
+                "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
+            }
+            try:
+                _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
+                tmp = _force_react_config_file.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
+                tmp.replace(_force_react_config_file)
+            except Exception as exc:
+                raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
         _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
         return {"ok": True, "config": {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}}
 
