@@ -18,11 +18,11 @@
 |---|---|---|---|---|
 | GET | `/archive/config` | open | app.html | yes |
 | POST | `/archive/config` | token | app.html | yes |
-| POST | `/bot/command` | token | — | yes |
+| POST | `/bot/command` | token | bot-bridge.js | yes |
 | POST | `/cache/prune` | token | api.html | no |
 | GET | `/config` | open | app.html | yes |
 | POST | `/config` | token | app.html | yes |
-| GET | `/config/features` | open | docs.html | no |
+| GET | `/config/features` | open | bot-bridge.js | no |
 | POST | `/config/reload` | token | launcher.js | no |
 | GET | `/config/schema` | open | app.html | no |
 | GET | `/config/status` | open | nav.js | yes |
@@ -36,7 +36,7 @@
 | GET | `/emoji-vault/guilds` | token | emoji-vault.js | yes |
 | WEBSOCKET | `/events` | token* | events.js | no |
 | POST | `/events/emit` | token | — | yes |
-| GET | `/events/status` | open | — | yes |
+| GET | `/events/status` | open | bot-bridge.js | yes |
 | GET | `/force-react/{guild_id}/config` | token | — | yes |
 | POST | `/force-react/{guild_id}/config` | token | — | yes |
 | GET | `/force-react/{guild_id}/emojis` | token | — | yes |

@@ -1421,6 +1421,7 @@
     const GATED_ITEMS = [
       { title: 'Emoji Vault', path: 'emoji-vault.html', flag: 'SEEKDEEP_FEATURE_EMOJI_VAULT' },
       { title: 'Force React', path: 'force-react.html', flag: 'SEEKDEEP_FEATURE_FORCE_REACT' },
+      { title: 'Bot Bridge', path: 'bot-bridge.html', flag: 'SEEKDEEP_FEATURE_BOT_BRIDGE' },
     ];
     const moreCSS = `
       .topnav .links .sd-more { position: relative; display: inline-flex; align-items: center; }

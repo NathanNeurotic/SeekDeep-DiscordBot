@@ -138,7 +138,7 @@ stage('js', () => {
   // Parse-check every JS file we ship. gui/nav.js carries the GUI's auth
   // interceptor + jump palette + SeekDeepPrompt API — a parse error there
   // silently breaks every page.
-  const targets = ['index.js', 'lib/url-fetch-policy.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/audit_endpoint_coverage.mjs', 'scripts/check-release-files.mjs', 'scripts/check-env-coverage.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js', 'gui/emoji-vault.js', 'gui/force-react.js', 'gui/tts.js'];
+  const targets = ['index.js', 'lib/url-fetch-policy.js', 'smoke_test.mjs', 'scripts/preflight.mjs', 'scripts/run-python.mjs', 'scripts/audit_endpoint_coverage.mjs', 'scripts/check-release-files.mjs', 'scripts/check-env-coverage.mjs', 'gui/nav.js', 'gui/events.js', 'gui/version.js', 'gui/fetch.js', 'gui/playground.js', 'gui/stats.js', 'gui/ml-deps.js', 'gui/model-install.js', 'gui/notify.js', 'gui/updater.js', 'gui/launcher.js', 'gui/config-render.js', 'gui/emoji-vault.js', 'gui/force-react.js', 'gui/tts.js', 'gui/bot-bridge.js'];
   for (const t of targets) {
     if (!existsSync(path.join(ROOT, t))) continue;
     const r = checkJsFile(t);

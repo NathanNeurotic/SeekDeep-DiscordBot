@@ -258,6 +258,10 @@ event_bus = _EventBus()
 # receive-loop routes to _resolve_bot_command() to complete the Future.
 # Module-level so it survives the idempotent re-registration of the route table.
 _bot_command_pending = {}  # cid -> asyncio.Future
+_bot_bridge_sockets = set()  # WebSockets that announced themselves as the bot (bot.bridge.hello)
+
+def _bot_bridge_online() -> bool:
+    return len(_bot_bridge_sockets) > 0
 
 def _resolve_bot_command(cid, payload):
     if not cid:
@@ -5692,14 +5696,22 @@ def register_gui_endpoints(
                     msg = json.loads(raw)
                 except Exception:
                     continue
-                if isinstance(msg, dict) and msg.get("type") == "bot.command.result":
-                    d = msg.get("data") or {}
-                    _resolve_bot_command(d.get("cid"), d)
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("type") == "bot.command.result":
+                    d = msg.get("data")
+                    if isinstance(d, dict):
+                        _resolve_bot_command(d.get("cid"), d)
+                elif msg.get("type") == "bot.bridge.hello":
+                    # The bot identifies itself so /bot/command knows it is ACTUALLY
+                    # connected (a browser tab also counts as a bus subscriber).
+                    _bot_bridge_sockets.add(websocket)
         except WebSocketDisconnect:
             pass
         except Exception:
             pass
         finally:
+            _bot_bridge_sockets.discard(websocket)
             await event_bus.unsubscribe(websocket)
 
     # ----- POST /events/emit -----
@@ -5716,7 +5728,8 @@ def register_gui_endpoints(
     # are connected (useful for the "WebSocket connected" indicator in the title bar).
     @app.get("/events/status")
     async def get_events_status():
-        return {"ok": True, "subscribers": event_bus.subscriber_count, "server_time_ms": int(time.time() * 1000)}
+        return {"ok": True, "subscribers": event_bus.subscriber_count,
+                "bot_bridge": _bot_bridge_online(), "server_time_ms": int(time.time() * 1000)}
 
     # ----- POST /bot/command (GUI -> bot command bridge) -----
     # Feature-gated parity bridge: relay a whitelisted command to the running
@@ -5733,15 +5746,19 @@ def register_gui_endpoints(
         action = (cmd.action or "").strip()
         if not action:
             raise HTTPException(400, "action is required")
-        if event_bus.subscriber_count == 0:
+        if not _bot_bridge_online():
             raise HTTPException(503, "the bot is not connected to the event bus")
         cid = secrets.token_hex(8)
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
         _bot_command_pending[cid] = fut
         try:
-            await event_bus.publish({"type": "bot.command",
-                                     "data": {"cid": cid, "action": action, "args": cmd.args or {}}})
+            sent = await event_bus.publish({"type": "bot.command",
+                                            "data": {"cid": cid, "action": action, "args": cmd.args or {}}})
+            if sent == 0:
+                # Race: the bot dropped off the bus between the online-check and
+                # publish. Fail fast instead of waiting out the timeout.
+                raise HTTPException(503, "the bot is not connected to the event bus")
             timeout = max(1.0, min(float(cmd.timeout or 8.0), 30.0))
             try:
                 result = await asyncio.wait_for(fut, timeout=timeout)
