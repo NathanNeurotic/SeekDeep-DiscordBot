@@ -179,8 +179,9 @@ window.DATADASH = {
     // independently with a guaranteed min channel + flyable slopes (never impossible).
     colW:              20,     // terrain column width (px)
     edgeMargin:        0.05,   // walls never enter this margin of the screen edges
-    minGapFrac:        0.225,  // narrowest safe channel (fraction of H) — a bit more clearance
-    maxGapFrac:        0.64,   // the open channel width
+    minGapFrac:        0.235,  // narrowest safe channel (fraction of H) — fairer tightest clearance
+    maxGapFrac:        0.50,   // open channel width — tighter so screen-centre is no longer auto-safe
+                               // (centre used to always sit inside the gap; you must follow it up/down now)
     wallSlopePx:       12,     // max wall move per column (px) — kept followable at 2× speed
     rampFrac:          0.3,    // fraction of a tower spent ramping (rest is flat top → ziggurat)
     towerMin:          0.24,   // tower/overhang height range (fraction of H)
