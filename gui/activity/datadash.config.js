@@ -180,8 +180,8 @@ window.DATADASH = {
     colW:              20,     // terrain column width (px)
     edgeMargin:        0.05,   // walls never enter this margin of the screen edges
     minGapFrac:        0.215,  // narrowest safe channel (fraction of H) — tightest pinch clearance
-    maxGapFrac:        0.42,   // open channel width — below 0.45 so the gap sometimes sits fully
-                               // above/below screen-centre (centre is no longer a guaranteed free ride)
+    maxGapFrac:        0.44,   // open channel width — eased from 0.42 (too hard); still <0.45 so the
+                               // gap occasionally sits off screen-centre (centre not a guaranteed free ride)
     wallSlopePx:       12,     // max wall move per column (px) — kept followable at 2× speed
     rampFrac:          0.3,    // fraction of a tower spent ramping (rest is flat top → ziggurat)
     towerMin:          0.09,   // tower/overhang height range — kept under the shared feature-height
@@ -189,9 +189,9 @@ window.DATADASH = {
                                //   not clamped flat. Re-fit whenever maxGapFrac/minGapFrac move.
     wallStepFrac:      0.055,  // walls snap to this vertical grid → blocky chip towers (not smooth ramps)
     pinchAmt:          0.17,   // how far an archway pinch closes (fraction of H) — under the ~0.185 cap so pinches vary (still the tightest feature)
-    centerStepMin:     0.14,   // base-channel meander per feature (fraction H) — cranked for more vertical
-    centerStepMax:     0.24,   //   travel. CAP at the half-range (0.45 − maxGapFrac/2 = 0.24): a larger step
-                               //   from mid-channel overshoots BOTH bounds → degenerate slam to an edge.
+    centerStepMin:     0.14,   // base-channel meander per feature (fraction H) — kept high for vertical travel
+    centerStepMax:     0.23,   //   (Nathan likes it). CAP at the half-range (0.45 − maxGapFrac/2 = 0.23): a
+                               //   larger step from mid-channel overshoots BOTH bounds → degenerate slam to edge.
     featMin:           6,      // base feature length range (columns) for open/ramp stretches
     featMax:           13,
     corridorRampBytes: 80000,  // distance over which towers get a touch taller/more frequent
@@ -292,7 +292,6 @@ window.DATADASH = {
     barGap:            0.26,   // gap height in the firewall you fly through (fraction of H)
     barWarn:           0.55,   // telegraph time before the firewall goes lethal (s)
     barThickness:      30,     // firewall wall thickness (px)
-    barAlignThreshold: 240,    // x-distance within which a new firewall snaps to an existing one's gap (anti-solid-wall)
 
     // Player return fire (CLICK) — costs DATA: spend bytes to shoot. Out of data =
     // no fire, but bosses still expire on their own timer; bullets just speed it up.

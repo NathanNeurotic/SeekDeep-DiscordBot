@@ -304,7 +304,7 @@
     game.feat = { type: "open", amt: 0 };
     game.featCol = 0; game.featLen = T.featMax;
     game.laneY = 0.5; game.laneTarget = 0.5; game.laneCol = 0;
-    game.holdCols = 0; game.obsCooldown = 8;
+    game.holdCols = 0; game.obsCooldown = 8; game.reversing = false;
     game.cTop = 0.5 - openHalf; game.cBot = 0.5 + openHalf;
     game.cols = [];
     const n = Math.ceil(W / T.colW) + 4;
@@ -317,15 +317,44 @@
     scrollAcc += dx;
     while (scrollAcc >= T.colW) {
       scrollAcc -= T.colW;
+      // coming out of a rewind: re-sync the forward generator to the current
+      // right edge so the first new column continues from it — otherwise the
+      // generator is still ahead of the rewound edge and the corridor jumps
+      // ("restored-from-reverse" wall).
+      if (game.reversing) { resyncGenToRightEdge(); game.reversing = false; }
       game.cols.shift();
       game.cols.push(makeColumn());
     }
-    // reverse scroll: generate fresh terrain on the left as we move backwards
+    // reverse scroll: as we move backwards, EXTEND the current opening to the
+    // left by cloning the leftmost column — do NOT call makeColumn(), which
+    // would (a) advance the forward generator and slap freshly-generated terrain
+    // next to far-away old terrain → a discontinuous "solid wall" seam, and
+    // (b) spawn new towers/chips into the rewound region. Cloning keeps the
+    // channel continuous and passable the way the player came in, and freezes
+    // the generator so forward play resumes cleanly.
     while (scrollAcc < 0) {
       scrollAcc += T.colW;
+      game.reversing = true;
       game.cols.pop();
-      game.cols.unshift(makeColumn());
+      const edge = game.cols[0];
+      game.cols.unshift(edge ? { ceil: edge.ceil, floor: edge.floor, blocks: [] } : makeColumn());
     }
+  }
+
+  // Re-centre the forward generator on the current right-edge column's gap so
+  // generation continues continuously after a rewind (opens from where we are,
+  // never closing a wall onto the player). Called once on the reverse→forward flip.
+  function resyncGenToRightEdge() {
+    const edge = game.cols[game.cols.length - 1];
+    if (!edge) return;
+    const cTop = edge.ceil / H, cBot = (H - edge.floor) / H;
+    const mid = (cTop + cBot) / 2;
+    const lm = T.laneMargin, em = T.edgeMargin;
+    game.baseCenter = mid; game.baseCenterTarget = mid;
+    game.laneY = Math.max(em + lm, Math.min(1 - em - lm, mid));
+    game.laneTarget = game.laneY; game.laneCol = 0;
+    game.feat = { type: "open", amt: 0 }; game.featCol = 0; game.featLen = T.featMax;
+    game.holdCols = 0;
   }
 
   // ---- input / controls / pause -------------------------------------------
@@ -1438,14 +1467,26 @@
       case 4: // FIREWALL — a full-height energy wall sweeps in; fly through the gap
         b.fireT = 2.0 * fr;
         { const gapH = H * T.barGap;
-          // Align to any firewall already sweeping in at nearly the same x — a second
-          // simultaneous pattern (or the other daemon in a double-boss) could otherwise
-          // stack a wall whose gap doesn't overlap, leaving NO passable lane (solid wall).
-          const near = game.bars.find((bar) => !bar.breaking && Math.abs(bar.x - (b.x - T.barThickness)) < (T.barAlignThreshold ?? 240));
-          const gy = near ? near.gapY
-                          : Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, game.py + (Math.random() - 0.5) * H * 0.18));
-          const gh = near ? near.gapH : gapH;
-          game.bars.push({ x: b.x - T.barThickness, vx: -T.barSpeed, w: T.barThickness, gapY: gy, gapH: gh, life: 0, warn: T.barWarn }); }
+          const newX = b.x - T.barThickness;
+          let gy = Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, game.py + (Math.random() - 0.5) * H * 0.18));
+          // Keep the gap REACHABLE from the nearest firewall already in flight,
+          // else a staggered pair (two patterns at once, or the other daemon in a
+          // double-boss) can leave no passable path — a solid wall. The player has
+          // Δx / barSpeed seconds before this wall arrives after that one; at vMax
+          // that bounds the vertical move. Clamp |Δgap| to that reach (×0.6 for the
+          // accel ramp). Δx→0 ⇒ gaps converge (old align); far apart ⇒ free variety.
+          let nearest = null, nd = Infinity;
+          for (const bar of game.bars) {
+            if (bar.breaking) continue;
+            const d = Math.abs(bar.x - newX);
+            if (d < nd) { nd = d; nearest = bar; }
+          }
+          if (nearest) {
+            const reach = T.vMax * (nd / T.barSpeed) * 0.6;
+            gy = Math.max(nearest.gapY - reach, Math.min(nearest.gapY + reach, gy));
+            gy = Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, gy));
+          }
+          game.bars.push({ x: newX, vx: -T.barSpeed, w: T.barThickness, gapY: gy, gapH: gapH, life: 0, warn: T.barWarn }); }
         break;
     }
   }
