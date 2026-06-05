@@ -608,7 +608,7 @@ Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All 
 | `SEEKDEEP_FEATURE_INPAINT` | off | `@SeekDeep inpaint <target>` and `/inpaint`. Object removal via CLIPSeg auto-mask + SDXL inpainting. |
 | `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. Requires Real-ESRGAN weights + a Python endpoint. Scaffolded. |
 | `SEEKDEEP_FEATURE_NSFW_GATE` | off | Scores generated images via a CLIP NSFW classifier and either spoiler-wraps or refuses based on threshold. Scaffolded. |
-| `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). Scaffolded. |
+| `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). **Wired** — the AI server exposes a token-gated `POST /tts` (text → base64 WAV) and the GUI TTS controls call it. Set `SEEKDEEP_TTS_PIPER_VOICE` to a Piper `.onnx` voice (or `SEEKDEEP_TTS_MODEL_ID` for XTTS) to enable it; until then `/tts` returns 503. The voice model is **not bundled** — download a Piper voice yourself ([OHF-Voice/piper](https://github.com/OHF-Voice/piper)). |
 | `LOCAL_VISION_KEEP_RESIDENT` | off | Pins the vision model in VRAM across task switches. Off saves ~6 GB VRAM; pay a one-time reload on rare vision follow-ups. |
 | `LOCAL_IMAGE_KEEP_RESIDENT` | off | Same for the SDXL image pipeline. Image is bursty enough that pinning it usually isn't worth the VRAM. |
 

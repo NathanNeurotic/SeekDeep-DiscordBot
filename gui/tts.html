@@ -207,22 +207,17 @@
 </nav>
 
 <div class="app-wrap"><div class="win">
-  <!-- Whole page is a design-time mock (banner below). Lock interactivity
-       so buttons / toggles / textareas don't pretend to work — they
-       generated tiny visual flickers + zero side-effect before. Matches
-       the mobile.html pattern. The topbar nav above stays clickable. -->
-  <style>.body, .body * { pointer-events: none !important; }</style>
-  <div class="body">
+  <div class="body" id="ttsPage">
 
     <!-- ===== LEFT · VOICE CHANNELS ===== -->
     <aside class="col">
       <div>
         <h2>Voice channels</h2>
-        <div class="sub" style="margin-top: 4px;">▸ joinable in this guild</div>
+        <div class="sub" style="margin-top: 4px;">▸ Discord-only · @SeekDeep tts join</div>
       </div>
 
-      <div class="preview-banner">
-        <strong>⚠ DESIGN-TIME MOCK</strong> · TTS backend (Piper / XTTS) is deferred indefinitely. UI is targeting a future integration shape. None of the controls below dispatch.
+      <div class="preview-banner" id="ttsStatus" data-state="checking">
+        <strong>● TTS</strong> · Checking…
       </div>
 
       <div class="vc-list">
@@ -302,6 +297,7 @@
           <div class="wave" id="wave"></div>
           <div class="timecode" id="tc">00:08 / 00:24</div>
         </div>
+        <audio id="ttsAudio" hidden preload="none"></audio>
         <div class="stage-meta">
           <span><em>voice</em> en_US-amy-medium</span>
           <span><em>rate</em> 1.0×</span>
@@ -350,8 +346,8 @@
       </div>
 
       <div class="composer">
-        <textarea placeholder="Queue an utterance for the connected VC…">test queue: "the kraken is real, it's just smaller than you'd hope."</textarea>
-        <button class="btn btn-primary">▸ Queue</button>
+        <textarea id="ttsText" placeholder="Type text and press Speak to synthesize it in your browser…">The kraken is real — it's just smaller than you'd hope.</textarea>
+        <button class="btn btn-primary" id="ttsSpeak">▸ Speak</button>
       </div>
     </main>
 
@@ -404,7 +400,7 @@
         <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">SYNTHESIS KNOBS</h2>
         <div class="pref-row">
           <div><div class="k">RATE</div><div class="d">speech speed multiplier · 0.5–2.0</div></div>
-          <input type="number" value="1.0" step="0.1" min="0.5" max="2.0" />
+          <input type="number" id="ttsRate" value="1.0" step="0.1" min="0.5" max="2.0" />
         </div>
         <div class="pref-row">
           <div><div class="k">PITCH</div><div class="d">semitones · −6 to +6</div></div>
@@ -428,35 +424,7 @@
   </div>
 </div></div>
 
-<script>
-(function () {
-  // Play/pause toggle (visual only — no audio in mock)
-  const pp = document.getElementById('pp');
-  let playing = true;
-  pp.addEventListener('click', () => {
-    playing = !playing;
-    pp.textContent = playing ? '▮▮' : '▶';
-    document.getElementById('wave').style.filter = playing ? '' : 'grayscale(1) brightness(0.6)';
-  });
-
-  // Voice selection
-  document.querySelectorAll('.voice').forEach(v => v.addEventListener('click', e => {
-    if (e.target.tagName === 'BUTTON') return;
-    document.querySelectorAll('.voice').forEach(x => x.classList.remove('active'));
-    v.classList.add('active');
-  }));
-
-  // Voice channel selection
-  document.querySelectorAll('.vc').forEach(vc => vc.addEventListener('click', () => {
-    if (vc.classList.contains('locked')) return;
-    document.querySelectorAll('.vc').forEach(x => x.classList.remove('active'));
-    vc.classList.add('active');
-  }));
-
-  // Toggle pref-row toggles
-  document.querySelectorAll('.pref-row .toggle').forEach(t => t.addEventListener('click', () => t.classList.toggle('on')));
-})();
-</script>
+<script src="tts.js" defer></script>
 <script src="nav.js" defer></script>
 </body>
 </html>

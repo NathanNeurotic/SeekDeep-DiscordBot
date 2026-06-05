@@ -409,6 +409,50 @@ KEEP_RESIDENT_VISION = os.getenv("LOCAL_VISION_KEEP_RESIDENT", "false").lower() 
 KEEP_RESIDENT_IMAGE = os.getenv("LOCAL_IMAGE_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
 
 # ---------------------------------------------------------------------------
+# Text-to-speech (TTS) — /tts endpoint + GUI voice reader.
+# ---------------------------------------------------------------------------
+# Two engines are wired:
+#   piper : fast, CPU-friendly, offline ONNX voices (OHF-Voice/piper). Needs a
+#           voice file — set SEEKDEEP_TTS_PIPER_VOICE to a .onnx path (the model
+#           is NOT bundled; download one yourself). Optionally point
+#           SEEKDEEP_TTS_PIPER_BIN at a `piper` executable to use the CLI
+#           instead of the Python package.
+#   xtts  : Coqui XTTS-v2 (heavier, multilingual, voice-cloning). Set
+#           SEEKDEEP_TTS_MODEL_ID to the XTTS repo id.
+# No voice/model is configured by default, so /tts returns 503 until you set
+# one. Nothing here imports at module load — the heavy bits live in the loader.
+SEEKDEEP_TTS_ENGINE = (os.getenv("SEEKDEEP_TTS_ENGINE", "piper") or "piper").strip().lower()
+SEEKDEEP_TTS_PIPER_VOICE = (os.getenv("SEEKDEEP_TTS_PIPER_VOICE", "") or "").strip()
+SEEKDEEP_TTS_MODEL_ID = (os.getenv("SEEKDEEP_TTS_MODEL_ID", "") or "").strip()
+SEEKDEEP_TTS_PIPER_BIN = (os.getenv("SEEKDEEP_TTS_PIPER_BIN", "") or "").strip()
+# Hard cap on a single /tts request's text. Above this we 400 before any
+# synthesis runs (a runaway paragraph shouldn't pin the CPU).
+SEEKDEEP_TTS_MAX_CHARS = int(os.getenv("SEEKDEEP_TTS_MAX_CHARS", "2000"))
+
+
+def _tts_voice_configured() -> bool:
+    """True when the selected engine has a voice/model pointed at it. This is
+    the single source of truth for the 503 ('not configured') gate and the
+    /health `tts.enabled` flag — it answers "could /tts possibly work?" without
+    importing or loading anything heavy."""
+    if SEEKDEEP_TTS_ENGINE == "piper":
+        return bool(SEEKDEEP_TTS_PIPER_VOICE)
+    if SEEKDEEP_TTS_ENGINE == "xtts":
+        return bool(SEEKDEEP_TTS_MODEL_ID)
+    return False
+
+
+def _tts_configured_voice() -> str:
+    """The configured voice/model identifier for the active engine ('' if none).
+    Surfaced in /health and echoed back in the /tts 200 response."""
+    if SEEKDEEP_TTS_ENGINE == "piper":
+        return SEEKDEEP_TTS_PIPER_VOICE
+    if SEEKDEEP_TTS_ENGINE == "xtts":
+        return SEEKDEEP_TTS_MODEL_ID
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # VRAM budget management
 # ---------------------------------------------------------------------------
 # Reserve this much VRAM (MB) for Windows, desktop compositor, Discord,
@@ -2056,6 +2100,11 @@ vision_model = None
 vision_processor = None
 vision_tokenizer = None
 image_pipe = None
+# TTS engine handle, lazily built by load_tts_engine(). Stays None until the
+# first /tts request with a configured voice/model. For Piper this is the
+# loaded PiperVoice (or a small dict describing the CLI fallback); for XTTS the
+# Coqui TTS object. Never touched at import time.
+tts_engine = None
 loaded_task: Optional[str] = None
 loaded_chat_role: Optional[str] = None
 loaded_chat_model_id: Optional[str] = None
@@ -2579,6 +2628,14 @@ async def health():
             "chat": CHAT_MODEL_ID,
             "vision": VISION_MODEL_ID,
             "image": IMAGE_MODEL_ID,
+        },
+        # TTS readiness for the GUI voice-reader badge. `enabled` is purely
+        # "is a voice/model configured?" — it does NOT import or load anything,
+        # so /health stays cheap even when no TTS deps are installed.
+        "tts": {
+            "enabled": _tts_voice_configured(),
+            "engine": SEEKDEEP_TTS_ENGINE,
+            "voice": (_tts_configured_voice() or None),
         },
         "vram_budget": {
             "system_reserve_mb": VRAM_SYSTEM_RESERVE_MB,
@@ -4725,6 +4782,260 @@ def vision(req: VisionRequest):
 
 
 # ---------------------------------------------------------------------------
+# Text-to-speech — loader + synthesis. Heavy imports live INSIDE load_tts_engine
+# so importing this module never pulls in piper / TTS. The /tts route (below the
+# image routes) maps the two sentinels to HTTP codes: TTSDepsMissing -> 501,
+# TTSNotConfigured -> 503, and any other exception -> 500.
+# ---------------------------------------------------------------------------
+
+class TTSNotConfigured(RuntimeError):
+    """No voice/model env is set for the active engine -> HTTP 503."""
+
+
+class TTSDepsMissing(RuntimeError):
+    """The chosen engine's package/binary isn't installed -> HTTP 501."""
+
+
+def load_tts_engine():
+    """Lazily build (and cache) the TTS engine handle for the active engine.
+
+    Mirrors load_image_pipe(): cached-handle short-circuit -> lazy import inside
+    -> assign the `tts_engine` module global. NOTHING heavy imports at module
+    load. Raises TTSNotConfigured (->503) when no voice/model is set, and
+    TTSDepsMissing (->501) when the engine's package/binary is unavailable.
+
+    Piper resolution order:
+      1. Python package: `from piper import PiperVoice` + PiperVoice.load(voice).
+      2. CLI fallback: if the import fails but SEEKDEEP_TTS_PIPER_BIN (or a
+         `piper` on PATH) exists, stash a {"mode": "cli", ...} descriptor and
+         shell out at synth time.
+      3. Neither -> TTSDepsMissing.
+    """
+    global tts_engine
+
+    if tts_engine is not None:
+        return tts_engine
+
+    if not _tts_voice_configured():
+        raise TTSNotConfigured(
+            "No TTS voice/model configured. Set SEEKDEEP_TTS_PIPER_VOICE "
+            "(Piper) or SEEKDEEP_TTS_MODEL_ID (XTTS)."
+        )
+
+    if SEEKDEEP_TTS_ENGINE == "piper":
+        # --- Preferred: the piper Python package (offline, fast). ---
+        try:
+            from piper import PiperVoice  # type: ignore
+        except Exception:
+            PiperVoice = None  # fall through to the CLI probe below
+
+        if PiperVoice is not None:
+            try:
+                voice = PiperVoice.load(SEEKDEEP_TTS_PIPER_VOICE)
+            except Exception as exc:
+                # Package present but the voice file is unloadable (missing
+                # .onnx / .onnx.json, corrupt, wrong path). That's a 500-class
+                # config error, not a missing-dep — surface it loudly.
+                raise RuntimeError(f"failed to load Piper voice: {exc}") from exc
+            tts_engine = {"mode": "python", "voice": voice}
+            print(f"[SeekDeep] TTS (piper) loaded voice: {SEEKDEEP_TTS_PIPER_VOICE}", flush=True)
+            return tts_engine
+
+        # --- Fallback: a `piper` executable. ---
+        import shutil
+        piper_bin = SEEKDEEP_TTS_PIPER_BIN or shutil.which("piper")
+        if piper_bin and (os.path.isfile(piper_bin) or shutil.which(piper_bin)):
+            tts_engine = {"mode": "cli", "bin": piper_bin, "voice": SEEKDEEP_TTS_PIPER_VOICE}
+            print(f"[SeekDeep] TTS (piper) using CLI: {piper_bin}", flush=True)
+            return tts_engine
+
+        raise TTSDepsMissing("TTS engine not installed (pip install piper-tts).")
+
+    if SEEKDEEP_TTS_ENGINE == "xtts":
+        try:
+            from TTS.api import TTS  # type: ignore
+        except Exception as exc:
+            raise TTSDepsMissing("TTS engine not installed (pip install TTS).") from exc
+        try:
+            use_gpu = cuda_available()
+            engine = TTS(model_name=SEEKDEEP_TTS_MODEL_ID).to("cuda" if use_gpu else "cpu")
+        except Exception as exc:
+            raise RuntimeError(f"failed to load XTTS model: {exc}") from exc
+        tts_engine = {"mode": "xtts", "tts": engine}
+        print(f"[SeekDeep] TTS (xtts) loaded model: {SEEKDEEP_TTS_MODEL_ID}", flush=True)
+        return tts_engine
+
+    # Engine string isn't one we know how to drive.
+    raise TTSDepsMissing(
+        f"Unknown TTS engine {SEEKDEEP_TTS_ENGINE!r}. Set SEEKDEEP_TTS_ENGINE to 'piper' or 'xtts'."
+    )
+
+
+def _tts_default_sample_rate() -> int:
+    """Best-effort sample rate for the active engine, used only when synthesis
+    can't report one (Piper voices are typically 22050 Hz mono; XTTS is 24000)."""
+    return 24000 if SEEKDEEP_TTS_ENGINE == "xtts" else 22050
+
+
+def synthesize_tts(text: str, voice: str = "", rate: float = 1.0) -> tuple[bytes, int]:
+    """Synthesize `text` -> (wav_bytes, sample_rate). Builds the engine on first
+    call. `rate` is an optional length scale (>1.0 = slower for Piper). Raises
+    the same sentinels as load_tts_engine(); other failures bubble as plain
+    exceptions the route maps to 500. Returns a native WAV (no resampling)."""
+    import io as _io
+    import wave as _wave
+
+    engine = load_tts_engine()
+    mode = engine.get("mode")
+
+    # ---------------- Piper: Python package ----------------
+    if mode == "python":
+        voice_obj = engine["voice"]
+        # The piper1-gpl package accepts a SynthesisConfig with a length_scale;
+        # older builds don't. Pass it when available, otherwise synthesize plain.
+        syn_config = None
+        try:
+            from piper import SynthesisConfig  # type: ignore
+            if rate and rate > 0 and abs(rate - 1.0) > 1e-3:
+                syn_config = SynthesisConfig(length_scale=float(rate))
+        except Exception:
+            syn_config = None
+
+        buf = _io.BytesIO()
+        # Preferred path: synthesize_wav writes a full WAV (header + frames)
+        # straight into a wave.Wave_write. This is the documented one-shot API.
+        try:
+            with _wave.open(buf, "wb") as wav_file:
+                if syn_config is not None:
+                    voice_obj.synthesize_wav(text, wav_file, syn_config=syn_config)
+                else:
+                    voice_obj.synthesize_wav(text, wav_file)
+            data = buf.getvalue()
+            if data:
+                sr = _wav_sample_rate(data) or _tts_default_sample_rate()
+                return data, sr
+        except (AttributeError, TypeError):
+            pass  # older/newer API — fall back to the streaming chunk API
+
+        # Fallback: stream raw int16 chunks and assemble the WAV ourselves.
+        sample_rate = _tts_default_sample_rate()
+        sample_width = 2
+        channels = 1
+        frames = bytearray()
+        produced = False
+        for chunk in voice_obj.synthesize(text):
+            produced = True
+            # piper1-gpl AudioChunk carries int16 bytes + format metadata.
+            sample_rate = int(getattr(chunk, "sample_rate", sample_rate) or sample_rate)
+            sample_width = int(getattr(chunk, "sample_width", sample_width) or sample_width)
+            channels = int(getattr(chunk, "sample_channels", channels) or channels)
+            payload = getattr(chunk, "audio_int16_bytes", None)
+            if payload is None:
+                # Last-resort: some builds expose float arrays instead.
+                arr = getattr(chunk, "audio_float_array", None)
+                if arr is not None:
+                    import numpy as _np  # local: numpy ships with the ML stack
+                    payload = (_np.clip(arr, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+            if payload:
+                frames.extend(payload)
+        if not produced:
+            raise RuntimeError("Piper produced no audio for the request.")
+        return _pcm_to_wav(bytes(frames), sample_rate, sample_width, channels), sample_rate
+
+    # ---------------- Piper: CLI fallback ----------------
+    if mode == "cli":
+        import subprocess
+        import tempfile
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+            cmd = [engine["bin"], "-m", engine["voice"], "-f", tmp_path]
+            if rate and rate > 0 and abs(rate - 1.0) > 1e-3:
+                cmd += ["--length_scale", str(float(rate))]
+            proc = subprocess.run(
+                cmd,
+                input=text.encode("utf-8"),
+                capture_output=True,
+                timeout=120,
+            )
+            if proc.returncode != 0:
+                err = (proc.stderr or b"").decode("utf-8", "replace")[:300]
+                raise RuntimeError(f"piper CLI failed (exit {proc.returncode}): {err}")
+            with open(tmp_path, "rb") as fh:
+                data = fh.read()
+            if not data:
+                raise RuntimeError("piper CLI produced an empty WAV.")
+            sr = _wav_sample_rate(data) or _tts_default_sample_rate()
+            return data, sr
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    # ---------------- XTTS (Coqui) ----------------
+    if mode == "xtts":
+        import tempfile
+        tts_obj = engine["tts"]
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+            kwargs = {"text": text, "file_path": tmp_path}
+            # XTTS-v2 needs a target language; default to English. A speaker
+            # name (when the model ships built-in speakers) can be passed via
+            # the request `voice` field.
+            try:
+                kwargs["language"] = os.getenv("SEEKDEEP_TTS_XTTS_LANGUAGE", "en")
+                if voice:
+                    kwargs["speaker"] = voice
+                tts_obj.tts_to_file(**kwargs)
+            except TypeError:
+                # Model doesn't take language/speaker — retry minimal.
+                tts_obj.tts_to_file(text=text, file_path=tmp_path)
+            with open(tmp_path, "rb") as fh:
+                data = fh.read()
+            if not data:
+                raise RuntimeError("XTTS produced an empty WAV.")
+            sr = _wav_sample_rate(data) or _tts_default_sample_rate()
+            return data, sr
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    raise RuntimeError(f"TTS engine in an unexpected state: mode={mode!r}")
+
+
+def _pcm_to_wav(pcm: bytes, sample_rate: int, sample_width: int = 2, channels: int = 1) -> bytes:
+    """Wrap raw little-endian PCM frames in a minimal WAV container."""
+    import io as _io
+    import wave as _wave
+    buf = _io.BytesIO()
+    with _wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(max(1, channels))
+        wav_file.setsampwidth(max(1, sample_width))
+        wav_file.setframerate(max(1, sample_rate))
+        wav_file.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _wav_sample_rate(wav_bytes: bytes) -> int:
+    """Read the sample rate out of a WAV byte string; 0 if it isn't parseable."""
+    import io as _io
+    import wave as _wave
+    try:
+        with _wave.open(_io.BytesIO(wav_bytes), "rb") as wav_file:
+            return int(wav_file.getframerate())
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Image generation - configurable diffusion steps for the current model.
 # ---------------------------------------------------------------------------
 
@@ -5766,6 +6077,17 @@ class ChartRequest(BaseModel):
     guild_name: str = Field("", description="Optional server name for subtitle")
 
 
+class TTSRequest(BaseModel):
+    """Text-to-speech request. `voice`/`engine` override the configured defaults
+    (echoed back in the response); `rate` is a length scale (>1.0 = slower for
+    Piper). Length is hard-capped in the route so an oversized paragraph 400s
+    before any synthesis runs."""
+    text: str = Field(..., max_length=_MAX_PROMPT_CHARS)
+    voice: str = Field("", max_length=256)
+    engine: str = Field("", max_length=32)
+    rate: float = Field(1.0, ge=0.1, le=4.0)
+
+
 @app.post("/chart", dependencies=[Depends(require_gui_token)])
 def chart(req: ChartRequest):
     """Render a line chart of daily images / chats / vision counts."""
@@ -5837,6 +6159,74 @@ def chart(req: ChartRequest):
     img_b64 = base64.b64encode(buf.read()).decode("utf-8")
 
     return {"image_b64": img_b64, "filename": "seekdeep_stats_chart.png"}
+
+
+# ---------- tts: synthesize speech from text -> base64 WAV ----------
+
+@app.post("/tts", dependencies=[Depends(require_gui_token)])
+def tts(req: TTSRequest):
+    """Synthesize speech for `req.text` and return a base64-encoded WAV.
+
+    Status contract (mirrors /chart's JSONResponse error shaping):
+      200 -> {ok:true, audio_b64, format:'wav', sample_rate, engine, voice}
+      400 -> empty text, or text longer than SEEKDEEP_TTS_MAX_CHARS
+      503 -> no voice/model configured (detail: 'tts-not-configured')
+      501 -> chosen engine's package/binary unavailable (detail: 'tts-deps-missing')
+      500 -> any other synthesis failure (short message)
+
+    The token gate (Depends(require_gui_token)) fires before this body runs, so
+    an unauthenticated call is 401 and never reaches synthesis. NO model is
+    bundled, so on a stock checkout this returns 503 until SEEKDEEP_TTS_PIPER_VOICE
+    (or SEEKDEEP_TTS_MODEL_ID for XTTS) is set.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "text is required."})
+    if len(text) > SEEKDEEP_TTS_MAX_CHARS:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"text too long (max {SEEKDEEP_TTS_MAX_CHARS} chars)."},
+        )
+
+    # Deterministic 'not configured' gate BEFORE we try to import/load anything.
+    if not _tts_voice_configured():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": "No TTS voice/model configured. Set SEEKDEEP_TTS_PIPER_VOICE (Piper) or SEEKDEEP_TTS_MODEL_ID (XTTS).",
+                "detail": "tts-not-configured",
+            },
+        )
+
+    try:
+        wav_bytes, sample_rate = synthesize_tts(text, voice=req.voice, rate=req.rate)
+    except TTSNotConfigured as exc:
+        # Defensive: the gate above should have caught this, but a racing env
+        # change could land here. Same 503 shape.
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": str(exc), "detail": "tts-not-configured"},
+        )
+    except TTSDepsMissing as exc:
+        return JSONResponse(
+            status_code=501,
+            content={"ok": False, "error": str(exc), "detail": "tts-deps-missing"},
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a short message, not a stack
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"TTS synthesis failed: {exc}"[:300]},
+        )
+
+    return {
+        "ok": True,
+        "audio_b64": base64.b64encode(wav_bytes).decode("ascii"),
+        "format": "wav",
+        "sample_rate": int(sample_rate),
+        "engine": SEEKDEEP_TTS_ENGINE,
+        "voice": req.voice or _tts_configured_voice() or "",
+    }
 
 
 if __name__ == "__main__":
