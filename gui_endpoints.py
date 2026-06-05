@@ -4187,6 +4187,115 @@ def register_gui_endpoints(
             headers={"Content-Disposition": f'attachment; filename="emoji-backup-{guild_id}.zip"'},
         )
 
+    # ----- Force React config (read/write) · SEEKDEEP_FEATURE_FORCE_REACT -----
+    # GUI for the existing right-click Force React picker: pick a server, set the
+    # per-user-per-message cap + cooldown, and choose which emojis the picker offers.
+    # The config lives in data/force-react-config.json (the BOT reads it; server +
+    # emoji lists come from Discord REST, reusing the helpers above). All endpoints
+    # are token-gated; the Discord-REST ones + the config read/write are also
+    # feature-gated (404 when SEEKDEEP_FEATURE_FORCE_REACT is off).
+    _force_react_config_file = (_data_dir / "force-react-config.json")
+
+    def _force_react_enabled() -> bool:
+        return str(_read_env_kv(_env_path).get("SEEKDEEP_FEATURE_FORCE_REACT") or "").strip().lower() in ("1", "true", "yes", "on")
+
+    def _force_react_token() -> str:
+        if not _force_react_enabled():
+            raise HTTPException(404, "Force React is disabled (set SEEKDEEP_FEATURE_FORCE_REACT=on).")
+        token = (_read_env_kv(_env_path).get("DISCORD_TOKEN") or "").strip()
+        if not token:
+            raise HTTPException(503, "DISCORD_TOKEN is not set; cannot reach Discord.")
+        return token
+
+    def _force_react_read_all() -> dict:
+        try:
+            if _force_react_config_file.is_file():
+                raw = json.loads(_force_react_config_file.read_text(encoding="utf-8"))
+                if isinstance(raw, dict) and isinstance(raw.get("guilds"), dict):
+                    return raw
+        except Exception:
+            pass
+        return {"guilds": {}}
+
+    def _force_react_guild_cfg(all_cfg: dict, guild_id: str) -> dict:
+        b = (all_cfg.get("guilds") or {}).get(str(guild_id)) or {}
+        try:
+            cap = max(1, min(20, int(b.get("cap", 3))))
+        except (TypeError, ValueError):
+            cap = 3
+        try:
+            cooldown_ms = max(0, int(b.get("cooldown_ms", 0)))
+        except (TypeError, ValueError):
+            cooldown_ms = 0
+        allowed = b.get("allowed_emoji_ids")
+        allowed = [str(x) for x in allowed] if isinstance(allowed, list) else []
+        return {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}
+
+    @app.get("/force-react/guilds", dependencies=[Depends(_require_gui_token)])
+    async def force_react_guilds():
+        token = _force_react_token()
+        raw = await asyncio.to_thread(_discord_get_json_sync, "/users/@me/guilds", token)
+        guilds = [
+            {"id": str(g.get("id")), "name": str(g.get("name") or "(unnamed)"), "icon": g.get("icon")}
+            for g in (raw or []) if isinstance(g, dict) and g.get("id")
+        ]
+        guilds.sort(key=lambda x: x["name"].lower())
+        return {"ok": True, "guilds": guilds}
+
+    @app.get("/force-react/{guild_id}/emojis", dependencies=[Depends(_require_gui_token)])
+    async def force_react_emojis(guild_id: str):
+        token = _force_react_token()
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        items = _emoji_items(await asyncio.to_thread(_discord_get_json_sync, f"/guilds/{guild_id}/emojis", token))
+        return {"ok": True, "count": len(items), "emojis": items}
+
+    @app.get("/force-react/{guild_id}/config", dependencies=[Depends(_require_gui_token)])
+    async def force_react_get_config(guild_id: str):
+        if not _force_react_enabled():
+            raise HTTPException(404, "Force React is disabled (set SEEKDEEP_FEATURE_FORCE_REACT=on).")
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        return {"ok": True, "config": _force_react_guild_cfg(_force_react_read_all(), guild_id)}
+
+    @app.post("/force-react/{guild_id}/config", dependencies=[Depends(_require_gui_token)])
+    async def force_react_set_config(guild_id: str, request: Request):
+        if not _force_react_enabled():
+            raise HTTPException(404, "Force React is disabled (set SEEKDEEP_FEATURE_FORCE_REACT=on).")
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(400, "invalid JSON body")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "body must be an object")
+        try:
+            cap = max(1, min(20, int(body.get("cap", 3))))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "cap must be an integer 1-20")
+        try:
+            cooldown_ms = max(0, int(body.get("cooldown_ms", 0)))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "cooldown_ms must be a non-negative integer")
+        allowed = body.get("allowed_emoji_ids", [])
+        if not isinstance(allowed, list):
+            raise HTTPException(400, "allowed_emoji_ids must be a list")
+        allowed = [str(x) for x in allowed if re.fullmatch(r"\d{5,25}", str(x))][:2000]
+        all_cfg = _force_react_read_all()
+        all_cfg.setdefault("guilds", {})[str(guild_id)] = {
+            "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
+        }
+        try:
+            _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _force_react_config_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
+            tmp.replace(_force_react_config_file)
+        except Exception as exc:
+            raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
+        _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
+        return {"ok": True, "config": {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}}
+
     # ----- GET /config -----
     # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
     # the Models / Search / Runtime cells against live config. Secret-tagged

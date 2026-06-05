@@ -22214,17 +22214,29 @@ const SEEKDEEP_FORCE_REACT_CAP_CEILING = 20; // Discord allows at most 20 distin
 const SEEKDEEP_FORCE_REACT_DEFAULT_CAP = Math.max(1, Math.min(
   SEEKDEEP_FORCE_REACT_CAP_CEILING, Number(process.env.SEEKDEEP_FORCE_REACT_DEFAULT_CAP || 3)));
 let _seekdeepForceReactConfigCache = null;
+let _seekdeepForceReactConfigMtime = -1;
 
 function seekdeepReadForceReactConfig() {
-  if (_seekdeepForceReactConfigCache !== null) return _seekdeepForceReactConfigCache;
+  // mtime-aware cache: the GUI (gui_endpoints.py) writes this file directly, so a
+  // bot-only invalidate isn't enough — re-read whenever the file's mtime changes
+  // so GUI saves take effect without a bot restart. Picker interactions are a cold
+  // path, so the stat() per call is negligible.
+  let mtime = 0;
+  try {
+    if (fs.existsSync(SEEKDEEP_FORCE_REACT_CONFIG_PATH)) mtime = fs.statSync(SEEKDEEP_FORCE_REACT_CONFIG_PATH).mtimeMs;
+  } catch {}
+  if (_seekdeepForceReactConfigCache !== null && mtime === _seekdeepForceReactConfigMtime) {
+    return _seekdeepForceReactConfigCache;
+  }
   let parsed = { guilds: {} };
   try {
-    if (fs.existsSync(SEEKDEEP_FORCE_REACT_CONFIG_PATH)) {
+    if (mtime) {
       const raw = readJsonSafe(SEEKDEEP_FORCE_REACT_CONFIG_PATH, { guilds: {} });
       if (raw && typeof raw === 'object' && raw.guilds && typeof raw.guilds === 'object') parsed = raw;
     }
   } catch {}
   _seekdeepForceReactConfigCache = parsed;
+  _seekdeepForceReactConfigMtime = mtime;
   return parsed;
 }
 

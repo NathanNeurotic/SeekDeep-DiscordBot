@@ -517,6 +517,15 @@ def main() -> int:
         r = c.get(ep)
         check(f"GET {ep} without token -> 401", r.status_code == 401, f"got {r.status_code}")
 
+    # ---- Auth: Force React config GUI endpoints without token -> 401 ------
+    for ep in ("/force-react/guilds",
+               "/force-react/123456789012345678/emojis",
+               "/force-react/123456789012345678/config"):
+        r = c.get(ep)
+        check(f"GET {ep} without token -> 401", r.status_code == 401, f"got {r.status_code}")
+    r = c.post("/force-react/123456789012345678/config", json={})
+    check("POST /force-react/{guild}/config without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
     # ---- GET /system/docker (open; installer page Docker probe) -----------
     r = c.get("/system/docker")
     check("GET /system/docker -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")
