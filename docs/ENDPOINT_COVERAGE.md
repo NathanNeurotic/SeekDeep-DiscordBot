@@ -12,7 +12,7 @@
 > references it. `—` / `no` are drift signals, not necessarily bugs (some routes
 > are tray-only or future-facing); investigate before assuming coverage.
 
-## gui_endpoints.py (67 routes)
+## gui_endpoints.py (70 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -28,6 +28,9 @@
 | GET | `/data/{file}` | token* | app.html | yes |
 | POST | `/deps/install` | token | fix-action.js | yes |
 | POST | `/docker/start-searxng` | token | installer.html | yes |
+| GET | `/emoji-vault/{guild_id}/backup.zip` | token | — | yes |
+| GET | `/emoji-vault/{guild_id}/emojis` | token | — | yes |
+| GET | `/emoji-vault/guilds` | token | emoji-vault.js | yes |
 | WEBSOCKET | `/events` | token* | events.js | no |
 | POST | `/events/emit` | token | — | yes |
 | GET | `/events/status` | open | — | yes |
@@ -114,7 +117,7 @@
 
 ## Summary
 
-- Total routes: **90**
+- Total routes: **93**
 - Open (no token): **27**
 - Not referenced by any test suite: **25**
 

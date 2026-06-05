@@ -507,6 +507,16 @@ def main() -> int:
               and isinstance(body.get("failed"), list),
               f"body keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
 
+    # ---- Auth: Emoji Vault (read-only GUI) GETs without token -> 401 -------
+    # The emoji-vault page hits these (Python -> Discord REST with the bot token).
+    # They are token-gated AND feature-gated; the token gate is what we pin here
+    # (the feature-off 404 + the live Discord calls need real creds/network).
+    for ep in ("/emoji-vault/guilds",
+               "/emoji-vault/123456789012345678/emojis",
+               "/emoji-vault/123456789012345678/backup.zip"):
+        r = c.get(ep)
+        check(f"GET {ep} without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
     # ---- GET /system/docker (open; installer page Docker probe) -----------
     r = c.get("/system/docker")
     check("GET /system/docker -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

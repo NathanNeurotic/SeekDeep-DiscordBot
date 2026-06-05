@@ -36,6 +36,8 @@ import socket
 import subprocess as _real_subprocess
 import shutil
 import threading
+import io
+import zipfile
 
 # Subprocess shim: shadows `subprocess` so every run/Popen in this file gets
 # creationflags=CREATE_NO_WINDOW on Windows — no terminal flashes per probe.
@@ -4056,6 +4058,130 @@ def register_gui_endpoints(
                   "JOIN_LEAVE_LOGS_ENABLED"):
             out.setdefault(k, _on(env.get(k)))
         return {"ok": True, "features": out}
+
+    # ----- Emoji Vault (read-only) · SEEKDEEP_FEATURE_EMOJI_VAULT -----
+    # GUI parity for the Discord "@SeekDeep emoji backup/list/count" admin feature:
+    # list the bot's servers, list/count a server's custom emojis, and download a zip
+    # backup of every emoji image — no Discord client needed. The Python server calls
+    # Discord's REST API directly with the bot token. READ-ONLY here (writes — import,
+    # delete — are a later phase). Every endpoint requires the GUI token AND the
+    # feature flag; with the flag off they 404 so the GUI page stays hidden.
+    _DISCORD_API = "https://discord.com/api/v10"
+    _EMOJI_GUILD_ID_RE = re.compile(r"^\d{5,25}$")
+
+    def _emoji_vault_token() -> str:
+        # 404 when the feature is off (page hidden); 503 when the bot token is absent.
+        env = _read_env_kv(_env_path)
+        if str(env.get("SEEKDEEP_FEATURE_EMOJI_VAULT") or "").strip().lower() not in ("1", "true", "yes", "on"):
+            raise HTTPException(404, "Emoji vault is disabled (set SEEKDEEP_FEATURE_EMOJI_VAULT=on).")
+        token = (env.get("DISCORD_TOKEN") or "").strip()
+        if not token:
+            raise HTTPException(503, "DISCORD_TOKEN is not set; cannot reach Discord.")
+        return token
+
+    def _discord_get_json_sync(path: str, token: str):
+        import requests
+        try:
+            r = requests.get(
+                f"{_DISCORD_API}{path}",
+                headers={
+                    "Authorization": f"Bot {token}",
+                    "User-Agent": "SeekDeep-DiscordBot (control-center, 1.0)",
+                },
+                timeout=20,
+            )
+        except Exception as exc:
+            raise HTTPException(502, f"Could not reach Discord: {str(exc)[:200]}")
+        if r.status_code == 401:
+            raise HTTPException(502, "Discord rejected the bot token (401).")
+        if r.status_code == 403:
+            raise HTTPException(502, "Discord refused access (403) — check the bot's server membership/permissions.")
+        if r.status_code == 429:
+            raise HTTPException(503, "Discord rate-limited the request; retry shortly.")
+        if r.status_code >= 400:
+            raise HTTPException(502, f"Discord API error {r.status_code}.")
+        try:
+            return r.json()
+        except Exception:
+            raise HTTPException(502, "Discord returned a non-JSON response.")
+
+    def _emoji_items(raw) -> list[dict]:
+        items: list[dict] = []
+        for e in (raw or []):
+            if not isinstance(e, dict) or not e.get("id"):
+                continue
+            animated = bool(e.get("animated"))
+            ext = "gif" if animated else "png"
+            items.append({
+                "id": str(e.get("id")),
+                "name": str(e.get("name") or "emoji"),
+                "animated": animated,
+                "url": f"https://cdn.discordapp.com/emojis/{e.get('id')}.{ext}",
+            })
+        items.sort(key=lambda x: x["name"].lower())
+        return items
+
+    @app.get("/emoji-vault/guilds", dependencies=[Depends(_require_gui_token)])
+    async def emoji_vault_guilds():
+        token = _emoji_vault_token()
+        raw = await asyncio.to_thread(_discord_get_json_sync, "/users/@me/guilds", token)
+        guilds = [
+            {"id": str(g.get("id")), "name": str(g.get("name") or "(unnamed)"), "icon": g.get("icon")}
+            for g in (raw or []) if isinstance(g, dict) and g.get("id")
+        ]
+        guilds.sort(key=lambda x: x["name"].lower())
+        return {"ok": True, "guilds": guilds}
+
+    @app.get("/emoji-vault/{guild_id}/emojis", dependencies=[Depends(_require_gui_token)])
+    async def emoji_vault_emojis(guild_id: str):
+        token = _emoji_vault_token()
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        items = _emoji_items(await asyncio.to_thread(_discord_get_json_sync, f"/guilds/{guild_id}/emojis", token))
+        animated = sum(1 for x in items if x["animated"])
+        return {"ok": True, "count": len(items), "animated": animated,
+                "static": len(items) - animated, "emojis": items}
+
+    def _build_emoji_zip_sync(items: list[dict]) -> bytes:
+        import requests
+        buf = io.BytesIO()
+        used: set[str] = set()
+        manifest: list[str] = []
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for it in items:
+                ext = "gif" if it["animated"] else "png"
+                base = re.sub(r"[^A-Za-z0-9_.-]+", "_", it["name"]).strip("_") or "emoji"
+                fname = f"{base}.{ext}"
+                n = 1
+                while fname in used:
+                    fname = f"{base}_{n}.{ext}"
+                    n += 1
+                used.add(fname)
+                try:
+                    img = requests.get(it["url"], timeout=20)
+                    if img.status_code == 200 and img.content:
+                        zf.writestr(fname, img.content)
+                        manifest.append(f":{it['name']}: -> {fname}")
+                except Exception:
+                    pass
+            zf.writestr("MANIFEST.txt", "SeekDeep emoji backup\n" + "\n".join(manifest) + "\n")
+        return buf.getvalue()
+
+    @app.get("/emoji-vault/{guild_id}/backup.zip", dependencies=[Depends(_require_gui_token)])
+    async def emoji_vault_backup(guild_id: str):
+        token = _emoji_vault_token()
+        if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
+            raise HTTPException(400, "invalid guild id")
+        items = _emoji_items(await asyncio.to_thread(_discord_get_json_sync, f"/guilds/{guild_id}/emojis", token))
+        if not items:
+            raise HTTPException(404, "This server has no custom emojis to back up.")
+        data = await asyncio.to_thread(_build_emoji_zip_sync, items)
+        _seekdeep_audit("emoji-vault-backup", guild=guild_id, count=len(items))
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="emoji-backup-{guild_id}.zip"'},
+        )
 
     # ----- GET /config -----
     # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
