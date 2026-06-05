@@ -427,7 +427,10 @@ SEEKDEEP_TTS_MODEL_ID = (os.getenv("SEEKDEEP_TTS_MODEL_ID", "") or "").strip()
 SEEKDEEP_TTS_PIPER_BIN = (os.getenv("SEEKDEEP_TTS_PIPER_BIN", "") or "").strip()
 # Hard cap on a single /tts request's text. Above this we 400 before any
 # synthesis runs (a runaway paragraph shouldn't pin the CPU).
-SEEKDEEP_TTS_MAX_CHARS = int(os.getenv("SEEKDEEP_TTS_MAX_CHARS", "2000"))
+try:
+    SEEKDEEP_TTS_MAX_CHARS = int(os.getenv("SEEKDEEP_TTS_MAX_CHARS", "2000"))
+except ValueError:
+    SEEKDEEP_TTS_MAX_CHARS = 2000
 
 
 def _tts_voice_configured() -> bool:
@@ -4897,7 +4900,7 @@ def synthesize_tts(text: str, voice: str = "", rate: float = 1.0) -> tuple[bytes
         try:
             from piper import SynthesisConfig  # type: ignore
             if rate and rate > 0 and abs(rate - 1.0) > 1e-3:
-                syn_config = SynthesisConfig(length_scale=float(rate))
+                syn_config = SynthesisConfig(length_scale=1.0 / float(rate))
         except Exception:
             syn_config = None
 
@@ -4952,7 +4955,7 @@ def synthesize_tts(text: str, voice: str = "", rate: float = 1.0) -> tuple[bytes
                 tmp_path = tmp.name
             cmd = [engine["bin"], "-m", engine["voice"], "-f", tmp_path]
             if rate and rate > 0 and abs(rate - 1.0) > 1e-3:
-                cmd += ["--length_scale", str(float(rate))]
+                cmd += ["--length_scale", str(1.0 / float(rate))]
             proc = subprocess.run(
                 cmd,
                 input=text.encode("utf-8"),
@@ -6132,10 +6135,10 @@ class ChartRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     """Text-to-speech request. `voice`/`engine` override the configured defaults
-    (echoed back in the response); `rate` is a length scale (>1.0 = slower for
-    Piper). Length is hard-capped in the route so an oversized paragraph 400s
-    before any synthesis runs."""
-    text: str = Field(..., max_length=_MAX_PROMPT_CHARS)
+    (echoed back in the response); `rate` is a speed multiplier (>1.0 = faster).
+    Length is validated in the route (the documented 400) so an oversized
+    paragraph is rejected before any synthesis runs."""
+    text: str = Field(...)
     voice: str = Field("", max_length=256)
     engine: str = Field("", max_length=32)
     rate: float = Field(1.0, ge=0.1, le=4.0)
@@ -6254,22 +6257,27 @@ def tts(req: TTSRequest):
 
     try:
         wav_bytes, sample_rate = synthesize_tts(text, voice=req.voice, rate=req.rate)
-    except TTSNotConfigured as exc:
+    except TTSNotConfigured:
         # Defensive: the gate above should have caught this, but a racing env
-        # change could land here. Same 503 shape.
+        # change could land here. Static message (no exc string in the body) so
+        # we don't leak internals via the error text.
         return JSONResponse(
             status_code=503,
-            content={"ok": False, "error": str(exc), "detail": "tts-not-configured"},
+            content={"ok": False,
+                     "error": "No TTS voice/model configured. Set SEEKDEEP_TTS_PIPER_VOICE (Piper) or SEEKDEEP_TTS_MODEL_ID (XTTS).",
+                     "detail": "tts-not-configured"},
         )
-    except TTSDepsMissing as exc:
+    except TTSDepsMissing:
         return JSONResponse(
             status_code=501,
-            content={"ok": False, "error": str(exc), "detail": "tts-deps-missing"},
+            content={"ok": False, "error": "TTS engine not installed (pip install piper-tts).",
+                     "detail": "tts-deps-missing"},
         )
-    except Exception as exc:  # noqa: BLE001 — surface a short message, not a stack
+    except Exception as exc:  # noqa: BLE001 — log the detail, return a static body
+        print(f"[SeekDeep Local AI] /tts synthesis error: {exc}")
         return JSONResponse(
             status_code=500,
-            content={"ok": False, "error": f"TTS synthesis failed: {exc}"[:300]},
+            content={"ok": False, "error": "TTS synthesis failed."},
         )
 
     return {

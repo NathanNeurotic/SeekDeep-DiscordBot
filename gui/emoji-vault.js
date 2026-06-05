@@ -150,7 +150,14 @@
     if (!window.confirm('Delete :' + name + ': permanently from this server? This cannot be undone.')) return;
     setError('');
     try {
-      await getJSON('/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), { method: 'DELETE' });
+      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), {
+        method: 'DELETE', headers: { 'Accept': 'application/json' }
+      });
+      if (!r.ok) {
+        let detail = 'HTTP ' + r.status;
+        try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (_) {}
+        throw new Error(detail);
+      }
       if (tile && tile.parentNode) tile.parentNode.removeChild(tile);
       if (currentGuild === guildId) loadEmojis(guildId);  // refresh counts honestly
     } catch (err) {
@@ -194,7 +201,7 @@
     } catch (err) {
       setError('Import failed: ' + err.message);
     } finally {
-      if (imp) { imp.textContent = label || 'Import .zip…'; imp.disabled = (currentGuild !== guildId); }
+      if (imp) { imp.textContent = label || 'Import .zip…'; if (currentGuild === guildId) imp.disabled = false; }
     }
   }
 
