@@ -389,7 +389,7 @@
       <div class="roadmap-hero">
         <h1 class="live">Roadmap</h1>
         <div class="sub">▸ what shipped, what's next, what's parked, what we won't ship</div>
-        <div class="meta">SOURCE · <em>PLANNED.md</em> + git log · LAST AUDIT 2026-05-27 · v10.35.6</div>
+        <div class="meta">SOURCE · <em>PLANNED.md</em> + git log · LAST AUDIT 2026-06-04 · v10.38.31</div>
       </div>
 
       <div class="stat-bar" id="statBar">
@@ -469,7 +469,7 @@
 
 <script>
 // ===========================================================
-// ROADMAP DATA — audit 2026-05-27 against v10.35.6
+// ROADMAP DATA — audit 2026-06-04 against v10.38.31
 // ===========================================================
 const PHASES = [
   {
@@ -550,14 +550,32 @@ const PHASES = [
     ]
   },
   {
+    id: 'hardening-parity',
+    title: 'Hardening + GUI⇄Discord parity',
+    status: 'shipped',
+    meta: 'v10.36–v10.38 · CSP · parity · supply-chain',
+    note: 'The v10.36–v10.38 wave: a browser/WebView content-security policy, one shared config renderer so the two settings surfaces can\'t drift, the first read/write GUI⇄Discord parity pages, the DataDash Activity game, and a supply-chain + runtime safety pass.',
+    items: [
+      { title: 'CSP Phase A', desc: 'Content-Security-Policy + security headers on the Tauri WebView (<span class="mono">tauri.conf.json</span>) mirrored on the loopback browser path (<span class="mono">_SEEKDEEP_GUI_CSP</span> in <span class="mono">local_ai_server.py</span>). <span class="mono">connect-src</span> locks token egress to loopback; the Discord Activity (<span class="mono">gui/activity/*</span>) is exempt. <span class="mono">script-src</span> still allows <span class="mono">\'unsafe-inline\'</span> — tightening is parked below.', cat: 'features', version: 'v10.38' },
+      { title: 'Config-renderer unification', desc: 'Control Center + All Settings now render every schema-backed SELECT / TOGGLE row through one shared <span class="mono">config-render.js</span>, so a new enum value or boolean vocab can\'t drift between the two surfaces. Curated rich controls (model picker, token fields) intentionally kept bespoke.', cat: 'features', version: 'v10.38' },
+      { title: 'GUI⇄Discord parity — Emoji Vault', desc: 'Read-only <span class="mono">Emoji Vault</span> page bridges Python → Discord REST to browse application + guild emojis from the GUI. Feature-gated. Writes (import/delete) are Phase 2 — see below.', cat: 'features', version: 'v10.38.28' },
+      { title: 'GUI⇄Discord parity — Force React', desc: 'Force React config page + per-guild cumulative cap, feature-gated. Second parity surface, this one read/write on reaction-rule config.', cat: 'features', version: 'v10.38.30' },
+      { title: 'DataDash Discord Activity game', desc: 'Replaced the mockup with the real DataDash game embedded as a Discord Activity and wired into the GUI nav.', cat: 'features', version: 'v10.38' },
+      { title: 'Security / supply-chain hardening', desc: 'CodeQL security-extended + Dependabot + secret scanning; bounded image queue with output caps; a cross-process advisory lock through every shared-file writer; atomic-write quarantine on corruption; SHA-pinned GitHub Actions.', cat: 'perf', version: 'v10.36–v10.38' },
+    ]
+  },
+  {
     id: 'next-up',
     title: 'Next up',
     status: 'flight',
-    meta: '3 priorities',
-    note: 'Actively on the radar — scaffolded with feature flags but blocked on model downloads, external lifts, or design decisions.',
+    meta: '6 priorities',
+    note: 'Actively on the radar — scaffolded or scoped, but blocked on an external lift, a model download, or a go-ahead.',
     items: [
+      { title: 'Drop \'unsafe-inline\' from script-src', desc: 'CSP Phase B, defense-in-depth (not a fix for any known issue). Requires externalizing the 35 inline <span class="mono">&lt;script&gt;</span> blocks across 24 files + converting the ~28 inline <span class="mono">on*=</span> handlers to <span class="mono">addEventListener</span>, then flipping the CSP. Auto-hashing is a dead end; extraction is the path. Parked, no date.', cat: 'features' },
+      { title: 'Split the index.js monolith', desc: '<span class="mono">index.js</span> is ~24.5k lines. Split into <span class="mono">lib/</span> modules (image-pipeline, archive, persona, router, commands, reactrules, presence). High-touch; needs a go. Only <span class="mono">lib/url-fetch-policy.js</span> extracted so far.', cat: 'qol' },
+      { title: 'Emoji Vault writes (Phase 2)', desc: 'Import / delete on the Emoji Vault page — touches real server emojis via Discord REST. Follows the read-only v10.38.28 page.', cat: 'features' },
+      { title: 'Bot command-bridge', desc: 'The foundation for full GUI⇄Discord parity on bot-state-dependent features — a channel for the GUI to drive live bot state, not just config + REST reads.', cat: 'features' },
       { title: 'Real-ESRGAN upscale model', desc: 'Right-click "Upscale 2x" path is wired; needs the model weights cached + a first-run consent prompt. Gated behind <span class="mono">SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on</span>.', cat: 'image' },
-      { title: 'TTS voice channel', desc: 'Piper or XTTS — voice connection, model setup, per-channel opt-in. Largest remaining lift; gated behind <span class="mono">SEEKDEEP_FEATURE_TTS_VOICE=on</span>. TTS page UI already drafted.', cat: 'features' },
       { title: 'Live-events for /stats/snapshot', desc: '<span class="mono">/stats/snapshot</span> is the last 30s poll we haven\'t pushed onto the event bus. Could fire <span class="mono">stats.tick</span> on the same loop. Low priority — 30s is fine.', cat: 'perf' },
     ]
   },
@@ -619,7 +637,7 @@ PHASES.forEach(p => {
 });
 const statBar = document.getElementById('statBar');
 statBar.innerHTML = `
-  <div class="stat-tile shipped"><div class="lbl">SHIPPED</div><div class="val">${stats.shipped}</div><div class="delta">v10.34 wave + earlier</div></div>
+  <div class="stat-tile shipped"><div class="lbl">SHIPPED</div><div class="val">${stats.shipped}</div><div class="delta">through v10.38 wave</div></div>
   <div class="stat-tile flight"><div class="lbl">IN FLIGHT</div><div class="val">${stats.flight}</div><div class="delta">scaffolded · awaiting</div></div>
   <div class="stat-tile parked"><div class="lbl">PARKED</div><div class="val">${stats.parked}</div><div class="delta">scoped · deferred</div></div>
   <div class="stat-tile wont"><div class="lbl">WON'T DO</div><div class="val">${stats.wont}</div><div class="delta">non-goals</div></div>
