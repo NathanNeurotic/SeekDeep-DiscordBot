@@ -53,10 +53,13 @@
                 }
               } catch (_) { /* server offline; leave toggle off */ }
             }
-            // page7 defines SEEKDEEP_BASE; DOMContentLoaded fires after all parser
-            // scripts. Guard on 'complete' (not 'interactive' — under defer that's
-            // before page7 → TDZ) so a post-load insertion still runs.
-            if (document.readyState === 'complete') probeWarmupState();
+            // Run once page7's SEEKDEEP_BASE exists. Check the dependency DIRECTLY
+            // (not a readyState proxy): typeof throws for a TDZ const → caught → wait
+            // for DOMContentLoaded (after every parser script incl page7); if already
+            // defined (any post-parse insertion), run now.
+            var hasBase = false;
+            try { hasBase = typeof SEEKDEEP_BASE !== 'undefined'; } catch (_) {}
+            if (hasBase) probeWarmupState();
             else window.addEventListener('DOMContentLoaded', probeWarmupState);
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
