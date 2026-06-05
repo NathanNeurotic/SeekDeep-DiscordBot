@@ -656,7 +656,7 @@
       if (game.scrollFx.t <= 0) game.scrollFx = null;
       else if (game.scrollFx.kind === "fast") base *= T.mysteryFastMult;
       else if (game.scrollFx.kind === "slow") base *= T.mysterySlowMult;
-      else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace; }
+      else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace || 0; }
     }
     game.scroll = base;
     const dx = game.scroll * dt;
@@ -718,7 +718,7 @@
     const touching = resolveTerrain();
     // No wall death during/just-after a rewind — the player can't be expected to dodge
     // a config the rewind generated under them. resolveTerrain still nudges them clear.
-    if (touching && game.invuln <= 0 && !(game.revertGrace > 0)) loseLife("wall");
+    if (touching && game.invuln <= 0 && game.revertGrace <= 0) loseLife("wall");
 
     updateProgression();
     updateEvent(dt);
@@ -1053,7 +1053,7 @@
       const spanTop = Math.max(sL[0], sC[0], sR[0]);
       const spanBot = Math.min(sL[1], sC[1], sR[1]);
       if (spanBot - spanTop > half * 2) p.y = Math.max(spanTop + half, Math.min(spanBot - half, p.y));
-      else p.y = (spanTop + spanBot) / 2;
+      else p.y = (sC[0] + sC[1]) / 2;   // fallback: centre column's own midpoint (always in its clear span)
       if (rectsHit(hb.x, hb.y, HBX, HBY, p.x - psz / 2, p.y - psz / 2, psz, psz)) {
         p.grabbed = true;
         if (p.kind === "bonus") {
@@ -1441,7 +1441,7 @@
           // Align to any firewall already sweeping in at nearly the same x — a second
           // simultaneous pattern (or the other daemon in a double-boss) could otherwise
           // stack a wall whose gap doesn't overlap, leaving NO passable lane (solid wall).
-          const near = game.bars.find((bar) => !bar.breaking && Math.abs(bar.x - (b.x - T.barThickness)) < (T.barAlignThreshold || 240));
+          const near = game.bars.find((bar) => !bar.breaking && Math.abs(bar.x - (b.x - T.barThickness)) < (T.barAlignThreshold ?? 240));
           const gy = near ? near.gapY
                           : Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, game.py + (Math.random() - 0.5) * H * 0.18));
           const gh = near ? near.gapH : gapH;
@@ -1649,6 +1649,7 @@
   }
   // active power-up -> its signature colour (null = none). Drives the streak tint + aura.
   function powerupColor() {
+    if (!game) return null;
     if (game.invincible > 0) return "#ffe66b";                  // Pepe invincibility — gold
     if (game.scrollFx) {
       if (game.scrollFx.kind === "fast") return "#5dff8f";      // overclock / performance — green
