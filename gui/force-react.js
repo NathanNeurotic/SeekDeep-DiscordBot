@@ -88,12 +88,14 @@
         getJSON('/force-react/' + encodeURIComponent(guildId) + '/config'),
         getJSON('/force-react/' + encodeURIComponent(guildId) + '/emojis'),
       ]);
+      if (currentGuild !== guildId) return;  // a newer guild selection won the race
       const c = (cfg && cfg.config) || {};
       if ($('fr-cap')) $('fr-cap').value = c.cap != null ? c.cap : 3;
       if ($('fr-cooldown')) $('fr-cooldown').value = Math.round((c.cooldown_ms || 0) / 1000);
       renderEmojis((emo && emo.emojis) || [], c.allowed_emoji_ids || []);
       if ($('fr-save')) $('fr-save').disabled = false;
     } catch (err) {
+      if (currentGuild !== guildId) return;  // stale request lost the race; ignore its error
       setError('Could not load: ' + err.message + (err.status === 503 ? ' (is DISCORD_TOKEN set?)' : ''));
     }
   }
@@ -105,7 +107,8 @@
     const label = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     setError('');
-    const cap = Math.max(1, Math.min(20, parseInt(($('fr-cap') || {}).value, 10) || 3));
+    const capRaw = parseInt(($('fr-cap') || {}).value, 10);
+    const cap = Math.max(1, Math.min(20, isNaN(capRaw) ? 3 : capRaw));
     const cooldownMs = Math.max(0, (parseInt(($('fr-cooldown') || {}).value, 10) || 0) * 1000);
     const checked = checkedIds();
     // All checked => store [] (= all, and future emoji auto-included).
