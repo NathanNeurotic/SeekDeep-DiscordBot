@@ -16,17 +16,17 @@
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
-| GET | `/archive/config` | open | app.html | yes |
-| POST | `/archive/config` | token | app.html | yes |
+| GET | `/archive/config` | open | app.page1.js | yes |
+| POST | `/archive/config` | token | app.page1.js | yes |
 | POST | `/bot/command` | token | bot-bridge.js | yes |
 | POST | `/cache/prune` | token | api.page.js | no |
-| GET | `/config` | open | app.html | yes |
-| POST | `/config` | token | app.html | yes |
+| GET | `/config` | open | app.page2.js | yes |
+| POST | `/config` | token | app.page2.js | yes |
 | GET | `/config/features` | open | bot-bridge.js | no |
 | POST | `/config/reload` | token | launcher.js | no |
-| GET | `/config/schema` | open | app.html | no |
+| GET | `/config/schema` | open | app.page2.js | no |
 | GET | `/config/status` | open | nav.js | yes |
-| GET | `/data/{file}` | token* | app.html | yes |
+| GET | `/data/{file}` | token* | app.page1.js | yes |
 | POST | `/deps/install` | token | fix-action.js | yes |
 | POST | `/docker/start-searxng` | token | installer.page4.js | yes |
 | GET | `/emoji-vault/{guild_id}/backup.zip` | token | — | yes |
@@ -41,10 +41,10 @@
 | POST | `/force-react/{guild_id}/config` | token | — | yes |
 | GET | `/force-react/{guild_id}/emojis` | token | — | yes |
 | GET | `/force-react/guilds` | token | force-react.js | yes |
-| POST | `/launcher/{service}/{action}` | token | app.html | yes |
+| POST | `/launcher/{service}/{action}` | token | app.page5.js | yes |
 | POST | `/launcher/bot/kill-all` | token | nav.js | yes |
 | GET | `/launchers/status` | open | api.page.js | yes |
-| GET | `/logs/stream` | token* | app.html | no |
+| GET | `/logs/stream` | token* | app.page2.js | no |
 | GET | `/logs/tail` | token | — | no |
 | GET | `/memory/presets/{user_id}` | token | — | yes |
 | POST | `/memory/presets/{user_id}` | token | — | yes |
@@ -55,7 +55,7 @@
 | DELETE | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
 | PATCH | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
 | GET | `/memory/users` | token | api.page.js | yes |
-| POST | `/model/warm` | token | app.html | yes |
+| POST | `/model/warm` | token | app.page1.js | yes |
 | GET | `/persona` | open | api.page.js | yes |
 | POST | `/persona` | token | api.page.js | yes |
 | GET | `/personas` | open | personas.page.js | yes |
@@ -65,7 +65,7 @@
 | POST | `/prompts/template` | token | prompts.page.js | yes |
 | DELETE | `/prompts/template/{template_id:path}` | token | — | yes |
 | POST | `/reacts/builtin/{key}` | token | — | yes |
-| POST | `/reacts/rule` | token | app.html | yes |
+| POST | `/reacts/rule` | token | app.page1.js | yes |
 | DELETE | `/reacts/rule/{rule_id}` | token | — | yes |
 | PATCH | `/reacts/rule/{rule_id}` | token | — | yes |
 | GET | `/stats/counts` | open | stats.js | yes |
@@ -75,7 +75,7 @@
 | GET | `/system/detect-venv` | open | — | yes |
 | GET | `/system/docker` | open | installer.page7.js | yes |
 | POST | `/system/doctor` | token | installer.page1.js | no |
-| GET | `/system/firstrun` | open | app.html | yes |
+| GET | `/system/firstrun` | open | app.page2.js | yes |
 | POST | `/system/install-docker` | token | — | yes |
 | POST | `/system/install-ollama` | token | — | no |
 | POST | `/system/install-python` | token | — | yes |
@@ -109,10 +109,10 @@
 | POST | `/instruct-pix2pix` | token | api.page.js | yes |
 | GET | `/ml_deps` | open | ml-deps.js | yes |
 | POST | `/model/install` | token | add-model.page.js | yes |
-| POST | `/model/uninstall` | token | app.html | yes |
-| GET | `/models/available` | open | app.html | no |
+| POST | `/model/uninstall` | token | app.page4.js | yes |
+| GET | `/models/available` | open | app.page4.js | no |
 | GET | `/models/catalog` | open | installer.page7.js | no |
-| GET | `/models/installed` | open | app.html | yes |
+| GET | `/models/installed` | open | app.page4.js | yes |
 | GET | `/route/debug` | open | api.page.js | yes |
 | POST | `/tts` | token | tts.js | yes |
 | POST | `/unload` | token | api.page.js | yes |
