@@ -4175,7 +4175,26 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
                 last_exc = e
         raise last_exc
     chat_tokenizer = _try_load_tokenizer_direct() or _try_load(AutoTokenizer, what="tokenizer")
-    chat_model = _try_load(AutoModelForCausalLM, what="model")
+    try:
+        chat_model = _try_load(AutoModelForCausalLM, what="model")
+    except Exception as _quant_exc:
+        # Resilience: if the QUANTIZED (bitsandbytes) load fails — e.g. a broken
+        # bitsandbytes/torch CUDA binding, which raises odd errors including a
+        # NameError for `torch` from inside the quantizer — retry once in full
+        # precision instead of hard-failing the warm. Only fires on the
+        # already-failing quantized path; the non-quantized success path is
+        # untouched, so this can never regress a working load.
+        if quant_config is None:
+            raise
+        print(
+            f"[SeekDeep Local AI] quantized chat load failed "
+            f"({type(_quant_exc).__name__}: {_quant_exc}); retrying in full precision "
+            f"(bitsandbytes may be unavailable or mis-bound to torch/CUDA)",
+            flush=True,
+        )
+        quant_config = None  # _try_load reads this via closure -> full-precision branch;
+                             # also makes the .to('cuda') below run for the reloaded model.
+        chat_model = _try_load(AutoModelForCausalLM, what="model")
 
     # Only move manually when NOT using bnb quant — bnb already placed the weights.
     if quant_config is None and cuda_available():
