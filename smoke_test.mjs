@@ -747,7 +747,16 @@ check('router: translation routes to lightweight', T.seekdeepSelectChatModelRole
 check('router: greeting routes to lightweight', T.seekdeepSelectChatModelRole('hello', 'chat') === 'lightweight_chat');
 check('router: short trivial routes to lightweight', T.seekdeepSelectChatModelRole('who are you', 'chat') === 'lightweight_chat');
 check('router: complex prompt routes to default', T.seekdeepSelectChatModelRole('tell me a story about a dragon and a knight in a faraway kingdom', 'chat') === 'default_chat');
-check('router: image_refinement routes to lightweight when configured', T.seekdeepSelectChatModelRole('hello', 'image_refinement') === 'lightweight_chat');
+// image_refinement only falls to lightweight when NO dedicated refine model is
+// configured. A developer's .env may set LOCAL_CHAT_REFINE_MODEL_ID (which then
+// correctly routes to refine_chat), so clear it just for this assertion and
+// restore it after — otherwise this check fails on configured boxes. CI has no
+// .env, which is why it previously passed there but failed locally. (The full
+// refine-routing matrix is covered hermetically in the refinement-routing suite below.)
+const _savedRefineModelIdForLightCheck = process.env.LOCAL_CHAT_REFINE_MODEL_ID;
+delete process.env.LOCAL_CHAT_REFINE_MODEL_ID;
+check('router: image_refinement routes to lightweight when no refine model set', T.seekdeepSelectChatModelRole('hello', 'image_refinement') === 'lightweight_chat');
+if (_savedRefineModelIdForLightCheck !== undefined) process.env.LOCAL_CHAT_REFINE_MODEL_ID = _savedRefineModelIdForLightCheck;
 delete process.env.LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID;
 check('router: without env var, greeting falls to default', T.seekdeepSelectChatModelRole('hello', 'chat') === 'default_chat');
 
