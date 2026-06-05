@@ -4481,10 +4481,7 @@ def register_gui_endpoints(
                 all_cfg.setdefault("guilds", {})[str(guild_id)] = {
                     "cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed,
                 }
-                _force_react_config_file.parent.mkdir(parents=True, exist_ok=True)
-                tmp = _force_react_config_file.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(all_cfg, indent=2), encoding="utf-8")
-                tmp.replace(_force_react_config_file)
+                _atomic_write_json(_force_react_config_file, all_cfg)   # fsync-durable write
         try:
             await asyncio.to_thread(_save_force_react)
         except Exception as exc:

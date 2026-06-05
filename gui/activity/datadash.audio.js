@@ -67,13 +67,13 @@
     var dur = Math.max(0.02, rec.end - rec.start);
     // optional fade-in: ramp gain 0 -> target over opts.fadeIn seconds
     if (opts.fadeIn > 0) { g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(Math.max(0.0001, target), now + Math.min(opts.fadeIn, dur)); }
-    else { g.gain.value = target; }
+    else { g.gain.setValueAtTime(target, now); }
     src.connect(g); g.connect(MUSIC[key] ? musicBus : master);
     if (opts.loop) { src.loop = true; src.loopStart = rec.start; src.loopEnd = rec.end; src.start(0, rec.start); }
     else {
       src.start(0, rec.start, dur);
       // optional fade-out: ease gain to 0 over the clip's final opts.fadeOut seconds
-      if (opts.fadeOut > 0 && opts.fadeOut < dur) { g.gain.setTargetAtTime(0.0001, now + dur - opts.fadeOut, Math.max(0.05, opts.fadeOut / 3)); }
+      if (opts.fadeOut > 0 && opts.fadeOut < dur) { g.gain.setValueAtTime(target, now + dur - opts.fadeOut); g.gain.linearRampToValueAtTime(0.0001, now + dur); }
       if (!MUSIC[key]) duck(opts.duck != null ? opts.duck : 0.32, dur);
     }
     return { src: src, gain: g, dur: dur };
