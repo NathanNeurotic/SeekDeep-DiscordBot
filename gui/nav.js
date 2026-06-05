@@ -212,7 +212,7 @@
     // attached, every Logs Viewer poll wasted a 401 round-trip before the
     // catch-all retry kicked in. Now any of /, ?, or end-of-string ends
     // the matched path segment.
-    const SENSITIVE_READ_RE = /\/(memory|logs\/(tail|stream)|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|\?|$)/;
+    const SENSITIVE_READ_RE = /\/(memory|logs\/(tail|stream)|emoji-vault|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|\?|$)/;
     window.fetch = async function patchedFetch(input, init) {
       init = init || {};
       const method = (init.method || (input && input.method) || 'GET').toUpperCase();
@@ -1415,6 +1415,12 @@
       { title: 'Changelog',   path: 'changelog.html' },
       { title: 'DATA DASH!',  path: 'activity/index.html' },
     ];
+    // Feature-gated items: shown only when their env flag is ON (read from the
+    // open GET /config/features). Keeps Discord-only admin tools out of the nav
+    // until the operator enables the feature.
+    const GATED_ITEMS = [
+      { title: 'Emoji Vault', path: 'emoji-vault.html', flag: 'SEEKDEEP_FEATURE_EMOJI_VAULT' },
+    ];
     const moreCSS = `
       .topnav .links .sd-more { position: relative; display: inline-flex; align-items: center; }
       .topnav .links a.sd-more-btn { cursor: pointer; }
@@ -1459,7 +1465,7 @@
       const links = document.querySelector('.topnav .links');
       if (!links || links.querySelector('.sd-more')) return true; // absent or already done
       const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
-      const onMore = MORE_ITEMS.some((it) => it.path === here);
+      const onMore = MORE_ITEMS.concat(GATED_ITEMS).some((it) => it.path === here);
 
       const wrap = document.createElement('div');
       wrap.className = 'sd-more';
@@ -1513,6 +1519,29 @@
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') setOpen(false);
       });
+
+      // Append feature-gated items once the flags are known (additive,
+      // non-blocking). Emoji Vault only appears when SEEKDEEP_FEATURE_EMOJI_VAULT
+      // is on; the GET /config/features endpoint is open (no token).
+      if (GATED_ITEMS.length && /^https?:/.test(location.protocol)) {
+        fetch('/config/features')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => {
+            const feats = (j && j.features) || {};
+            GATED_ITEMS.forEach((it) => {
+              if (!feats[it.flag]) return;
+              if (panel.querySelector(`a[href="${it.path}"]`)) return;
+              const a = document.createElement('a');
+              a.href = it.path;
+              a.textContent = it.title;
+              a.setAttribute('role', 'menuitem');
+              if (it.path === here) a.classList.add('here');
+              panel.appendChild(a);
+            });
+          })
+          .catch(() => {});
+      }
+
       return true;
     }
 

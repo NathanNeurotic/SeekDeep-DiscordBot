@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Emoji Vault</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .app-wrap { padding: 22px 28px 44px; }
+  .ev-win { width: 100%; max-width: 1080px; margin: 0 auto; }
+  .ev-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ev-head h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; color: var(--hull); margin: 0; }
+  .ev-head h1 em { font-style: normal; color: var(--cyan-1); }
+  .ev-sub { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-1); }
+  .ev-lead { color: var(--hull-2, #c7d6f0); margin: 4px 0 20px; max-width: 74ch; line-height: 1.55; }
+  .ev-lead code { font-family: var(--font-mono); color: var(--cyan-1); font-size: 0.92em; }
+  .ev-card { border: 1px solid var(--stroke); border-radius: var(--r-md, 12px); background: linear-gradient(180deg, rgba(10,26,48,0.55), rgba(6,18,31,0.75)); padding: 16px 20px; margin-bottom: 18px; }
+  .ev-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .ev-controls label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan-1); }
+  select#ev-guild { background: rgba(6,18,31,0.9); color: var(--hull); border: 1px solid var(--stroke); border-radius: 8px; padding: 9px 12px; font-size: 14px; min-width: 240px; }
+  .ev-btn { cursor: pointer; background: rgba(45,212,255,0.12); color: var(--cyan-1); border: 1px solid rgba(45,212,255,0.4); border-radius: 8px; padding: 9px 16px; font-size: 14px; font-weight: 600; }
+  .ev-btn:hover:not([disabled]) { background: rgba(45,212,255,0.2); }
+  .ev-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+  .ev-summary { margin-left: auto; font-family: var(--font-mono); font-size: 13px; color: var(--hull-2, #c7d6f0); }
+  .ev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 12px; margin-top: 4px; }
+  .ev-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; border: 1px solid var(--stroke); border-radius: 10px; background: rgba(6,18,31,0.55); }
+  .ev-tile img { width: 48px; height: 48px; object-fit: contain; }
+  .ev-tile .nm { font-family: var(--font-mono); font-size: 10px; color: var(--hull-2, #c7d6f0); text-align: center; word-break: break-all; line-height: 1.2; }
+  .ev-tile .anim { font-size: 9px; color: var(--cyan-1); letter-spacing: 0.1em; }
+  .ev-msg { padding: 14px 16px; border-radius: 10px; font-size: 14px; line-height: 1.5; }
+  .ev-msg code { font-family: var(--font-mono); color: var(--cyan-1); }
+  .ev-msg.err { border: 1px solid rgba(255,90,90,0.4); background: rgba(255,90,90,0.08); color: #ffb3b3; margin-bottom: 14px; }
+  .ev-msg.info { border: 1px solid var(--stroke); background: rgba(6,18,31,0.5); color: var(--hull-2, #c7d6f0); }
+  .ev-hidden { display: none !important; }
+</style>
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill cyan" id="liveModePill" title="WebSocket bus · /events">
+      <span class="dot"></span>PROBING
+    </span>
+    <span class="pill"><span class="dot"></span><span data-version>v—</span> · LOCAL</span>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <div class="ev-win">
+    <div class="ev-head">
+      <h1>Emoji <em>Vault</em></h1>
+      <span class="ev-sub">Server emoji backup · GUI</span>
+    </div>
+    <p class="ev-lead">
+      Browse a server's custom emojis and download a full <code>.zip</code> backup — no Discord
+      needed. Mirrors the bot's <code>@SeekDeep emoji backup / list / count</code> admin commands.
+      Read-only: nothing here changes your server.
+    </p>
+
+    <div id="ev-disabled" class="ev-msg info ev-hidden">
+      The Emoji Vault feature is off. Set <code>SEEKDEEP_FEATURE_EMOJI_VAULT=on</code> in your
+      <code>.env</code> and restart the server to use it.
+    </div>
+
+    <div id="ev-main" class="ev-hidden">
+      <div class="ev-card">
+        <div class="ev-controls">
+          <label for="ev-guild">Server</label>
+          <select id="ev-guild"><option value="">Loading servers…</option></select>
+          <button id="ev-backup" class="ev-btn" disabled>Download backup (.zip)</button>
+          <span id="ev-summary" class="ev-summary"></span>
+        </div>
+      </div>
+      <div id="ev-error" class="ev-msg err ev-hidden"></div>
+      <div id="ev-grid" class="ev-grid"></div>
+    </div>
+  </div>
+</div>
+
+<script src="nav.js" defer></script>
+<script src="emoji-vault.js" defer></script>
+</body>
+</html>
