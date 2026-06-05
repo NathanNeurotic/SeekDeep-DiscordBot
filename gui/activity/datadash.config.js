@@ -184,10 +184,11 @@ window.DATADASH = {
                                // (centre used to always sit inside the gap; you must follow it up/down now)
     wallSlopePx:       12,     // max wall move per column (px) — kept followable at 2× speed
     rampFrac:          0.3,    // fraction of a tower spent ramping (rest is flat top → ziggurat)
-    towerMin:          0.24,   // tower/overhang height range (fraction of H)
-    towerMax:          0.42,
+    towerMin:          0.12,   // tower/overhang height range — rescaled to keep variation under the
+    towerMax:          0.24,   //   feature-height cap (≈ maxGapFrac − minGapFrac − 0.02 = 0.245);
+                               //   without this every tower clamps to the cap → flat, uniform terrain.
     wallStepFrac:      0.055,  // walls snap to this vertical grid → blocky chip towers (not smooth ramps)
-    pinchAmt:          0.38,   // how far an archway pinch closes (fraction of H)
+    pinchAmt:          0.22,   // how far an archway pinch closes (fraction of H) — also under the 0.245 cap
     centerStepMin:     0.1,    // base-channel meander per feature (fraction H)
     centerStepMax:     0.28,
     featMin:           6,      // base feature length range (columns) for open/ramp stretches
