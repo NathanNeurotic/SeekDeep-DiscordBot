@@ -53,8 +53,9 @@
                 }
               } catch (_) { /* server offline; leave toggle off */ }
             }
-            if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', probeWarmupState);
-            else probeWarmupState();
+            // ALWAYS wait for DOMContentLoaded (page7 defines SEEKDEEP_BASE); a
+            // readyState 'else' branch would run before page7 under defer → TDZ.
+            window.addEventListener('DOMContentLoaded', probeWarmupState);
             runBtn.addEventListener('click', async () => {
               runBtn.disabled = true;
               runBtn.textContent = '… DOWNLOADING';
