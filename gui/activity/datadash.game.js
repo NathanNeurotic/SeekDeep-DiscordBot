@@ -2874,14 +2874,18 @@
   }
 
   function drawParticles() {
+    // text state for the binary glyphs set ONCE (dots ignore it); the font is
+    // re-parsed only when the size bucket changes, not once per particle.
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    let lastFont = 0;
     for (const p of game.particles) {
       ctx.globalAlpha = Math.max(0, p.life / p.max);
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color; ctx.shadowBlur = p.ch ? 8 : 10;
       if (p.ch) {
         // binary exhaust glyph — tiny mono 0/1 streaming off the tail
-        ctx.font = `700 ${Math.round(9 + p.r * 2)}px ${FONTS.mono}`;
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const fs = Math.round(9 + p.r * 2);
+        if (fs !== lastFont) { ctx.font = `700 ${fs}px ${FONTS.mono}`; lastFont = fs; }
         ctx.fillText(p.ch, p.x, p.y);
       } else {
         ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 1.2, 0, Math.PI * 2); ctx.fill();
