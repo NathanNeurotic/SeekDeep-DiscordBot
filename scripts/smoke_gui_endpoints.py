@@ -1697,11 +1697,41 @@ def main() -> int:
     if token:
         for _p in ("/chat", "/vision", "/image", "/img2img", "/upscale",
                    "/instruct-pix2pix", "/inpaint", "/inpaint_mask_preview",
-                   "/chart", "/unload", "/warmup/chat", "/warmup/image",
+                   "/chart", "/tts", "/unload", "/warmup/chat", "/warmup/image",
                    "/warmup/vision"):
             r = cl.post(_p)  # no token header, no body
             check(f"POST {_p} without token -> 401 (token-gated)",
                   r.status_code == 401, f"got {r.status_code}")
+
+    # ---- TTS: configured-state contract (no model bundled in the test env) --
+    # /tts is wired but ships with NO voice/model, so a *token-authed* request
+    # is deterministically 503 (tts-not-configured) on CI — the synth path is
+    # never reached. The 401-without-token gate is asserted in the sweep above.
+    # (The 200/501 paths need a real Piper voice / package and are exercised on
+    # a box that has one; here 503 is the stable, model-free state.)
+    #
+    # `_tts_voice_configured()` reads module-scope vars captured at import from
+    # the dev .env (local_ai_server calls load_dotenv()). Force the unconfigured
+    # state on the module so a dev who actually set a voice still gets a green,
+    # deterministic 503 here — then restore.
+    if token:
+        _tts_saved = (getattr(_lai, "SEEKDEEP_TTS_PIPER_VOICE", ""),
+                      getattr(_lai, "SEEKDEEP_TTS_MODEL_ID", ""),
+                      getattr(_lai, "tts_engine", None))
+        try:
+            _lai.SEEKDEEP_TTS_PIPER_VOICE = ""
+            _lai.SEEKDEEP_TTS_MODEL_ID = ""
+            _lai.tts_engine = None
+            r = cl.post("/tts", json={"text": "hello from the smoke test"},
+                        headers={_TOKEN_HEADER: token})
+            check("POST /tts with token but no model configured -> 503",
+                  r.status_code == 503, f"got {r.status_code}")
+            body = r.json() if r.status_code == 503 else {}
+            check("  ...returns {ok:false, detail:'tts-not-configured'}",
+                  body.get("ok") is False and body.get("detail") == "tts-not-configured",
+                  f"body={body}")
+        finally:
+            _lai.SEEKDEEP_TTS_PIPER_VOICE, _lai.SEEKDEEP_TTS_MODEL_ID, _lai.tts_engine = _tts_saved
 
     # ---- TAU-5 / Phase A: browser-path CSP + security headers ---------------
     # The /gui StaticFiles mount mirrors the desktop CSP + anti-framing headers

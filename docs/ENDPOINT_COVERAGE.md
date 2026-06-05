@@ -94,7 +94,7 @@
 | POST | `/system/warmup` | token | installer.html | no |
 | GET | `/token` | open | nav.js | yes |
 
-## local_ai_server.py (23 routes)
+## local_ai_server.py (24 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -114,6 +114,7 @@
 | GET | `/models/catalog` | open | installer.html | no |
 | GET | `/models/installed` | open | app.html | yes |
 | GET | `/route/debug` | open | api.html | yes |
+| POST | `/tts` | token | tts.js | yes |
 | POST | `/unload` | token | api.html | yes |
 | POST | `/upscale` | token | api.html | yes |
 | POST | `/vision` | token | api.html | yes |
@@ -124,7 +125,7 @@
 
 ## Summary
 
-- Total routes: **100**
+- Total routes: **101**
 - Open (no token): **27**
 - Not referenced by any test suite: **25**
 

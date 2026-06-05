@@ -228,7 +228,7 @@ All have backend ready unless noted.
 
 13. **Route Inspector panel** in `api.html` — renders the `/route/debug` debug payload. Needs my #1 above shipped first, OR can mock the JSON shape from this PLANNED entry while I build the endpoint in parallel.
 
-14. **TTS preview UI** — voice channel picker + voice picker + queue mockup. Backend (Piper / XTTS / etc.) is deferred indefinitely; designer can mock now so when TTS finally lands, the integration target is clear.
+14. **TTS preview UI** — voice channel picker + voice picker + queue mockup. Backend is now **wired**: the AI server exposes token-gated `POST /tts` (text → base64 WAV, Piper or XTTS) and `/health` reports `tts.{enabled,engine,voice}`. The voice model is **not bundled** — set `SEEKDEEP_TTS_PIPER_VOICE` to a downloaded Piper `.onnx` voice to make it live. Designer can build against the real endpoint now.
 
 15. **Prompt template marketplace** — Now spec'd as a per-server `#prompts` channel pattern (see "Queued for post-designer cycle" item **A** above). Designer can mock the share/import button UX against the new spec; Claude Code builds the backend after designer wraps.
 
@@ -351,7 +351,7 @@ Model router now routes to `lightweight_chat` (gemma-3n-E4B-it) for: translation
 ## Next Up
 
 - **Real-ESRGAN model download** -- scaffolded in v10.25 but needs user approval for the model cache.
-- **TTS voice channel** -- Piper or XTTS. Biggest remaining lift. Requires model download.
+- **TTS voice model download** -- the `/tts` backend is wired (Piper + XTTS), but no voice is bundled. Drop in a Piper `.onnx` voice and set `SEEKDEEP_TTS_PIPER_VOICE`; the remaining lift is the Discord voice-channel connection + per-channel opt-in (the synthesis side is done).
 
 ## Optional Features (Scaffolded, Off By Default)
 
@@ -362,7 +362,7 @@ Model router now routes to `lightweight_chat` (gemma-3n-E4B-it) for: translation
 CLIP-based NSFW scorer on generated images. Needs model, scoring step, thresholds, `.env` knobs.
 
 ### `SEEKDEEP_FEATURE_TTS_VOICE`
-Voice-channel TTS reader (Piper or XTTS). Voice connection, model setup, per-channel opt-in.
+Voice-channel TTS reader (Piper or XTTS). **Synthesis backend wired** — token-gated `POST /tts` (text → base64 WAV) on the AI server, `/health.tts` readiness, env knobs (`SEEKDEEP_TTS_ENGINE` / `SEEKDEEP_TTS_PIPER_VOICE` / `SEEKDEEP_TTS_MODEL_ID` / `SEEKDEEP_TTS_PIPER_BIN`). The voice model is **not bundled**: set `SEEKDEEP_TTS_PIPER_VOICE` to a downloaded Piper `.onnx` voice to enable it (else `/tts` → 503). Remaining: the Discord voice connection + per-channel opt-in.
 
 ## Quality-of-Life Wishlist
 

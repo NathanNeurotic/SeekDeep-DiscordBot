@@ -1750,6 +1750,19 @@ const client = new Client({
     if (joinLeaveActive()) {
       base.push(GatewayIntentBits.GuildMembers);
     }
+    // GuildVoiceStates is NON-privileged (no Dev-Portal toggle, no 4014 risk),
+    // but it's still requested only when the TTS voice-channel reader is flagged
+    // on so the gateway subscription, and the whole feature, stays inert by
+    // default. @discordjs/voice needs this intent to track which voice channel
+    // a member is in (message.member.voice.channel) for seekdeepTtsJoin.
+    // NOTE: the SEEKDEEP_FEATURE_TTS_VOICE_ENABLED const is declared much lower
+    // in this file (with the other feature flags), but this IIFE runs at Client
+    // construction — before that line executes — so reading it here would throw
+    // a temporal-dead-zone ReferenceError. Read process.env inline instead, with
+    // the exact same parse the const uses, so it stays correct and self-contained.
+    if (String(process.env.SEEKDEEP_FEATURE_TTS_VOICE || 'off').toLowerCase() === 'on') {
+      base.push(GatewayIntentBits.GuildVoiceStates);
+    }
     return base;
   })(),
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
@@ -16673,6 +16686,127 @@ if (SEEKDEEP_FEATURE_IMG2IMG_ENABLED || SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX_ENABLE
   );
   console.log('[SeekDeep] These features require additional model downloads / Python endpoints — see README "Optional features".');
 }
+
+// SEEKDEEP_TTS_VOICE_START
+// Self-contained Discord voice-channel TTS reader, gated entirely behind
+// SEEKDEEP_FEATURE_TTS_VOICE_ENABLED. Everything below is INERT when the flag
+// is off: the dispatch branch (see the @SeekDeep prompt-command area) never
+// fires, so these functions are never called, and the heavy voice libraries
+// (@discordjs/voice + its libsodium-wrappers / opusscript peers) are pulled in
+// via a DYNAMIC import() that only runs the first time a user issues `tts join`.
+// With the flag off nothing here loads — no intent, no import, no command.
+//
+// Backend contract (POST /tts via postLocal):
+//   200 -> { ok:true, audio_b64:"<base64 WAV>", format, sample_rate, engine, voice }
+//   503 -> { ok:false, error, detail:"tts-not-configured" }
+//   501 -> { ok:false, error, detail:"tts-deps-missing" }
+// NOTE: fetchJson() (which postLocal wraps) THROWS on any non-2xx and hangs the
+// parsed body off err.responseJson, so the 503/501 cases arrive in the catch
+// block — we surface the server's `error` string from there.
+const seekdeepTtsConnections = new Map(); // guildId -> VoiceConnection
+
+async function seekdeepTtsJoin(message) {
+  const channel = message.member?.voice?.channel;
+  if (!channel) {
+    await message.reply('Join a voice channel first, then run `@SeekDeep tts join`.');
+    return;
+  }
+  let voice;
+  try {
+    voice = await import('@discordjs/voice');
+  } catch (err) {
+    if (err?.code === 'MODULE_NOT_FOUND' || /Cannot find module/i.test(String(err?.message || err))) {
+      await message.reply('TTS voice deps not installed — run `npm install` (needs @discordjs/voice, libsodium-wrappers, opusscript).');
+      return;
+    }
+    await message.reply(`Failed to load voice library: ${String(err?.message || err).slice(0, 200)}`);
+    return;
+  }
+  try {
+    const connection = voice.joinVoiceChannel({
+      channelId: channel.id,
+      guildId: message.guild.id,
+      adapterCreator: message.guild.voiceAdapterCreator,
+    });
+    seekdeepTtsConnections.set(message.guild.id, connection);
+    await message.reply(`Joined **${channel.name}**. Use \`@SeekDeep tts say <text>\` to speak, \`@SeekDeep tts leave\` to disconnect.`);
+  } catch (err) {
+    await message.reply(`Could not join the voice channel: ${String(err?.message || err).slice(0, 200)}`);
+  }
+}
+
+async function seekdeepTtsLeave(message) {
+  const connection = seekdeepTtsConnections.get(message.guild?.id);
+  if (!connection) {
+    await message.reply('I am not in a voice channel here.');
+    return;
+  }
+  try {
+    connection.destroy();
+  } catch { /* already torn down */ }
+  seekdeepTtsConnections.delete(message.guild.id);
+  await message.reply('Left the voice channel.');
+}
+
+async function seekdeepTtsSay(message, text) {
+  const body = String(text || '').trim();
+  if (!body) {
+    await message.reply('Give me something to say: `@SeekDeep tts say <text>`.');
+    return;
+  }
+  const connection = seekdeepTtsConnections.get(message.guild?.id);
+  if (!connection) {
+    await message.reply('Join a voice channel first with `@SeekDeep tts join`.');
+    return;
+  }
+  let voice;
+  try {
+    voice = await import('@discordjs/voice');
+  } catch (err) {
+    if (err?.code === 'MODULE_NOT_FOUND' || /Cannot find module/i.test(String(err?.message || err))) {
+      await message.reply('TTS voice deps not installed — run `npm install` (needs @discordjs/voice, libsodium-wrappers, opusscript).');
+      return;
+    }
+    await message.reply(`Failed to load voice library: ${String(err?.message || err).slice(0, 200)}`);
+    return;
+  }
+
+  // Call the Python /tts endpoint. postLocal returns the parsed JSON on a 200;
+  // on 503 ("tts-not-configured") / 501 ("tts-deps-missing") fetchJson throws
+  // with the parsed { ok:false, error } body on err.responseJson — surface that.
+  let res;
+  try {
+    res = await postLocal('/tts', { text: body }, { timeoutMs: 60000 });
+  } catch (err) {
+    const serverErr = err?.responseJson?.error || err?.responseBody?.error || err?.detail;
+    if (serverErr) {
+      await message.reply(String(serverErr).slice(0, 400));
+    } else if (err?.name === 'AICircuitOpenError') {
+      await message.reply('Local AI server is unreachable right now — try again shortly.');
+    } else {
+      await message.reply(`TTS request failed: ${String(err?.message || err).slice(0, 200)}`);
+    }
+    return;
+  }
+  if (!res || res.ok === false || !res.audio_b64) {
+    await message.reply(String(res?.error || 'TTS failed: the server did not return any audio.').slice(0, 400));
+    return;
+  }
+
+  try {
+    const buf = Buffer.from(res.audio_b64, 'base64');
+    const { Readable } = await import('node:stream');
+    const stream = Readable.from(buf);
+    const resource = voice.createAudioResource(stream, { inputType: voice.StreamType.Arbitrary });
+    const player = voice.createAudioPlayer();
+    connection.subscribe(player);
+    player.play(resource);
+    await message.reply('Speaking…');
+  } catch (err) {
+    await message.reply(`Could not play the audio (voice playback may need \`ffmpeg\` installed on the host): ${String(err?.message || err).slice(0, 160)}`);
+  }
+}
+// SEEKDEEP_TTS_VOICE_END
 // SEEKDEEP_BIG_FEATURE_SCAFFOLDS_END
 
 // SEEKDEEP_AUTO_REACTIONS_START
@@ -20326,6 +20460,35 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
           })
         : replyText;
       await sendLongMessageReply(message, content);
+      return;
+    }
+
+    // TTS voice-channel reader (gated). Inert unless SEEKDEEP_FEATURE_TTS_VOICE
+    // is on: with the flag off this whole branch is skipped, the helpers are
+    // never called, and @discordjs/voice is never dynamically imported.
+    // Subcommands: `tts join` | `tts leave` | `tts say <text>` | bare `tts` help.
+    if (SEEKDEEP_FEATURE_TTS_VOICE_ENABLED && (lowerPrompt === 'tts' || lowerPrompt.startsWith('tts '))) {
+      if (typeof seekdeepLogRoute === 'function') {
+        seekdeepLogRoute('tts-voice', prompt);
+      }
+      // Slice from the ORIGINAL prompt (not the lowercased copy) so `say` keeps
+      // the user's exact casing. `rest` is the part after the leading "tts".
+      const rest = prompt.trim().slice(3).trim();
+      const sub = rest.toLowerCase();
+      if (sub === 'join') {
+        await seekdeepTtsJoin(message);
+      } else if (sub === 'leave' || sub === 'stop' || sub === 'disconnect') {
+        await seekdeepTtsLeave(message);
+      } else if (sub === 'say' || sub.startsWith('say ')) {
+        await seekdeepTtsSay(message, rest.slice(3).trim());
+      } else {
+        await message.reply([
+          '**TTS voice reader** — read text aloud in a voice channel:',
+          '• `@SeekDeep tts join` — join your current voice channel',
+          '• `@SeekDeep tts say <text>` — speak the text',
+          '• `@SeekDeep tts leave` — disconnect',
+        ].join('\n'));
+      }
       return;
     }
 
