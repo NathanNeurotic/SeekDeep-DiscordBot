@@ -115,7 +115,7 @@ The local AI server exposes:
 - `POST /img2img` — image-to-image transformation (shared SDXL weights)
 - `POST /instruct-pix2pix` — natural-language image editing (InstructPix2Pix)
 - `POST /inpaint` — object removal via CLIPSeg auto-mask + SDXL inpainting
-- `POST /upscale` — PIL upscale (Lanczos by default) with optional mild sharpening; Real-ESRGAN scaffolded
+- `POST /upscale` — PIL upscale (Lanczos by default) with optional mild sharpening; Real-ESRGAN wired (set `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on` + `SEEKDEEP_REALESRGAN_MODEL_PATH`; model not bundled, falls back to Lanczos)
 - `POST /chart` — matplotlib stats chart rendering
 - `POST /unload` — force-unload current model
 
@@ -569,7 +569,10 @@ SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS=45    # SDXL-friendly refinement clamp
 SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_CHARS=360   # SDXL-friendly refinement clamp
 
 # Upscale
-SEEKDEEP_UPSCALE_METHOD=lanczos           # lanczos | realesrgan (scaffolded)
+SEEKDEEP_UPSCALE_METHOD=lanczos           # lanczos | realesrgan (wired — needs flag + model path; falls back to lanczos)
+SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=off   # on = use Real-ESRGAN when a model is configured below
+SEEKDEEP_REALESRGAN_MODEL_PATH=           # absolute path to a .pth; model not bundled, blank = Lanczos
+SEEKDEEP_REALESRGAN_MODEL_NAME=           # optional arch hint, e.g. RealESRGAN_x4plus (inferred from filename when blank)
 SEEKDEEP_UPSCALE_RESAMPLE=lanczos         # lanczos | bicubic | nearest
 SEEKDEEP_UPSCALE_SHARPEN=true             # mild UnsharpMask after resize
 SEEKDEEP_UPSCALE_SHARPEN_RADIUS=1.1
@@ -606,7 +609,7 @@ Optional features are gated behind `SEEKDEEP_FEATURE_*` env vars in `.env`. All 
 | `SEEKDEEP_FEATURE_IMG2IMG` | off | `@SeekDeep img2img <prompt>` and `/img2img`. Transform an attached/replied image with a text prompt. Reuses the Dreamshaper-XL pipeline — no extra model download. |
 | `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX` | off | `@SeekDeep pix2pix <instruction>` and `/pix2pix`. Natural-language image editing ("make it darker", "add snow"). Uses `timbrooks/instruct-pix2pix`. |
 | `SEEKDEEP_FEATURE_INPAINT` | off | `@SeekDeep inpaint <target>` and `/inpaint`. Object removal via CLIPSeg auto-mask + SDXL inpainting. |
-| `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. Requires Real-ESRGAN weights + a Python endpoint. Scaffolded. |
+| `SEEKDEEP_FEATURE_UPSCALE_REALESRGAN` | off | Right-click "Upscale 2x" on a generated image. **Wired** — turn this on and set `SEEKDEEP_REALESRGAN_MODEL_PATH` to a `.pth` to enable Real-ESRGAN; the model is **not bundled**. Until then (or on any load/run error) `/upscale` falls back to the built-in Lanczos upscale. |
 | `SEEKDEEP_FEATURE_NSFW_GATE` | off | Scores generated images via a CLIP NSFW classifier and either spoiler-wraps or refuses based on threshold. Scaffolded. |
 | `SEEKDEEP_FEATURE_TTS_VOICE` | off | Voice-channel TTS reader (Piper / XTTS). **Wired** — the AI server exposes a token-gated `POST /tts` (text → base64 WAV) and the GUI TTS controls call it. Set `SEEKDEEP_TTS_PIPER_VOICE` to a Piper `.onnx` voice (or `SEEKDEEP_TTS_MODEL_ID` for XTTS) to enable it; until then `/tts` returns 503. The voice model is **not bundled** — download a Piper voice yourself ([OHF-Voice/piper](https://github.com/OHF-Voice/piper)). |
 | `LOCAL_VISION_KEEP_RESIDENT` | off | Pins the vision model in VRAM across task switches. Off saves ~6 GB VRAM; pay a one-time reload on rare vision follow-ups. |
