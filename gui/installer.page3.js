@@ -30,8 +30,9 @@
                 if (state.ollama_api_key)  key.value  = state.ollama_api_key;
               }
             };
-            if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', restoreState);
-            else restoreState();
+            // ALWAYS wait for DOMContentLoaded (page7 defines `state`); a readyState
+            // 'else' branch would run before page7 under defer → TDZ.
+            window.addEventListener('DOMContentLoaded', restoreState);
 
             function wireBus() {
               if (!window.SeekDeepEvents) return false;
