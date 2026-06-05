@@ -447,12 +447,18 @@ function escapeAttr(s) {
 function prettyJSON(obj, plain = false) {
   let s = JSON.stringify(obj, null, 2);
   if (plain) return s;
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/("(?:\\.|[^"\\])*"):/g, '<span class="key">$1</span>:')
-    .replace(/: "((?:\\.|[^"\\])*)"/g, ': <span class="str">"$1"</span>')
-    .replace(/: (-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/gi, ': <span class="num">$1</span>')
-    .replace(/: (true|false)/g, ': <span class="bool">$1</span>')
-    .replace(/: (null)/g, ': <span class="null">$1</span>');
+  // Escape HTML first, then highlight with a SINGLE tokenizer pass. The old
+  // chained per-line regexes mis-highlighted values containing ':' or numbers
+  // embedded inside strings; a token-aware match classifies each JSON token
+  // (key / string / number / bool / null) exactly once.
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return s.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, function (m) {
+    let cls = 'num';
+    if (/^"/.test(m)) { if (/:$/.test(m)) { return '<span class="key">' + m.slice(0, -1) + '</span>:'; } cls = 'str'; }
+    else if (/true|false/.test(m)) cls = 'bool';
+    else if (/null/.test(m)) cls = 'null';
+    return '<span class="' + cls + '">' + m + '</span>';
+  });
 }
 
 // ===========================================================

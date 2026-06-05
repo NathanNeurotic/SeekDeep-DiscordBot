@@ -19,10 +19,17 @@
             }
             base.addEventListener('input', persistOllama);
             key.addEventListener('input', persistOllama);
-            if (typeof state === 'object' && state) {
-              if (state.ollama_base_url) base.value = state.ollama_base_url;
-              if (state.ollama_api_key)  key.value  = state.ollama_api_key;
-            }
+            // Restore saved values on load. `state` is a const declared in
+            // installer.page7.js, which loads AFTER this file — so reading it
+            // at parse time hits the temporal dead zone (even `typeof` throws
+            // on a TDZ const). Defer to DOMContentLoaded, by which point
+            // page7 has initialized `state`.
+            window.addEventListener('DOMContentLoaded', () => {
+              if (typeof state === 'object' && state) {
+                if (state.ollama_base_url) base.value = state.ollama_base_url;
+                if (state.ollama_api_key)  key.value  = state.ollama_api_key;
+              }
+            });
 
             function wireBus() {
               if (!window.SeekDeepEvents) return false;

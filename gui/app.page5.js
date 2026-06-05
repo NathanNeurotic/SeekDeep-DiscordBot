@@ -167,11 +167,28 @@
     row.style.gap = '12px';
     row.style.lineHeight = '1.6';
     row.style.borderBottom = '1px solid color-mix(in oklab, var(--cyan-1) 5%, transparent)';
-    row.innerHTML =
-      `<span style="color: var(--hull-3);">${time}</span>` +
-      `<span style="color: ${colorMap[level] || 'var(--hull-2)'}; text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px;">${level}</span>` +
-      `<span style="color: var(--hull-3);">${d.src || '—'}</span>` +
-      `<span style="color: var(--hull-2);">${(d.msg || '').replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;')}</span>`;
+    // Build the four columns with createElement + textContent so untrusted
+    // log fields (d.src, d.msg) can never break out into markup. textContent
+    // means no manual escaping is needed. Styling/colors preserved exactly.
+    const timeSpan = document.createElement('span');
+    timeSpan.style.color = 'var(--hull-3)';
+    timeSpan.textContent = time;
+    const levelSpan = document.createElement('span');
+    levelSpan.style.color = colorMap[level] || 'var(--hull-2)';
+    levelSpan.style.textTransform = 'uppercase';
+    levelSpan.style.letterSpacing = '0.12em';
+    levelSpan.style.fontSize = '10px';
+    levelSpan.textContent = level;
+    const srcSpan = document.createElement('span');
+    srcSpan.style.color = 'var(--hull-3)';
+    srcSpan.textContent = d.src || '—';
+    const msgSpan = document.createElement('span');
+    msgSpan.style.color = 'var(--hull-2)';
+    msgSpan.textContent = d.msg || '';
+    row.appendChild(timeSpan);
+    row.appendChild(levelSpan);
+    row.appendChild(srcSpan);
+    row.appendChild(msgSpan);
     logsWrap.appendChild(row);
     lineCount++;
     while (lineCount > MAX_LINES) { logsWrap.firstChild?.remove(); lineCount--; }

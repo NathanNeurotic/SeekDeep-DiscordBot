@@ -77,6 +77,7 @@ function nextStep() {
 function finish() {
   if (done) return;
   done = true;
+  clearInterval(clockInterval);
   progLabel.textContent = 'STACK READY';
   setTimeout(() => {
     document.body.classList.add('complete');

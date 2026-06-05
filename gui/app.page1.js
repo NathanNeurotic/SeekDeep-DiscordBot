@@ -420,7 +420,7 @@
         if (g.shared && Array.isArray(g.shared.entries)) {
           for (const e of g.shared.entries) out.push({ entry: e, threadId: g.shared.thread_id, threadName: g.shared.thread_name || 'shared', kind: 'shared', guildId: gid, guildName: g.guild_name });
         }
-        if (g.users) {
+        if (g.users && typeof g.users === 'object') {
           for (const [uid, u] of Object.entries(g.users)) {
             if (!Array.isArray(u.entries)) continue;
             for (const e of u.entries) out.push({ entry: e, threadId: u.thread_id, threadName: u.thread_name || (u.nickname ? 'archive-' + u.nickname : 'archive-' + uid.slice(-6)), kind: 'user', guildId: gid, guildName: g.guild_name, userId: uid });
@@ -575,15 +575,24 @@
       try {
         const r = await sdPollFetch(SEEKDEEP_BASE + '/data/archive-snapshot.json', { timeout: 5000, attempts: 2 });
         if (r.status === 401) throw new Error('unauthorized · refresh page so nav.js can inject the token');
-        if (r.status === 404 || (r.ok && (await (async () => { const j = await r.clone().json().catch(() => null); return j && j.empty; })()))) {
-          // Empty snapshot (bot hasn't written one yet)
+        if (r.status === 404) {
+          // No snapshot file yet (bot hasn't written one).
           snapshot = null;
           if (meta) meta.textContent = '— bot has not written a snapshot yet · run "@SeekDeep archive snapshot" in Discord';
           renderTabs(); renderGrid();
           return;
         }
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        const wrap = await r.json();
+        // Parse the (potentially multi-MB) payload ONCE — the old empty-check
+        // did r.clone().json() then r.json() again, double-parsing the body.
+        const wrap = await r.json().catch(() => null);
+        if (!wrap || wrap.empty) {
+          // Empty snapshot (bot hasn't written one yet)
+          snapshot = null;
+          if (meta) meta.textContent = '— bot has not written a snapshot yet · run "@SeekDeep archive snapshot" in Discord';
+          renderTabs(); renderGrid();
+          return;
+        }
         snapshot = wrap.data || wrap;
         if (snapshot && snapshot.generated_at == null && snapshot.guilds == null) snapshot = null;
         renderTabs(); renderGrid(); renderMeta();

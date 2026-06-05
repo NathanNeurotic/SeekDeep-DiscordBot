@@ -115,6 +115,13 @@
             // The installer's setStep() toggles display:; we don't
             // hook into that directly. A short interval is fine — the
             // probe is cheap (filesystem stat).
-            onVisible();
-            setInterval(onVisible, 4000);
+            // Defer the on-load probe to DOMContentLoaded: SEEKDEEP_BASE (used
+            // by refreshStatus via onVisible) is a const declared in
+            // installer.page7.js, which loads AFTER this file — so at parse
+            // time it's still in the temporal dead zone and a direct call
+            // would throw. By DOMContentLoaded page7 has run.
+            window.addEventListener('DOMContentLoaded', () => {
+              onVisible();
+              setInterval(onVisible, 4000);
+            });
           })();
