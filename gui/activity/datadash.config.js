@@ -97,9 +97,33 @@ window.DATADASH = {
    * w/h are the on-screen draw size in CSS px.
    */
   SPRITES: {
-    // Player defaults to a procedural "electrified white hexagon" (drawn from shapes).
-    // Set src to an image path to use your own art instead; size with w/h.
-    player: { src: null, w: 24,  h: 24 },
+    // Player defaults to SeekDeep's standard 12-frame motion loop, with a
+    // procedural fallback if the image assets fail to load. w/h remain the
+    // collision-size anchor.
+    player: {
+      src: null,
+      w: 24,
+      h: 24,
+      standard: {
+        fps: 12,
+        scale: 2.15,
+        glow: 14,
+        frames: [
+          "assets/seekdeep/standard/standard_01.png",
+          "assets/seekdeep/standard/standard_02.png",
+          "assets/seekdeep/standard/standard_03.png",
+          "assets/seekdeep/standard/standard_04.png",
+          "assets/seekdeep/standard/standard_05.png",
+          "assets/seekdeep/standard/standard_06.png",
+          "assets/seekdeep/standard/standard_07.png",
+          "assets/seekdeep/standard/standard_08.png",
+          "assets/seekdeep/standard/standard_09.png",
+          "assets/seekdeep/standard/standard_10.png",
+          "assets/seekdeep/standard/standard_11.png",
+          "assets/seekdeep/standard/standard_12.png",
+        ],
+      },
+    },
     // Boss is drawn procedurally from simple shapes (original art, no 3rd-party graphic).
     // To use your own boss image instead, set src to a file path; size with w/h.
     boss:   { src: null, w: 124, h: 124 },

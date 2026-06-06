@@ -35,10 +35,21 @@
 
   // ---- sprites -------------------------------------------------------------
   function loadImg(src) { if (!src) return null; const i = new Image(); i.src = src; return i; }
+  function isLoadedImg(img) { return !!(img && img.complete && img.naturalWidth && img.naturalHeight); }
+  function firstLoadedImg(frames) { return frames.find(isLoadedImg) || null; }
+  function pickFrame(frames, fps) {
+    if (!frames.length) return null;
+    const rate = Number(fps) || 0;
+    if (rate > 0 && frames.length > 1) return frames[Math.floor(game.t * rate) % frames.length];
+    return frames[0];
+  }
   const imgPlayer = loadImg(SPRITES.player.src);
   const imgBoss = loadImg(SPRITES.boss.src);
+  const playerStandard = SPRITES.player.standard || SPRITES.player.run || {};
+  const configuredStandardFrames = Array.isArray(playerStandard.frames) ? playerStandard.frames.map(loadImg).filter(Boolean) : [];
+  const fallbackFlyFrames = imgPlayer ? [imgPlayer] : ["assets/seekdeep/fly1.png"].map(loadImg);
   // pixel-DeepSeek animation frames (flight + overdrive flight)
-  const flyFrames = ["assets/seekdeep/fly1.png"].map(loadImg);
+  const flyFrames = configuredStandardFrames.length ? configuredStandardFrames : fallbackFlyFrames;
   const odFrames  = ["assets/seekdeep/od1.png"].map(loadImg);
   const imgPower  = loadImg("assets/seekdeep/power.png");   // electric power-pose (transform)
   const imgPepe   = loadImg("assets/seekdeep/pepe.png");    // pepe coin art
@@ -2785,15 +2796,22 @@
     const bob = Math.sin(game.t * 7) * PH * 0.06;
     const breathe = 1 + Math.sin(game.t * 7) * 0.03;
     if (!blink) {
-      const fr = (od ? odFrames : flyFrames)[0];
-      if (fr && fr.complete && fr.naturalWidth) {
-        const ar = od ? OD_AR : SPR_AR;
-        const dh = PH * 2.15 * breathe, dw = dh * ar;
-        ctx.imageSmoothingEnabled = false;
+      const frames = od ? odFrames : flyFrames;
+      const selectedFrame = pickFrame(frames, od ? 0 : playerStandard.fps);
+      let fr = isLoadedImg(selectedFrame) ? selectedFrame : firstLoadedImg(frames);
+      const usingStandardLoop = !od && configuredStandardFrames.length && fr;
+      if (!od && !fr && configuredStandardFrames.length) fr = firstLoadedImg(fallbackFlyFrames);
+      if (fr) {
+        const ar = fr.naturalWidth && fr.naturalHeight ? fr.naturalWidth / fr.naturalHeight : (od ? OD_AR : SPR_AR);
+        const sc = od ? 2.15 : (Number(playerStandard.scale) || 2.15);
+        const frameBreathe = usingStandardLoop ? 1 : breathe;
+        const frameBob = usingStandardLoop ? 0 : bob;
+        const dh = PH * sc * frameBreathe, dw = dh * ar;
+        ctx.imageSmoothingEnabled = !!configuredStandardFrames.length && !od;
         if (rew) ctx.scale(-1, 1);   // face backward while rewinding
         ctx.shadowColor = od ? C.accent : C.accentSoft;
-        ctx.shadowBlur = od ? 24 : 10;
-        ctx.drawImage(fr, -dw / 2, -dh / 2 + bob, dw, dh);
+        ctx.shadowBlur = od ? 24 : (Number(playerStandard.glow) || 10);
+        ctx.drawImage(fr, -dw / 2, -dh / 2 + frameBob, dw, dh);
         ctx.shadowBlur = 0;
         ctx.imageSmoothingEnabled = true;
       } else {
