@@ -167,7 +167,7 @@ jobs:
       - name: Set up Node 20
         # setup-node@v5 is the Node 24-based runner of this action;
         # node-version is still 20 (what our app targets).
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
