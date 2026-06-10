@@ -11,7 +11,7 @@
 # fine without them; ML-dependent handlers return ML_DEPS_MISSING until
 # the user opts to install.
 
-fastapi>=0.115.0
+fastapi>=0.136.3
 uvicorn[standard]>=0.48.0
 pydantic>=2.10.0
 python-dotenv>=1.2.2
