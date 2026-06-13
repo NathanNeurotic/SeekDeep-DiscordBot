@@ -106,8 +106,8 @@ window.DATADASH = {
       h: 24,
       standard: {
         fps: 12,
-        scale: 2.15,
-        glow: 14,
+        scale: 7.5,
+        glow: 22,
         frames: [
           "assets/seekdeep/standard/standard_01.png",
           "assets/seekdeep/standard/standard_02.png",

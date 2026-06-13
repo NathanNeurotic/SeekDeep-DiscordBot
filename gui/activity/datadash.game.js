@@ -107,6 +107,7 @@
       invincible: 0,           // Pepe invincibility timer
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
+      binaryTrailAcc: 0,       // fixed-rate binary streamer emission accumulator
       lives: T.startLives,
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
@@ -731,14 +732,30 @@
     game.vx *= Math.pow(T.hDamp, dt * 60);
     game.vx = Math.max(-T.hMax, Math.min(T.hMax, game.vx));
     game.px += game.vx * dt;
-    // trailing data-streamers off the bot so he feels alive (not during rewind)
+    // A broad, persistent binary streamer. Time-based emission keeps density
+    // stable across frame rates and continues while the player is coasting.
     const rewinding = game.scrollFx && game.scrollFx.kind === "reverse";
-    if (state === STATE.PLAY && !paused && !rewinding && Math.random() < 0.9) {
+    if (state === STATE.PLAY && !paused && !rewinding) {
+      game.binaryTrailAcc = (game.binaryTrailAcc || 0) + dt * 7;
       const col = game.freeAmmo ? "#ffffff" : (powerupColor() || C.accentSoft);
-      game.particles.push({ x: game.px - PW * 0.5, y: game.py + (Math.random() - 0.5) * PH * 0.5,
-        vx: -120 - Math.random() * 80 - game.scroll * 0.15, vy: (Math.random() - 0.5) * 30,
-        life: 0.4 + Math.random() * 0.3, max: 0.7, color: col, r: 1.5 + Math.random() * 2,
-        ch: Math.random() < 0.5 ? "0" : "1" });   // binary exhaust — rendered as a tiny 0/1 glyph
+      while (game.binaryTrailAcc >= 1) {
+        game.binaryTrailAcc -= 1;
+        const life = 1.8 + Math.random();
+        game.particles.push({
+          x: game.px - PH * (2.8 + Math.random() * 1.5),
+          y: game.py + (Math.random() - 0.5) * PH * 3.2,
+          vx: -135 - Math.random() * 125 - game.scroll * 0.22,
+          vy: (Math.random() - 0.5) * 78,
+          life,
+          max: life,
+          color: col,
+          r: 1.45 + Math.random() * 1.35,
+          ch: Math.random() < 0.5 ? "0" : "1",
+          streamer: 60 + Math.random() * 60,
+        });
+      }
+    } else {
+      game.binaryTrailAcc = 0;
     }
     const xmin = W * T.hMargin, xmax = W * (1 - T.hMargin);
     if (game.px < xmin) { game.px = xmin; game.vx = Math.max(0, game.vx); }
@@ -1617,8 +1634,9 @@
       drawPlayerBullets();
       drawAimReticle();
       drawPowerupAura();
+      drawParticles(true);
       drawPlayer();
-      drawParticles();
+      drawParticles(false);
       drawFloaters();
     }
     ctx.restore();
@@ -2790,8 +2808,9 @@
       ctx.restore();
     }
 
-    // lively motion: lean into velocity + gentle idle bob/sway/breathe
-    const tilt = Math.max(-0.4, Math.min(0.5, game.vy / 900)) + Math.sin(game.t * 4) * 0.04;
+    // Lean into actual movement. The standard strip already contains its own
+    // idle motion, so adding a second procedural sway makes its anchor shimmer.
+    const tilt = Math.max(-0.4, Math.min(0.5, game.vy / 900));
     ctx.rotate(tilt);
     const bob = Math.sin(game.t * 7) * PH * 0.06;
     const breathe = 1 + Math.sin(game.t * 7) * 0.03;
@@ -2891,18 +2910,36 @@
     ctx.shadowBlur = 0;
   }
 
-  function drawParticles() {
+  function drawParticles(binaryOnly) {
     // text state for the binary glyphs set ONCE (dots ignore it); the font is
     // re-parsed only when the size bucket changes, not once per particle.
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     let lastFont = 0;
     for (const p of game.particles) {
+      if (!!p.ch !== binaryOnly) continue;
       ctx.globalAlpha = Math.max(0, p.life / p.max);
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color; ctx.shadowBlur = p.ch ? 8 : 10;
       if (p.ch) {
-        // binary exhaust glyph — tiny mono 0/1 streaming off the tail
-        const fs = Math.round(9 + p.r * 2);
+        // Sparse binary streamers: each glyph carries a faint filament back
+        // toward the player so the trail reads as one broad ribbon at speed.
+        if (p.streamer) {
+          ctx.save();
+          ctx.globalAlpha *= 0.72;
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 1.15 + p.r * 0.48;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.quadraticCurveTo(
+            p.x + p.streamer * 0.45,
+            p.y - p.vy * 0.035,
+            p.x + p.streamer,
+            p.y - p.vy * 0.07
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+        const fs = Math.round(13 + p.r * 2.6);
         if (fs !== lastFont) { ctx.font = `700 ${fs}px ${FONTS.mono}`; lastFont = fs; }
         ctx.fillText(p.ch, p.x, p.y);
       } else {
