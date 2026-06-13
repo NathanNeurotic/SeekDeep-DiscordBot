@@ -35,10 +35,21 @@
 
   // ---- sprites -------------------------------------------------------------
   function loadImg(src) { if (!src) return null; const i = new Image(); i.src = src; return i; }
+  function isLoadedImg(img) { return !!(img && img.complete && img.naturalWidth && img.naturalHeight); }
+  function firstLoadedImg(frames) { return frames.find(isLoadedImg) || null; }
+  function pickFrame(frames, fps) {
+    if (!frames.length) return null;
+    const rate = Number(fps) || 0;
+    if (rate > 0 && frames.length > 1) return frames[Math.floor(game.t * rate) % frames.length];
+    return frames[0];
+  }
   const imgPlayer = loadImg(SPRITES.player.src);
   const imgBoss = loadImg(SPRITES.boss.src);
+  const playerStandard = SPRITES.player.standard || SPRITES.player.run || {};
+  const configuredStandardFrames = Array.isArray(playerStandard.frames) ? playerStandard.frames.map(loadImg).filter(Boolean) : [];
+  const fallbackFlyFrames = imgPlayer ? [imgPlayer] : ["assets/seekdeep/fly1.png"].map(loadImg);
   // pixel-DeepSeek animation frames (flight + overdrive flight)
-  const flyFrames = ["assets/seekdeep/fly1.png"].map(loadImg);
+  const flyFrames = configuredStandardFrames.length ? configuredStandardFrames : fallbackFlyFrames;
   const odFrames  = ["assets/seekdeep/od1.png"].map(loadImg);
   const imgPower  = loadImg("assets/seekdeep/power.png");   // electric power-pose (transform)
   const imgPepe   = loadImg("assets/seekdeep/pepe.png");    // pepe coin art
@@ -96,6 +107,7 @@
       invincible: 0,           // Pepe invincibility timer
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
+      binaryTrailAcc: 0,       // fixed-rate binary streamer emission accumulator
       lives: T.startLives,
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
@@ -720,14 +732,30 @@
     game.vx *= Math.pow(T.hDamp, dt * 60);
     game.vx = Math.max(-T.hMax, Math.min(T.hMax, game.vx));
     game.px += game.vx * dt;
-    // trailing data-streamers off the bot so he feels alive (not during rewind)
+    // A broad, persistent binary streamer. Time-based emission keeps density
+    // stable across frame rates and continues while the player is coasting.
     const rewinding = game.scrollFx && game.scrollFx.kind === "reverse";
-    if (state === STATE.PLAY && !paused && !rewinding && Math.random() < 0.9) {
+    if (state === STATE.PLAY && !paused && !rewinding) {
+      game.binaryTrailAcc = (game.binaryTrailAcc || 0) + dt * 7;
       const col = game.freeAmmo ? "#ffffff" : (powerupColor() || C.accentSoft);
-      game.particles.push({ x: game.px - PW * 0.5, y: game.py + (Math.random() - 0.5) * PH * 0.5,
-        vx: -120 - Math.random() * 80 - game.scroll * 0.15, vy: (Math.random() - 0.5) * 30,
-        life: 0.4 + Math.random() * 0.3, max: 0.7, color: col, r: 1.5 + Math.random() * 2,
-        ch: Math.random() < 0.5 ? "0" : "1" });   // binary exhaust — rendered as a tiny 0/1 glyph
+      while (game.binaryTrailAcc >= 1) {
+        game.binaryTrailAcc -= 1;
+        const life = 1.8 + Math.random();
+        game.particles.push({
+          x: game.px - PH * (2.8 + Math.random() * 1.5),
+          y: game.py + (Math.random() - 0.5) * PH * 3.2,
+          vx: -135 - Math.random() * 125 - game.scroll * 0.22,
+          vy: (Math.random() - 0.5) * 78,
+          life,
+          max: life,
+          color: col,
+          r: 1.45 + Math.random() * 1.35,
+          ch: Math.random() < 0.5 ? "0" : "1",
+          streamer: 60 + Math.random() * 60,
+        });
+      }
+    } else {
+      game.binaryTrailAcc = 0;
     }
     const xmin = W * T.hMargin, xmax = W * (1 - T.hMargin);
     if (game.px < xmin) { game.px = xmin; game.vx = Math.max(0, game.vx); }
@@ -1606,8 +1634,9 @@
       drawPlayerBullets();
       drawAimReticle();
       drawPowerupAura();
+      drawParticles(true);
       drawPlayer();
-      drawParticles();
+      drawParticles(false);
       drawFloaters();
     }
     ctx.restore();
@@ -2779,21 +2808,29 @@
       ctx.restore();
     }
 
-    // lively motion: lean into velocity + gentle idle bob/sway/breathe
-    const tilt = Math.max(-0.4, Math.min(0.5, game.vy / 900)) + Math.sin(game.t * 4) * 0.04;
+    // Lean into actual movement. The standard strip already contains its own
+    // idle motion, so adding a second procedural sway makes its anchor shimmer.
+    const tilt = Math.max(-0.4, Math.min(0.5, game.vy / 900));
     ctx.rotate(tilt);
     const bob = Math.sin(game.t * 7) * PH * 0.06;
     const breathe = 1 + Math.sin(game.t * 7) * 0.03;
     if (!blink) {
-      const fr = (od ? odFrames : flyFrames)[0];
-      if (fr && fr.complete && fr.naturalWidth) {
-        const ar = od ? OD_AR : SPR_AR;
-        const dh = PH * 2.15 * breathe, dw = dh * ar;
-        ctx.imageSmoothingEnabled = false;
+      const frames = od ? odFrames : flyFrames;
+      const selectedFrame = pickFrame(frames, od ? 0 : playerStandard.fps);
+      let fr = isLoadedImg(selectedFrame) ? selectedFrame : firstLoadedImg(frames);
+      const usingStandardLoop = !od && configuredStandardFrames.length && fr;
+      if (!od && !fr && configuredStandardFrames.length) fr = firstLoadedImg(fallbackFlyFrames);
+      if (fr) {
+        const ar = fr.naturalWidth && fr.naturalHeight ? fr.naturalWidth / fr.naturalHeight : (od ? OD_AR : SPR_AR);
+        const sc = od ? 2.15 : (Number(playerStandard.scale) || 2.15);
+        const frameBreathe = usingStandardLoop ? 1 : breathe;
+        const frameBob = usingStandardLoop ? 0 : bob;
+        const dh = PH * sc * frameBreathe, dw = dh * ar;
+        ctx.imageSmoothingEnabled = !!configuredStandardFrames.length && !od;
         if (rew) ctx.scale(-1, 1);   // face backward while rewinding
         ctx.shadowColor = od ? C.accent : C.accentSoft;
-        ctx.shadowBlur = od ? 24 : 10;
-        ctx.drawImage(fr, -dw / 2, -dh / 2 + bob, dw, dh);
+        ctx.shadowBlur = od ? 24 : (Number(playerStandard.glow) || 10);
+        ctx.drawImage(fr, -dw / 2, -dh / 2 + frameBob, dw, dh);
         ctx.shadowBlur = 0;
         ctx.imageSmoothingEnabled = true;
       } else {
@@ -2873,18 +2910,36 @@
     ctx.shadowBlur = 0;
   }
 
-  function drawParticles() {
+  function drawParticles(binaryOnly) {
     // text state for the binary glyphs set ONCE (dots ignore it); the font is
     // re-parsed only when the size bucket changes, not once per particle.
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     let lastFont = 0;
     for (const p of game.particles) {
+      if (!!p.ch !== binaryOnly) continue;
       ctx.globalAlpha = Math.max(0, p.life / p.max);
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color; ctx.shadowBlur = p.ch ? 8 : 10;
       if (p.ch) {
-        // binary exhaust glyph — tiny mono 0/1 streaming off the tail
-        const fs = Math.round(9 + p.r * 2);
+        // Sparse binary streamers: each glyph carries a faint filament back
+        // toward the player so the trail reads as one broad ribbon at speed.
+        if (p.streamer) {
+          ctx.save();
+          ctx.globalAlpha *= 0.72;
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 1.15 + p.r * 0.48;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.quadraticCurveTo(
+            p.x + p.streamer * 0.45,
+            p.y - p.vy * 0.035,
+            p.x + p.streamer,
+            p.y - p.vy * 0.07
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+        const fs = Math.round(13 + p.r * 2.6);
         if (fs !== lastFont) { ctx.font = `700 ${fs}px ${FONTS.mono}`; lastFont = fs; }
         ctx.fillText(p.ch, p.x, p.y);
       } else {
