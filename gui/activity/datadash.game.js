@@ -932,12 +932,14 @@
           spawnParticles(pb.x, pb.y, pb.big ? "#ffffff" : C.warn, pb.big ? 18 : 8, 260);
         }
       }
-      // CHARGE shots SLAM the environment — screen shake + shatter on impact
-      if (pb.big && !pb.dead) {
+      // CHARGE shots SLAM the environment; STANDARD shots chip towers (T.obsHitsToBreak hits to break)
+      if (!pb.dead) {
         const ci = colIndexAt(pb.x);
         const col = game.cols[ci];
         if (col) {
-          let hit = pb.y < col.ceil || pb.y > (H - col.floor);
+          // walls: only CHARGE shots react — standard shots fly over terrain to reach bots
+          let hit = pb.big && (pb.y < col.ceil || pb.y > (H - col.floor));
+          let smashedNow = false;
           if (!hit) {
             const bx2 = ci * T.colW - scrollAcc;
             for (const bl of col.blocks) {
@@ -947,16 +949,25 @@
                 const top = bl.from === "top";
                 const bTop = top ? col.ceil : (H - col.floor) - bl.h;
                 const bBot = top ? col.ceil + bl.h : (H - col.floor);
-                if (pb.y >= bTop && pb.y <= bBot) { hit = true; bl.smashed = true; break; }
+                if (pb.y >= bTop && pb.y <= bBot) {
+                  hit = true;
+                  if (pb.big) { bl.smashed = true; smashedNow = true; }
+                  else { bl.hits = (bl.hits || 0) + 1; if (bl.hits >= (T.obsHitsToBreak || 4)) { bl.smashed = true; smashedNow = true; } }
+                  break;
+                }
               }
             }
           }
           if (hit) {
             pb.dead = true;
-            game.shake = Math.max(game.shake, 16);
-            SFX("firewallSmash");
-            spawnParticles(pb.x, pb.y, "#ffffff", 24, 400);
-            spawnParticles(pb.x, pb.y, C.accent, 12, 280);
+            if (pb.big || smashedNow) {
+              game.shake = Math.max(game.shake, pb.big ? 16 : 10);
+              SFX("firewallSmash");
+              spawnParticles(pb.x, pb.y, "#ffffff", pb.big ? 24 : 14, pb.big ? 400 : 300);
+              spawnParticles(pb.x, pb.y, C.accent, pb.big ? 12 : 6, 280);
+            } else {
+              spawnParticles(pb.x, pb.y, C.accentSoft, 5, 200);   // standard chip — light puff
+            }
           }
         }
       }
@@ -2218,6 +2229,20 @@
         ctx.beginPath(); ctx.moveTo(x + bw / 2, by + 4); ctx.lineTo(x + bw / 2, by + bh - 4); ctx.stroke();
         // little IC tick rungs
         for (let yy = by + 10; yy < by + bh - 6; yy += 12) { ctx.beginPath(); ctx.moveTo(x + 4, yy); ctx.lineTo(x + bw - 4, yy); ctx.stroke(); }
+        // damage cue: red wash + cracks as standard shots chip the tower toward breaking
+        if (blk.hits) {
+          const dmg = Math.min(1, blk.hits / (T.obsHitsToBreak || 4));
+          ctx.save();
+          ctx.globalAlpha = 0.18 + 0.32 * dmg;
+          ctx.fillStyle = C.danger; ctx.fillRect(x, by, bw, bh);
+          ctx.globalAlpha = 0.7; ctx.strokeStyle = "#ffd9d9"; ctx.lineWidth = 1.3;
+          const cracks = Math.min(4, blk.hits);
+          for (let c = 0; c < cracks; c++) {
+            const cx = x + ((c + 0.5) / cracks) * bw;
+            ctx.beginPath(); ctx.moveTo(cx, by + 2); ctx.lineTo(cx + (c % 2 ? 5 : -5), by + bh * 0.45); ctx.lineTo(cx + (c % 2 ? -3 : 4), by + bh - 2); ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
     }
   }

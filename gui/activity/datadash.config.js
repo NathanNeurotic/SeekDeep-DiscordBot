@@ -252,6 +252,7 @@ window.DATADASH = {
     obsPassage:        0.17,   // guaranteed clear channel past the chip (fraction of H)
     obsMinHeight:      0.16,   // chip protrusion range (fraction of H) — juts a bit more
     obsMaxHeight:      0.42,
+    obsHitsToBreak:    4,      // standard shots needed to break a chip-tower (charge/super smash instantly)
     obsDoubleChance:   0.16,   // chance of a top+bottom pair (squeeze you through the middle)
 
     // ---- FLYABLE LANE (error correction) ----
