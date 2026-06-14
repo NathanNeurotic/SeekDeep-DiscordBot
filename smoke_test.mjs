@@ -2171,6 +2171,11 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf classify: ::ffff:808:808 hex mapped 8.8.8.8 PUBLIC', !blockedIp('::ffff:808:808'));
   check('ssrf classify: 8.8.8.8 PUBLIC', !blockedIp('8.8.8.8'));
   check('ssrf classify: 2606:4700:4700::1111 PUBLIC', !blockedIp('2606:4700:4700::1111'));
+  // AUD-002c: NON-CANONICAL IPv6 forms must classify too (canonicalize-before-match).
+  check('ssrf classify: 0:0:0:0:0:ffff:7f00:1 non-canon hex loopback', blockedIp('0:0:0:0:0:ffff:7f00:1'));
+  check('ssrf classify: 0:0:0:0:0:ffff:127.0.0.1 non-canon dotted loopback', blockedIp('0:0:0:0:0:ffff:127.0.0.1'));
+  check('ssrf classify: 0000:0000:0000:0000:0000:ffff:a9fe:a9fe non-canon metadata', blockedIp('0000:0000:0000:0000:0000:ffff:a9fe:a9fe'));
+  check('ssrf classify: 0:0:0:0:0:ffff:808:808 non-canon 8.8.8.8 PUBLIC', !blockedIp('0:0:0:0:0:ffff:808:808'));
 
   // -- async validator: reject + accept --
   const blocked = async (url, opts) => {
