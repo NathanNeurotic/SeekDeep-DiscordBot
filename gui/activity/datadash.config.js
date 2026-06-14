@@ -129,7 +129,7 @@ window.DATADASH = {
 
   /* --- LEVELS ------------------------------------------------------------
    * Zones unlocked by total DATA STREAMED. The level is the magnitude bracket
-   * of the streamed byte count and only ever climbs (latched) within a run.
+   * of DATA streamed; it tracks DATA BOTH ways (non-monotonic, with hysteresis).
    * Each level sets its own scroll speed, colour palette, and tower-shape
    * profile, so the world visibly changes character as you stream more data.
    *   threshold = bytes at/above which this level becomes active.
@@ -144,22 +144,34 @@ window.DATADASH = {
    *     weights = relative chance of each feature {open,floorTower,ceilTower,pinch,ramp}.
    */
   LEVELS: [
-    { name: "KB · DATA STREAM", sub: "kilobyte channel — boot sequence", threshold: 0, speed: 440,
+    // --- cyan family (Start / KB / MB<250): easy on-ramp, differentiated by bg/terrain luminance ---
+    { name: "BOOT · DATA STREAM", sub: "spooling up — ease in", threshold: 0, speed: 380,
       palette: { bg:"#02060f", glow:"#2dd4ff", grid:"#78deff", terrain:"#06182e", terrainEdge:"#2dd4ff", obstacle:"#0a2742", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#6df0ff" },
-      shape: { rampFrac:0.30, wallStepFrac:0.055, towerMin:0.09, towerMax:0.18, pinchAmt:0.17, featMin:6, featMax:13, obsChance:0.78, obsDoubleChance:0.14,
-        weights:{ open:0.24, floorTower:0.23, ceilTower:0.23, pinch:0.15, ramp:0.15 } } },
-    { name: "MB · DATA RIVER", sub: "megabyte zone — picking up speed", threshold: 1e6, speed: 600,
-      palette: { bg:"#02100a", glow:"#39ff96", grid:"#7cffb4", terrain:"#06281a", terrainEdge:"#2dff95", obstacle:"#0a3a26", obstacleEdge:"#6dffae", accent:"#2dff95", accentSoft:"#6dffae" },
-      shape: { rampFrac:0.50, wallStepFrac:0, towerMin:0.08, towerMax:0.16, pinchAmt:0.14, featMin:8, featMax:16, obsChance:0.60, obsDoubleChance:0.10,
-        weights:{ open:0.28, floorTower:0.21, ceilTower:0.21, pinch:0.10, ramp:0.20 } } },
-    { name: "GB · DATA TORRENT", sub: "gigabyte zone — sharp and fast", threshold: 1e9, speed: 760,
-      palette: { bg:"#0a0614", glow:"#a855f7", grid:"#c8a0ff", terrain:"#1a0b2e", terrainEdge:"#b86dff", obstacle:"#2a1142", obstacleEdge:"#d2a8ff", accent:"#a855f7", accentSoft:"#c89cff" },
-      shape: { rampFrac:0.16, wallStepFrac:0, towerMin:0.10, towerMax:0.185, pinchAmt:0.18, featMin:5, featMax:10, obsChance:0.85, obsDoubleChance:0.18,
-        weights:{ open:0.14, floorTower:0.30, ceilTower:0.30, pinch:0.14, ramp:0.12 } } },
-    { name: "TB · DATA OVERLOAD", sub: "terabyte zone — maximum velocity", threshold: 1e12, speed: 980,
+      shape: { rampFrac:0.50, wallStepFrac:0, towerMin:0.06, towerMax:0.12, pinchAmt:0.10, featMin:10, featMax:18, obsChance:0.40, obsDoubleChance:0.00,
+        weights:{ open:0.50, floorTower:0.16, ceilTower:0.16, pinch:0.04, ramp:0.14 } } },
+    { name: "KB · DATA STREAM", sub: "kilobyte channel", threshold: 1e3, speed: 460,
+      palette: { bg:"#03091a", glow:"#2dd4ff", grid:"#78deff", terrain:"#08203c", terrainEdge:"#2dd4ff", obstacle:"#0c2d4e", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#6df0ff" },
+      shape: { rampFrac:0.45, wallStepFrac:0, towerMin:0.07, towerMax:0.14, pinchAmt:0.12, featMin:9, featMax:16, obsChance:0.52, obsDoubleChance:0.04,
+        weights:{ open:0.40, floorTower:0.19, ceilTower:0.19, pinch:0.07, ramp:0.15 } } },
+    { name: "MB · DATA RIVER", sub: "megabyte flow", threshold: 1e6, speed: 560,
+      palette: { bg:"#040d22", glow:"#2dd4ff", grid:"#8fe6ff", terrain:"#0a2848", terrainEdge:"#2dd4ff", obstacle:"#0e3558", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#8fe6ff" },
+      shape: { rampFrac:0.38, wallStepFrac:0.04, towerMin:0.08, towerMax:0.16, pinchAmt:0.15, featMin:7, featMax:14, obsChance:0.66, obsDoubleChance:0.10,
+        weights:{ open:0.30, floorTower:0.22, ceilTower:0.22, pinch:0.11, ramp:0.15 } } },
+    // --- teal @ 250MB (colour shift; speed keeps climbing) ---
+    { name: "MB · DATA SURGE", sub: "quarter-gig — current rising", threshold: 2.5e8, speed: 680,
+      palette: { bg:"#02100c", glow:"#2dd4c0", grid:"#7cffe0", terrain:"#06281f", terrainEdge:"#2dd4c0", obstacle:"#0a3a30", obstacleEdge:"#6df0d8", accent:"#2dd4c0", accentSoft:"#5ff0d8" },
+      shape: { rampFrac:0.28, wallStepFrac:0.05, towerMin:0.09, towerMax:0.175, pinchAmt:0.17, featMin:6, featMax:12, obsChance:0.78, obsDoubleChance:0.16,
+        weights:{ open:0.22, floorTower:0.25, ceilTower:0.25, pinch:0.13, ramp:0.15 } } },
+    // --- green @ GB (the original speed) ---
+    { name: "GB · DATA TORRENT", sub: "gigabyte zone — full speed", threshold: 1e9, speed: 860,
+      palette: { bg:"#02100a", glow:"#39ff96", grid:"#7cffb4", terrain:"#06281a", terrainEdge:"#39ff96", obstacle:"#0a3a26", obstacleEdge:"#6dffae", accent:"#39ff96", accentSoft:"#7cffb4" },
+      shape: { rampFrac:0.18, wallStepFrac:0, towerMin:0.10, towerMax:0.185, pinchAmt:0.18, featMin:5, featMax:10, obsChance:0.85, obsDoubleChance:0.20,
+        weights:{ open:0.15, floorTower:0.29, ceilTower:0.29, pinch:0.15, ramp:0.12 } } },
+    // --- red @ TB (fastest, brutal) ---
+    { name: "TB · DATA OVERLOAD", sub: "terabyte zone — maximum velocity", threshold: 1e12, speed: 1040,
       palette: { bg:"#140604", glow:"#ff5a3c", grid:"#ffaa78", terrain:"#2e0d06", terrainEdge:"#ff5d3a", obstacle:"#421a11", obstacleEdge:"#ff9a6d", accent:"#ff5d3a", accentSoft:"#ffae6d" },
-      shape: { rampFrac:0.22, wallStepFrac:0.04, towerMin:0.11, towerMax:0.185, pinchAmt:0.18, featMin:4, featMax:8, obsChance:0.90, obsDoubleChance:0.26,
-        weights:{ open:0.12, floorTower:0.28, ceilTower:0.28, pinch:0.18, ramp:0.14 } } },
+      shape: { rampFrac:0.22, wallStepFrac:0.04, towerMin:0.11, towerMax:0.185, pinchAmt:0.18, featMin:4, featMax:8, obsChance:0.92, obsDoubleChance:0.30,
+        weights:{ open:0.10, floorTower:0.28, ceilTower:0.28, pinch:0.19, ramp:0.15 } } },
   ],
 
   FONTS: {

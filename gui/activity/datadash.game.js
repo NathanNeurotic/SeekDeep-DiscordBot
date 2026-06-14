@@ -45,14 +45,15 @@
     game.palFrom = Object.assign({}, pal); game.palTo = pal; game.palT = 1;
     applyPalette();
   }
-  function levelUp(n) {
+  function levelUp(n, down) {
     if (!LEVELS[n]) return;
     game.level = n;
     game.palFrom = Object.assign({}, game.pal);   // current interpolated colours
     game.palTo = LEVELS[n].palette;
     game.palT = 0;
-    game.flashT = Math.max(game.flashT || 0, 0.6);
-    showBanner(LEVELS[n].name, LEVELS[n].sub, LEVELS[n].palette.accent, 2.4);
+    game.flashT = Math.max(game.flashT || 0, down ? 0.35 : 0.6);
+    if (down) showBanner(LEVELS[n].name, "DATA dropped — zone reverted", LEVELS[n].palette.accent, 1.8);
+    else showBanner(LEVELS[n].name, LEVELS[n].sub, LEVELS[n].palette.accent, 2.4);
   }
 
   // ---- canvas / scaling ----------------------------------------------------
@@ -754,9 +755,12 @@
       return;   // everything else frozen
     }
 
-    // level progression: detect a tier crossing, ease toward its speed, cross-fade palette
+    // level progression: NON-MONOTONIC — climb on rise, revert on DATA-loss drop
+    // (hysteresis: only drop once clearly below the current tier's entry threshold,
+    // so hovering a boundary doesn't thrash the palette/banner/tiles).
     const lvNow = levelIdx(game.bytes);
     if (lvNow > game.level) levelUp(lvNow);
+    else if (lvNow < game.level && game.bytes < (LEVELS[game.level].threshold || 0) * 0.92) levelUp(lvNow, true);
     game.spd += (levelSpeed(game.level) - game.spd) * Math.min(1, dt * 1.6);
     if (game.palT < 1) { game.palT = Math.min(1, game.palT + dt / LEVEL_FADE); applyPalette(); if (game.palT >= 1) buildTiles(); }
 
