@@ -117,6 +117,7 @@
     dist:  document.getElementById("hud-dist"),
     best:  document.getElementById("hud-best"),
     lives: document.getElementById("hud-lives"),
+    lifecells: document.getElementById("hud-lifecells"),
     timerWrap: document.getElementById("hud-timer"),
     timerVal:  document.getElementById("hud-timer-val"),
     timerFill: document.getElementById("hud-timer-fill"),
@@ -158,6 +159,9 @@
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
       lives: T.startLives,
+      lifeCells: 1,            // continue tokens (resume-at-death); start with 1, cap T.lifeCellCap
+      nextLifeCell: T.lifeCellEvery,
+      resumeT: 0,              // 5s slow-restart ramp after a continue
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
       scroll: levelSpeed(0),
@@ -218,7 +222,9 @@
   // ---- terrain generation : continuous safe corridor -----------------------
   function curScroll() {
     // per-level base speed, eased on level-up (see update()); scrollFx multiplies on top
-    return game.spd || levelSpeed(game.level || 0);
+    let s = game.spd || levelSpeed(game.level || 0);
+    if (game.resumeT > 0) s *= 0.25 + 0.75 * (1 - game.resumeT / 5);   // 5s slow restart after a continue
+    return s;
   }
 
   function pickFeature() {
@@ -574,6 +580,28 @@
     return { x: game.px - HBX / 2, y: game.py - HBY / 2, w: HBX, h: HBY };
   }
 
+  // CONTINUE: if the player has a banked life cell, consume one and RESUME the run
+  // exactly where they died (same position/terrain/DATA/zone) with a 5s slow restart
+  // + immunity, instead of game-over. Returns true if a continue was used.
+  function endLifeOrContinue() {
+    if (!game.lifeCells || game.lifeCells <= 0) return false;
+    game.lifeCells--;
+    game.lives = T.startLives;
+    game.invuln = Math.max(game.invuln, 5);    // immune through the slow restart window
+    game.resumeT = 5;                          // 5s eased speed ramp (see curScroll)
+    game.scrollFx = null;                      // clear any active mystery so the resume is clean
+    game.shooting = false; game.charging = false;
+    // clear immediate threats around the player so the continue isn't instant death
+    game.bots = game.bots.filter((b) => Math.hypot(b.x - game.px, b.y - game.py) > 220);
+    game.bullets = []; game.bars = []; game.bombs = [];
+    game.flashT = Math.max(game.flashT, 0.8);
+    game.shake = 16;
+    spawnParticles(game.px, game.py, "#9fe6ff", 50, 480);
+    SFX("powerUp");
+    showBanner("⚛ CONTINUE", "resuming — ⚛×" + game.lifeCells + " left", "#9fe6ff", 2.0);
+    return true;
+  }
+
   function loseLife(reason) {
     if (game.invuln > 0) return;
     if (game.invincible > 0) return;   // Pepe jackpot: untouchable
@@ -607,7 +635,7 @@
       game.lives = Math.max(0, game.lives - 2);
       spawnParticles(game.px, game.py, "#ffffff", 34, 420);
       SFX("powerDown");
-      if (game.lives <= 0) { die(); return; }
+      if (game.lives <= 0) { if (!endLifeOrContinue()) die(); return; }
       showBanner("POWER DOWN", TEXT.livesLabel + " ×" + game.lives, C.warn, 1.3);
       return;
     }
@@ -616,7 +644,7 @@
     SFX("damage");
     spawnParticles(game.px, game.py, C.danger, 26, 360);
     if (game.lives <= 0) {
-      die();
+      if (!endLifeOrContinue()) die();
     } else {
       showBanner(TEXT.hit, TEXT.livesLabel + " ×" + game.lives, C.danger, 1.3);
       game.invuln = T.invulnTime;
@@ -827,6 +855,7 @@
     }
 
     if (game.invuln > 0) game.invuln -= dt;
+    if (game.resumeT > 0) game.resumeT = Math.max(0, game.resumeT - dt);
     if (game.revertGrace > 0) game.revertGrace -= dt;
     if (game.shake > 0) game.shake = Math.max(0, game.shake - dt * 60);
 
@@ -1014,6 +1043,15 @@
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
     }
+    // LIFE CELL — rare atomic power-cell granting a continue; NO magnet (fly into it),
+    // 2× rarer than the upgrade bolt; never spawns at the cap.
+    if (!busy && game.lifeCells < (T.lifeCellCap || 9) && S >= game.nextLifeCell &&
+        !game.pickups.some((p) => p.kind === "lifecell" && !p.grabbed)) {
+      game.nextLifeCell = S + (T.lifeCellEvery || 2000000);
+      const col = colAtSpawn();
+      const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
+      game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "lifecell" });
+    }
     // PEPE COIN — jackpot: spawns on the timer every pepeEverySec(+random) seconds,
     // UNCONDITIONALLY (per Nathan). If the player can't grab it (busy / invincible /
     // whatever), it just flies by — too bad, the next one comes on schedule.
@@ -1151,7 +1189,7 @@
       p.x -= game.scroll * dt;
       // magnet: gravitate toward the player when nearby — EXCEPT the upgrade bolt
       // and the DATA LOSS skull (you want to be able to DODGE that one).
-      if (p.kind !== "upgrade" && p.kind !== "dataloss") {
+      if (p.kind !== "upgrade" && p.kind !== "dataloss" && p.kind !== "lifecell") {
         const dxp = game.px - p.x, dyp = game.py - p.y;
         const d = Math.hypot(dxp, dyp);
         if (d < T.pickupPull && d > 0.001) {
@@ -1160,7 +1198,7 @@
           p.y += (dyp / d) * f;
         }
       }
-      const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize)));
+      const psz = p.kind === "lifecell" ? (T.lifeCellSize || 50) : (p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize))));
       // never let a collectible sit inside/touching a tower — clamp into the clear span
       // sampled at EVERY column the sprite covers (a thin tower can hide between sparse
       // samples), with margin for the ±5px draw bob so even the bobbing sprite never
@@ -1251,6 +1289,12 @@
           spawnParticles(p.x, p.y, C.accentSoft, 34, 380);
           SFX("shieldHeld");
           showBanner("🛡 SHIELD ONLINE", "absorbs the next hit", C.accentSoft);
+        } else if (p.kind === "lifecell") {
+          game.lifeCells = Math.min(game.lifeCells + 1, (T.lifeCellCap || 9));
+          game.flashT = Math.max(game.flashT, 0.5);
+          spawnParticles(p.x, p.y, "#9fe6ff", 40, 420);
+          SFX("powerUp");
+          showBanner("⚛ LIFE CELL", "continue banked · ⚛×" + game.lifeCells, "#9fe6ff");
         } else {
           game.lives = Math.min(game.lives + 1, T.kernelCap || 10);
           spawnParticles(p.x, p.y, C.ok, 22, 280);
@@ -1657,6 +1701,7 @@
         hud.lives.appendChild(d);
       }
     }
+    if (hud.lifecells) hud.lifecells.textContent = "⚛×" + (game.lifeCells || 0);
     const bossT = (game.boss && game.boss.phase === "fight") ? game.boss : ((game.boss2 && game.boss2.phase === "fight") ? game.boss2 : null);
     if (bossT) {
       const f = Math.max(0, bossT.timer / T.bossDuration);
@@ -2269,6 +2314,32 @@
           ctx.beginPath(); ctx.arc(p.x + Math.cos(a) * gr, y + Math.sin(a) * gr, 2.6, 0, Math.PI * 2); ctx.fill();
         }
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        continue;
+      }
+
+      if (p.kind === "lifecell") {
+        // atomic power-cell — glowing nucleus + 3 rotating electron orbits (no magnet, fly into it)
+        const tt = 0.5 + 0.5 * Math.sin(game.t * 6 + p.bob);
+        const us = (T.lifeCellSize || 50);
+        ctx.save(); ctx.translate(p.x, y);
+        const ha = ctx.createRadialGradient(0, 0, 0, 0, 0, us);
+        ha.addColorStop(0, hexA("#dff6ff", 0.5 + 0.3 * tt)); ha.addColorStop(0.5, hexA("#2dd4ff", 0.22)); ha.addColorStop(1, "transparent");
+        ctx.fillStyle = ha; ctx.beginPath(); ctx.arc(0, 0, us, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowColor = "#6df0ff"; ctx.shadowBlur = 18;
+        ctx.strokeStyle = hexA("#6df0ff", 0.85); ctx.lineWidth = 2;
+        for (let k = 0; k < 3; k++) {
+          ctx.save();
+          ctx.rotate(game.t * (1.2 + k * 0.4) * (k % 2 ? -1 : 1) + k * 2.094);
+          ctx.beginPath(); ctx.ellipse(0, 0, us * 0.42, us * 0.16, 0, 0, Math.PI * 2); ctx.stroke();
+          const ea = game.t * (2 + k);
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath(); ctx.arc(Math.cos(ea) * us * 0.42, Math.sin(ea) * us * 0.16, 2.6, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
+        ctx.fillStyle = "#eaffff"; ctx.beginPath(); ctx.arc(0, 0, us * 0.16 * (1 + 0.12 * tt), 0, Math.PI * 2); ctx.fill();
+        ctx.restore(); ctx.shadowBlur = 0;
+        ctx.fillStyle = "#9fe6ff"; ctx.font = `700 9px ${FONTS.mono}`; ctx.textAlign = "center";
+        ctx.fillText("⚛ LIFE", p.x, y + us * 0.6 + 12); ctx.textAlign = "left";
         continue;
       }
 
