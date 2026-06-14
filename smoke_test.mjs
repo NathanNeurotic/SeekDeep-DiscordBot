@@ -34,6 +34,12 @@ if (!process.env.SEEKDEEP_FEATURE_INPAINT) {
 process.env.SEEKDEEP_FEATURE_AUTO_REACT = 'off';
 process.env.SEEKDEEP_FEATURE_EMOJI_VAULT = 'off';
 process.env.SEEKDEEP_FEATURE_FORCE_REACT = 'off';
+// Universal-archive author-notify defaults to 'on' in code (!== 'off'), but a
+// developer's .env may set it 'off'. Force it on here so the notify-gate
+// assertions below are deterministic regardless of ambient .env — 'on' is the
+// only value where all four gate checks (bot-skip, self-skip, fire-on-other,
+// missing-target) are meaningful instead of trivially short-circuited by silent.
+process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY = 'on';
 
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
@@ -2156,6 +2162,13 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf classify: fc00::1 unique-local', blockedIp('fc00::1'));
   check('ssrf classify: fe80::1 link-local', blockedIp('fe80::1'));
   check('ssrf classify: ::ffff:127.0.0.1 mapped loopback', blockedIp('::ffff:127.0.0.1'));
+  // AUD-002b: the WHATWG URL parser emits IPv4-mapped IPv6 in compressed HEX form.
+  check('ssrf classify: ::ffff:7f00:1 hex mapped loopback', blockedIp('::ffff:7f00:1'));
+  check('ssrf classify: ::7f00:1 hex compat loopback', blockedIp('::7f00:1'));
+  check('ssrf classify: ::ffff:a9fe:a9fe hex mapped metadata', blockedIp('::ffff:a9fe:a9fe'));
+  check('ssrf classify: ::ffff:a00:1 hex mapped 10.0.0.1', blockedIp('::ffff:a00:1'));
+  check('ssrf classify: ::ffff:c0a8:101 hex mapped 192.168.1.1', blockedIp('::ffff:c0a8:101'));
+  check('ssrf classify: ::ffff:808:808 hex mapped 8.8.8.8 PUBLIC', !blockedIp('::ffff:808:808'));
   check('ssrf classify: 8.8.8.8 PUBLIC', !blockedIp('8.8.8.8'));
   check('ssrf classify: 2606:4700:4700::1111 PUBLIC', !blockedIp('2606:4700:4700::1111'));
 
@@ -2181,10 +2194,18 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf validate: javascript: scheme blocked', await blocked('javascript:alert(1)'));
   check('ssrf validate: https public IPv4 literal allowed', await allowed('https://8.8.8.8/x'));
   check('ssrf validate: https public IPv6 literal allowed', await allowed('https://[2606:4700:4700::1111]/x'));
+  // AUD-002b: the real exploit — new URL() canonicalizes these to hex internally.
+  check('ssrf validate: http://[::ffff:127.0.0.1] blocked (hex canon)', await blocked('http://[::ffff:127.0.0.1]/x'));
+  check('ssrf validate: http://[::127.0.0.1] blocked (hex canon)', await blocked('http://[::127.0.0.1]/x'));
+  check('ssrf validate: http://[::ffff:169.254.169.254] blocked', await blocked('http://[::ffff:169.254.169.254]/x'));
+  check('ssrf validate: http://[::ffff:10.0.0.1] blocked', await blocked('http://[::ffff:10.0.0.1]/x'));
+  check('ssrf validate: http://[::ffff:192.168.1.1] blocked', await blocked('http://[::ffff:192.168.1.1]/x'));
+  check('ssrf validate: http://[::ffff:8.8.8.8] public mapped allowed', await allowed('http://[::ffff:8.8.8.8]/x'));
 
   // -- allowPrivate opt-in: permits loopback, but NEVER metadata/unspecified --
   check('ssrf validate: allowPrivate permits 127.0.0.1', await allowed('http://127.0.0.1/x', { allowPrivate: true }));
   check('ssrf validate: allowPrivate still blocks metadata', await blocked('http://169.254.169.254/x', { allowPrivate: true }));
+  check('ssrf validate: allowPrivate still blocks hex-mapped metadata', await blocked('http://[::ffff:169.254.169.254]/x', { allowPrivate: true }));
   check('ssrf validate: allowPrivate still blocks 0.0.0.0', await blocked('http://0.0.0.0/x', { allowPrivate: true }));
 
   // -- redirect re-validation: public → private must fail before body read --
