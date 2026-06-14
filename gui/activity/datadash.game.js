@@ -9,6 +9,52 @@
   const CFG = window.DATADASH;
   const { TEXT, SPRITES, COLORS: C, FONTS, TUNING: T } = CFG;
 
+  // ---- LEVELS: distance-tiered zones (per-level speed + palette + tower shape) ----
+  const LEVELS = (CFG.LEVELS && CFG.LEVELS.length) ? CFG.LEVELS : [{
+    name: "", sub: "", threshold: 0, speed: T.scrollStart, shape: {},
+    palette: { bg: "#02060f", glow: "#2dd4ff", grid: "#78deff", terrain: "#06182e", terrainEdge: "#2dd4ff", obstacle: "#0a2742", obstacleEdge: "#6df0ff", accent: "#2dd4ff", accentSoft: "#6df0ff" },
+  }];
+  const PAL_KEYS = ["bg", "glow", "grid", "terrain", "terrainEdge", "obstacle", "obstacleEdge", "accent", "accentSoft"];
+  const LEVEL_FADE = 1.6;   // seconds for the palette cross-fade on level-up
+  function levelIdx(b) {
+    // Derive the active tier from CFG.LEVELS thresholds (single source of truth);
+    // thresholds are ascending, so the highest one <= b wins.
+    let n = 0;
+    for (let i = 0; i < LEVELS.length; i++) { if (b >= (LEVELS[i].threshold || 0)) n = i; }
+    return n;
+  }
+  function levelSpeed(n) { return (LEVELS[n] && LEVELS[n].speed) || T.scrollStart; }
+  function curShape() { return (game && LEVELS[game.level] && LEVELS[game.level].shape) || {}; }
+  function mixHex(a, b, t) {
+    const ch = (i) => { const x = parseInt(a.slice(1 + 2 * i, 3 + 2 * i), 16), y = parseInt(b.slice(1 + 2 * i, 3 + 2 * i), 16); return Math.round(x + (y - x) * t).toString(16).padStart(2, "0"); };
+    return "#" + ch(0) + ch(1) + ch(2);
+  }
+  function rgbTriplet(h) { return parseInt(h.slice(1, 3), 16) + "," + parseInt(h.slice(3, 5), 16) + "," + parseInt(h.slice(5, 7), 16); }
+  function applyPalette() {
+    const a = game.palFrom, b = game.palTo, p = game.pal, t = game.palT;
+    if (!a || !b || !p) return;
+    for (const k of PAL_KEYS) p[k] = mixHex(a[k], b[k], t);
+    C.bg = p.bg; C.terrain = p.terrain; C.terrainEdge = p.terrainEdge;
+    C.obstacle = p.obstacle; C.obstacleEdge = p.obstacleEdge;
+    C.accent = p.accent; C.accentSoft = p.accentSoft;
+    C.bgGlow = "rgba(" + rgbTriplet(p.glow) + ",0.12)";
+    C.grid = "rgba(" + rgbTriplet(p.grid) + ",0.10)";
+  }
+  function setPalette(pal) {                // snap instantly (init / new game)
+    game.pal = Object.assign({}, pal);
+    game.palFrom = Object.assign({}, pal); game.palTo = pal; game.palT = 1;
+    applyPalette();
+  }
+  function levelUp(n) {
+    if (!LEVELS[n]) return;
+    game.level = n;
+    game.palFrom = Object.assign({}, game.pal);   // current interpolated colours
+    game.palTo = LEVELS[n].palette;
+    game.palT = 0;
+    game.flashT = Math.max(game.flashT || 0, 0.6);
+    showBanner(LEVELS[n].name, LEVELS[n].sub, LEVELS[n].palette.accent, 2.4);
+  }
+
   // ---- canvas / scaling ----------------------------------------------------
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -99,7 +145,9 @@
       lives: T.startLives,
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
-      scroll: T.scrollStart,
+      scroll: levelSpeed(0),
+      level: 0, spd: levelSpeed(0),
+      pal: null, palFrom: null, palTo: null, palT: 1,
       // player
       px: 0, py: 0, vy: 0, vx: 0,
       // terrain
@@ -147,13 +195,15 @@
     };
     game.px = W * T.playerX;
     game.py = H * 0.5;
+    setPalette(LEVELS[0].palette);   // reset zone colours to L1 (a prior run may have lerped C to a later level)
+    buildTiles();                    // re-tint the circuit tiles to the L1 accent
     seedTerrain();
   }
 
   // ---- terrain generation : continuous safe corridor -----------------------
   function curScroll() {
-    const k = Math.min(1, game.bytes / T.scrollRampBytes);
-    return T.scrollStart + (T.scrollMax - T.scrollStart) * k;
+    // per-level base speed, eased on level-up (see update()); scrollFx multiplies on top
+    return game.spd || levelSpeed(game.level || 0);
   }
 
   function pickFeature() {
@@ -161,27 +211,35 @@
     const openHalf = T.maxGapFrac / 2;
     const slopeFrac = T.wallSlopePx / H;
     const diff = Math.min(1, game.bytes / T.corridorRampBytes);
+    const sh = curShape();
+    const twMin = sh.towerMin != null ? sh.towerMin : T.towerMin;
+    const twMax = sh.towerMax != null ? sh.towerMax : T.towerMax;
+    const pAmt = sh.pinchAmt != null ? sh.pinchAmt : T.pinchAmt;
+    const rFrac = sh.rampFrac != null ? sh.rampFrac : T.rampFrac;
+    const fMin = sh.featMin != null ? sh.featMin : T.featMin;
+    const fMax = sh.featMax != null ? sh.featMax : T.featMax;
+    const w = sh.weights || { open: 0.22, floorTower: 0.24, ceilTower: 0.24, pinch: 0.15, ramp: 0.15 };
     const r = Math.random();
-    let type, amt = 0, len;
-    if (r < 0.22) type = "open";
-    else if (r < 0.46) type = "floorTower";
-    else if (r < 0.70) type = "ceilTower";
-    else if (r < 0.85) type = "pinch";
+    let type, amt = 0, len, wAcc = w.open;
+    if (r < wAcc) type = "open";
+    else if (r < (wAcc += w.floorTower)) type = "floorTower";
+    else if (r < (wAcc += w.ceilTower)) type = "ceilTower";
+    else if (r < (wAcc += w.pinch)) type = "pinch";
     else type = "ramp";
 
     if (type === "floorTower" || type === "ceilTower") {
-      amt = (T.towerMin + Math.random() * (T.towerMax - T.towerMin)) * (1 + diff * 0.15);
+      amt = (twMin + Math.random() * (twMax - twMin)) * (1 + diff * 0.15);
     } else if (type === "pinch") {
-      amt = T.pinchAmt * (0.7 + Math.random() * 0.4) * (1 + diff * 0.12);
+      amt = pAmt * (0.7 + Math.random() * 0.4) * (1 + diff * 0.12);
     }
     // cap amt so a tower always leaves the minimum channel
     amt = Math.min(amt, openHalf * 2 - T.minGapFrac - 0.02);
 
     if (amt > 0) {
       const rampCols = Math.max(3, Math.ceil(amt / slopeFrac));
-      len = Math.round(rampCols / T.rampFrac);
+      len = Math.round(rampCols / rFrac);
     } else {
-      len = T.featMin + (Math.random() * (T.featMax - T.featMin) | 0);
+      len = fMin + (Math.random() * (fMax - fMin) | 0);
     }
     // open/ramp stretches meander the base channel
     if (type === "open" || type === "ramp") {
@@ -192,7 +250,7 @@
       if (c < lo || c > hi) c = game.baseCenter - dir * step;
       game.baseCenterTarget = Math.max(lo, Math.min(hi, c));
     }
-    game.feat = { type, amt };
+    game.feat = { type, amt, rampFrac: rFrac };
     game.featLen = Math.max(6, len);
   }
 
@@ -209,6 +267,7 @@
     const em = T.edgeMargin, mg = T.minGapFrac, openHalf = T.maxGapFrac / 2;
     const slopeFrac = T.wallSlopePx / H;
     const fast = game.scrollFx && game.scrollFx.kind === "fast";
+    const sh = curShape();
 
     // while a chip obstacle occupies the channel, hold the walls flat through it
     if (game.holdCols > 0) {
@@ -224,7 +283,9 @@
 
     // trapezoid envelope → ziggurat (ramp up, flat top, ramp down)
     const p = game.featLen > 0 ? game.featCol / game.featLen : 0;
-    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / T.rampFrac));
+    // Use the feature's rampFrac latched at pick time so the env trapezoid stays
+    // matched to the featLen it was sized for, even if a level-up lands mid-feature.
+    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / ((game.feat && game.feat.rampFrac != null) ? game.feat.rampFrac : (sh.rampFrac != null ? sh.rampFrac : T.rampFrac))));
     const amt = game.feat.amt * (fast ? 0.6 : 1);
 
     let cTop = game.baseCenter - openHalf;
@@ -239,7 +300,7 @@
     cTop = Math.max(em, Math.min(1 - em - mg, cTop));
     cBot = Math.max(cTop + mg, Math.min(1 - em, cBot));
     // snap walls to a vertical grid → blocky chip-tower silhouette (flat tops, vertical sides)
-    const st = T.wallStepFrac;
+    const st = sh.wallStepFrac != null ? sh.wallStepFrac : T.wallStepFrac;
     if (st > 0) {
       let qT = Math.round(cTop / st) * st;
       let qB = Math.round(cBot / st) * st;
@@ -266,12 +327,12 @@
     let blocks = [];
     if (!fast) {
       game.obsCooldown = (game.obsCooldown || 0) - 1;
-      if (game.obsCooldown <= 0 && Math.random() < T.obsChance) {
+      if (game.obsCooldown <= 0 && Math.random() < (sh.obsChance != null ? sh.obsChance : T.obsChance)) {
         game.obsCooldown = T.obsEveryMin + (Math.random() * (T.obsEveryMax - T.obsEveryMin) | 0);
         const span = T.obsSpanMin + (Math.random() * (T.obsSpanMax - T.obsSpanMin + 1) | 0);
         const ceilRoom = (game.laneY - lm) - cTop;   // space above the lane
         const floorRoom = cBot - (game.laneY + lm);  // space below the lane
-        const doDouble = Math.random() < (T.obsDoubleChance || 0) && ceilRoom > T.obsMinHeight && floorRoom > T.obsMinHeight;
+        const doDouble = Math.random() < ((sh.obsDoubleChance != null ? sh.obsDoubleChance : T.obsDoubleChance) || 0) && ceilRoom > T.obsMinHeight && floorRoom > T.obsMinHeight;
         const OV = 12; // bury the base into the wall so chips are always connected
         if (doDouble) {
           const ht = Math.min(ceilRoom, T.obsMinHeight + Math.random() * 0.12) * H;
@@ -461,6 +522,7 @@
   // ---- helpers -------------------------------------------------------------
   function formatBytes(b) {
     b = Math.floor(b);
+    if (b >= 1e12) return (b / 1e12).toFixed(2) + " T" + TEXT.unit;
     if (b >= 1e9) return (b / 1e9).toFixed(2) + " G" + TEXT.unit;
     if (b >= 1e6) return (b / 1e6).toFixed(2) + " M" + TEXT.unit;
     if (b >= 1e3) return (b / 1e3).toFixed(1) + " K" + TEXT.unit;
@@ -677,6 +739,12 @@
       updateParticles(dt);
       return;   // everything else frozen
     }
+
+    // level progression: detect a tier crossing, ease toward its speed, cross-fade palette
+    const lvNow = levelIdx(game.bytes);
+    if (lvNow > game.level) levelUp(lvNow);
+    game.spd += (levelSpeed(game.level) - game.spd) * Math.min(1, dt * 1.6);
+    if (game.palT < 1) { game.palT = Math.min(1, game.palT + dt / LEVEL_FADE); applyPalette(); if (game.palT >= 1) buildTiles(); }
 
     // scroll speed, warped by an active mystery effect
     let base = curScroll();
@@ -1711,7 +1779,10 @@
 
   function drawStreaks() {
     const spd = game ? game.scroll : 0;
-    const norm = Math.min(1, (spd - T.scrollStart) / Math.max(1, T.scrollMax - T.scrollStart));
+    // Normalize against the actual per-level speed span (L1..TB) so streaks keep
+    // intensifying through GB/TB and never go negative at the slower L1 base.
+    const sLo = levelSpeed(0), sHi = levelSpeed(LEVELS.length - 1);
+    const norm = Math.max(0, Math.min(1, (spd - sLo) / Math.max(1, sHi - sLo)));
     const streakCol = powerupColor() || "#6df0ff";   // tint the streamers with the active power-up
     ctx.lineCap = "round";
     for (const s of STREAKS) {
@@ -1776,10 +1847,11 @@
   }
   function buildTiles() {
     tileW = 1500;
-    // background: faint, small, sparse — recedes
-    pcbTile = makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: "rgba(45,212,255,0.08)", pad: "rgba(109,240,255,0.1)", chip: "rgba(120,222,255,0.09)" });
-    // foreground walls: BOLD, glowing white-blue — reads as a lit circuit board
-    wallTile = makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: "rgba(150,235,255,0.62)", pad: "rgba(235,252,255,0.92)", chip: "rgba(190,242,255,0.6)" });
+    const acc = C.accent, accS = C.accentSoft;
+    // background: faint, small, sparse — recedes. Tinted to the current zone accent.
+    pcbTile = makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: hexA(acc, 0.08), pad: hexA(accS, 0.1), chip: hexA(acc, 0.09) });
+    // foreground walls: BOLD, glowing — reads as a lit circuit board in the zone colour
+    wallTile = makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: hexA(accS, 0.62), pad: hexA(accS, 0.95), chip: hexA(accS, 0.6) });
   }
 
   function blitTile(tile, parallax) {
@@ -2023,8 +2095,8 @@
         const by = top ? col.ceil - OV : (H - col.floor) - blk.h;
         const bh = blk.h + OV;
         const bg = ctx.createLinearGradient(0, by, 0, by + bh);
-        bg.addColorStop(0, top ? "#0b2b42" : "#06182e");
-        bg.addColorStop(1, top ? "#06182e" : "#0b2b42");
+        bg.addColorStop(0, top ? C.obstacle : C.terrain);
+        bg.addColorStop(1, top ? C.terrain : C.obstacle);
         ctx.fillStyle = bg;
         ctx.fillRect(x, by, bw, bh);
         ctx.strokeStyle = C.obstacleEdge; ctx.lineWidth = 2.5;
@@ -2037,12 +2109,12 @@
         // contact pads near the exposed tip + circuit detail
         const tipY = top ? by + bh : by;
         const pads = Math.max(2, Math.round(bw / 14));
-        ctx.fillStyle = "rgba(109,240,255,0.7)";
+        ctx.fillStyle = hexA(C.accentSoft, 0.7);
         for (let p = 0; p < pads; p++) {
           const px = x + (p + 0.5) * (bw / pads) - 2;
           ctx.fillRect(px, top ? tipY - 8 : tipY + 4, 4, 4);
         }
-        ctx.strokeStyle = "rgba(109,240,255,0.3)"; ctx.lineWidth = 1;
+        ctx.strokeStyle = hexA(C.accentSoft, 0.3); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x + bw / 2, by + 4); ctx.lineTo(x + bw / 2, by + bh - 4); ctx.stroke();
         // little IC tick rungs
         for (let yy = by + 10; yy < by + bh - 6; yy += 12) { ctx.beginPath(); ctx.moveTo(x + 4, yy); ctx.lineTo(x + bw - 4, yy); ctx.stroke(); }

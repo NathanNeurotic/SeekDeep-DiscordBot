@@ -127,6 +127,41 @@ window.DATADASH = {
     thrust:    "#6df0ff",          // thruster flame
   },
 
+  /* --- LEVELS ------------------------------------------------------------
+   * Zones unlocked by total DATA STREAMED. The level is the magnitude bracket
+   * of the streamed byte count and only ever climbs (latched) within a run.
+   * Each level sets its own scroll speed, colour palette, and tower-shape
+   * profile, so the world visibly changes character as you stream more data.
+   *   threshold = bytes at/above which this level becomes active.
+   *   speed     = world scroll px/s (eased on level-up). L1 is the slow base;
+   *               TB is faster than the old single-ramp max (860).
+   *   palette   = all hex. glow/grid are the hex tint (alpha applied in-engine);
+   *               terrain/obstacle/accent families recolour the whole world.
+   *   shape     = per-level overrides for the corridor generator (anything
+   *               omitted falls back to TUNING). Gap / lane / min-channel params
+   *               are intentionally NOT here — they stay constant in TUNING so
+   *               the "always a flyable thread" guarantee holds at every level.
+   *     weights = relative chance of each feature {open,floorTower,ceilTower,pinch,ramp}.
+   */
+  LEVELS: [
+    { name: "KB · DATA STREAM", sub: "kilobyte channel — boot sequence", threshold: 0, speed: 440,
+      palette: { bg:"#02060f", glow:"#2dd4ff", grid:"#78deff", terrain:"#06182e", terrainEdge:"#2dd4ff", obstacle:"#0a2742", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#6df0ff" },
+      shape: { rampFrac:0.30, wallStepFrac:0.055, towerMin:0.09, towerMax:0.18, pinchAmt:0.17, featMin:6, featMax:13, obsChance:0.78, obsDoubleChance:0.14,
+        weights:{ open:0.24, floorTower:0.23, ceilTower:0.23, pinch:0.15, ramp:0.15 } } },
+    { name: "MB · DATA RIVER", sub: "megabyte zone — picking up speed", threshold: 1e6, speed: 600,
+      palette: { bg:"#02100a", glow:"#39ff96", grid:"#7cffb4", terrain:"#06281a", terrainEdge:"#2dff95", obstacle:"#0a3a26", obstacleEdge:"#6dffae", accent:"#2dff95", accentSoft:"#6dffae" },
+      shape: { rampFrac:0.50, wallStepFrac:0, towerMin:0.08, towerMax:0.16, pinchAmt:0.14, featMin:8, featMax:16, obsChance:0.60, obsDoubleChance:0.10,
+        weights:{ open:0.28, floorTower:0.21, ceilTower:0.21, pinch:0.10, ramp:0.20 } } },
+    { name: "GB · DATA TORRENT", sub: "gigabyte zone — sharp and fast", threshold: 1e9, speed: 760,
+      palette: { bg:"#0a0614", glow:"#a855f7", grid:"#c8a0ff", terrain:"#1a0b2e", terrainEdge:"#b86dff", obstacle:"#2a1142", obstacleEdge:"#d2a8ff", accent:"#a855f7", accentSoft:"#c89cff" },
+      shape: { rampFrac:0.16, wallStepFrac:0, towerMin:0.10, towerMax:0.185, pinchAmt:0.18, featMin:5, featMax:10, obsChance:0.85, obsDoubleChance:0.18,
+        weights:{ open:0.14, floorTower:0.30, ceilTower:0.30, pinch:0.14, ramp:0.12 } } },
+    { name: "TB · DATA OVERLOAD", sub: "terabyte zone — maximum velocity", threshold: 1e12, speed: 980,
+      palette: { bg:"#140604", glow:"#ff5a3c", grid:"#ffaa78", terrain:"#2e0d06", terrainEdge:"#ff5d3a", obstacle:"#421a11", obstacleEdge:"#ff9a6d", accent:"#ff5d3a", accentSoft:"#ffae6d" },
+      shape: { rampFrac:0.22, wallStepFrac:0.04, towerMin:0.11, towerMax:0.185, pinchAmt:0.18, featMin:4, featMax:8, obsChance:0.90, obsDoubleChance:0.26,
+        weights:{ open:0.12, floorTower:0.28, ceilTower:0.28, pinch:0.18, ramp:0.14 } } },
+  ],
+
   FONTS: {
     ui:   `Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`,
     mono: `"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace`,
@@ -167,9 +202,7 @@ window.DATADASH = {
     hMargin:           0.1,      // player stays within this margin of the screen edges
     crashGravity:      900,     // pull used only for the boss death-spiral
 
-    scrollStart:       560,    // world speed px/s at start — eased (was 640; transitions too fast to clear)
-    scrollMax:         860,    // caps out here — eased (was 1040) so wall ramps stay clearable vs vMax 840
-    scrollRampBytes:   90000,  // bytes over which speed ramps to max
+    scrollStart:       560,    // fallback base speed only (used if CFG.LEVELS is absent) — real per-level speeds now live in CFG.LEVELS (440 → 980)
 
     bytesPerPx:        14,     // distance → bytes multiplier
 
