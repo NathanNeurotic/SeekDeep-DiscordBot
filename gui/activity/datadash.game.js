@@ -1186,6 +1186,7 @@
     const kind = roll < 0.4 ? "fast" : (roll < 0.72 ? "slow" : "reverse");
     let dur = T.mysteryDurMin + Math.random() * (T.mysteryDurMax - T.mysteryDurMin);
     if (kind === "slow") dur = Math.min(dur, T.mysterySlowDurMax);
+    if (kind === "reverse") dur *= 0.5;   // reverse was too long — halve it
     game.scrollFx = { kind, t: dur };
     const label = kind === "fast" ? TEXT.mysteryFast : (kind === "slow" ? TEXT.mysterySlow : TEXT.mysteryReverse);
     spawnParticles(game.px, game.py, C.mystery, 28, 320);
