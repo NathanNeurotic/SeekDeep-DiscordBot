@@ -266,6 +266,7 @@ window.DATADASH = {
     // Plenty when you're hurting, rare once you're comfortable (5+).
     checkpointEvery:   46000,  // base bytes between +1 packs (scaled by kernels held) — rarer
     checkpointRich:    5,      // kernels at/above which packs become rare
+    kernelCap:         10,     // max kernels — none spawn/stack at 10+; collectible only while < 10
     pickupSize:        44,
     pickupPull:        360,    // pickups gravitate to the player within this radius (px) — stronger reach
     pickupPullForce:   2200,   // pull strength (px/s at the edge of the radius) — much grabbier

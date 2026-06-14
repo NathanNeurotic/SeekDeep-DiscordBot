@@ -953,7 +953,7 @@
     // RANDOM EVENT trigger — fires at unpredictable intervals, never while already busy
     if (!busy && game.t >= game.nextEventT) { triggerRandomEvent(); return; }
     // checkpoint backups (+1) — cadence scales with kernels held
-    if (!busy && S >= game.nextCheckpoint && pickupLaneClear()) {
+    if (!busy && S >= game.nextCheckpoint && game.lives < (T.kernelCap || 10) && pickupLaneClear()) {
       game.nextCheckpoint = S + checkpointInterval();
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
@@ -1180,7 +1180,7 @@
       if (rectsHit(hb.x, hb.y, HBX, HBY, p.x - psz / 2, p.y - psz / 2, psz, psz)) {
         p.grabbed = true;
         if (p.kind === "bonus") {
-          game.lives += T.bonusValue;
+          game.lives = Math.min(game.lives + T.bonusValue, T.kernelCap || 10);
           spawnParticles(p.x, p.y, C.ok, 32, 360);
           SFX("kernel");
           showBanner(TEXT.bonus, TEXT.bonusSub.replace("{v}", T.bonusValue).replace("{n}", game.lives), C.ok);
@@ -1216,7 +1216,7 @@
           game.freeAmmo = true;
           game.odHits = 0;                       // absorbs 2 hits before power-down
           if (!p.eventGift) {
-            game.lives += 2;                     // +2 kernels buffer (rare standalone bolt only)
+            game.lives = Math.min(game.lives + 2, T.kernelCap || 10);   // +2 kernels (rare standalone bolt only), capped
             game.transform = T.transformTime;    // world-freeze transform sequence
             showBanner("⚡ OVER CLOCKED!", "+2 kernels · 3× fire · smash through", C.accent);
           } else if (!wasOD) {
@@ -1252,7 +1252,7 @@
           SFX("shieldHeld");
           showBanner("🛡 SHIELD ONLINE", "absorbs the next hit", C.accentSoft);
         } else {
-          game.lives++;
+          game.lives = Math.min(game.lives + 1, T.kernelCap || 10);
           spawnParticles(p.x, p.y, C.ok, 22, 280);
           SFX("kernel");
           showBanner(TEXT.checkpoint, TEXT.checkpointSub.replace("{n}", game.lives), C.ok);
