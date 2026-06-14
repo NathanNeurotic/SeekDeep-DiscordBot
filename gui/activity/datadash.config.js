@@ -305,7 +305,7 @@ window.DATADASH = {
     mysteryDurMin:     6,      // effect duration range (seconds)
     mysteryDurMax:     14,
     mysterySlowDurMax: 10,     // slowdown is capped shorter than other effects
-    mysteryFastMult:   1.45,   // scroll multiplier: overclock (flashes GREEN)
+    mysteryFastMult:   2.0,    // PERFORMANCE MODE scroll multiplier ×2 (violent rainbow world filter)
     mysterySlowMult:   0.5,    // scroll multiplier: throttle (flashes GREEN)
     mysteryReverseMult:-0.8,   // scroll multiplier: rewind (flashes RED, negative = backwards)
     revertGrace:       1.2,    // wall-damage immunity (s) DURING a rewind + this long after it

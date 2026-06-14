@@ -1656,7 +1656,7 @@
     if (hud.fx) {
       if (game.scrollFx) {
         const fx = game.scrollFx;
-        const label = fx.kind === "fast" ? "OVERCLOCK ⏩" : (fx.kind === "slow" ? "THROTTLED ⏸" : "REVERTING ⏪");
+        const label = fx.kind === "fast" ? TEXT.mysteryFast : (fx.kind === "slow" ? TEXT.mysterySlow : TEXT.mysteryReverse);
         const fxCol = fx.kind === "reverse" ? C.danger : C.ok;
         hud.fx.textContent = label + "  " + Math.ceil(fx.t) + "s";
         hud.fx.style.color = fxCol;
@@ -1669,6 +1669,30 @@
   }
 
   // ---- render --------------------------------------------------------------
+  // ---- override states: ONE global ctx.filter recolours the entire world render
+  // pass (terrain, tiles, sprite, enemies, particles) for the active mystery/buff
+  // state. Set in render() right after the shake transform; the surrounding
+  // ctx.restore() resets it so the DOM HUD + canvas FX overlays stay true-colour.
+  function worldFilter() {
+    if (!game) return "none";
+    const fx = game.scrollFx;
+    if (fx && fx.kind === "reverse") return "invert(1)";                                              // reverse: fully inverted incl. sprite
+    if (fx && fx.kind === "fast") return "saturate(2.6) hue-rotate(" + Math.floor((game.t * 220) % 360) + "deg)"; // performance: violent rainbow spin
+    if (fx && fx.kind === "slow") return "grayscale(1) contrast(0.95)";                               // throttle: black & white
+    if (game.invincible > 0) return "brightness(2.1) saturate(0.12)";                                 // pepe: all white / divinity
+    if (game.freeAmmo) return "sepia(1) saturate(4.5) hue-rotate(-28deg) brightness(1.05)";           // overdrive: yellow-orange
+    return "none";
+  }
+  // overdrive "pumped" pulsing solid-white overlay (drawn after the world pass, true-colour)
+  function drawPumpedOverlay() {
+    const pulse = 0.10 + 0.13 * Math.abs(Math.sin(game.t * 9));
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-40, -40, W + 80, H + 80);
+    ctx.restore();
+  }
+
   function render() {
     ctx.clearRect(0, 0, W, H);
     let sx = 0, sy = 0;
@@ -1678,6 +1702,7 @@
     }
     ctx.save();
     ctx.translate(sx, sy);
+    ctx.filter = worldFilter();   // override states recolour the whole world pass; the restore() below resets it before HUD/FX overlays
 
     drawBackground();
     if (game) {
@@ -1697,6 +1722,7 @@
       drawFloaters();
     }
     ctx.restore();
+    if (game && game.freeAmmo) drawPumpedOverlay();
     if (game && game.scrollFx) drawFxVignette();
     if (game && game.invincible > 0) drawInvincibleOverlay();
     if (game && game.transform > 0) drawTransformLightning();
