@@ -590,7 +590,8 @@
     game.invuln = Math.max(game.invuln, 5);    // immune through the slow restart window
     game.resumeT = 5;                          // 5s eased speed ramp (see curScroll)
     game.scrollFx = null;                      // clear any active mystery so the resume is clean
-    game.shooting = false; game.charging = false;
+    game.shooting = false; game.charging = false; game.chargeT = 0;
+    if (window.DDAudio) window.DDAudio.stopLoop("chargeLoop");   // died mid-charge: stop the held charge loop (die() does this too)
     // clear immediate threats around the player so the continue isn't instant death
     game.bots = game.bots.filter((b) => Math.hypot(b.x - game.px, b.y - game.py) > 220);
     game.bullets = []; game.bars = []; game.bombs = [];
@@ -790,7 +791,7 @@
     if (lvNow > game.level) levelUp(lvNow);
     else if (lvNow < game.level && game.bytes < (LEVELS[game.level].threshold || 0) * 0.92) levelUp(lvNow, true);
     game.spd += (levelSpeed(game.level) - game.spd) * Math.min(1, dt * 1.6);
-    if (game.palT < 1) { game.palT = Math.min(1, game.palT + dt / LEVEL_FADE); applyPalette(); if (game.palT >= 1) buildTiles(); }
+    if (game.palT < 1) { game.palT = Math.min(1, game.palT + dt / LEVEL_FADE); applyPalette(); if (game.palT >= 1) applyZoneTiles(game.level); }
 
     // scroll speed, warped by an active mystery effect
     let base = curScroll();
@@ -1741,6 +1742,7 @@
   // pass (terrain, tiles, sprite, enemies, particles) for the active mystery/buff
   // state. Set in render() right after the shake transform; the surrounding
   // ctx.restore() resets it so the DOM HUD + canvas FX overlays stay true-colour.
+  let _lastCanvasFilter = "";
   function worldFilter() {
     if (!game) return "none";
     const fx = game.scrollFx;
@@ -1763,6 +1765,10 @@
 
   function render() {
     ctx.clearRect(0, 0, W, H);
+    // override states recolour the whole canvas via a GPU-composited CSS filter on the
+    // ELEMENT (not ctx.filter — a per-draw-op CPU killer that tanked FPS). HUD is separate DOM.
+    const _wf = worldFilter();
+    if (_wf !== _lastCanvasFilter) { canvas.style.filter = _wf === "none" ? "" : _wf; _lastCanvasFilter = _wf; }
     let sx = 0, sy = 0;
     if (game && game.shake > 0) {
       sx = (Math.random() - 0.5) * game.shake;
@@ -1770,7 +1776,6 @@
     }
     ctx.save();
     ctx.translate(sx, sy);
-    ctx.filter = worldFilter();   // override states recolour the whole world pass; the restore() below resets it before HUD/FX overlays
 
     drawBackground();
     if (game) {
@@ -1957,13 +1962,24 @@
     c.shadowBlur = 0;
     return cv;
   }
+  // Pre-render the circuit tiles for EVERY zone once (init/resize), then SWAP on
+  // level-up via applyZoneTiles(). Rebuilding 2 big offscreen canvases per transition
+  // was the "lag when the environment changes" hitch.
+  let zoneTiles = [];
   function buildTiles() {
     tileW = 1500;
-    const acc = C.accent, accS = C.accentSoft;
-    // background: faint, small, sparse — recedes. Tinted to the current zone accent.
-    pcbTile = makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: hexA(acc, 0.08), pad: hexA(accS, 0.1), chip: hexA(acc, 0.09) });
-    // foreground walls: BOLD, glowing — reads as a lit circuit board in the zone colour
-    wallTile = makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: hexA(accS, 0.62), pad: hexA(accS, 0.95), chip: hexA(accS, 0.6) });
+    zoneTiles = LEVELS.map((lv) => {
+      const acc = lv.palette.accent, accS = lv.palette.accentSoft;
+      return {
+        pcb: makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: hexA(acc, 0.08), pad: hexA(accS, 0.1), chip: hexA(acc, 0.09) }),
+        wall: makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: hexA(accS, 0.62), pad: hexA(accS, 0.95), chip: hexA(accS, 0.6) }),
+      };
+    });
+    applyZoneTiles(game ? game.level : 0);
+  }
+  function applyZoneTiles(n) {
+    const z = zoneTiles[Math.max(0, Math.min(zoneTiles.length - 1, n || 0))];
+    if (z) { pcbTile = z.pcb; wallTile = z.wall; }
   }
 
   function blitTile(tile, parallax) {

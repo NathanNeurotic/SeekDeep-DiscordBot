@@ -381,7 +381,7 @@ window.DATADASH = {
     upgradeSize:       104,    // 2× bigger lightning bolt
     lifeCellEvery:     2000000, // bytes between LIFE CELL spawns — 2× rarer than the upgrade bolt
     lifeCellCap:       9,       // max banked continues (player starts with 1)
-    lifeCellSize:      50,      // atomic power-cell pickup diameter (px)
+    lifeCellSize:      76,      // atomic power-cell pickup diameter (px) — bigger grab box (no magnet) so a rare cell isn't easily missed
     transformTime:     1.6,    // world-freeze duration while the Over Clocked transform plays
 
     // Local scoreboard
