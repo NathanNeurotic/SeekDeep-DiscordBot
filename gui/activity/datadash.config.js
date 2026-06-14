@@ -289,6 +289,7 @@ window.DATADASH = {
 
     // MINI-MALWARE BOTS — small drifting hazards on their own respawn clock
     botSpawnSeconds:   20,     // independent timer: spawn a batch every N seconds (50% more frequent)
+    botMinDataBytes:   1000000, // no chasing malware until DATA > 1MB
     botBatch:          2,      // how many spawn per tick
     botMax:            6,      // hard cap on screen — clock won't restart until there's room
     botLoudFar:        420,    // world px: beyond this the presence loop is silent

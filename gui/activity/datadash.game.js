@@ -1265,8 +1265,11 @@
   // MINI-MALWARE spawns on a strict independent clock: every botSpawnSeconds it
   // releases botBatch bots, but never more than botMax on screen. While at the cap
   // the clock simply parks at zero (no back-queue) and only rearms once there's room.
+  const BOT_SHAPES = ["star6", "star5", "star4", "hex", "tri", "diamond"];
+  const BOT_TINTS = ["#ff5d73", "#c08cff", "#ffd166", "#ff7a3c", "#c83cff", "#ff3c8a", "#5d9bff"];
   function updateMalwareSpawn(dt) {
     if (game.event) return;   // the hallway events run their own content; no chasing malware
+    if (game.bytes < (T.botMinDataBytes || 1e6)) return;   // no chasing malware until DATA > 1MB
     game.botTimer -= dt;
     if (game.botTimer > 0) return;
     if (game.bots.length >= T.botMax) return;   // full screen — hold the clock until space frees
@@ -1274,18 +1277,26 @@
     const n = Math.min(T.botBatch, room);
     const S = game.streamed;
     for (let i = 0; i < n; i++) {
-      let cy;
-      if (game.boss) {
-        cy = H * (0.18 + Math.random() * 0.64);   // boss arena is open — drop them anywhere
-      } else {
-        const col = colAtSpawn();
-        cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H / 2;
-      }
-      game.bots.push({ x: W + 60 + i * 74, y: cy, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S });
+      // varied entry edge: right common, top/bottom medium, left rare (never pop in on top of the player)
+      const er = Math.random();
+      const edge = game.boss ? "right" : er < 0.50 ? "right" : er < 0.72 ? "top" : er < 0.94 ? "bottom" : "left";
+      let x, y;
+      if (edge === "right") {
+        if (game.boss) { x = W + 60 + i * 74; y = H * (0.18 + Math.random() * 0.64); }   // boss arena is open
+        else { const col = colAtSpawn(); x = W + 60 + i * 40; y = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H * 0.5; }
+      } else if (edge === "top") { x = W * (0.35 + Math.random() * 0.6); y = -60 - i * 30; }
+      else if (edge === "bottom") { x = W * (0.35 + Math.random() * 0.6); y = H + 60 + i * 30; }
+      else { x = -60 - i * 30; y = H * (0.45 + Math.random() * 0.10); }   // left: rare, mid-channel so it isn't born inside a wall
+      game.bots.push({
+        x, y, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S, edge,
+        shape: BOT_SHAPES[Math.floor(Math.random() * BOT_SHAPES.length)],
+        tint: BOT_TINTS[Math.floor(Math.random() * BOT_TINTS.length)],
+        rotDir: Math.random() < 0.5 ? -1 : 1,
+      });
     }
     SFX("malwareSpawn");
     if (window.DDAudio) window.DDAudio.startLoop("malwareLoop");
-    game.botTimer = T.botSpawnSeconds;            // rearm the 30s clock only after a successful spawn
+    game.botTimer = T.botSpawnSeconds;            // rearm the clock only after a successful spawn
   }
 
   // SHIELD — its own independent entity. Memoryless random spawn: no timer, cycle,
@@ -2205,17 +2216,24 @@
   function drawBots() {
     for (const b of game.bots) {
       const r = T.botSize / 2, p = 0.5 + 0.5 * Math.sin(b.pulse * 8);
-      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.pulse * 2);
-      // glitchy malware mite — spiky body, red/violet, angry eye
-      ctx.shadowColor = C.danger; ctx.shadowBlur = 16;
-      starPath(6, r * (1 + 0.12 * p), r * 0.5, b.pulse * 3);
+      const tint = b.tint || C.danger;
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.pulse * 2 * (b.rotDir || 1));
+      // glitchy malware mite — varied spiky/poly body + angry eye
+      ctx.shadowColor = tint; ctx.shadowBlur = 16;
+      const sh = b.shape || "star6";
+      if (sh === "star5") starPath(5, r * (1 + 0.14 * p), r * 0.45, b.pulse * 3);
+      else if (sh === "star4") starPath(4, r * (1 + 0.16 * p), r * 0.42, b.pulse * 3);
+      else if (sh === "hex") polyPath(6, r * (0.95 + 0.10 * p), b.pulse);
+      else if (sh === "tri") polyPath(3, r * (1 + 0.12 * p), b.pulse);
+      else if (sh === "diamond") polyPath(4, r * (1 + 0.12 * p), b.pulse + 0.785);
+      else starPath(6, r * (1 + 0.12 * p), r * 0.5, b.pulse * 3);
       ctx.fillStyle = "rgba(30,8,22,0.95)"; ctx.fill();
-      ctx.strokeStyle = p > 0.5 ? C.danger : C.mystery; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = p > 0.5 ? tint : C.mystery; ctx.lineWidth = 2; ctx.stroke();
       ctx.restore();
       // eye
-      ctx.shadowBlur = 12; ctx.shadowColor = C.danger;
+      ctx.shadowBlur = 12; ctx.shadowColor = tint;
       ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.26, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = C.danger; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.13, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = tint; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.13, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0;
     }
   }
