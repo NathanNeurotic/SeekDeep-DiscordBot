@@ -26,11 +26,14 @@
   function levelSpeed(n) { return (LEVELS[n] && LEVELS[n].speed) || T.scrollStart; }
   function curShape() { return (game && LEVELS[game.level] && LEVELS[game.level].shape) || {}; }
   function mixHex(a, b, t) {
-    const ch = (i) => { const x = parseInt(a.slice(1 + 2 * i, 3 + 2 * i), 16), y = parseInt(b.slice(1 + 2 * i, 3 + 2 * i), 16); return Math.round(x + (y - x) * t).toString(16).padStart(2, "0"); };
+    const expand = (h) => (h && h.length === 4) ? "#" + h[1] + h[1] + h[2] + h[2] + h[3] + h[3] : h;   // tolerate 3-digit shorthand (#fff)
+    const hA = expand(a), hB = expand(b);
+    const ch = (i) => { const x = parseInt(hA.slice(1 + 2 * i, 3 + 2 * i), 16), y = parseInt(hB.slice(1 + 2 * i, 3 + 2 * i), 16); return Math.round(x + (y - x) * t).toString(16).padStart(2, "0"); };
     return "#" + ch(0) + ch(1) + ch(2);
   }
   function rgbTriplet(h) { return parseInt(h.slice(1, 3), 16) + "," + parseInt(h.slice(3, 5), 16) + "," + parseInt(h.slice(5, 7), 16); }
   function applyPalette() {
+    if (!game) return;
     const a = game.palFrom, b = game.palTo, p = game.pal, t = game.palT;
     if (!a || !b || !p) return;
     for (const k of PAL_KEYS) p[k] = mixHex(a[k], b[k], t);
@@ -239,7 +242,7 @@
     const rFrac = sh.rampFrac != null ? sh.rampFrac : T.rampFrac;
     const fMin = sh.featMin != null ? sh.featMin : T.featMin;
     const fMax = sh.featMax != null ? sh.featMax : T.featMax;
-    const w = sh.weights || { open: 0.22, floorTower: 0.24, ceilTower: 0.24, pinch: 0.15, ramp: 0.15 };
+    const w = Object.assign({ open: 0.22, floorTower: 0.24, ceilTower: 0.24, pinch: 0.15, ramp: 0.15 }, sh.weights);   // merge so a partial config weights{} can't introduce NaN
     const r = Math.random();
     let type, amt = 0, len, wAcc = w.open;
     if (r < wAcc) type = "open";
@@ -306,7 +309,8 @@
     const p = game.featLen > 0 ? game.featCol / game.featLen : 0;
     // Use the feature's rampFrac latched at pick time so the env trapezoid stays
     // matched to the featLen it was sized for, even if a level-up lands mid-feature.
-    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / ((game.feat && game.feat.rampFrac != null) ? game.feat.rampFrac : (sh.rampFrac != null ? sh.rampFrac : T.rampFrac))));
+    const rf = (game.feat && game.feat.rampFrac != null) ? game.feat.rampFrac : (sh.rampFrac != null ? sh.rampFrac : T.rampFrac);
+    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / rf));
     const amt = game.feat.amt * (fast ? 0.6 : 1);
 
     let cTop = game.baseCenter - openHalf;
