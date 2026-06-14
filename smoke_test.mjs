@@ -34,6 +34,12 @@ if (!process.env.SEEKDEEP_FEATURE_INPAINT) {
 process.env.SEEKDEEP_FEATURE_AUTO_REACT = 'off';
 process.env.SEEKDEEP_FEATURE_EMOJI_VAULT = 'off';
 process.env.SEEKDEEP_FEATURE_FORCE_REACT = 'off';
+// Universal-archive author-notify defaults to 'on' in code (!== 'off'), but a
+// developer's .env may set it 'off'. Force it on here so the notify-gate
+// assertions below are deterministic regardless of ambient .env — 'on' is the
+// only value where all four gate checks (bot-skip, self-skip, fire-on-other,
+// missing-target) are meaningful instead of trivially short-circuited by silent.
+process.env.SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY = 'on';
 
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
