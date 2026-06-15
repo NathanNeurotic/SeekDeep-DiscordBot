@@ -509,7 +509,17 @@ _CONFIG_PROTECTED_KEYS = frozenset({
     "SEEKDEEP_GUI_TOKEN",
     "SEEKDEEP_GUI_TOKEN_DISABLED",
     "SEEKDEEP_SELF_UPDATE_ENABLED",
+    # self-update integrity policy — must not be relaxable via the user-facing /config
+    # patch (a leaked/borrowed token could otherwise weaken the update gate after a restart)
+    "SEEKDEEP_SELF_UPDATE_REF_POLICY",
+    "SEEKDEEP_SELF_UPDATE_ALLOW_MAIN",
+    "SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE",
+    "SEEKDEEP_RELEASE_SIGNING_PUBKEY",
 })
+
+# Cap on concurrent /events WebSocket subscribers so a token-holder can't exhaust
+# connections (token-gated DoS). Hardcoded (no env read → no env-coverage entry needed).
+_MAX_WS_SUBSCRIBERS = 64
 
 
 def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
@@ -5687,6 +5697,17 @@ def register_gui_endpoints(
                 # 4401 = custom close code; clients can distinguish auth from network
                 await websocket.close(code=4401, reason="invalid or missing ?token=")
                 return
+        # Defense-in-depth (mirrors GET /token): reject a browser handshake whose Origin
+        # isn't allowlisted. WS handshakes aren't covered by CORS/SOP, so this is the only
+        # Origin gate. Server-to-server clients (the bot) send no Origin and still pass.
+        _origin = websocket.headers.get("origin") or ""
+        if _origin and _origin not in TRUSTED_BROWSER_ORIGINS:
+            await websocket.close(code=4403, reason="untrusted Origin")
+            return
+        # Cap concurrent subscribers (token-gated connection-exhaustion DoS).
+        if event_bus.subscriber_count >= _MAX_WS_SUBSCRIBERS:
+            await websocket.close(code=1013, reason="too many subscribers")
+            return
         await websocket.accept()
         await event_bus.subscribe(websocket)
         # Send an initial 'hello' so the client knows the connection is live + auth'd

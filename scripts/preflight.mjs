@@ -398,8 +398,24 @@ stage('docs', () => {
     }
   }
 
+  // AUD-003: the Tauri capability must NOT re-grant the opener plugin's UNSCOPED URL
+  // opener to the webview — it bypasses the open_external host allowlist (a GUI XSS
+  // could invoke plugin:opener|open_url for any URL). The frontend uses the custom
+  // open_external command only; reveal/open-path go via Rust OpenerExt. A tightly-
+  // scoped object grant is fine — this only flags the bare unscoped string grants.
+  {
+    const capPath = path.join(ROOT, 'src-tauri', 'capabilities', 'default.json');
+    try {
+      const perms = JSON.parse(readFileSync(capPath, 'utf8')).permissions || [];
+      const bad = perms.filter((p) => typeof p === 'string' && /^opener:(default|allow-open-url|allow-default-urls)$/.test(p));
+      if (bad.length) problems.push(`tauri-opener: capability re-grants ${bad.join(', ')} — bypasses the open_external host allowlist (AUD-003); use the custom open_external command or a tightly-scoped grant`);
+    } catch (e) {
+      problems.push(`tauri-opener: could not read capabilities/default.json (${e.message})`);
+    }
+  }
+
   if (problems.length) return { ok: false, detail: problems.join(' · ') };
-  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok · release-files ok · env-coverage ok' };
+  return { ok: true, detail: 'version-filenames placeholder · env caps aligned · smoke total live · version-sync ok · doc-drift guards ok · release-files ok · env-coverage ok · tauri-opener ok' };
 });
 
 // AUD-006: endpoint→GUI/test coverage map drift guard. Regenerates the map in

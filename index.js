@@ -14529,7 +14529,7 @@ function seekdeepGetUserMemoryPresetsLines(userId = '') {
   const set = new Set((data.users[String(userId)]?.presets || []).map((s) => String(s).toLowerCase()));
   const lines = [];
   for (const key of set) {
-    if (SEEKDEEP_KNOWN_PRESETS[key]) lines.push(SEEKDEEP_KNOWN_PRESETS[key]);
+    if (Object.prototype.hasOwnProperty.call(SEEKDEEP_KNOWN_PRESETS, key)) lines.push(SEEKDEEP_KNOWN_PRESETS[key]);
   }
   return lines;
 }
@@ -14577,7 +14577,7 @@ async function seekdeepHandleMemoryPresetCommand(message, raw = '') {
   if (modMatch) {
     const action = modMatch[1].toLowerCase();
     const keys = String(modMatch[2]).split(/[\s,]+/).map((s) => s.toLowerCase()).filter(Boolean);
-    const unknown = keys.filter((k) => !SEEKDEEP_KNOWN_PRESETS[k]);
+    const unknown = keys.filter((k) => !Object.prototype.hasOwnProperty.call(SEEKDEEP_KNOWN_PRESETS, k));
     if (unknown.length) {
       await message.reply({ content: `Unknown preset key(s): ${unknown.join(', ')}. Run \`@SeekDeep memory preset list\` for the supported keys.`, allowedMentions: { repliedUser: false } });
       return true;
