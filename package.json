@@ -1,6 +1,6 @@
 {
   "name": "seekdeep-discordbot",
-  "version": "10.38.82",
+  "version": "10.38.83",
   "type": "module",
   "description": "SeekDeep local Discord bot with local chat, vision, image generation, and SearXNG web search.",
   "main": "index.js",
