@@ -3009,7 +3009,10 @@ def register_gui_endpoints(
                         # file. The git-blob-SHA gate below is the backstop (off-repo
                         # bytes won't match this repo's published SHA); this just
                         # fails fast before any fetch. _stage pins the local write.
-                        _dl = urllib.parse.urlparse(download_url)
+                        # urlsplit (not urlparse): urlparse peels a trailing ;params
+                        # segment off .path, which is a footgun for path-prefix checks;
+                        # urlsplit keeps the whole path so normpath sees all of it.
+                        _dl = urllib.parse.urlsplit(download_url)
                         _dl_path = posixpath.normpath(urllib.parse.unquote(_dl.path or ""))
                         if (_dl.scheme.lower() != "https"
                                 or (_dl.hostname or "").lower() != "raw.githubusercontent.com"
