@@ -1479,6 +1479,46 @@ def cleanup_cuda() -> None:
 
 import urllib.request as _seekdeep_urllib_req
 import urllib.error as _seekdeep_urllib_err
+import ipaddress as _seekdeep_ipaddr
+import socket as _seekdeep_socket
+from urllib.parse import urlparse as _seekdeep_urlparse
+
+# AUD-SSRF: cloud-instance metadata endpoints — ALWAYS blocked for outbound provider
+# URLs (IAM-credential theft is the worst case). localhost / LAN are intentionally
+# NOT blocked: local LLM endpoints (ollama, LAN servers) are a primary use of this
+# local-first app, so only cloud-metadata + the link-local range it lives in are denied.
+_SEEKDEEP_METADATA_HOSTS = frozenset({
+    "169.254.169.254", "100.100.100.200", "fd00:ec2::254",
+    "metadata.google.internal", "metadata.goog",
+})
+def _seekdeep_assert_provider_url_safe(url: str) -> None:
+    """Raise RuntimeError if an outbound provider/probe URL targets a cloud-metadata or
+    link-local address (SSRF). http/https only. DNS-resolution failures are left for the
+    real request to surface (a non-resolving host is not an SSRF)."""
+    try:
+        u = _seekdeep_urlparse(url)
+    except Exception:
+        raise RuntimeError("provider URL is unparseable")
+    scheme = (u.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise RuntimeError(f"provider URL scheme {scheme!r} not allowed (http/https only)")
+    host = (u.hostname or "").lower()
+    if not host:
+        raise RuntimeError("provider URL has no host")
+    if host in _SEEKDEEP_METADATA_HOSTS:
+        raise RuntimeError("provider URL targets a cloud-metadata endpoint")
+    try:
+        infos = _seekdeep_socket.getaddrinfo(host, u.port or (443 if scheme == "https" else 80))
+    except Exception:
+        return
+    for info in infos:
+        ip = str(info[4][0]).split("%", 1)[0]
+        try:
+            addr = _seekdeep_ipaddr.ip_address(ip)
+        except Exception:
+            continue
+        if ip in _SEEKDEEP_METADATA_HOSTS or addr.is_link_local:
+            raise RuntimeError("provider URL resolves to a cloud-metadata / link-local address")
 
 OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "").rstrip("/")
 # Optional bearer for Ollama Cloud (https://ollama.com -> Account -> Keys).
@@ -1732,6 +1772,7 @@ def _openai_compat_request(base_url: str, api_key: str, path: str,
     if not base_url:
         raise RuntimeError("openai-compat base URL is empty")
     url = f"{base_url}{path}"
+    _seekdeep_assert_provider_url_safe(url)   # AUD: block cloud-metadata/link-local SSRF (localhost/LAN allowed for local LLM)
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = _seekdeep_urllib_req.Request(url, data=data, method=method)
     if data is not None:
@@ -1835,6 +1876,7 @@ def _anthropic_request(base_url: str, api_key: str, version: str,
     if not base_url:
         raise RuntimeError("anthropic base URL is empty")
     url = f"{base_url}{path}"
+    _seekdeep_assert_provider_url_safe(url)   # AUD: block cloud-metadata/link-local SSRF (localhost/LAN allowed for local LLM)
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = _seekdeep_urllib_req.Request(url, data=data, method=method)
     if data is not None:
@@ -1944,6 +1986,7 @@ def _gemini_request(base_url: str, api_key: str, path: str,
     if not base_url:
         raise RuntimeError("gemini base URL is empty")
     url = f"{base_url}{path}"
+    _seekdeep_assert_provider_url_safe(url)   # AUD: block cloud-metadata/link-local SSRF (localhost/LAN allowed for local LLM)
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = _seekdeep_urllib_req.Request(url, data=data, method=method)
     if data is not None:

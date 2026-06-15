@@ -96,8 +96,11 @@ function seekdeepJsonStringifySafe(value, space) {
       out = out.replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}/g, '[redacted-token]');
       // Generic Bearer/Authorization headers.
       out = out.replace(/(authorization\s*[:=]\s*['"]?bearer\s+)[^'"\s]+/gi, '$1[redacted]');
-      // hf_* / sk-* style API keys.
-      out = out.replace(/\b(hf_|sk-)[A-Za-z0-9]{16,}\b/g, '$1[redacted]');
+      // hf_* / sk-* / nvapi-* + Google AIza* keys, x-api-key/x-goog-api-key headers
+      // (kept in sync with seekdeepRedactErrorMsg so the on-disk log never lags it).
+      out = out.replace(/\b(?:hf_|sk-|nvapi-)[A-Za-z0-9_-]{16,}\b/g, '[redacted-key]');
+      out = out.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted-key]');
+      out = out.replace(/((?:x-api-key|x-goog-api-key)\s*[:=]\s*['"]?)[^'"\s]+/gi, '$1[redacted]');
       return out;
     };
     const write = (level, args) => {
@@ -12417,28 +12420,6 @@ function seekdeepArchiveDirForTarget(target = null) {
   return out;
 }
 
-function seekdeepIsPrivilegedArchiveCommand(commandName = '') {
-  return /^(?:purgearchive|setarchive|archiveconfig|archiveadmin|cleararchive)$/i.test(String(commandName || ''));
-}
-
-function seekdeepUserCanRunPrivilegedSeekDeepCommand(interactionOrMessage = {}) {
-  const memberPermissions = interactionOrMessage?.memberPermissions || interactionOrMessage?.member?.permissions || null;
-  if (!memberPermissions || typeof memberPermissions.has !== 'function') return false;
-  try {
-    return Boolean(
-      memberPermissions.has(PermissionFlagsBits.Administrator) ||
-      memberPermissions.has(PermissionFlagsBits.ManageGuild) ||
-      memberPermissions.has(PermissionFlagsBits.ManageChannels)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function seekdeepNormalUsersMayUseCommand(commandName = '') {
-  return !seekdeepIsPrivilegedArchiveCommand(commandName);
-}
-
 function seekdeepGroundBotanicalSlangPrompt(prompt = '') {
   const raw = String(prompt || '').trim();
   const lower = raw.toLowerCase();
@@ -20445,6 +20426,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     // Phase B commands: warmup, unload, reload, queue status, queue clear
     const lowerPrompt = prompt.toLowerCase().trim();
     if (lowerPrompt === 'unload') {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can unload models from VRAM.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       let replyText = '';
       if (typeof seekdeepLogRoute === 'function') {
@@ -20501,6 +20483,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (lowerPrompt === 'warmup' || lowerPrompt.startsWith('warmup ')) {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can warm up (load) models.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       const target = lowerPrompt.slice(6).trim();
       let replyText = '';
@@ -20539,6 +20522,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (lowerPrompt.startsWith('reload ')) {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can reload models.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       const target = lowerPrompt.slice(6).trim();
       let replyText = '';
