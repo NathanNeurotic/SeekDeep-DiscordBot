@@ -647,6 +647,17 @@
       ddSaveDebug(); ddSyncDebugUI();
     });
     ddSyncDebugUI();
+    // Robustness: the panel must never start (or get stuck) open over the menu —
+    // an open modal covers the DEBUG/JACK IN buttons and makes them unclickable.
+    // Force it hidden at init, and let the dimmed backdrop OR Escape dismiss it
+    // (not just the DONE button) so a click-outside doesn't trap it open.
+    if (hud.debug) {
+      hud.debug.classList.add("hidden");
+      hud.debug.addEventListener("click", (e) => { if (e.target === hud.debug) closeDebug(); });
+    }
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && hud.debug && !hud.debug.classList.contains("hidden")) { e.preventDefault(); closeDebug(); }
+    });
   }
   function openDebug() { ddSyncDebugUI(); if (hud.debug) hud.debug.classList.remove("hidden"); }
   function closeDebug() { if (hud.debug) hud.debug.classList.add("hidden"); }
@@ -1943,16 +1954,30 @@
     if (fx && fx.kind === "fast") return "saturate(2.6) hue-rotate(" + Math.floor((game.t * 220) % 360) + "deg)"; // performance: violent rainbow spin
     if (fx && fx.kind === "slow") return "grayscale(1) contrast(0.95)";                               // throttle: black & white
     if (game.invincible > 0) return "brightness(2.1) saturate(0.12)";                                 // pepe: all white / divinity
-    if (game.freeAmmo) return "sepia(1) saturate(4.5) hue-rotate(-28deg) brightness(1.05)";           // overdrive: yellow-orange
+    if (game.freeAmmo) return "saturate(1.3) brightness(1.06)";                                       // overdrive: subtle energised punch — the "alarm" lives on the PLAYER (drawPumpedOverlay), not a full-screen orange wash
     return "none";
   }
-  // overdrive "pumped" pulsing solid-white overlay (drawn after the world pass, true-colour)
+  // overdrive "alarm" overlay — the PLAYER reads as the alarm beacon: an amber
+  // glow throbs outward from the ball + a thin pulsing alert frame rings the
+  // screen edges. Deliberately NOT a full-screen colour wash (that looked like
+  // the screen "got scurvy"); the centre stays clear so you read as the alarm.
   function drawPumpedOverlay() {
-    const pulse = 0.10 + 0.13 * Math.abs(Math.sin(game.t * 9));
+    const beat = Math.abs(Math.sin(game.t * 7));   // ~1Hz throb
+    const px = game.px, py = game.py;
     ctx.save();
-    ctx.globalAlpha = pulse;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(-40, -40, W + 80, H + 80);
+    // beacon glow centred on the player
+    const r1 = 110 + 70 * beat;
+    const g = ctx.createRadialGradient(px, py, 12, px, py, r1);
+    g.addColorStop(0,    hexA("#ff9e2c", 0.26 + 0.18 * beat));
+    g.addColorStop(0.55, hexA("#ff6a1f", 0.07 + 0.10 * beat));
+    g.addColorStop(1,    "transparent");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    // thin pulsing alert frame at the edges (an alarm, not a wash)
+    ctx.globalAlpha = 0.14 + 0.32 * beat;
+    ctx.strokeStyle = "#ff7a1f";
+    ctx.lineWidth = 4 + 6 * beat;
+    ctx.strokeRect(3, 3, W - 6, H - 6);
     ctx.restore();
   }
 
