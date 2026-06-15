@@ -367,6 +367,7 @@
           <div class="ov-actions">
             <button class="ov-btn" id="ov-btn" type="button">JACK IN</button>
             <button class="ov-btn ghost" type="button" data-open-controls>CONTROLS</button>
+            <button class="ov-btn ghost" id="ov-debug-btn" type="button">DEBUG</button>
           </div>
           <div class="ov-controls" id="ov-controls">SPACE to lift · LEFT-CLICK to shoot · P to pause</div>
           <div class="ov-controls" id="mute-status" style="margin-top:6px;">[M] SOUND: ON</div>
@@ -422,6 +423,62 @@
           </div>
         </div>
       </div>
+
+      <!-- DEBUG panel (testing aid) — jump to a DATA tier + tune pickup spawn
+           frequency. All inert unless DEBUG MODE is checked; wired in
+           datadash.game.js (no inline script — CSP-clean). -->
+      <div class="modal hidden" id="debug-modal">
+        <div class="modal-card dbg-card">
+          <div class="modal-title">DEBUG</div>
+          <label class="dbg-row dbg-toggle" for="dbg-enabled">
+            <span class="ctrl-name">DEBUG MODE</span>
+            <input type="checkbox" id="dbg-enabled" />
+          </label>
+          <div class="dbg-row">
+            <span class="ctrl-name">START DATA</span>
+            <span class="dbg-start">
+              <input type="number" id="dbg-start-amt" min="0" step="1" value="0" inputmode="numeric" />
+              <select id="dbg-start-unit">
+                <option value="1">B</option>
+                <option value="1000">KB</option>
+                <option value="1000000" selected>MB</option>
+                <option value="1000000000">GB</option>
+                <option value="1000000000000">TB</option>
+              </select>
+            </span>
+          </div>
+          <div class="dbg-note">start DATA applies on the next JACK IN</div>
+          <div class="dbg-sect">PICKUP FREQUENCY</div>
+          <div class="dbg-row"><span class="ctrl-name">DATA PACKETS</span><select class="dbg-freq" id="dbg-freq-packet"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">KERNELS (+1)</span><select class="dbg-freq" id="dbg-freq-kernel"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">MYSTERY ?</span><select class="dbg-freq" id="dbg-freq-mystery"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">UPGRADE BOLT</span><select class="dbg-freq" id="dbg-freq-upgrade"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">LIFE CELL &#9883;</span><select class="dbg-freq" id="dbg-freq-lifecell"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">PEPE COIN</span><select class="dbg-freq" id="dbg-freq-pepe"></select></div>
+          <div class="dbg-row"><span class="ctrl-name">SHIELD</span><select class="dbg-freq" id="dbg-freq-shield"></select></div>
+          <div class="ov-actions">
+            <button class="ov-btn ghost" id="dbg-reset" type="button">RESET</button>
+            <button class="ov-btn" id="dbg-close" type="button">DONE</button>
+          </div>
+        </div>
+      </div>
+      <style>
+        #debug-modal .dbg-card { max-height: 86vh; overflow-y: auto; text-align: left; }
+        .dbg-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 2px; }
+        .dbg-row .ctrl-name { white-space:nowrap; }
+        .dbg-toggle { cursor:pointer; }
+        .dbg-sect { margin:14px 0 4px; font-size:11px; letter-spacing:.18em; opacity:.7; text-transform:uppercase; }
+        .dbg-note { font-size:10px; opacity:.6; margin:2px 0 2px; }
+        .dbg-start { display:inline-flex; gap:6px; }
+        #dbg-start-amt { width:92px; }
+        .dbg-card input[type=number], .dbg-card select {
+          background: rgba(3,10,26,.72); color:#cdeeff;
+          border:1px solid rgba(45,212,255,.4); border-radius:6px;
+          padding:4px 6px; font-family: inherit; font-size:12px; outline:none;
+        }
+        .dbg-card input[type=number]:focus, .dbg-card select:focus { border-color: rgba(45,212,255,.75); }
+        .dbg-card input[type=checkbox] { width:18px; height:18px; accent-color:#2dd4ff; }
+      </style>
     </div>
 
     <div class="foot">

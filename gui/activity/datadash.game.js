@@ -139,6 +139,7 @@
     ovControls:document.getElementById("ov-controls"),
     pause:     document.getElementById("pause"),
     controls:  document.getElementById("controls-modal"),
+    debug:     document.getElementById("debug-modal"),
     scores:    document.getElementById("scoreboard"),
     scoreEntry:document.getElementById("score-entry"),
     scoreName: document.getElementById("score-name"),
@@ -151,6 +152,38 @@
   let state = STATE.MENU;
   let best = +(localStorage.getItem("datadash.best") || 0);
 
+  // ---- DEBUG (testing aid) -------------------------------------------------
+  // OFF by default → zero gameplay effect. The Debug menu (#debug-modal in
+  // index.html) flips DD_DEBUG.enabled, sets a starting DATA tier, and tunes
+  // per-pickup spawn frequency. ddFreq() returns an interval MULTIPLIER (<1 =
+  // more frequent, >1 = rarer); it returns 1 whenever debug is off, so every
+  // spawn site is untouched in normal play. Persisted so a testing session
+  // survives reloads (RESET / uncheck to clear).
+  const DD_FREQ_KEYS = ["packet", "kernel", "mystery", "upgrade", "lifecell", "pepe", "shield"];
+  const DD_FREQ_LEVELS = ["default", "less", "more", "excessive"];
+  const DD_FREQ_LABELS = { default: "default", less: "less frequent", more: "more frequent", excessive: "excessive" };
+  const DD_FREQ_MULT = { default: 1, less: 2.5, more: 0.4, excessive: 0.1 };
+  const DD_DEBUG = (function () {
+    const base = { enabled: false, startBytes: 0, freq: {} };
+    for (const k of DD_FREQ_KEYS) base.freq[k] = "default";
+    try {
+      const saved = JSON.parse(localStorage.getItem("datadash.debug") || "null");
+      if (saved && typeof saved === "object") {
+        base.enabled = !!saved.enabled;
+        base.startBytes = Math.max(0, +saved.startBytes || 0);
+        if (saved.freq && typeof saved.freq === "object") {
+          for (const k of DD_FREQ_KEYS) if (DD_FREQ_LEVELS.indexOf(saved.freq[k]) >= 0) base.freq[k] = saved.freq[k];
+        }
+      }
+    } catch (e) {}
+    return base;
+  })();
+  function ddSaveDebug() { try { localStorage.setItem("datadash.debug", JSON.stringify(DD_DEBUG)); } catch (e) {} }
+  function ddFreq(key) {
+    if (!DD_DEBUG.enabled) return 1;
+    return DD_FREQ_MULT[DD_DEBUG.freq[key]] || 1;
+  }
+
   let game = null;
   function newGame() {
     game = {
@@ -160,14 +193,14 @@
       streamed: 0,             // monotonic bytes-ever-streamed → drives spawns
       gross: 0,                // total gross accumulation (distance + collected) → Pepe
       nextPepe: 0,
-      nextPepeT: T.pepeEverySec + Math.random() * T.pepeRandSec,   // first Pepe window (seconds)
+      nextPepeT: (T.pepeEverySec + Math.random() * T.pepeRandSec) * ddFreq("pepe"),   // first Pepe window (seconds)
       nextElementalT: 42,      // first DATA LOSS / RECOVERY event window (seconds); then ≥ elementalEvery apart
       invincible: 0,           // Pepe invincibility timer
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
       lives: T.startLives,
       lifeCells: 1,            // continue tokens (resume-at-death); start with 1, cap T.lifeCellCap
-      nextLifeCell: T.lifeCellEvery,
+      nextLifeCell: T.lifeCellEvery * ddFreq("lifecell"),
       resumeT: 0,              // 5s slow-restart ramp after a continue
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
@@ -186,15 +219,15 @@
       holdCols: 0, obsCooldown: 8,
       laneY: 0.5, laneTarget: 0.5, laneCol: 0,
       // progression
-      nextCheckpoint: T.checkpointEvery,
+      nextCheckpoint: T.checkpointEvery * ddFreq("kernel"),
       nextBonus: 0,            // emergency packs (spawn while at 1 kernel)
       bossClock: 0,            // seconds of boss-free survival → triggers the next boss
       bossPending: 0,          // boss arena-warmup countdown before the daemon spawns
-      nextMystery: T.mysteryEvery * (0.6 + Math.random() * 0.8),
-      nextPacket: T.packetEvery,
+      nextMystery: T.mysteryEvery * (0.6 + Math.random() * 0.8) * ddFreq("mystery"),
+      nextPacket: T.packetEvery * ddFreq("packet"),
       nextBossPacket: 0,       // boss-fight ammo-relief packet strips (when DATA is low)
       botTimer: T.botSpawnSeconds,   // independent mini-malware respawn clock
-      nextUpgrade: T.upgradeEvery,
+      nextUpgrade: T.upgradeEvery * ddFreq("upgrade"),
       freeAmmo: false,
       odHits: 0, poweringDown: 0,
       transform: 0,
@@ -226,6 +259,21 @@
     setPalette(LEVELS[0].palette);   // reset zone colours to L1 (a prior run may have lerped C to a later level)
     buildTiles();                    // re-tint the circuit tiles to the L1 accent
     seedTerrain();
+    // DEBUG: jump-start at a chosen DATA tier for testing (Debug menu). Sets the
+    // tier directly so colour/speed match the starting DATA from frame one;
+    // spawn counters (streamed) stay at 0 so pickups arrive on their normal
+    // (debug-scaled) cadence from the jump point.
+    if (DD_DEBUG.enabled && DD_DEBUG.startBytes > 0) {
+      game.bytes = DD_DEBUG.startBytes;
+      game.gross = DD_DEBUG.startBytes;
+      const lv = levelIdx(game.bytes);
+      game.level = lv;
+      game.spd = levelSpeed(lv);
+      game.scroll = levelSpeed(lv);
+      setPalette(LEVELS[lv].palette);
+      buildTiles();
+      if (typeof applyZoneTiles === "function") applyZoneTiles(lv);
+    }
   }
 
   // ---- terrain generation : continuous safe corridor -----------------------
@@ -543,6 +591,65 @@
   // ---- controls menu (informational reference) ------------------------------
   function openControls() { hud.controls.classList.remove("hidden"); }
   function closeControls() { hud.controls.classList.add("hidden"); }
+
+  // ---- debug menu (testing aid) --------------------------------------------
+  function ddReadStartBytes() {
+    const amt = document.getElementById("dbg-start-amt");
+    const unit = document.getElementById("dbg-start-unit");
+    const n = Math.max(0, +(amt && amt.value) || 0);
+    const u = Math.max(1, +(unit && unit.value) || 1);
+    return Math.floor(n * u);
+  }
+  function ddSyncDebugUI() {
+    // push DD_DEBUG state into the controls (called on open + reset)
+    const en = document.getElementById("dbg-enabled");
+    if (en) en.checked = DD_DEBUG.enabled;
+    const amt = document.getElementById("dbg-start-amt");
+    const unit = document.getElementById("dbg-start-unit");
+    if (amt && unit) {
+      // show startBytes in the largest unit that divides it cleanly
+      let u = 1000000, v = DD_DEBUG.startBytes;
+      if (v > 0) { for (const x of [1e12, 1e9, 1e6, 1e3, 1]) { if (v >= x && v % x === 0) { u = x; break; } } }
+      unit.value = String(u);
+      amt.value = v ? String(v / u) : "0";
+    }
+    for (const k of DD_FREQ_KEYS) {
+      const sel = document.getElementById("dbg-freq-" + k);
+      if (sel) sel.value = DD_DEBUG.freq[k];
+    }
+  }
+  function ddInitDebugUI() {
+    for (const k of DD_FREQ_KEYS) {
+      const sel = document.getElementById("dbg-freq-" + k);
+      if (!sel) continue;
+      sel.innerHTML = "";
+      for (const lv of DD_FREQ_LEVELS) {
+        const o = document.createElement("option");
+        o.value = lv; o.textContent = DD_FREQ_LABELS[lv];
+        sel.appendChild(o);
+      }
+      sel.value = DD_DEBUG.freq[k];
+      sel.addEventListener("change", () => {
+        if (DD_FREQ_LEVELS.indexOf(sel.value) >= 0) { DD_DEBUG.freq[k] = sel.value; ddSaveDebug(); }
+      });
+    }
+    const en = document.getElementById("dbg-enabled");
+    if (en) en.addEventListener("change", () => { DD_DEBUG.enabled = !!en.checked; ddSaveDebug(); });
+    const amt = document.getElementById("dbg-start-amt");
+    const unit = document.getElementById("dbg-start-unit");
+    const upd = () => { DD_DEBUG.startBytes = ddReadStartBytes(); ddSaveDebug(); };
+    if (amt) amt.addEventListener("input", upd);
+    if (unit) unit.addEventListener("change", upd);
+    const reset = document.getElementById("dbg-reset");
+    if (reset) reset.addEventListener("click", () => {
+      DD_DEBUG.enabled = false; DD_DEBUG.startBytes = 0;
+      for (const k of DD_FREQ_KEYS) DD_DEBUG.freq[k] = "default";
+      ddSaveDebug(); ddSyncDebugUI();
+    });
+    ddSyncDebugUI();
+  }
+  function openDebug() { ddSyncDebugUI(); if (hud.debug) hud.debug.classList.remove("hidden"); }
+  function closeDebug() { if (hud.debug) hud.debug.classList.add("hidden"); }
 
   function start() {
     newGame();
@@ -1047,7 +1154,7 @@
     if (!busy && game.t >= game.nextEventT) { triggerRandomEvent(); return; }
     // checkpoint backups (+1) — cadence scales with kernels held
     if (!busy && S >= game.nextCheckpoint && game.lives < (T.kernelCap || 10) && pickupLaneClear()) {
-      game.nextCheckpoint = S + checkpointInterval();
+      game.nextCheckpoint = S + checkpointInterval() * ddFreq("kernel");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
       game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind: "normal" });
@@ -1074,14 +1181,14 @@
     // mystery (?) pickup — random scroll warp (suppressed while one is already active)
     if (!busy && !game.scrollFx && S >= game.nextMystery && pickupLaneClear() &&
         !game.pickups.some((p) => p.kind === "mystery" && !p.grabbed)) {
-      game.nextMystery = S + T.mysteryEvery * (0.6 + Math.random() * 0.8);
+      game.nextMystery = S + T.mysteryEvery * (0.6 + Math.random() * 0.8) * ddFreq("mystery");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
       game.pickups.push({ x: W + 80, y: cy, grabbed: false, bob: Math.random() * 6, kind: "mystery" });
     }
     // DATA PACKETS — tiny streamed-data collectibles, sometimes in flowing strings
     if (!busy && S >= game.nextPacket && pickupLaneClear()) {
-      game.nextPacket = S + T.packetEvery * (0.7 + Math.random() * 0.6);
+      game.nextPacket = S + T.packetEvery * (0.7 + Math.random() * 0.6) * ddFreq("packet");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 50 : H / 2;
       const n = Math.random() < T.packetStringChance ? 2 + (Math.random() * (T.packetStringMax - 1) | 0) : 1;
@@ -1108,7 +1215,7 @@
     // rare UPGRADE bolt — no magnet, must be flown into
     if (!busy && !game.freeAmmo && S >= game.nextUpgrade &&
         !game.pickups.some((p) => p.kind === "upgrade" && !p.grabbed)) {
-      game.nextUpgrade = S + T.upgradeEvery;
+      game.nextUpgrade = S + T.upgradeEvery * ddFreq("upgrade");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
@@ -1117,7 +1224,7 @@
     // 2× rarer than the upgrade bolt; never spawns at the cap.
     if (!busy && game.lifeCells < (T.lifeCellCap || 9) && S >= game.nextLifeCell &&
         !game.pickups.some((p) => p.kind === "lifecell" && !p.grabbed)) {
-      game.nextLifeCell = S + (T.lifeCellEvery || 2000000);
+      game.nextLifeCell = S + (T.lifeCellEvery || 2000000) * ddFreq("lifecell");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "lifecell" });
@@ -1126,7 +1233,7 @@
     // UNCONDITIONALLY (per Nathan). If the player can't grab it (busy / invincible /
     // whatever), it just flies by — too bad, the next one comes on schedule.
     if (game.t >= game.nextPepeT) {
-      game.nextPepeT = game.t + T.pepeEverySec + Math.random() * T.pepeRandSec;
+      game.nextPepeT = game.t + (T.pepeEverySec + Math.random() * T.pepeRandSec) * ddFreq("pepe");
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
       game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "pepe" });
@@ -1430,7 +1537,7 @@
     if (game.event) return;    // events run their own content
     if (game.shield) return;   // already shielded — don't spawn another (no stacking, no queue)
     if (game.pickups.some((p) => p.kind === "shield" && !p.grabbed)) return;
-    if (Math.random() < dt / T.shieldMeanSec) {
+    if (Math.random() < dt / (T.shieldMeanSec * ddFreq("shield"))) {
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 70 : H / 2;
       game.pickups.push({ x: W + 70, y: cy, grabbed: false, bob: Math.random() * 6, kind: "shield" });
@@ -3453,6 +3560,11 @@
       btn.addEventListener("click", openControls));
     const ctrlClose = document.getElementById("ctrl-close");
     if (ctrlClose) ctrlClose.addEventListener("click", closeControls);
+    const ovDebugBtn = document.getElementById("ov-debug-btn");
+    if (ovDebugBtn) ovDebugBtn.addEventListener("click", openDebug);
+    const dbgClose = document.getElementById("dbg-close");
+    if (dbgClose) dbgClose.addEventListener("click", closeDebug);
+    ddInitDebugUI();
     const pauseResume = document.getElementById("pause-resume");
     if (pauseResume) pauseResume.addEventListener("click", togglePause);
     if (hud.scoreName) hud.scoreName.addEventListener("input", () => {
