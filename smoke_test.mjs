@@ -1370,6 +1370,7 @@ globalThis.__seekdeepRouteSpy = (route, prompt) => {
 for (const { prompt, expectedRoute } of testRoutes) {
   let replyContent = '';
   const mockMsg = makeMockMessage({ id: `msg_${prompt.replace(' ', '_')}`, content: `@SeekDeep ${prompt}`, authorId: 'user_1' });
+  mockMsg.memberPermissions = { has: () => true };   // routing test exercises the route AS AN ADMIN; the non-admin gate is asserted separately below
   mockMsg.reply = async (payload) => {
     replyContent = typeof payload === 'string' ? payload : payload.content;
     return mockMsg;
@@ -1384,6 +1385,18 @@ for (const { prompt, expectedRoute } of testRoutes) {
   const logged = routeLogsPhaseB.find(r => r.prompt === prompt);
   check(`routing: "${prompt}" triggers route "${expectedRoute}"`, logged && logged.route === expectedRoute);
   check(`routing: "${prompt}" returns non-empty reply`, replyContent.length > 0);
+}
+
+// AUD: the GPU model-management commands (unload/warmup/reload) must be admin-gated —
+// a non-admin must be refused BEFORE any route fires (no VRAM-thrash DoS).
+for (const prompt of ['unload', 'warmup image', 'reload chat']) {
+  let reply = '';
+  const before = routeLogsPhaseB.length;
+  const m = makeMockMessage({ id: `msg_na_${prompt.replace(' ', '_')}`, content: `@SeekDeep ${prompt}`, authorId: 'user_nonadmin' });
+  m.reply = async (payload) => { reply = typeof payload === 'string' ? payload : payload.content; return m; };
+  await T.seekdeepDispatchAddressedMessage(m, { prompt, seekdeepReplyPromptInfo: {}, seekdeepForceImageFromReplyContext: false });
+  check(`gate: non-admin "${prompt}" fires no route`, routeLogsPhaseB.length === before);
+  check(`gate: non-admin "${prompt}" replies with a refusal`, /administrator/i.test(reply));
 }
 
 // Suite 51: Phase C Inpaint preview / prompt debug routing and formatting tests

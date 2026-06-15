@@ -20445,6 +20445,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     // Phase B commands: warmup, unload, reload, queue status, queue clear
     const lowerPrompt = prompt.toLowerCase().trim();
     if (lowerPrompt === 'unload') {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can unload models from VRAM.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       let replyText = '';
       if (typeof seekdeepLogRoute === 'function') {
@@ -20501,6 +20502,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (lowerPrompt === 'warmup' || lowerPrompt.startsWith('warmup ')) {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can warm up (load) models.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       const target = lowerPrompt.slice(6).trim();
       let replyText = '';
@@ -20539,6 +20541,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (lowerPrompt.startsWith('reload ')) {
+      if (!seekdeepIsAdminSource(message)) { await sendLongMessageReply(message, '🔒 Only administrators can reload models.'); return; }
       const startedAt = typeof seekdeepNowMs === 'function' ? seekdeepNowMs() : Date.now();
       const target = lowerPrompt.slice(6).trim();
       let replyText = '';
