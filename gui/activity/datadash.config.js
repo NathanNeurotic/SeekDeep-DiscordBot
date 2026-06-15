@@ -331,6 +331,7 @@ window.DATADASH = {
     bossEverySeconds:  50,     // a boss arrives after this many seconds of boss-free survival
     bossDuration:      24,     // seconds you must survive (longer, tougher fights)
     bossEnterTime:     1.4,    // glide-in time
+    bossWarmup:        1.4,    // arena scrolls in for this long before the daemon spawns (spawn-after-env)
     bossArenaGap:      0.78,   // cave opens to this fraction of height during fight (room to dodge)
     bossMoveSpeed:     3.0,    // how briskly it darts around its zone
     bossPatternEvery:  2.4,    // seconds between switching attack patterns

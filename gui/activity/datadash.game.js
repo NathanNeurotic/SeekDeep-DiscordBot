@@ -184,6 +184,7 @@
       nextCheckpoint: T.checkpointEvery,
       nextBonus: 0,            // emergency packs (spawn while at 1 kernel)
       bossClock: 0,            // seconds of boss-free survival → triggers the next boss
+      bossPending: 0,          // boss arena-warmup countdown before the daemon spawns
       nextMystery: T.mysteryEvery * (0.6 + Math.random() * 0.8),
       nextPacket: T.packetEvery,
       nextBossPacket: 0,       // boss-fight ammo-relief packet strips (when DATA is low)
@@ -280,7 +281,7 @@
 
   function makeColumn() {
     // straight wide hallway during a boss fight (either daemon) OR a random event
-    const inBoss = (game.boss && game.boss.phase !== "crash") || (game.boss2 && game.boss2.phase !== "crash");
+    const inBoss = game.bossPending > 0 || (game.boss && game.boss.phase !== "crash") || (game.boss2 && game.boss2.phase !== "crash");
     if (inBoss || game.event) {
       const gapFrac = game.event ? T.eventGap : T.bossArenaGap;
       const h = H * gapFrac / 2;
@@ -819,7 +820,7 @@
     if (game.flashT > 0) game.flashT = Math.max(0, game.flashT - dt * 2.5);
 
     advanceTerrain(dx);
-    if (!game.boss && !game.boss2 && !game.event) game.bossClock += dt;  // count boss-free survival time
+    if (!game.boss && !game.boss2 && !game.event && !game.bossPending) game.bossClock += dt;  // count boss-free survival time
 
     // player physics — DRIFT (no gravity): thrusters add momentum, damping bleeds it off
     let ay = 0;
@@ -994,7 +995,7 @@
 
   function updateProgression() {
     const S = game.streamed;
-    const busy = game.boss || game.boss2 || game.event;   // no normal spawns during a boss/event
+    const busy = game.boss || game.boss2 || game.event || game.bossPending;   // no normal spawns during a boss/event/warmup
     // RANDOM EVENT trigger — fires at unpredictable intervals, never while already busy
     if (!busy && game.t >= game.nextEventT) { triggerRandomEvent(); return; }
     // checkpoint backups (+1) — cadence scales with kernels held
@@ -1014,8 +1015,14 @@
     }
     // boss trigger — time-based (every N seconds of boss-free survival)
     if (!busy && game.bossClock >= T.bossEverySeconds) {
+      // SPAWN-AFTER-ENV: start the wide arena scrolling in (bossPending widens makeColumn)
+      // + warn now; the daemon itself spawns only once the arena has reached the player,
+      // so it never arrives before its environment exists.
       game.bossClock = 0;
-      spawnBoss();
+      game.bossPending = (T.bossWarmup || 1.4);
+      showBanner(TEXT.bossIncoming, "arena forming…", C.danger, 1.6);
+      SFX("bossIncoming");
+      if (window.DDAudio) window.DDAudio.music("bossMusic");
     }
     // mystery (?) pickup — random scroll warp (suppressed while one is already active)
     if (!busy && !game.scrollFx && S >= game.nextMystery && pickupLaneClear() &&
@@ -1484,12 +1491,12 @@
   }
 
   function spawnBoss() {
+    // called after the bossPending arena warmup — the wide arena is already on-screen,
+    // so the daemon now glides into an established environment (banner/SFX/music fired at warmup start).
+    game.bossPending = 0;
     game.boss = makeBoss(W * 0.78, H / 2);
     game._bossesActive = true;
-    showBanner(TEXT.bossIncoming, "", C.danger);
     game.nextBossPacket = game.streamed + T.bossPacketEvery * 0.35;   // first relief strip soon after engage
-    SFX("bossIncoming");
-    if (window.DDAudio) window.DDAudio.music("bossMusic");
   }
 
   function spawnDoubleBoss() {
@@ -1515,6 +1522,12 @@
   }
 
   function updateBoss(dt) {
+    // arena warmup: count down, then spawn the daemon into its now-established arena
+    if (game.bossPending > 0 && !game.boss && !game.boss2) {
+      game.bossPending -= dt;
+      if (game.bossPending <= 0) spawnBoss();
+      return;
+    }
     if (game.boss) updateOneBoss(game.boss, dt, true);
     if (game.boss2) updateOneBoss(game.boss2, dt, false);
     if (game.boss && game.boss._dead) game.boss = null;
@@ -1552,6 +1565,10 @@
       b.x += (b.tx - b.x) * k;
       b.y += (b.ty - b.y) * k;
       b.y += Math.sin(b.pulse * 9) * 1.2;       // menace jitter
+      // keep the daemon fully on-screen during the fight (orbit/dart/jitter can push it off-frame)
+      const _m = SPRITES.boss.w * 0.55;
+      b.x = Math.max(_m, Math.min(W - _m, b.x));
+      b.y = Math.max(_m, Math.min(H - _m, b.y));
       // ambient energy embers shed during the fight
       if (Math.random() < 0.5) spawnParticles(b.x + (Math.random() - 0.5) * SPRITES.boss.w, b.y + (Math.random() - 0.5) * SPRITES.boss.w, b.arch ? b.arch.c2 : C.danger, 1, 120);
 
