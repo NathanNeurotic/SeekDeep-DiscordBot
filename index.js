@@ -3101,7 +3101,7 @@ async function askVision(attachment, prompt, { systemHint } = {}) {
       media_kind: mediaKind,
       max_new_tokens: systemHint ? 1500 : 700,
       temperature: 0.0,
-    });
+    }, { timeoutMs: SEEKDEEP_IMAGE_TIMEOUT_MS });
 
     const text = response.text || '(empty vision response)';
     return seekdeepTrimVisionBoilerplate(text);
@@ -3507,6 +3507,13 @@ const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_REFINEMENT_ENABLED = !/^(0|false|off|no)$/i.
 const SEEKDEEP_IMAGE_PROMPT_REFINEMENT_LOG = /^(1|true|on|yes)$/i.test(String(process.env.SEEKDEEP_IMAGE_PROMPT_REFINEMENT_LOG || 'true'));
 const SEEKDEEP_IMAGE_PROMPT_MAX_CHARS = Math.max(180, Number(process.env.SEEKDEEP_IMAGE_PROMPT_MAX_CHARS || 650));
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS = Math.max(5000, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TIMEOUT_MS || 180000));
+// Ceiling for the heavy local-AI image pipeline calls (/image /upscale /vision
+// /inpaint). Without it postLocal defaults to NO timeout, so a stalled backend
+// (e.g. a cold model load thrashing under VRAM/CPU contention) hangs the request
+// forever and the "working" loading.gif never gets replaced. Generous default
+// (10 min, matching the chat ceiling) so a slow cold-load doesn't false-abort;
+// on timeout the existing per-handler catch swaps the gif for an error message.
+const SEEKDEEP_IMAGE_TIMEOUT_MS = Math.max(10000, Number(process.env.LOCAL_AI_IMAGE_TIMEOUT_MS || 600000));
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS = Math.max(64, Math.min(320, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_TOKENS || 160)));
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE = Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_TEMPERATURE || 0.5);
 const SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS = Math.max(18, Math.min(70, Number(process.env.SEEKDEEP_IMAGE_PROMPT_DYNAMIC_MAX_WORDS || 45)));
@@ -4210,7 +4217,7 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
       guidance_scale: Number(process.env.IMAGE_GUIDANCE_SCALE || 7.0),
       seed,
       negative_prompt: finalNegative,
-    });
+    }, { timeoutMs: SEEKDEEP_IMAGE_TIMEOUT_MS });
   } finally {
     seekdeepClearActivityStatus();
   }
@@ -16043,7 +16050,7 @@ async function seekdeepHandleInpaint(target, prompt, removeTarget, imageUrl) {
       steps: 30,
       guidance_scale: 5.0,
       ...(String(process.env.IMAGE_NEGATIVE_PROMPT || '').trim() ? { negative_prompt: String(process.env.IMAGE_NEGATIVE_PROMPT || '').trim() } : {}),
-    });
+    }, { timeoutMs: SEEKDEEP_IMAGE_TIMEOUT_MS });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_inpaint.png';
@@ -16073,7 +16080,7 @@ async function seekdeepHandleInpaintMaskPreview(target, removeTarget, imageUrl) 
       image_b64: imageB64,
       width: 1024,
       height: 1024,
-    });
+    }, { timeoutMs: SEEKDEEP_IMAGE_TIMEOUT_MS });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_mask_preview.png';
@@ -16137,7 +16144,7 @@ async function seekdeepHandleUpscale(target, imageInput, scale = 2) {
       sharpen_percent: SEEKDEEP_UPSCALE_SHARPEN_PERCENT,
       sharpen_threshold: SEEKDEEP_UPSCALE_SHARPEN_THRESHOLD,
       max_bytes: maxImageBytes,
-    });
+    }, { timeoutMs: SEEKDEEP_IMAGE_TIMEOUT_MS });
 
     const buffer = Buffer.from(response.image_b64, 'base64');
     const filename = response.filename || 'seekdeep_upscale.png';
