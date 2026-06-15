@@ -2895,7 +2895,7 @@ def register_gui_endpoints(
             _SELF_UPDATE_LOCK.release()
 
     def _post_self_update_locked(ref: str):
-        import urllib.request, urllib.error
+        import urllib.request, urllib.error, urllib.parse, posixpath
         _seekdeep_audit("self_update", ref=ref)
         REPO = "NathanNeurotic/SeekDeep-DiscordBot"
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
@@ -2996,18 +2996,27 @@ def register_gui_endpoints(
                         download_url = entry.get("download_url") or ""
                         if not name or not download_url:
                             continue
-                        # SSRF guard: the contents API hands us a download_url, but
-                        # we only ever fetch our own repo's raw content. Reject any
-                        # URL that doesn't sit under our repo's raw prefix so a
-                        # spoofed/compromised listing can't redirect a fetch to an
-                        # arbitrary host (and then stage its body as a repo file).
-                        # Repo-level (not ref-level) so a future change in how the
-                        # API echoes the ref into download_url can't silently skip
-                        # every file; _stage already pins the local write path.
-                        if not download_url.startswith(f"https://raw.githubusercontent.com/{REPO}/"):
+                        # SSRF + path-traversal guard: the contents API hands us a
+                        # download_url, but we only ever fetch our own repo's raw
+                        # content. Parse + NORMALIZE the URL (decode %-escapes,
+                        # collapse ../) before checking, so a spoofed/compromised
+                        # listing can't redirect a fetch to another host OR — via
+                        # ../ segments the CDN would resolve — to another repo on the
+                        # same host (e.g. .../SeekDeep-DiscordBot/../../evil/repo/...).
+                        # A plain startswith() would let that traversal pass. Repo-
+                        # level (not ref-level) so a future change in how the API
+                        # echoes the ref into download_url can't silently skip every
+                        # file. The git-blob-SHA gate below is the backstop (off-repo
+                        # bytes won't match this repo's published SHA); this just
+                        # fails fast before any fetch. _stage pins the local write.
+                        _dl = urllib.parse.urlparse(download_url)
+                        _dl_path = posixpath.normpath(urllib.parse.unquote(_dl.path or ""))
+                        if (_dl.scheme.lower() != "https"
+                                or (_dl.hostname or "").lower() != "raw.githubusercontent.com"
+                                or not _dl_path.startswith(f"/{REPO}/")):
                             errors.append(f"{sub}/{name}: download_url off-prefix; skipped")
                             event_bus.publish_sync({"type": "self-update.line",
-                                                    "data": {"line": f"FAIL {sub}/{name}: unexpected download host; skipped"}})
+                                                    "data": {"line": f"FAIL {sub}/{name}: unexpected download host/path; skipped"}})
                             continue
                         try:
                             content = _fetch(download_url)
