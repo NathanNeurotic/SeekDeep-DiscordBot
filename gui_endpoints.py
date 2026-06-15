@@ -228,6 +228,31 @@ class _EventBus:
                     self._subscribers.discard(ws)
         return sent
 
+    async def publish_to(self, targets, event: dict[str, Any]) -> int:
+        """Send `event` ONLY to the given subscriber sockets (must already be
+        subscribed). Used for directed frames -- notably `bot.command`, which
+        must reach the bot command-bridge and NOT every browser tab on the bus
+        (a tab that never sees the frame can't learn its correlation id to forge
+        a reply). Returns successful sends; prunes any dead socket."""
+        event.setdefault("ts", int(time.time() * 1000))
+        async with self._lock:
+            live = [ws for ws in targets if ws in self._subscribers]
+        if not live:
+            return 0
+        sent = 0
+        dead: list[WebSocket] = []
+        for ws in live:
+            try:
+                await ws.send_json(event)
+                sent += 1
+            except Exception:
+                dead.append(ws)
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    self._subscribers.discard(ws)
+        return sent
+
     def publish_sync(self, event: dict[str, Any]) -> None:
         """Schedule a publish from sync code. Safe to call from anywhere --
         a sync FastAPI handler, a threadpool worker, a load_chat_model()
@@ -323,6 +348,11 @@ _SELF_UPDATE_LOCK = threading.Lock()
 # response can't exhaust memory mid-update. Per-source-file vs API-listing caps.
 _SELF_UPDATE_MAX_FILE_BYTES = int(os.environ.get("SEEKDEEP_SELF_UPDATE_MAX_FILE_BYTES", str(25 * 1024 * 1024)))
 _SELF_UPDATE_MAX_API_BYTES = int(os.environ.get("SEEKDEEP_SELF_UPDATE_MAX_API_BYTES", str(8 * 1024 * 1024)))
+# Defense-in-depth: cap how many files a single subtree listing may enqueue, so a
+# malformed/compromised contents-API response can't fan out into thousands of
+# fetches. Today gui/ holds ~90 files and scripts/ ~15; keep this comfortably
+# above the real tree size so a legitimate update never gets silently truncated.
+_SELF_UPDATE_MAX_TREE_ENTRIES = int(os.environ.get("SEEKDEEP_SELF_UPDATE_MAX_TREE_ENTRIES", "200"))
 
 # AUD-001: ref allowlist. Strict (default) accepts only an immutable release tag
 # (vMAJOR.MINOR.PATCH[-pre]) or a full 40-char commit SHA — NOT mutable `main`
@@ -515,6 +545,11 @@ _CONFIG_PROTECTED_KEYS = frozenset({
     "SEEKDEEP_SELF_UPDATE_ALLOW_MAIN",
     "SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE",
     "SEEKDEEP_RELEASE_SIGNING_PUBKEY",
+    # self-update resource bounds — a leaked token must not be able to set these
+    # to 0 (break updates) or huge (OOM / unbounded fetch fan-out) after a restart
+    "SEEKDEEP_SELF_UPDATE_MAX_FILE_BYTES",
+    "SEEKDEEP_SELF_UPDATE_MAX_API_BYTES",
+    "SEEKDEEP_SELF_UPDATE_MAX_TREE_ENTRIES",
 })
 
 # Cap on concurrent /events WebSocket subscribers so a token-holder can't exhaust
@@ -2946,12 +2981,33 @@ def register_gui_endpoints(
                 entries = _json.loads(api_resp)
                 if isinstance(entries, list):
                     sub_files = [e for e in entries if isinstance(e, dict) and e.get("type") == "file"]
+                    if len(sub_files) > _SELF_UPDATE_MAX_TREE_ENTRIES:
+                        # Truncate rather than fan out into an unbounded fetch storm.
+                        errors.append(f"{sub}/ listing: {len(sub_files)} files exceeds cap "
+                                      f"{_SELF_UPDATE_MAX_TREE_ENTRIES}; truncated")
+                        event_bus.publish_sync({"type": "self-update.line",
+                                                "data": {"line": f"WARN {sub}/ has {len(sub_files)} files "
+                                                                 f"(> cap {_SELF_UPDATE_MAX_TREE_ENTRIES}); truncating"}})
+                        sub_files = sub_files[:_SELF_UPDATE_MAX_TREE_ENTRIES]
                     event_bus.publish_sync({"type": "self-update.line",
                                             "data": {"line": f"{sub}/ has {len(sub_files)} files to fetch"}})
                     for entry in sub_files:
                         name = entry.get("name") or ""
                         download_url = entry.get("download_url") or ""
                         if not name or not download_url:
+                            continue
+                        # SSRF guard: the contents API hands us a download_url, but
+                        # we only ever fetch our own repo's raw content. Reject any
+                        # URL that doesn't sit under our repo's raw prefix so a
+                        # spoofed/compromised listing can't redirect a fetch to an
+                        # arbitrary host (and then stage its body as a repo file).
+                        # Repo-level (not ref-level) so a future change in how the
+                        # API echoes the ref into download_url can't silently skip
+                        # every file; _stage already pins the local write path.
+                        if not download_url.startswith(f"https://raw.githubusercontent.com/{REPO}/"):
+                            errors.append(f"{sub}/{name}: download_url off-prefix; skipped")
+                            event_bus.publish_sync({"type": "self-update.line",
+                                                    "data": {"line": f"FAIL {sub}/{name}: unexpected download host; skipped"}})
                             continue
                         try:
                             content = _fetch(download_url)
@@ -5704,12 +5760,17 @@ def register_gui_endpoints(
         if _origin and _origin not in TRUSTED_BROWSER_ORIGINS:
             await websocket.close(code=4403, reason="untrusted Origin")
             return
-        # Cap concurrent subscribers (token-gated connection-exhaustion DoS).
-        if event_bus.subscriber_count >= _MAX_WS_SUBSCRIBERS:
-            await websocket.close(code=1013, reason="too many subscribers")
-            return
         await websocket.accept()
         await event_bus.subscribe(websocket)
+        # Cap concurrent subscribers (token-gated connection-exhaustion DoS).
+        # Checked AFTER subscribe (not as a pre-check before accept): accept()
+        # yields to the loop, so a pre-check would let many concurrent handshakes
+        # all clear it before any incremented the count (TOCTOU). subscriber_count
+        # now includes self, so '>' caps at exactly _MAX_WS_SUBSCRIBERS live sockets.
+        if event_bus.subscriber_count > _MAX_WS_SUBSCRIBERS:
+            await event_bus.unsubscribe(websocket)
+            await websocket.close(code=1013, reason="too many subscribers")
+            return
         # Send an initial 'hello' so the client knows the connection is live + auth'd
         try:
             await websocket.send_json({
@@ -5732,13 +5793,27 @@ def register_gui_endpoints(
                 if not isinstance(msg, dict):
                     continue
                 if msg.get("type") == "bot.command.result":
-                    d = msg.get("data")
-                    if isinstance(d, dict):
-                        _resolve_bot_command(d.get("cid"), d)
+                    # Anti-spoof: only a socket that registered itself as the bot
+                    # bridge may complete a pending command Future. A plain browser
+                    # tab on the bus must not be able to forge a result -- and it
+                    # never receives the `bot.command` frame (sent only to bridge
+                    # sockets) so it can't learn the correlation id either.
+                    if websocket in _bot_bridge_sockets:
+                        d = msg.get("data")
+                        if isinstance(d, dict):
+                            _resolve_bot_command(d.get("cid"), d)
                 elif msg.get("type") == "bot.bridge.hello":
                     # The bot identifies itself so /bot/command knows it is ACTUALLY
                     # connected (a browser tab also counts as a bus subscriber).
-                    _bot_bridge_sockets.add(websocket)
+                    # Honour the registration ONLY when (a) the parity bridge feature
+                    # is enabled -- with it off (the default) no socket is ever a
+                    # bridge, /bot/command stays 404, no result frame is trusted; and
+                    # (b) the socket is server-to-server (no Origin header). The bot
+                    # sends no Origin; a browser always sends one. This stops a
+                    # malicious trusted-origin tab from self-registering as a bridge
+                    # (which would otherwise let it receive command cids + forge results).
+                    if _bot_bridge_enabled() and not _origin:
+                        _bot_bridge_sockets.add(websocket)
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -5786,8 +5861,11 @@ def register_gui_endpoints(
         fut = loop.create_future()
         _bot_command_pending[cid] = fut
         try:
-            sent = await event_bus.publish({"type": "bot.command",
-                                            "data": {"cid": cid, "action": action, "args": cmd.args or {}}})
+            # Directed send: the command (and its correlation id) goes ONLY to
+            # registered bridge sockets, never broadcast to every browser tab.
+            sent = await event_bus.publish_to(list(_bot_bridge_sockets),
+                                              {"type": "bot.command",
+                                               "data": {"cid": cid, "action": action, "args": cmd.args or {}}})
             if sent == 0:
                 # Race: the bot dropped off the bus between the online-check and
                 # publish. Fail fast instead of waiting out the timeout.
@@ -7112,6 +7190,17 @@ def register_gui_endpoints(
         # event_bus.publish_sync(...) without each one juggling its own loop.
         loop = asyncio.get_running_loop()
         event_bus.attach_loop(loop)
+        # Sweep abandoned self-update staging dirs from a prior crashed/killed
+        # run. The updater also wipes these before staging its own, but a crash
+        # that never gets a follow-up update would otherwise leave the dir (and
+        # its partial download) on disk indefinitely. Wiping ALL matches (not just
+        # this PID's) is safe: only one server binds 127.0.0.1:7865, so there is
+        # never another live updater whose in-progress dir we could clobber.
+        try:
+            for stale in root.glob(".self-update-staging-*"):
+                shutil.rmtree(stale, ignore_errors=True)
+        except Exception:
+            pass
         # Fresh-boot ritual: clean the entire stale stack (bots + stray
         # AI servers + SeekDeep Docker containers), then bring the stack
         # back up. Mirrors seekdeep_launcher.bat option 8. Gated on the
