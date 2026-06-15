@@ -1691,12 +1691,15 @@ def register_gui_endpoints(
     def _seekdeep_audit(action: str, **fields) -> None:
         try:
             ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+            # strip CR/LF from action + values so a client/operator-influenced field
+            # can't forge extra audit-log lines (log injection)
+            _noln = lambda x: str(x).replace("\r", " ").replace("\n", " ")
             safe = " ".join(
-                f"{k}={v}" for k, v in fields.items()
+                f"{k}={_noln(v)}" for k, v in fields.items()
                 if "token" not in k.lower() and "secret" not in k.lower()
             )
             with open(_data_dir / "audit.log", "a", encoding="utf-8") as fh:
-                fh.write(f"{ts} {action} {safe}".rstrip() + "\n")
+                fh.write(f"{ts} {_noln(action)} {safe}".rstrip() + "\n")
         except Exception:
             pass
 
@@ -4584,7 +4587,8 @@ def register_gui_endpoints(
             if _is_secret_key(k):
                 redacted[k] = "*****" if v else ""
             else:
-                redacted[k] = v
+                # redact embedded URL credentials (scheme://user:pass@host) even when the key isn't secret-named
+                redacted[k] = re.sub(r'([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s:]+:[^/@\s]+@', r'\1[redacted]@', v) if v else v
         return {"ok": True, "env": redacted}
 
     # ----- GET /config/schema -----

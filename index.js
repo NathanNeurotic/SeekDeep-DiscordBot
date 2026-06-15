@@ -96,8 +96,11 @@ function seekdeepJsonStringifySafe(value, space) {
       out = out.replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}/g, '[redacted-token]');
       // Generic Bearer/Authorization headers.
       out = out.replace(/(authorization\s*[:=]\s*['"]?bearer\s+)[^'"\s]+/gi, '$1[redacted]');
-      // hf_* / sk-* style API keys.
-      out = out.replace(/\b(hf_|sk-)[A-Za-z0-9]{16,}\b/g, '$1[redacted]');
+      // hf_* / sk-* / nvapi-* + Google AIza* keys, x-api-key/x-goog-api-key headers
+      // (kept in sync with seekdeepRedactErrorMsg so the on-disk log never lags it).
+      out = out.replace(/\b(?:hf_|sk-|nvapi-)[A-Za-z0-9_-]{16,}\b/g, '[redacted-key]');
+      out = out.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted-key]');
+      out = out.replace(/((?:x-api-key|x-goog-api-key)\s*[:=]\s*['"]?)[^'"\s]+/gi, '$1[redacted]');
       return out;
     };
     const write = (level, args) => {
