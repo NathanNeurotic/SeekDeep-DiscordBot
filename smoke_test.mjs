@@ -2176,6 +2176,10 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf classify: 0:0:0:0:0:ffff:127.0.0.1 non-canon dotted loopback', blockedIp('0:0:0:0:0:ffff:127.0.0.1'));
   check('ssrf classify: 0000:0000:0000:0000:0000:ffff:a9fe:a9fe non-canon metadata', blockedIp('0000:0000:0000:0000:0000:ffff:a9fe:a9fe'));
   check('ssrf classify: 0:0:0:0:0:ffff:808:808 non-canon 8.8.8.8 PUBLIC', !blockedIp('0:0:0:0:0:ffff:808:808'));
+  // AUD-002c: zone/scope id — net.isIP accepts it; strip before canonicalizing so it can't slip past the $-anchored regexes.
+  check('ssrf classify: ::1%eth0 loopback w/ zone id', blockedIp('::1%eth0'));
+  check('ssrf classify: fe80::1%eth0 link-local w/ zone id', blockedIp('fe80::1%eth0'));
+  check('ssrf classify: 0:0:0:0:0:ffff:127.0.0.1%eth0 mapped loopback w/ zone id', blockedIp('0:0:0:0:0:ffff:127.0.0.1%eth0'));
 
   // -- async validator: reject + accept --
   const blocked = async (url, opts) => {
