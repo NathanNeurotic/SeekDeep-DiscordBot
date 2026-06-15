@@ -1574,6 +1574,7 @@ def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
     """Bare-metal Ollama HTTP call using stdlib urllib (no extra runtime dep).
     Returns parsed JSON. Raises on HTTP errors so the caller can decide."""
     url = f"{OLLAMA_BASE_URL}{path}"
+    _seekdeep_assert_provider_url_safe(url)   # AUD: block cloud-metadata/link-local SSRF (localhost/LAN/cloud allowed) — parity with the openai/anthropic/gemini paths; OLLAMA_BASE_URL is config-settable so a repointed base must still be screened
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = _seekdeep_urllib_req.Request(url, data=data, method=method)
     if data is not None:
