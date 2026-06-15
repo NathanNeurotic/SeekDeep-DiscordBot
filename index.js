@@ -12420,28 +12420,6 @@ function seekdeepArchiveDirForTarget(target = null) {
   return out;
 }
 
-function seekdeepIsPrivilegedArchiveCommand(commandName = '') {
-  return /^(?:purgearchive|setarchive|archiveconfig|archiveadmin|cleararchive)$/i.test(String(commandName || ''));
-}
-
-function seekdeepUserCanRunPrivilegedSeekDeepCommand(interactionOrMessage = {}) {
-  const memberPermissions = interactionOrMessage?.memberPermissions || interactionOrMessage?.member?.permissions || null;
-  if (!memberPermissions || typeof memberPermissions.has !== 'function') return false;
-  try {
-    return Boolean(
-      memberPermissions.has(PermissionFlagsBits.Administrator) ||
-      memberPermissions.has(PermissionFlagsBits.ManageGuild) ||
-      memberPermissions.has(PermissionFlagsBits.ManageChannels)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function seekdeepNormalUsersMayUseCommand(commandName = '') {
-  return !seekdeepIsPrivilegedArchiveCommand(commandName);
-}
-
 function seekdeepGroundBotanicalSlangPrompt(prompt = '') {
   const raw = String(prompt || '').trim();
   const lower = raw.toLowerCase();
