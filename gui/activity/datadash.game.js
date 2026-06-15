@@ -174,6 +174,7 @@
       px: 0, py: 0, vy: 0, vx: 0,
       // terrain
       cols: [],                // {ceil, floor, blocks:[{y,h}]}
+      colHistory: [],          // recently-passed columns (LIFO) for reverse-scroll replay
       genX: 0,                 // world-x of next column to generate
       baseCenter: 0.5, baseCenterTarget: 0.5, feat: { type: "open", amt: 0 },
       cTop: 0.18, cBot: 0.82,
@@ -409,7 +410,8 @@
       // generator is still ahead of the rewound edge and the corridor jumps
       // ("restored-from-reverse" wall).
       if (game.reversing) { resyncGenToRightEdge(); game.reversing = false; }
-      game.cols.shift();
+      const _off = game.cols.shift();
+      if (_off) { game.colHistory.push(_off); if (game.colHistory.length > 420) game.colHistory.shift(); }   // record passed terrain for reverse replay
       game.cols.push(makeColumn());
     }
     // reverse scroll: as we move backwards, EXTEND the current opening to the
@@ -423,8 +425,14 @@
       scrollAcc += T.colW;
       game.reversing = true;
       game.cols.pop();
-      const edge = game.cols[0];
-      game.cols.unshift(edge ? { ceil: edge.ceil, floor: edge.floor, blocks: [] } : makeColumn());
+      // REPLAY the actual terrain the player flew through (passability + continuity
+      // guaranteed — it was already navigated forward), newest-first so original
+      // adjacency + towers are restored. Falls back to cloning the left edge only
+      // when history runs dry (rewound further than recorded). revertGrace still
+      // covers the brief window so a replayed tower can't unfairly kill mid-rewind.
+      const replay = game.colHistory.pop();
+      if (replay) { game.cols.unshift(replay); }
+      else { const edge = game.cols[0]; game.cols.unshift(edge ? { ceil: edge.ceil, floor: edge.floor, blocks: [] } : makeColumn()); }
     }
   }
 
