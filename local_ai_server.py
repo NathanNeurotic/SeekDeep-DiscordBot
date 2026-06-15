@@ -1517,7 +1517,14 @@ def _seekdeep_assert_provider_url_safe(url: str) -> None:
             addr = _seekdeep_ipaddr.ip_address(ip)
         except Exception:
             continue
-        if ip in _SEEKDEEP_METADATA_HOSTS or addr.is_link_local:
+        # Unwrap IPv4-mapped IPv6 (e.g. ::ffff:100.100.100.200) to its native IPv4
+        # before checking. Otherwise the mapped form's string ("::ffff:...") never
+        # matches the IPv4 entries in the metadata set, and a non-link-local
+        # metadata host (Alibaba 100.100.100.200) slips past both checks — an SSRF
+        # bypass that's also Python-version-fragile for the link-local case.
+        if isinstance(addr, _seekdeep_ipaddr.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        if str(addr) in _SEEKDEEP_METADATA_HOSTS or addr.is_link_local:
             raise RuntimeError("provider URL resolves to a cloud-metadata / link-local address")
 
 OLLAMA_BASE_URL = (os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "").rstrip("/")
