@@ -747,6 +747,9 @@
     game.shooting = false;
     if (window.DDAudio) { window.DDAudio.stopLoop("malwareLoop"); if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }window.DDAudio.stopLoop("chargeLoop"); window.DDAudio.play("gameOver"); window.DDAudio.music("menuMusic"); }
     spawnParticles(game.px, game.py, C.danger, 40, 460);
+    spawnParticles(game.px, game.py, "#ffffff", 30, 720);   // bright outward death blast
+    game.flashT = Math.max(game.flashT || 0, 0.9);
+    game.shake = Math.max(game.shake || 0, 26);
     const beat = game.bytes > best;
     if (beat) { best = Math.floor(game.bytes); localStorage.setItem("datadash.best", best); }
     recordScore(game.bytes);
@@ -1402,6 +1405,14 @@
     const hb = playerHitbox();
     for (const b of game.bots) {
       b.pulse += dt;
+      if (b.hitFlash > 0) b.hitFlash -= dt;
+      if (b.dying) {   // death animation: shrink/spin out, shed sparks, then remove
+        b.deathT = (b.deathT || 0) + dt;
+        b.x -= game.scroll * dt * 0.5;
+        if (Math.random() < 0.4) spawnParticles(b.x, b.y, b.tint || C.danger, 1, 160);
+        if (b.deathT > 0.35) b.dead = true;
+        continue;   // corpse: no chase, no hits taken, no damage dealt
+      }
       if (b.static) {
         b.x -= game.scroll * dt;   // DDoS maze bot: rides the world like terrain, never chases
         if (b.x < -80) { b.dead = true; continue; }
@@ -1415,13 +1426,13 @@
       }
       // player bullets damage bots
       for (const pb of game.playerBullets) {
-        if (b.dead) break;   // bot already destroyed this frame — stop, so later bullets don't "hit" the corpse (dupe particles/SFX)
+        if (b.dead || b.dying) break;   // already destroyed/dying this frame — don't re-hit the corpse
         if (pb.dead) continue;
-        if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; spawnParticles(pb.x, pb.y, C.warn, 10, 240); if (b.hp <= 0) { b.dead = true; SFX("malwareDie"); spawnParticles(b.x, b.y, C.danger, 30, 360); } }
+        if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; b.hitFlash = 0.12; spawnParticles(pb.x, pb.y, C.warn, 8, 240); if (b.hp <= 0) { b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 360); } }
       }
       // body contact costs a kernel
-      if (!b.dead && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < T.botSize / 2 + HBX / 2) {
-        b.dead = true; SFX("malwareDie"); spawnParticles(b.x, b.y, C.danger, 24, 320); loseLife("bot");
+      if (!b.dead && !b.dying && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < T.botSize / 2 + HBX / 2) {
+        b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 320); loseLife("bot");
       }
     }
     game.bots = game.bots.filter((b) => !b.dead);
@@ -2343,9 +2354,15 @@
     for (const b of game.bots) {
       const r = T.botSize / 2, p = 0.5 + 0.5 * Math.sin(b.pulse * 8);
       const tint = b.tint || C.danger;
-      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.pulse * 2 * (b.rotDir || 1));
-      // glitchy malware mite — varied spiky/poly body + angry eye
-      ctx.shadowColor = tint; ctx.shadowBlur = 16;
+      const flash = b.hitFlash > 0;
+      const dsc = b.dying ? Math.max(0, 1 - (b.deathT || 0) / 0.35) : 1;   // shrink out on death
+      ctx.save();
+      ctx.globalAlpha = b.dying ? dsc : 1;
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.pulse * 2 * (b.rotDir || 1) + (b.dying ? (b.deathT || 0) * 16 : 0));   // spin out on death
+      if (dsc !== 1) ctx.scale(dsc, dsc);
+      // glitchy malware mite — varied spiky/poly body + angry eye (flashes white on a hit)
+      ctx.shadowColor = flash ? "#ffffff" : tint; ctx.shadowBlur = 16;
       const sh = b.shape || "star6";
       if (sh === "star5") starPath(5, r * (1 + 0.14 * p), r * 0.45, b.pulse * 3);
       else if (sh === "star4") starPath(4, r * (1 + 0.16 * p), r * 0.42, b.pulse * 3);
@@ -2353,14 +2370,14 @@
       else if (sh === "tri") polyPath(3, r * (1 + 0.12 * p), b.pulse);
       else if (sh === "diamond") polyPath(4, r * (1 + 0.12 * p), b.pulse + 0.785);
       else starPath(6, r * (1 + 0.12 * p), r * 0.5, b.pulse * 3);
-      ctx.fillStyle = "rgba(30,8,22,0.95)"; ctx.fill();
-      ctx.strokeStyle = p > 0.5 ? tint : C.mystery; ctx.lineWidth = 2; ctx.stroke();
-      ctx.restore();
-      // eye
-      ctx.shadowBlur = 12; ctx.shadowColor = tint;
-      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.26, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = tint; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.13, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : "rgba(30,8,22,0.95)"; ctx.fill();
+      ctx.strokeStyle = flash ? "#ffffff" : (p > 0.5 ? tint : C.mystery); ctx.lineWidth = 2; ctx.stroke();
+      // eye (local frame so it scales/fades with the death anim)
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, r * 0.26, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : tint; ctx.beginPath(); ctx.arc(0, 0, r * 0.13, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0;
+      ctx.restore();
     }
   }
 
