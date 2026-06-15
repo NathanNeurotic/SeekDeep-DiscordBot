@@ -1113,7 +1113,11 @@
     const spacing = kind === "database" ? T.colW * T.dbSpacingCols
                   : kind === "ddos" ? T.colW * T.ddosSpacingCols
                   : T.colW * T.pepeGridCols;
-    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: 1 + Math.random() * (T.ddosSlots - 3), gapV: (Math.random() - 0.5) * 0.4 };
+    // SAFE ENTRY: anchor the DDoS gap to the player's current lane so the first rows
+    // arrive with their opening where the player already is (gapV starts flat, then drifts).
+    const evTop = (0.5 - T.eventGap / 2) * H, evSpan = T.eventGap * H;
+    const pSlot = Math.max(1, Math.min(T.ddosSlots - 3, Math.round(((game.py - evTop) / evSpan) * T.ddosSlots - 0.5)));
+    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: pSlot, gapV: 0 };
     const meta = {
       database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
       ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
@@ -1134,6 +1138,12 @@
   }
 
   function spawnEventColumn(ev) {
+    // SAFE ENTRY/EXIT: don't spawn event content until the wide hallway has reached the
+    // player (run-in ≈ the player's screen position), and stop one screen-width before the
+    // end (run-out) so trailing content scrolls clear before normal terrain + towers resume.
+    // Kills the "dead unavoidable damage at a DDoS boundary" cases.
+    const runIn = W * T.playerX, runOut = W + 2 * T.colW;
+    if (ev.dist < runIn || ev.dist > ev.length - runOut) return;
     const top = (0.5 - T.eventGap / 2) * H, bot = (0.5 + T.eventGap / 2) * H, span = bot - top;
     const x = W + 40;
     if (ev.kind === "database") {
