@@ -131,6 +131,10 @@
     ovTitle:   document.getElementById("ov-title"),
     ovSub:     document.getElementById("ov-sub"),
     ovBtn:     document.getElementById("ov-btn"),
+    continueOverlay: document.getElementById("continue-overlay"),
+    contYes:   document.getElementById("cont-yes"),
+    contNo:    document.getElementById("cont-no"),
+    contSub:   document.getElementById("cont-sub"),
     ovBest:    document.getElementById("ov-best"),
     ovControls:document.getElementById("ov-controls"),
     pause:     document.getElementById("pause"),
@@ -142,7 +146,7 @@
   };
 
   // ---- state ---------------------------------------------------------------
-  const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead" };
+  const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead", CONTINUE: "continue" };
   const SFX = function (k, o) { if (window.DDAudio) window.DDAudio.play(k, o); };
   let state = STATE.MENU;
   let best = +(localStorage.getItem("datadash.best") || 0);
@@ -480,6 +484,7 @@
   // keyboard — movement
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
+    if (state === STATE.CONTINUE) return;   // CONTINUE? scene is click-only — keys never decide it
     if (e.code === "KeyP") { if (!e.repeat) togglePause(); return; }
     if (e.code === "KeyM") { if (!e.repeat && window.DDAudio) { window.DDAudio.toggleMute(); refreshMuteLabels(); } return; }
     const d = keyDir(e.code);
@@ -514,6 +519,7 @@
     try { if (document.activeElement && document.activeElement !== canvas && document.activeElement.blur) document.activeElement.blur(); } catch (err) {}
     if (canvas.focus) try { canvas.focus(); } catch (err) {}
     updateAim(e);
+    if (state === STATE.CONTINUE) return;   // CONTINUE? scene is decided ONLY by its on-screen buttons
     if (state === STATE.MENU) { start(); return; }
     if (state === STATE.DEAD) { restart(); return; }
     if (e.pointerType === "touch") return;   // in-play: touch fires via the on-screen buttons
@@ -531,6 +537,8 @@
     if (state === STATE.MENU) start();
     else restart();
   });
+  if (hud.contYes) hud.contYes.addEventListener("click", doContinue);
+  if (hud.contNo) hud.contNo.addEventListener("click", doAbandon);
 
   // ---- controls menu (informational reference) ------------------------------
   function openControls() { hud.controls.classList.remove("hidden"); }
@@ -549,6 +557,7 @@
     hud.controls.classList.add("hidden");
     if (hud.scoreEntry) hud.scoreEntry.classList.add("hidden");
     hud.overlay.classList.add("hidden");
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
     hud.timerWrap.classList.add("hidden");
   }
   function restart() { start(); }
@@ -593,27 +602,54 @@
     return { x: game.px - HBX / 2, y: game.py - HBY / 2, w: HBX, h: HBY };
   }
 
-  // CONTINUE: if the player has a banked life cell, consume one and RESUME the run
-  // exactly where they died (same position/terrain/DATA/zone) with a 5s slow restart
-  // + immunity, instead of game-over. Returns true if a continue was used.
-  function endLifeOrContinue() {
-    if (!game.lifeCells || game.lifeCells <= 0) return false;
-    game.lifeCells--;
+  // On a fatal hit with a banked life cell, raise the click-only "CONTINUE?" scene —
+  // the player must click Continue/Abandon; keys + canvas taps never decide it. No
+  // cell → straight to game-over.
+  function deathOrContinuePrompt() {
+    if (game.lifeCells > 0) enterContinuePrompt();
+    else die();
+  }
+  function enterContinuePrompt() {
+    state = STATE.CONTINUE;
+    clearKeys();
+    game.shooting = false; game.charging = false; game.chargeT = 0;
+    if (window.DDAudio) {
+      window.DDAudio.stopLoop("malwareLoop"); window.DDAudio.stopLoop("chargeLoop");
+      if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }
+    }
+    spawnParticles(game.px, game.py, C.danger, 30, 380);
+    game.shake = Math.max(game.shake || 0, 18);
+    if (hud.contSub) hud.contSub.textContent = "⚛ × " + game.lifeCells + " remaining";
+    if (hud.contYes) hud.contYes.textContent = "CONTINUE  (⚛×" + game.lifeCells + ")";
+    if (hud.continueOverlay) hud.continueOverlay.classList.remove("hidden");
+  }
+  // CONTINUE button: consume one cell + RESUME the run exactly where the player died
+  // (same position/terrain/DATA/zone) with a 5s eased slow-restart + immunity.
+  function doContinue() {
+    if (state !== STATE.CONTINUE || !game) return;
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
+    state = STATE.PLAY;
+    game.lifeCells = Math.max(0, game.lifeCells - 1);
     game.lives = T.startLives;
     game.invuln = Math.max(game.invuln, 5);    // immune through the slow restart window
     game.resumeT = 5;                          // 5s eased speed ramp (see curScroll)
     game.scrollFx = null;                      // clear any active mystery so the resume is clean
     game.shooting = false; game.charging = false; game.chargeT = 0;
-    if (window.DDAudio) window.DDAudio.stopLoop("chargeLoop");   // died mid-charge: stop the held charge loop (die() does this too)
+    clearKeys();
     // clear immediate threats around the player so the continue isn't instant death
     game.bots = game.bots.filter((b) => Math.hypot(b.x - game.px, b.y - game.py) > 220);
     game.bullets = []; game.bars = []; game.bombs = [];
     game.flashT = Math.max(game.flashT, 0.8);
     game.shake = 16;
     spawnParticles(game.px, game.py, "#9fe6ff", 50, 480);
-    SFX("powerUp");
+    if (window.DDAudio) window.DDAudio.play("powerUp");
     showBanner("⚛ CONTINUE", "resuming — ⚛×" + game.lifeCells + " left", "#9fe6ff", 2.0);
-    return true;
+  }
+  // ABANDON button: end the run (game over).
+  function doAbandon() {
+    if (state !== STATE.CONTINUE) return;
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
+    die();
   }
 
   function loseLife(reason) {
@@ -649,7 +685,7 @@
       game.lives = Math.max(0, game.lives - 2);
       spawnParticles(game.px, game.py, "#ffffff", 34, 420);
       SFX("powerDown");
-      if (game.lives <= 0) { if (!endLifeOrContinue()) die(); return; }
+      if (game.lives <= 0) { deathOrContinuePrompt(); return; }
       showBanner("POWER DOWN", TEXT.livesLabel + " ×" + game.lives, C.warn, 1.3);
       return;
     }
@@ -658,7 +694,7 @@
     SFX("damage");
     spawnParticles(game.px, game.py, C.danger, 26, 360);
     if (game.lives <= 0) {
-      if (!endLifeOrContinue()) die();
+      deathOrContinuePrompt();
     } else {
       showBanner(TEXT.hit, TEXT.livesLabel + " ×" + game.lives, C.danger, 1.3);
       game.invuln = T.invulnTime;
