@@ -256,24 +256,23 @@
     };
     game.px = W * T.playerX;
     game.py = H * 0.5;
-    setPalette(LEVELS[0].palette);   // reset zone colours to L1 (a prior run may have lerped C to a later level)
-    buildTiles();                    // re-tint the circuit tiles to the L1 accent
-    seedTerrain();
-    // DEBUG: jump-start at a chosen DATA tier for testing (Debug menu). Sets the
-    // tier directly so colour/speed match the starting DATA from frame one;
-    // spawn counters (streamed) stay at 0 so pickups arrive on their normal
+    // DEBUG: optionally jump-start at a chosen DATA tier for testing (Debug menu) —
+    // decide the starting level FIRST so the palette + (heavy) buildTiles run exactly
+    // once. spawn counters (streamed) stay at 0 so pickups arrive on their normal
     // (debug-scaled) cadence from the jump point.
+    let startLv = 0;
     if (DD_DEBUG.enabled && DD_DEBUG.startBytes > 0) {
       game.bytes = DD_DEBUG.startBytes;
       game.gross = DD_DEBUG.startBytes;
-      const lv = levelIdx(game.bytes);
-      game.level = lv;
-      game.spd = levelSpeed(lv);
-      game.scroll = levelSpeed(lv);
-      setPalette(LEVELS[lv].palette);
-      buildTiles();
-      if (typeof applyZoneTiles === "function") applyZoneTiles(lv);
+      startLv = levelIdx(game.bytes);
     }
+    game.level = startLv;
+    game.spd = levelSpeed(startLv);
+    game.scroll = levelSpeed(startLv);
+    setPalette(LEVELS[startLv].palette);   // reset zone colours (a prior run may have lerped C to a later level)
+    buildTiles();                          // re-tint the circuit tiles to the accent
+    if (startLv > 0 && typeof applyZoneTiles === "function") applyZoneTiles(startLv);
+    seedTerrain();
   }
 
   // ---- terrain generation : continuous safe corridor -----------------------
@@ -1961,18 +1960,21 @@
   // glow throbs outward from the ball + a thin pulsing alert frame rings the
   // screen edges. Deliberately NOT a full-screen colour wash (that looked like
   // the screen "got scurvy"); the centre stays clear so you read as the alarm.
-  function drawPumpedOverlay() {
+  function drawPumpedOverlay(sx, sy) {
     const beat = Math.abs(Math.sin(game.t * 7));   // ~1Hz throb
-    const px = game.px, py = game.py;
+    // drawn after the world ctx.restore(), so add the shake offset back to keep
+    // the beacon locked on the player sprite during impacts.
+    const px = game.px + (sx || 0), py = game.py + (sy || 0);
     ctx.save();
-    // beacon glow centred on the player
+    // beacon glow centred on the player — fill only the gradient's bounding box
+    // (it's transparent past r1 anyway), not the whole screen.
     const r1 = 110 + 70 * beat;
     const g = ctx.createRadialGradient(px, py, 12, px, py, r1);
     g.addColorStop(0,    hexA("#ff9e2c", 0.26 + 0.18 * beat));
     g.addColorStop(0.55, hexA("#ff6a1f", 0.07 + 0.10 * beat));
     g.addColorStop(1,    "transparent");
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(px - r1, py - r1, r1 * 2, r1 * 2);
     // thin pulsing alert frame at the edges (an alarm, not a wash)
     ctx.globalAlpha = 0.14 + 0.32 * beat;
     ctx.strokeStyle = "#ff7a1f";
@@ -2013,7 +2015,7 @@
       drawFloaters();
     }
     ctx.restore();
-    if (game && game.freeAmmo) drawPumpedOverlay();
+    if (game && game.freeAmmo) drawPumpedOverlay(sx, sy);
     if (game && game.scrollFx) drawFxVignette();
     if (game && game.invincible > 0) drawInvincibleOverlay();
     if (game && game.transform > 0) drawTransformLightning();
