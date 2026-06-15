@@ -127,6 +127,53 @@ window.DATADASH = {
     thrust:    "#6df0ff",          // thruster flame
   },
 
+  /* --- LEVELS ------------------------------------------------------------
+   * Zones unlocked by total DATA STREAMED. The level is the magnitude bracket
+   * of DATA streamed; it tracks DATA BOTH ways (non-monotonic, with hysteresis).
+   * Each level sets its own scroll speed, colour palette, and tower-shape
+   * profile, so the world visibly changes character as you stream more data.
+   *   threshold = bytes at/above which this level becomes active.
+   *   speed     = world scroll px/s (eased on level-up). L1 is the slow base;
+   *               TB is faster than the old single-ramp max (860).
+   *   palette   = all hex. glow/grid are the hex tint (alpha applied in-engine);
+   *               terrain/obstacle/accent families recolour the whole world.
+   *   shape     = per-level overrides for the corridor generator (anything
+   *               omitted falls back to TUNING). Gap / lane / min-channel params
+   *               are intentionally NOT here — they stay constant in TUNING so
+   *               the "always a flyable thread" guarantee holds at every level.
+   *     weights = relative chance of each feature {open,floorTower,ceilTower,pinch,ramp}.
+   */
+  LEVELS: [
+    // --- cyan family (Start / KB / MB<250): easy on-ramp, differentiated by bg/terrain luminance ---
+    { name: "BOOT · DATA STREAM", sub: "spooling up — ease in", threshold: 0, speed: 380,
+      palette: { bg:"#02060f", glow:"#2dd4ff", grid:"#78deff", terrain:"#06182e", terrainEdge:"#2dd4ff", obstacle:"#0a2742", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#6df0ff" },
+      shape: { rampFrac:0.50, wallStepFrac:0, towerMin:0.06, towerMax:0.12, pinchAmt:0.10, featMin:10, featMax:18, obsChance:0.40, obsDoubleChance:0.00,
+        weights:{ open:0.50, floorTower:0.16, ceilTower:0.16, pinch:0.04, ramp:0.14 } } },
+    { name: "KB · DATA STREAM", sub: "kilobyte channel", threshold: 1e3, speed: 460,
+      palette: { bg:"#03091a", glow:"#2dd4ff", grid:"#78deff", terrain:"#08203c", terrainEdge:"#2dd4ff", obstacle:"#0c2d4e", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#6df0ff" },
+      shape: { rampFrac:0.45, wallStepFrac:0, towerMin:0.07, towerMax:0.14, pinchAmt:0.12, featMin:9, featMax:16, obsChance:0.52, obsDoubleChance:0.04,
+        weights:{ open:0.40, floorTower:0.19, ceilTower:0.19, pinch:0.07, ramp:0.15 } } },
+    { name: "MB · DATA RIVER", sub: "megabyte flow", threshold: 1e6, speed: 560,
+      palette: { bg:"#040d22", glow:"#2dd4ff", grid:"#8fe6ff", terrain:"#0a2848", terrainEdge:"#2dd4ff", obstacle:"#0e3558", obstacleEdge:"#6df0ff", accent:"#2dd4ff", accentSoft:"#8fe6ff" },
+      shape: { rampFrac:0.38, wallStepFrac:0.04, towerMin:0.08, towerMax:0.16, pinchAmt:0.15, featMin:7, featMax:14, obsChance:0.66, obsDoubleChance:0.10,
+        weights:{ open:0.30, floorTower:0.22, ceilTower:0.22, pinch:0.11, ramp:0.15 } } },
+    // --- teal @ 250MB (colour shift; speed keeps climbing) ---
+    { name: "MB · DATA SURGE", sub: "quarter-gig — current rising", threshold: 2.5e8, speed: 680,
+      palette: { bg:"#02100c", glow:"#2dd4c0", grid:"#7cffe0", terrain:"#06281f", terrainEdge:"#2dd4c0", obstacle:"#0a3a30", obstacleEdge:"#6df0d8", accent:"#2dd4c0", accentSoft:"#5ff0d8" },
+      shape: { rampFrac:0.28, wallStepFrac:0.05, towerMin:0.09, towerMax:0.175, pinchAmt:0.17, featMin:6, featMax:12, obsChance:0.78, obsDoubleChance:0.16,
+        weights:{ open:0.22, floorTower:0.25, ceilTower:0.25, pinch:0.13, ramp:0.15 } } },
+    // --- green @ GB (the original speed) ---
+    { name: "GB · DATA TORRENT", sub: "gigabyte zone — full speed", threshold: 1e9, speed: 860,
+      palette: { bg:"#02100a", glow:"#39ff96", grid:"#7cffb4", terrain:"#06281a", terrainEdge:"#39ff96", obstacle:"#0a3a26", obstacleEdge:"#6dffae", accent:"#39ff96", accentSoft:"#7cffb4" },
+      shape: { rampFrac:0.18, wallStepFrac:0, towerMin:0.10, towerMax:0.185, pinchAmt:0.18, featMin:5, featMax:10, obsChance:0.85, obsDoubleChance:0.20,
+        weights:{ open:0.15, floorTower:0.29, ceilTower:0.29, pinch:0.15, ramp:0.12 } } },
+    // --- red @ TB (fastest, brutal) ---
+    { name: "TB · DATA OVERLOAD", sub: "terabyte zone — maximum velocity", threshold: 1e12, speed: 1040,
+      palette: { bg:"#140604", glow:"#ff5a3c", grid:"#ffaa78", terrain:"#2e0d06", terrainEdge:"#ff5d3a", obstacle:"#421a11", obstacleEdge:"#ff9a6d", accent:"#ff5d3a", accentSoft:"#ffae6d" },
+      shape: { rampFrac:0.22, wallStepFrac:0.04, towerMin:0.11, towerMax:0.185, pinchAmt:0.18, featMin:4, featMax:8, obsChance:0.92, obsDoubleChance:0.30,
+        weights:{ open:0.10, floorTower:0.28, ceilTower:0.28, pinch:0.19, ramp:0.15 } } },
+  ],
+
   FONTS: {
     ui:   `Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`,
     mono: `"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace`,
@@ -167,9 +214,7 @@ window.DATADASH = {
     hMargin:           0.1,      // player stays within this margin of the screen edges
     crashGravity:      900,     // pull used only for the boss death-spiral
 
-    scrollStart:       560,    // world speed px/s at start — eased (was 640; transitions too fast to clear)
-    scrollMax:         860,    // caps out here — eased (was 1040) so wall ramps stay clearable vs vMax 840
-    scrollRampBytes:   90000,  // bytes over which speed ramps to max
+    scrollStart:       560,    // fallback base speed only (used if CFG.LEVELS is absent) — real per-level speeds now live in CFG.LEVELS (440 → 980)
 
     bytesPerPx:        14,     // distance → bytes multiplier
 
@@ -207,6 +252,7 @@ window.DATADASH = {
     obsPassage:        0.17,   // guaranteed clear channel past the chip (fraction of H)
     obsMinHeight:      0.16,   // chip protrusion range (fraction of H) — juts a bit more
     obsMaxHeight:      0.42,
+    obsHitsToBreak:    4,      // standard shots needed to break a chip-tower (charge/super smash instantly)
     obsDoubleChance:   0.16,   // chance of a top+bottom pair (squeeze you through the middle)
 
     // ---- FLYABLE LANE (error correction) ----
@@ -221,6 +267,7 @@ window.DATADASH = {
     // Plenty when you're hurting, rare once you're comfortable (5+).
     checkpointEvery:   46000,  // base bytes between +1 packs (scaled by kernels held) — rarer
     checkpointRich:    5,      // kernels at/above which packs become rare
+    kernelCap:         10,     // max kernels — none spawn/stack at 10+; collectible only while < 10
     pickupSize:        44,
     pickupPull:        360,    // pickups gravitate to the player within this radius (px) — stronger reach
     pickupPullForce:   2200,   // pull strength (px/s at the edge of the radius) — much grabbier
@@ -244,6 +291,7 @@ window.DATADASH = {
 
     // MINI-MALWARE BOTS — small drifting hazards on their own respawn clock
     botSpawnSeconds:   20,     // independent timer: spawn a batch every N seconds (50% more frequent)
+    botMinDataBytes:   1000000, // no chasing malware until DATA > 1MB
     botBatch:          2,      // how many spawn per tick
     botMax:            6,      // hard cap on screen — clock won't restart until there's room
     botLoudFar:        420,    // world px: beyond this the presence loop is silent
@@ -260,7 +308,7 @@ window.DATADASH = {
     mysteryDurMin:     6,      // effect duration range (seconds)
     mysteryDurMax:     14,
     mysterySlowDurMax: 10,     // slowdown is capped shorter than other effects
-    mysteryFastMult:   1.45,   // scroll multiplier: overclock (flashes GREEN)
+    mysteryFastMult:   2.0,    // PERFORMANCE MODE scroll multiplier ×2 (violent rainbow world filter)
     mysterySlowMult:   0.5,    // scroll multiplier: throttle (flashes GREEN)
     mysteryReverseMult:-0.8,   // scroll multiplier: rewind (flashes RED, negative = backwards)
     revertGrace:       1.2,    // wall-damage immunity (s) DURING a rewind + this long after it
@@ -283,6 +331,7 @@ window.DATADASH = {
     bossEverySeconds:  50,     // a boss arrives after this many seconds of boss-free survival
     bossDuration:      24,     // seconds you must survive (longer, tougher fights)
     bossEnterTime:     1.4,    // glide-in time
+    bossWarmup:        1.4,    // arena scrolls in for this long before the daemon spawns (spawn-after-env)
     bossArenaGap:      0.78,   // cave opens to this fraction of height during fight (room to dodge)
     bossMoveSpeed:     3.0,    // how briskly it darts around its zone
     bossPatternEvery:  2.4,    // seconds between switching attack patterns
@@ -331,6 +380,9 @@ window.DATADASH = {
     // instead of a kernel.
     upgradeEvery:      1000000, // bytes between upgrade spawns (50% rarer — 1 MB)
     upgradeSize:       104,    // 2× bigger lightning bolt
+    lifeCellEvery:     2000000, // bytes between LIFE CELL spawns — 2× rarer than the upgrade bolt
+    lifeCellCap:       9,       // max banked continues (player starts with 1)
+    lifeCellSize:      76,      // atomic power-cell pickup diameter (px) — bigger grab box (no magnet) so a rare cell isn't easily missed
     transformTime:     1.6,    // world-freeze duration while the Over Clocked transform plays
 
     // Local scoreboard

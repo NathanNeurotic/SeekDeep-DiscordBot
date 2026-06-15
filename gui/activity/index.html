@@ -304,6 +304,7 @@
           <div class="hud-block">
             <span class="hud-label" id="lbl-lives">KERNELS</span>
             <div class="lives" id="hud-lives"></div>
+            <span class="hud-lifecells" id="hud-lifecells" style="font:700 12px 'Cascadia Code',monospace;color:#9fe6ff;text-shadow:0 0 6px rgba(45,212,255,.55);margin-top:2px;letter-spacing:.5px"></span>
           </div>
           <div class="hud-block" style="align-items:center;">
             <span class="hud-label" id="lbl-dist">DATA STREAMED</span>
@@ -337,6 +338,18 @@
         </div>
       </div>
       <div class="rotate-hint" id="rotate-hint"><div>⟳<br />Rotate to landscape</div></div>
+
+      <div class="overlay hidden" id="continue-overlay">
+        <div class="ov-card">
+          <h1 class="ov-title" style="color:#9fe6ff;text-shadow:0 0 18px rgba(45,212,255,.6)">⚛ CONTINUE?</h1>
+          <p class="ov-sub" id="cont-sub">⚛ × 1 remaining</p>
+          <div class="ov-actions">
+            <button class="ov-btn" id="cont-yes" type="button">CONTINUE</button>
+            <button class="ov-btn ghost" id="cont-no" type="button">ABANDON</button>
+          </div>
+          <div class="ov-controls">resume where you fell — or end the run</div>
+        </div>
+      </div>
 
       <div class="overlay" id="overlay">
         <div class="ov-card">

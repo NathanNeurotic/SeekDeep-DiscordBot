@@ -9,6 +9,56 @@
   const CFG = window.DATADASH;
   const { TEXT, SPRITES, COLORS: C, FONTS, TUNING: T } = CFG;
 
+  // ---- LEVELS: distance-tiered zones (per-level speed + palette + tower shape) ----
+  const LEVELS = (CFG.LEVELS && CFG.LEVELS.length) ? CFG.LEVELS : [{
+    name: "", sub: "", threshold: 0, speed: T.scrollStart, shape: {},
+    palette: { bg: "#02060f", glow: "#2dd4ff", grid: "#78deff", terrain: "#06182e", terrainEdge: "#2dd4ff", obstacle: "#0a2742", obstacleEdge: "#6df0ff", accent: "#2dd4ff", accentSoft: "#6df0ff" },
+  }];
+  const PAL_KEYS = ["bg", "glow", "grid", "terrain", "terrainEdge", "obstacle", "obstacleEdge", "accent", "accentSoft"];
+  const LEVEL_FADE = 1.6;   // seconds for the palette cross-fade on level-up
+  function levelIdx(b) {
+    // Derive the active tier from CFG.LEVELS thresholds (single source of truth);
+    // thresholds are ascending, so the highest one <= b wins.
+    let n = 0;
+    for (let i = 0; i < LEVELS.length; i++) { if (b >= (LEVELS[i].threshold || 0)) n = i; }
+    return n;
+  }
+  function levelSpeed(n) { return (LEVELS[n] && LEVELS[n].speed) || T.scrollStart; }
+  function curShape() { return (game && LEVELS[game.level] && LEVELS[game.level].shape) || {}; }
+  function mixHex(a, b, t) {
+    const expand = (h) => (h && h.length === 4) ? "#" + h[1] + h[1] + h[2] + h[2] + h[3] + h[3] : h;   // tolerate 3-digit shorthand (#fff)
+    const hA = expand(a), hB = expand(b);
+    const ch = (i) => { const x = parseInt(hA.slice(1 + 2 * i, 3 + 2 * i), 16), y = parseInt(hB.slice(1 + 2 * i, 3 + 2 * i), 16); return Math.round(x + (y - x) * t).toString(16).padStart(2, "0"); };
+    return "#" + ch(0) + ch(1) + ch(2);
+  }
+  function rgbTriplet(h) { return parseInt(h.slice(1, 3), 16) + "," + parseInt(h.slice(3, 5), 16) + "," + parseInt(h.slice(5, 7), 16); }
+  function applyPalette() {
+    if (!game) return;
+    const a = game.palFrom, b = game.palTo, p = game.pal, t = game.palT;
+    if (!a || !b || !p) return;
+    for (const k of PAL_KEYS) p[k] = mixHex(a[k], b[k], t);
+    C.bg = p.bg; C.terrain = p.terrain; C.terrainEdge = p.terrainEdge;
+    C.obstacle = p.obstacle; C.obstacleEdge = p.obstacleEdge;
+    C.accent = p.accent; C.accentSoft = p.accentSoft;
+    C.bgGlow = "rgba(" + rgbTriplet(p.glow) + ",0.12)";
+    C.grid = "rgba(" + rgbTriplet(p.grid) + ",0.10)";
+  }
+  function setPalette(pal) {                // snap instantly (init / new game)
+    game.pal = Object.assign({}, pal);
+    game.palFrom = Object.assign({}, pal); game.palTo = pal; game.palT = 1;
+    applyPalette();
+  }
+  function levelUp(n, down) {
+    if (!LEVELS[n]) return;
+    game.level = n;
+    game.palFrom = Object.assign({}, game.pal);   // current interpolated colours
+    game.palTo = LEVELS[n].palette;
+    game.palT = 0;
+    game.flashT = Math.max(game.flashT || 0, down ? 0.35 : 0.6);
+    if (down) showBanner(LEVELS[n].name, "DATA dropped — zone reverted", LEVELS[n].palette.accent, 1.8);
+    else showBanner(LEVELS[n].name, LEVELS[n].sub, LEVELS[n].palette.accent, 2.4);
+  }
+
   // ---- canvas / scaling ----------------------------------------------------
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -35,10 +85,24 @@
 
   // ---- sprites -------------------------------------------------------------
   function loadImg(src) { if (!src) return null; const i = new Image(); i.src = src; return i; }
+  function isLoadedImg(img) { return !!(img && img.complete && img.naturalWidth && img.naturalHeight); }
+  function firstLoadedImg(frames) { return frames.find(isLoadedImg) || null; }
+  function pickFrame(frames, fps) {
+    if (!frames.length) return null;
+    const rate = Number(fps) || 0;
+    if (rate > 0 && frames.length > 1) return frames[Math.floor(game.t * rate) % frames.length];
+    return frames[0];
+  }
   const imgPlayer = loadImg(SPRITES.player.src);
   const imgBoss = loadImg(SPRITES.boss.src);
+  // Optional player animation loop. Configure SPRITES.player.standard.frames[] in
+  // datadash.config.js to animate; with no frames it stays DORMANT and falls back
+  // to the single fly1.png sprite (the pre-Codex look). w/h remain the hitbox anchor.
+  const playerStandard = SPRITES.player.standard || SPRITES.player.run || {};
+  const configuredStandardFrames = Array.isArray(playerStandard.frames) ? playerStandard.frames.map(loadImg).filter(Boolean) : [];
+  const fallbackFlyFrames = imgPlayer ? [imgPlayer] : ["assets/seekdeep/fly1.png"].map(loadImg);
   // pixel-DeepSeek animation frames (flight + overdrive flight)
-  const flyFrames = ["assets/seekdeep/fly1.png"].map(loadImg);
+  const flyFrames = configuredStandardFrames.length ? configuredStandardFrames : fallbackFlyFrames;
   const odFrames  = ["assets/seekdeep/od1.png"].map(loadImg);
   const imgPower  = loadImg("assets/seekdeep/power.png");   // electric power-pose (transform)
   const imgPepe   = loadImg("assets/seekdeep/pepe.png");    // pepe coin art
@@ -56,6 +120,7 @@
     dist:  document.getElementById("hud-dist"),
     best:  document.getElementById("hud-best"),
     lives: document.getElementById("hud-lives"),
+    lifecells: document.getElementById("hud-lifecells"),
     timerWrap: document.getElementById("hud-timer"),
     timerVal:  document.getElementById("hud-timer-val"),
     timerFill: document.getElementById("hud-timer-fill"),
@@ -66,6 +131,10 @@
     ovTitle:   document.getElementById("ov-title"),
     ovSub:     document.getElementById("ov-sub"),
     ovBtn:     document.getElementById("ov-btn"),
+    continueOverlay: document.getElementById("continue-overlay"),
+    contYes:   document.getElementById("cont-yes"),
+    contNo:    document.getElementById("cont-no"),
+    contSub:   document.getElementById("cont-sub"),
     ovBest:    document.getElementById("ov-best"),
     ovControls:document.getElementById("ov-controls"),
     pause:     document.getElementById("pause"),
@@ -77,7 +146,7 @@
   };
 
   // ---- state ---------------------------------------------------------------
-  const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead" };
+  const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead", CONTINUE: "continue" };
   const SFX = function (k, o) { if (window.DDAudio) window.DDAudio.play(k, o); };
   let state = STATE.MENU;
   let best = +(localStorage.getItem("datadash.best") || 0);
@@ -97,13 +166,19 @@
       flashT: 0,               // full-screen flash intensity
       floaters: [],            // tiny "+kb" pickup texts
       lives: T.startLives,
+      lifeCells: 1,            // continue tokens (resume-at-death); start with 1, cap T.lifeCellCap
+      nextLifeCell: T.lifeCellEvery,
+      resumeT: 0,              // 5s slow-restart ramp after a continue
       invuln: 0,
       shield: false,           // SHIELD pickup state — absorbs the next hit
-      scroll: T.scrollStart,
+      scroll: levelSpeed(0),
+      level: 0, spd: levelSpeed(0),
+      pal: null, palFrom: null, palTo: null, palT: 1,
       // player
       px: 0, py: 0, vy: 0, vx: 0,
       // terrain
       cols: [],                // {ceil, floor, blocks:[{y,h}]}
+      colHistory: [],          // recently-passed columns (LIFO) for reverse-scroll replay
       genX: 0,                 // world-x of next column to generate
       baseCenter: 0.5, baseCenterTarget: 0.5, feat: { type: "open", amt: 0 },
       cTop: 0.18, cBot: 0.82,
@@ -114,6 +189,7 @@
       nextCheckpoint: T.checkpointEvery,
       nextBonus: 0,            // emergency packs (spawn while at 1 kernel)
       bossClock: 0,            // seconds of boss-free survival → triggers the next boss
+      bossPending: 0,          // boss arena-warmup countdown before the daemon spawns
       nextMystery: T.mysteryEvery * (0.6 + Math.random() * 0.8),
       nextPacket: T.packetEvery,
       nextBossPacket: 0,       // boss-fight ammo-relief packet strips (when DATA is low)
@@ -147,13 +223,17 @@
     };
     game.px = W * T.playerX;
     game.py = H * 0.5;
+    setPalette(LEVELS[0].palette);   // reset zone colours to L1 (a prior run may have lerped C to a later level)
+    buildTiles();                    // re-tint the circuit tiles to the L1 accent
     seedTerrain();
   }
 
   // ---- terrain generation : continuous safe corridor -----------------------
   function curScroll() {
-    const k = Math.min(1, game.bytes / T.scrollRampBytes);
-    return T.scrollStart + (T.scrollMax - T.scrollStart) * k;
+    // per-level base speed, eased on level-up (see update()); scrollFx multiplies on top
+    let s = game.spd || levelSpeed(game.level || 0);
+    if (game.resumeT > 0) s *= 0.25 + 0.75 * (1 - game.resumeT / 5);   // 5s slow restart after a continue
+    return s;
   }
 
   function pickFeature() {
@@ -161,27 +241,35 @@
     const openHalf = T.maxGapFrac / 2;
     const slopeFrac = T.wallSlopePx / H;
     const diff = Math.min(1, game.bytes / T.corridorRampBytes);
+    const sh = curShape();
+    const twMin = sh.towerMin != null ? sh.towerMin : T.towerMin;
+    const twMax = sh.towerMax != null ? sh.towerMax : T.towerMax;
+    const pAmt = sh.pinchAmt != null ? sh.pinchAmt : T.pinchAmt;
+    const rFrac = sh.rampFrac != null ? sh.rampFrac : T.rampFrac;
+    const fMin = sh.featMin != null ? sh.featMin : T.featMin;
+    const fMax = sh.featMax != null ? sh.featMax : T.featMax;
+    const w = Object.assign({ open: 0.22, floorTower: 0.24, ceilTower: 0.24, pinch: 0.15, ramp: 0.15 }, sh.weights);   // merge so a partial config weights{} can't introduce NaN
     const r = Math.random();
-    let type, amt = 0, len;
-    if (r < 0.22) type = "open";
-    else if (r < 0.46) type = "floorTower";
-    else if (r < 0.70) type = "ceilTower";
-    else if (r < 0.85) type = "pinch";
+    let type, amt = 0, len, wAcc = w.open;
+    if (r < wAcc) type = "open";
+    else if (r < (wAcc += w.floorTower)) type = "floorTower";
+    else if (r < (wAcc += w.ceilTower)) type = "ceilTower";
+    else if (r < (wAcc += w.pinch)) type = "pinch";
     else type = "ramp";
 
     if (type === "floorTower" || type === "ceilTower") {
-      amt = (T.towerMin + Math.random() * (T.towerMax - T.towerMin)) * (1 + diff * 0.15);
+      amt = (twMin + Math.random() * (twMax - twMin)) * (1 + diff * 0.15);
     } else if (type === "pinch") {
-      amt = T.pinchAmt * (0.7 + Math.random() * 0.4) * (1 + diff * 0.12);
+      amt = pAmt * (0.7 + Math.random() * 0.4) * (1 + diff * 0.12);
     }
     // cap amt so a tower always leaves the minimum channel
     amt = Math.min(amt, openHalf * 2 - T.minGapFrac - 0.02);
 
     if (amt > 0) {
       const rampCols = Math.max(3, Math.ceil(amt / slopeFrac));
-      len = Math.round(rampCols / T.rampFrac);
+      len = Math.round(rampCols / rFrac);
     } else {
-      len = T.featMin + (Math.random() * (T.featMax - T.featMin) | 0);
+      len = fMin + (Math.random() * (fMax - fMin) | 0);
     }
     // open/ramp stretches meander the base channel
     if (type === "open" || type === "ramp") {
@@ -192,13 +280,13 @@
       if (c < lo || c > hi) c = game.baseCenter - dir * step;
       game.baseCenterTarget = Math.max(lo, Math.min(hi, c));
     }
-    game.feat = { type, amt };
+    game.feat = { type, amt, rampFrac: rFrac };
     game.featLen = Math.max(6, len);
   }
 
   function makeColumn() {
     // straight wide hallway during a boss fight (either daemon) OR a random event
-    const inBoss = (game.boss && game.boss.phase !== "crash") || (game.boss2 && game.boss2.phase !== "crash");
+    const inBoss = game.bossPending > 0 || (game.boss && game.boss.phase !== "crash") || (game.boss2 && game.boss2.phase !== "crash");
     if (inBoss || game.event) {
       const gapFrac = game.event ? T.eventGap : T.bossArenaGap;
       const h = H * gapFrac / 2;
@@ -209,6 +297,7 @@
     const em = T.edgeMargin, mg = T.minGapFrac, openHalf = T.maxGapFrac / 2;
     const slopeFrac = T.wallSlopePx / H;
     const fast = game.scrollFx && game.scrollFx.kind === "fast";
+    const sh = curShape();
 
     // while a chip obstacle occupies the channel, hold the walls flat through it
     if (game.holdCols > 0) {
@@ -224,7 +313,10 @@
 
     // trapezoid envelope → ziggurat (ramp up, flat top, ramp down)
     const p = game.featLen > 0 ? game.featCol / game.featLen : 0;
-    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / T.rampFrac));
+    // Use the feature's rampFrac latched at pick time so the env trapezoid stays
+    // matched to the featLen it was sized for, even if a level-up lands mid-feature.
+    const rf = (game.feat && game.feat.rampFrac != null) ? game.feat.rampFrac : (sh.rampFrac != null ? sh.rampFrac : T.rampFrac);
+    const env = Math.max(0, Math.min(1, Math.min(p, 1 - p) / rf));
     const amt = game.feat.amt * (fast ? 0.6 : 1);
 
     let cTop = game.baseCenter - openHalf;
@@ -239,7 +331,7 @@
     cTop = Math.max(em, Math.min(1 - em - mg, cTop));
     cBot = Math.max(cTop + mg, Math.min(1 - em, cBot));
     // snap walls to a vertical grid → blocky chip-tower silhouette (flat tops, vertical sides)
-    const st = T.wallStepFrac;
+    const st = sh.wallStepFrac != null ? sh.wallStepFrac : T.wallStepFrac;
     if (st > 0) {
       let qT = Math.round(cTop / st) * st;
       let qB = Math.round(cBot / st) * st;
@@ -266,12 +358,12 @@
     let blocks = [];
     if (!fast) {
       game.obsCooldown = (game.obsCooldown || 0) - 1;
-      if (game.obsCooldown <= 0 && Math.random() < T.obsChance) {
+      if (game.obsCooldown <= 0 && Math.random() < (sh.obsChance != null ? sh.obsChance : T.obsChance)) {
         game.obsCooldown = T.obsEveryMin + (Math.random() * (T.obsEveryMax - T.obsEveryMin) | 0);
         const span = T.obsSpanMin + (Math.random() * (T.obsSpanMax - T.obsSpanMin + 1) | 0);
         const ceilRoom = (game.laneY - lm) - cTop;   // space above the lane
         const floorRoom = cBot - (game.laneY + lm);  // space below the lane
-        const doDouble = Math.random() < (T.obsDoubleChance || 0) && ceilRoom > T.obsMinHeight && floorRoom > T.obsMinHeight;
+        const doDouble = Math.random() < ((sh.obsDoubleChance != null ? sh.obsDoubleChance : T.obsDoubleChance) || 0) && ceilRoom > T.obsMinHeight && floorRoom > T.obsMinHeight;
         const OV = 12; // bury the base into the wall so chips are always connected
         if (doDouble) {
           const ht = Math.min(ceilRoom, T.obsMinHeight + Math.random() * 0.12) * H;
@@ -322,7 +414,8 @@
       // generator is still ahead of the rewound edge and the corridor jumps
       // ("restored-from-reverse" wall).
       if (game.reversing) { resyncGenToRightEdge(); game.reversing = false; }
-      game.cols.shift();
+      const _off = game.cols.shift();
+      if (_off) { game.colHistory.push(_off); if (game.colHistory.length > 420) game.colHistory.shift(); }   // record passed terrain for reverse replay
       game.cols.push(makeColumn());
     }
     // reverse scroll: as we move backwards, EXTEND the current opening to the
@@ -336,8 +429,14 @@
       scrollAcc += T.colW;
       game.reversing = true;
       game.cols.pop();
-      const edge = game.cols[0];
-      game.cols.unshift(edge ? { ceil: edge.ceil, floor: edge.floor, blocks: [] } : makeColumn());
+      // REPLAY the actual terrain the player flew through (passability + continuity
+      // guaranteed — it was already navigated forward), newest-first so original
+      // adjacency + towers are restored. Falls back to cloning the left edge only
+      // when history runs dry (rewound further than recorded). revertGrace still
+      // covers the brief window so a replayed tower can't unfairly kill mid-rewind.
+      const replay = game.colHistory.pop();
+      if (replay) { game.cols.unshift(replay); }
+      else { const edge = game.cols[0]; game.cols.unshift(edge ? { ceil: edge.ceil, floor: edge.floor, blocks: [] } : makeColumn()); }
     }
   }
 
@@ -385,6 +484,7 @@
   // keyboard — movement
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
+    if (state === STATE.CONTINUE) return;   // CONTINUE? scene is click-only — keys never decide it
     if (e.code === "KeyP") { if (!e.repeat) togglePause(); return; }
     if (e.code === "KeyM") { if (!e.repeat && window.DDAudio) { window.DDAudio.toggleMute(); refreshMuteLabels(); } return; }
     const d = keyDir(e.code);
@@ -419,6 +519,7 @@
     try { if (document.activeElement && document.activeElement !== canvas && document.activeElement.blur) document.activeElement.blur(); } catch (err) {}
     if (canvas.focus) try { canvas.focus(); } catch (err) {}
     updateAim(e);
+    if (state === STATE.CONTINUE) return;   // CONTINUE? scene is decided ONLY by its on-screen buttons
     if (state === STATE.MENU) { start(); return; }
     if (state === STATE.DEAD) { restart(); return; }
     if (e.pointerType === "touch") return;   // in-play: touch fires via the on-screen buttons
@@ -436,6 +537,8 @@
     if (state === STATE.MENU) start();
     else restart();
   });
+  if (hud.contYes) hud.contYes.addEventListener("click", doContinue);
+  if (hud.contNo) hud.contNo.addEventListener("click", doAbandon);
 
   // ---- controls menu (informational reference) ------------------------------
   function openControls() { hud.controls.classList.remove("hidden"); }
@@ -454,6 +557,7 @@
     hud.controls.classList.add("hidden");
     if (hud.scoreEntry) hud.scoreEntry.classList.add("hidden");
     hud.overlay.classList.add("hidden");
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
     hud.timerWrap.classList.add("hidden");
   }
   function restart() { start(); }
@@ -461,6 +565,7 @@
   // ---- helpers -------------------------------------------------------------
   function formatBytes(b) {
     b = Math.floor(b);
+    if (b >= 1e12) return (b / 1e12).toFixed(2) + " T" + TEXT.unit;
     if (b >= 1e9) return (b / 1e9).toFixed(2) + " G" + TEXT.unit;
     if (b >= 1e6) return (b / 1e6).toFixed(2) + " M" + TEXT.unit;
     if (b >= 1e3) return (b / 1e3).toFixed(1) + " K" + TEXT.unit;
@@ -497,6 +602,56 @@
     return { x: game.px - HBX / 2, y: game.py - HBY / 2, w: HBX, h: HBY };
   }
 
+  // On a fatal hit with a banked life cell, raise the click-only "CONTINUE?" scene —
+  // the player must click Continue/Abandon; keys + canvas taps never decide it. No
+  // cell → straight to game-over.
+  function deathOrContinuePrompt() {
+    if (game.lifeCells > 0) enterContinuePrompt();
+    else die();
+  }
+  function enterContinuePrompt() {
+    state = STATE.CONTINUE;
+    clearKeys();
+    game.shooting = false; game.charging = false; game.chargeT = 0;
+    if (window.DDAudio) {
+      window.DDAudio.stopLoop("malwareLoop"); window.DDAudio.stopLoop("chargeLoop");
+      if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }
+    }
+    spawnParticles(game.px, game.py, C.danger, 30, 380);
+    game.shake = Math.max(game.shake || 0, 18);
+    if (hud.contSub) hud.contSub.textContent = "⚛ × " + game.lifeCells + " remaining";
+    if (hud.contYes) hud.contYes.textContent = "CONTINUE  (⚛×" + game.lifeCells + ")";
+    if (hud.continueOverlay) hud.continueOverlay.classList.remove("hidden");
+  }
+  // CONTINUE button: consume one cell + RESUME the run exactly where the player died
+  // (same position/terrain/DATA/zone) with a 5s eased slow-restart + immunity.
+  function doContinue() {
+    if (state !== STATE.CONTINUE || !game) return;
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
+    state = STATE.PLAY;
+    game.lifeCells = Math.max(0, game.lifeCells - 1);
+    game.lives = T.startLives;
+    game.invuln = Math.max(game.invuln, 5);    // immune through the slow restart window
+    game.resumeT = 5;                          // 5s eased speed ramp (see curScroll)
+    game.scrollFx = null;                      // clear any active mystery so the resume is clean
+    game.shooting = false; game.charging = false; game.chargeT = 0;
+    clearKeys();
+    // clear immediate threats around the player so the continue isn't instant death
+    game.bots = game.bots.filter((b) => Math.hypot(b.x - game.px, b.y - game.py) > 220);
+    game.bullets = []; game.bars = []; game.bombs = [];
+    game.flashT = Math.max(game.flashT, 0.8);
+    game.shake = 16;
+    spawnParticles(game.px, game.py, "#9fe6ff", 50, 480);
+    if (window.DDAudio) window.DDAudio.play("powerUp");
+    showBanner("⚛ CONTINUE", "resuming — ⚛×" + game.lifeCells + " left", "#9fe6ff", 2.0);
+  }
+  // ABANDON button: end the run (game over).
+  function doAbandon() {
+    if (state !== STATE.CONTINUE) return;
+    if (hud.continueOverlay) hud.continueOverlay.classList.add("hidden");
+    die();
+  }
+
   function loseLife(reason) {
     if (game.invuln > 0) return;
     if (game.invincible > 0) return;   // Pepe jackpot: untouchable
@@ -530,7 +685,7 @@
       game.lives = Math.max(0, game.lives - 2);
       spawnParticles(game.px, game.py, "#ffffff", 34, 420);
       SFX("powerDown");
-      if (game.lives <= 0) { die(); return; }
+      if (game.lives <= 0) { deathOrContinuePrompt(); return; }
       showBanner("POWER DOWN", TEXT.livesLabel + " ×" + game.lives, C.warn, 1.3);
       return;
     }
@@ -539,7 +694,7 @@
     SFX("damage");
     spawnParticles(game.px, game.py, C.danger, 26, 360);
     if (game.lives <= 0) {
-      die();
+      deathOrContinuePrompt();
     } else {
       showBanner(TEXT.hit, TEXT.livesLabel + " ×" + game.lives, C.danger, 1.3);
       game.invuln = T.invulnTime;
@@ -628,6 +783,9 @@
     game.shooting = false;
     if (window.DDAudio) { window.DDAudio.stopLoop("malwareLoop"); if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; }window.DDAudio.stopLoop("chargeLoop"); window.DDAudio.play("gameOver"); window.DDAudio.music("menuMusic"); }
     spawnParticles(game.px, game.py, C.danger, 40, 460);
+    spawnParticles(game.px, game.py, "#ffffff", 30, 720);   // bright outward death blast
+    game.flashT = Math.max(game.flashT || 0, 0.9);
+    game.shake = Math.max(game.shake || 0, 26);
     const beat = game.bytes > best;
     if (beat) { best = Math.floor(game.bytes); localStorage.setItem("datadash.best", best); }
     recordScore(game.bytes);
@@ -678,6 +836,15 @@
       return;   // everything else frozen
     }
 
+    // level progression: NON-MONOTONIC — climb on rise, revert on DATA-loss drop
+    // (hysteresis: only drop once clearly below the current tier's entry threshold,
+    // so hovering a boundary doesn't thrash the palette/banner/tiles).
+    const lvNow = levelIdx(game.bytes);
+    if (lvNow > game.level) levelUp(lvNow);
+    else if (lvNow < game.level && game.bytes < (LEVELS[game.level].threshold || 0) * 0.92) levelUp(lvNow, true);
+    game.spd += (levelSpeed(game.level) - game.spd) * Math.min(1, dt * 1.6);
+    if (game.palT < 1) { game.palT = Math.min(1, game.palT + dt / LEVEL_FADE); applyPalette(); if (game.palT >= 1) applyZoneTiles(game.level); }
+
     // scroll speed, warped by an active mystery effect
     let base = curScroll();
     if (game.scrollFx) {
@@ -700,7 +867,7 @@
     if (game.flashT > 0) game.flashT = Math.max(0, game.flashT - dt * 2.5);
 
     advanceTerrain(dx);
-    if (!game.boss && !game.boss2 && !game.event) game.bossClock += dt;  // count boss-free survival time
+    if (!game.boss && !game.boss2 && !game.event && !game.bossPending) game.bossClock += dt;  // count boss-free survival time
 
     // player physics — DRIFT (no gravity): thrusters add momentum, damping bleeds it off
     let ay = 0;
@@ -741,6 +908,7 @@
     }
 
     if (game.invuln > 0) game.invuln -= dt;
+    if (game.resumeT > 0) game.resumeT = Math.max(0, game.resumeT - dt);
     if (game.revertGrace > 0) game.revertGrace -= dt;
     if (game.shake > 0) game.shake = Math.max(0, game.shake - dt * 60);
 
@@ -817,12 +985,14 @@
           spawnParticles(pb.x, pb.y, pb.big ? "#ffffff" : C.warn, pb.big ? 18 : 8, 260);
         }
       }
-      // CHARGE shots SLAM the environment — screen shake + shatter on impact
-      if (pb.big && !pb.dead) {
+      // CHARGE shots SLAM the environment; STANDARD shots chip towers (T.obsHitsToBreak hits to break)
+      if (!pb.dead) {
         const ci = colIndexAt(pb.x);
         const col = game.cols[ci];
         if (col) {
-          let hit = pb.y < col.ceil || pb.y > (H - col.floor);
+          // walls: only CHARGE shots react — standard shots fly over terrain to reach bots
+          let hit = pb.big && (pb.y < col.ceil || pb.y > (H - col.floor));
+          let smashedNow = false;
           if (!hit) {
             const bx2 = ci * T.colW - scrollAcc;
             for (const bl of col.blocks) {
@@ -832,16 +1002,25 @@
                 const top = bl.from === "top";
                 const bTop = top ? col.ceil : (H - col.floor) - bl.h;
                 const bBot = top ? col.ceil + bl.h : (H - col.floor);
-                if (pb.y >= bTop && pb.y <= bBot) { hit = true; bl.smashed = true; break; }
+                if (pb.y >= bTop && pb.y <= bBot) {
+                  hit = true;
+                  if (pb.big) { bl.smashed = true; smashedNow = true; }
+                  else { bl.hits = (bl.hits || 0) + 1; if (bl.hits >= (T.obsHitsToBreak || 4)) { bl.smashed = true; smashedNow = true; } }
+                  break;
+                }
               }
             }
           }
           if (hit) {
             pb.dead = true;
-            game.shake = Math.max(game.shake, 16);
-            SFX("firewallSmash");
-            spawnParticles(pb.x, pb.y, "#ffffff", 24, 400);
-            spawnParticles(pb.x, pb.y, C.accent, 12, 280);
+            if (pb.big || smashedNow) {
+              game.shake = Math.max(game.shake, pb.big ? 16 : 10);
+              SFX("firewallSmash");
+              spawnParticles(pb.x, pb.y, "#ffffff", pb.big ? 24 : 14, pb.big ? 400 : 300);
+              spawnParticles(pb.x, pb.y, C.accent, pb.big ? 12 : 6, 280);
+            } else {
+              spawnParticles(pb.x, pb.y, C.accentSoft, 5, 200);   // standard chip — light puff
+            }
           }
         }
       }
@@ -863,11 +1042,11 @@
 
   function updateProgression() {
     const S = game.streamed;
-    const busy = game.boss || game.boss2 || game.event;   // no normal spawns during a boss/event
+    const busy = game.boss || game.boss2 || game.event || game.bossPending;   // no normal spawns during a boss/event/warmup
     // RANDOM EVENT trigger — fires at unpredictable intervals, never while already busy
     if (!busy && game.t >= game.nextEventT) { triggerRandomEvent(); return; }
     // checkpoint backups (+1) — cadence scales with kernels held
-    if (!busy && S >= game.nextCheckpoint && pickupLaneClear()) {
+    if (!busy && S >= game.nextCheckpoint && game.lives < (T.kernelCap || 10) && pickupLaneClear()) {
       game.nextCheckpoint = S + checkpointInterval();
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 : H / 2;
@@ -883,8 +1062,14 @@
     }
     // boss trigger — time-based (every N seconds of boss-free survival)
     if (!busy && game.bossClock >= T.bossEverySeconds) {
+      // SPAWN-AFTER-ENV: start the wide arena scrolling in (bossPending widens makeColumn)
+      // + warn now; the daemon itself spawns only once the arena has reached the player,
+      // so it never arrives before its environment exists.
       game.bossClock = 0;
-      spawnBoss();
+      game.bossPending = (T.bossWarmup || 1.4);
+      showBanner(TEXT.bossIncoming, "arena forming…", C.danger, 1.6);
+      SFX("bossIncoming");
+      if (window.DDAudio) window.DDAudio.music("bossMusic");
     }
     // mystery (?) pickup — random scroll warp (suppressed while one is already active)
     if (!busy && !game.scrollFx && S >= game.nextMystery && pickupLaneClear() &&
@@ -927,6 +1112,15 @@
       const col = colAtSpawn();
       const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
       game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "upgrade" });
+    }
+    // LIFE CELL — rare atomic power-cell granting a continue; NO magnet (fly into it),
+    // 2× rarer than the upgrade bolt; never spawns at the cap.
+    if (!busy && game.lifeCells < (T.lifeCellCap || 9) && S >= game.nextLifeCell &&
+        !game.pickups.some((p) => p.kind === "lifecell" && !p.grabbed)) {
+      game.nextLifeCell = S + (T.lifeCellEvery || 2000000);
+      const col = colAtSpawn();
+      const cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 80 : H / 2;
+      game.pickups.push({ x: W + 60, y: cy, grabbed: false, bob: Math.random() * 6, kind: "lifecell" });
     }
     // PEPE COIN — jackpot: spawns on the timer every pepeEverySec(+random) seconds,
     // UNCONDITIONALLY (per Nathan). If the player can't grab it (busy / invincible /
@@ -973,7 +1167,11 @@
     const spacing = kind === "database" ? T.colW * T.dbSpacingCols
                   : kind === "ddos" ? T.colW * T.ddosSpacingCols
                   : T.colW * T.pepeGridCols;
-    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: 1 + Math.random() * (T.ddosSlots - 3), gapV: (Math.random() - 0.5) * 0.4 };
+    // SAFE ENTRY: anchor the DDoS gap to the player's current lane so the first rows
+    // arrive with their opening where the player already is (gapV starts flat, then drifts).
+    const evTop = (0.5 - T.eventGap / 2) * H, evSpan = T.eventGap * H;
+    const pSlot = Math.max(1, Math.min(T.ddosSlots - 3, Math.round(((game.py - evTop) / evSpan) * T.ddosSlots - 0.5)));
+    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: pSlot, gapV: 0 };
     const meta = {
       database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
       ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
@@ -994,6 +1192,12 @@
   }
 
   function spawnEventColumn(ev) {
+    // SAFE ENTRY/EXIT: don't spawn event content until the wide hallway has reached the
+    // player (run-in ≈ the player's screen position), and stop one screen-width before the
+    // end (run-out) so trailing content scrolls clear before normal terrain + towers resume.
+    // Kills the "dead unavoidable damage at a DDoS boundary" cases.
+    const runIn = W * T.playerX, runOut = W + 2 * T.colW;
+    if (ev.dist < runIn || ev.dist > ev.length - runOut) return;
     const top = (0.5 - T.eventGap / 2) * H, bot = (0.5 + T.eventGap / 2) * H, span = bot - top;
     const x = W + 40;
     if (ev.kind === "database") {
@@ -1051,6 +1255,7 @@
     const kind = roll < 0.4 ? "fast" : (roll < 0.72 ? "slow" : "reverse");
     let dur = T.mysteryDurMin + Math.random() * (T.mysteryDurMax - T.mysteryDurMin);
     if (kind === "slow") dur = Math.min(dur, T.mysterySlowDurMax);
+    if (kind === "reverse") dur *= 0.5;   // reverse was too long — halve it
     game.scrollFx = { kind, t: dur };
     const label = kind === "fast" ? TEXT.mysteryFast : (kind === "slow" ? TEXT.mysterySlow : TEXT.mysteryReverse);
     spawnParticles(game.px, game.py, C.mystery, 28, 320);
@@ -1065,7 +1270,7 @@
       p.x -= game.scroll * dt;
       // magnet: gravitate toward the player when nearby — EXCEPT the upgrade bolt
       // and the DATA LOSS skull (you want to be able to DODGE that one).
-      if (p.kind !== "upgrade" && p.kind !== "dataloss") {
+      if (p.kind !== "upgrade" && p.kind !== "dataloss" && p.kind !== "lifecell") {
         const dxp = game.px - p.x, dyp = game.py - p.y;
         const d = Math.hypot(dxp, dyp);
         if (d < T.pickupPull && d > 0.001) {
@@ -1074,7 +1279,7 @@
           p.y += (dyp / d) * f;
         }
       }
-      const psz = p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize)));
+      const psz = p.kind === "lifecell" ? (T.lifeCellSize || 50) : (p.kind === "upgrade" ? T.upgradeSize : (p.kind === "pepe" ? T.pepeSize : (p.kind === "shield" ? T.shieldSize : ((p.kind === "dataloss" || p.kind === "recovery") ? T.pickupSize * 1.3 : T.pickupSize))));
       // never let a collectible sit inside/touching a tower — clamp into the clear span
       // sampled at EVERY column the sprite covers (a thin tower can hide between sparse
       // samples), with margin for the ±5px draw bob so even the bobbing sprite never
@@ -1094,7 +1299,7 @@
       if (rectsHit(hb.x, hb.y, HBX, HBY, p.x - psz / 2, p.y - psz / 2, psz, psz)) {
         p.grabbed = true;
         if (p.kind === "bonus") {
-          game.lives += T.bonusValue;
+          game.lives = Math.min(game.lives + T.bonusValue, T.kernelCap || 10);
           spawnParticles(p.x, p.y, C.ok, 32, 360);
           SFX("kernel");
           showBanner(TEXT.bonus, TEXT.bonusSub.replace("{v}", T.bonusValue).replace("{n}", game.lives), C.ok);
@@ -1130,7 +1335,7 @@
           game.freeAmmo = true;
           game.odHits = 0;                       // absorbs 2 hits before power-down
           if (!p.eventGift) {
-            game.lives += 2;                     // +2 kernels buffer (rare standalone bolt only)
+            game.lives = Math.min(game.lives + 2, T.kernelCap || 10);   // +2 kernels (rare standalone bolt only), capped
             game.transform = T.transformTime;    // world-freeze transform sequence
             showBanner("⚡ OVER CLOCKED!", "+2 kernels · 3× fire · smash through", C.accent);
           } else if (!wasOD) {
@@ -1165,8 +1370,14 @@
           spawnParticles(p.x, p.y, C.accentSoft, 34, 380);
           SFX("shieldHeld");
           showBanner("🛡 SHIELD ONLINE", "absorbs the next hit", C.accentSoft);
+        } else if (p.kind === "lifecell") {
+          game.lifeCells = Math.min(game.lifeCells + 1, (T.lifeCellCap || 9));
+          game.flashT = Math.max(game.flashT, 0.5);
+          spawnParticles(p.x, p.y, "#9fe6ff", 40, 420);
+          SFX("powerUp");
+          showBanner("⚛ LIFE CELL", "continue banked · ⚛×" + game.lifeCells, "#9fe6ff");
         } else {
-          game.lives++;
+          game.lives = Math.min(game.lives + 1, T.kernelCap || 10);
           spawnParticles(p.x, p.y, C.ok, 22, 280);
           SFX("kernel");
           showBanner(TEXT.checkpoint, TEXT.checkpointSub.replace("{n}", game.lives), C.ok);
@@ -1179,8 +1390,11 @@
   // MINI-MALWARE spawns on a strict independent clock: every botSpawnSeconds it
   // releases botBatch bots, but never more than botMax on screen. While at the cap
   // the clock simply parks at zero (no back-queue) and only rearms once there's room.
+  const BOT_SHAPES = ["star6", "star5", "star4", "hex", "tri", "diamond"];
+  const BOT_TINTS = ["#ff5d73", "#c08cff", "#ffd166", "#ff7a3c", "#c83cff", "#ff3c8a", "#5d9bff"];
   function updateMalwareSpawn(dt) {
     if (game.event) return;   // the hallway events run their own content; no chasing malware
+    if (game.bytes < (T.botMinDataBytes || 1e6)) return;   // no chasing malware until DATA > 1MB
     game.botTimer -= dt;
     if (game.botTimer > 0) return;
     if (game.bots.length >= T.botMax) return;   // full screen — hold the clock until space frees
@@ -1188,18 +1402,26 @@
     const n = Math.min(T.botBatch, room);
     const S = game.streamed;
     for (let i = 0; i < n; i++) {
-      let cy;
-      if (game.boss) {
-        cy = H * (0.18 + Math.random() * 0.64);   // boss arena is open — drop them anywhere
-      } else {
-        const col = colAtSpawn();
-        cy = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H / 2;
-      }
-      game.bots.push({ x: W + 60 + i * 74, y: cy, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S });
+      // varied entry edge: right common, top/bottom medium, left rare (never pop in on top of the player)
+      const er = Math.random();
+      const edge = game.boss ? "right" : er < 0.50 ? "right" : er < 0.72 ? "top" : er < 0.94 ? "bottom" : "left";
+      let x, y;
+      if (edge === "right") {
+        if (game.boss) { x = W + 60 + i * 74; y = H * (0.18 + Math.random() * 0.64); }   // boss arena is open
+        else { const col = colAtSpawn(); x = W + 60 + i * 40; y = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H * 0.5; }
+      } else if (edge === "top") { x = W * (0.35 + Math.random() * 0.6); y = -60 - i * 30; }
+      else if (edge === "bottom") { x = W * (0.35 + Math.random() * 0.6); y = H + 60 + i * 30; }
+      else { x = -60 - i * 30; y = H * (0.45 + Math.random() * 0.10); }   // left: rare, mid-channel so it isn't born inside a wall
+      game.bots.push({
+        x, y, vy: 0, pulse: Math.random() * 6, hp: 2, dead: false, spawnStreamed: S, edge,
+        shape: BOT_SHAPES[Math.floor(Math.random() * BOT_SHAPES.length)],
+        tint: BOT_TINTS[Math.floor(Math.random() * BOT_TINTS.length)],
+        rotDir: Math.random() < 0.5 ? -1 : 1,
+      });
     }
     SFX("malwareSpawn");
     if (window.DDAudio) window.DDAudio.startLoop("malwareLoop");
-    game.botTimer = T.botSpawnSeconds;            // rearm the 30s clock only after a successful spawn
+    game.botTimer = T.botSpawnSeconds;            // rearm the clock only after a successful spawn
   }
 
   // SHIELD — its own independent entity. Memoryless random spawn: no timer, cycle,
@@ -1219,6 +1441,14 @@
     const hb = playerHitbox();
     for (const b of game.bots) {
       b.pulse += dt;
+      if (b.hitFlash > 0) b.hitFlash -= dt;
+      if (b.dying) {   // death animation: shrink/spin out, shed sparks, then remove
+        b.deathT = (b.deathT || 0) + dt;
+        b.x -= game.scroll * dt * 0.5;
+        if (Math.random() < 0.4) spawnParticles(b.x, b.y, b.tint || C.danger, 1, 160);
+        if (b.deathT > 0.35) b.dead = true;
+        continue;   // corpse: no chase, no hits taken, no damage dealt
+      }
       if (b.static) {
         b.x -= game.scroll * dt;   // DDoS maze bot: rides the world like terrain, never chases
         if (b.x < -80) { b.dead = true; continue; }
@@ -1232,13 +1462,13 @@
       }
       // player bullets damage bots
       for (const pb of game.playerBullets) {
-        if (b.dead) break;   // bot already destroyed this frame — stop, so later bullets don't "hit" the corpse (dupe particles/SFX)
+        if (b.dead || b.dying) break;   // already destroyed/dying this frame — don't re-hit the corpse
         if (pb.dead) continue;
-        if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; spawnParticles(pb.x, pb.y, C.warn, 10, 240); if (b.hp <= 0) { b.dead = true; SFX("malwareDie"); spawnParticles(b.x, b.y, C.danger, 30, 360); } }
+        if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; b.hitFlash = 0.12; spawnParticles(pb.x, pb.y, C.warn, 8, 240); if (b.hp <= 0) { b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 360); } }
       }
       // body contact costs a kernel
-      if (!b.dead && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < T.botSize / 2 + HBX / 2) {
-        b.dead = true; SFX("malwareDie"); spawnParticles(b.x, b.y, C.danger, 24, 320); loseLife("bot");
+      if (!b.dead && !b.dying && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < T.botSize / 2 + HBX / 2) {
+        b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 320); loseLife("bot");
       }
     }
     game.bots = game.bots.filter((b) => !b.dead);
@@ -1316,12 +1546,12 @@
   }
 
   function spawnBoss() {
+    // called after the bossPending arena warmup — the wide arena is already on-screen,
+    // so the daemon now glides into an established environment (banner/SFX/music fired at warmup start).
+    game.bossPending = 0;
     game.boss = makeBoss(W * 0.78, H / 2);
     game._bossesActive = true;
-    showBanner(TEXT.bossIncoming, "", C.danger);
     game.nextBossPacket = game.streamed + T.bossPacketEvery * 0.35;   // first relief strip soon after engage
-    SFX("bossIncoming");
-    if (window.DDAudio) window.DDAudio.music("bossMusic");
   }
 
   function spawnDoubleBoss() {
@@ -1347,6 +1577,12 @@
   }
 
   function updateBoss(dt) {
+    // arena warmup: count down, then spawn the daemon into its now-established arena
+    if (game.bossPending > 0 && !game.boss && !game.boss2) {
+      game.bossPending -= dt;
+      if (game.bossPending <= 0) spawnBoss();
+      return;
+    }
     if (game.boss) updateOneBoss(game.boss, dt, true);
     if (game.boss2) updateOneBoss(game.boss2, dt, false);
     if (game.boss && game.boss._dead) game.boss = null;
@@ -1384,6 +1620,10 @@
       b.x += (b.tx - b.x) * k;
       b.y += (b.ty - b.y) * k;
       b.y += Math.sin(b.pulse * 9) * 1.2;       // menace jitter
+      // keep the daemon fully on-screen during the fight (orbit/dart/jitter can push it off-frame)
+      const _m = SPRITES.boss.w * 0.55;
+      b.x = Math.max(_m, Math.min(W - _m, b.x));
+      b.y = Math.max(_m, Math.min(H - _m, b.y));
       // ambient energy embers shed during the fight
       if (Math.random() < 0.5) spawnParticles(b.x + (Math.random() - 0.5) * SPRITES.boss.w, b.y + (Math.random() - 0.5) * SPRITES.boss.w, b.arch ? b.arch.c2 : C.danger, 1, 120);
 
@@ -1560,6 +1800,7 @@
         hud.lives.appendChild(d);
       }
     }
+    if (hud.lifecells) hud.lifecells.textContent = "⚛×" + (game.lifeCells || 0);
     const bossT = (game.boss && game.boss.phase === "fight") ? game.boss : ((game.boss2 && game.boss2.phase === "fight") ? game.boss2 : null);
     if (bossT) {
       const f = Math.max(0, bossT.timer / T.bossDuration);
@@ -1570,7 +1811,7 @@
     if (hud.fx) {
       if (game.scrollFx) {
         const fx = game.scrollFx;
-        const label = fx.kind === "fast" ? "OVERCLOCK ⏩" : (fx.kind === "slow" ? "THROTTLED ⏸" : "REVERTING ⏪");
+        const label = fx.kind === "fast" ? TEXT.mysteryFast : (fx.kind === "slow" ? TEXT.mysterySlow : TEXT.mysteryReverse);
         const fxCol = fx.kind === "reverse" ? C.danger : C.ok;
         hud.fx.textContent = label + "  " + Math.ceil(fx.t) + "s";
         hud.fx.style.color = fxCol;
@@ -1583,8 +1824,37 @@
   }
 
   // ---- render --------------------------------------------------------------
+  // ---- override states: ONE global ctx.filter recolours the entire world render
+  // pass (terrain, tiles, sprite, enemies, particles) for the active mystery/buff
+  // state. Set in render() right after the shake transform; the surrounding
+  // ctx.restore() resets it so the DOM HUD + canvas FX overlays stay true-colour.
+  let _lastCanvasFilter = "";
+  function worldFilter() {
+    if (!game) return "none";
+    const fx = game.scrollFx;
+    if (fx && fx.kind === "reverse") return "invert(1)";                                              // reverse: fully inverted incl. sprite
+    if (fx && fx.kind === "fast") return "saturate(2.6) hue-rotate(" + Math.floor((game.t * 220) % 360) + "deg)"; // performance: violent rainbow spin
+    if (fx && fx.kind === "slow") return "grayscale(1) contrast(0.95)";                               // throttle: black & white
+    if (game.invincible > 0) return "brightness(2.1) saturate(0.12)";                                 // pepe: all white / divinity
+    if (game.freeAmmo) return "sepia(1) saturate(4.5) hue-rotate(-28deg) brightness(1.05)";           // overdrive: yellow-orange
+    return "none";
+  }
+  // overdrive "pumped" pulsing solid-white overlay (drawn after the world pass, true-colour)
+  function drawPumpedOverlay() {
+    const pulse = 0.10 + 0.13 * Math.abs(Math.sin(game.t * 9));
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-40, -40, W + 80, H + 80);
+    ctx.restore();
+  }
+
   function render() {
     ctx.clearRect(0, 0, W, H);
+    // override states recolour the whole canvas via a GPU-composited CSS filter on the
+    // ELEMENT (not ctx.filter — a per-draw-op CPU killer that tanked FPS). HUD is separate DOM.
+    const _wf = worldFilter();
+    if (_wf !== _lastCanvasFilter) { canvas.style.filter = _wf === "none" ? "" : _wf; _lastCanvasFilter = _wf; }
     let sx = 0, sy = 0;
     if (game && game.shake > 0) {
       sx = (Math.random() - 0.5) * game.shake;
@@ -1611,6 +1881,7 @@
       drawFloaters();
     }
     ctx.restore();
+    if (game && game.freeAmmo) drawPumpedOverlay();
     if (game && game.scrollFx) drawFxVignette();
     if (game && game.invincible > 0) drawInvincibleOverlay();
     if (game && game.transform > 0) drawTransformLightning();
@@ -1711,7 +1982,10 @@
 
   function drawStreaks() {
     const spd = game ? game.scroll : 0;
-    const norm = Math.min(1, (spd - T.scrollStart) / Math.max(1, T.scrollMax - T.scrollStart));
+    // Normalize against the actual per-level speed span (L1..TB) so streaks keep
+    // intensifying through GB/TB and never go negative at the slower L1 base.
+    const sLo = levelSpeed(0), sHi = levelSpeed(LEVELS.length - 1);
+    const norm = Math.max(0, Math.min(1, (spd - sLo) / Math.max(1, sHi - sLo)));
     const streakCol = powerupColor() || "#6df0ff";   // tint the streamers with the active power-up
     ctx.lineCap = "round";
     for (const s of STREAKS) {
@@ -1774,12 +2048,24 @@
     c.shadowBlur = 0;
     return cv;
   }
+  // Pre-render the circuit tiles for EVERY zone once (init/resize), then SWAP on
+  // level-up via applyZoneTiles(). Rebuilding 2 big offscreen canvases per transition
+  // was the "lag when the environment changes" hitch.
+  let zoneTiles = [];
   function buildTiles() {
     tileW = 1500;
-    // background: faint, small, sparse — recedes
-    pcbTile = makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: "rgba(45,212,255,0.08)", pad: "rgba(109,240,255,0.1)", chip: "rgba(120,222,255,0.09)" });
-    // foreground walls: BOLD, glowing white-blue — reads as a lit circuit board
-    wallTile = makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: "rgba(150,235,255,0.62)", pad: "rgba(235,252,255,0.92)", chip: "rgba(190,242,255,0.6)" });
+    zoneTiles = LEVELS.map((lv) => {
+      const acc = lv.palette.accent, accS = lv.palette.accentSoft;
+      return {
+        pcb: makeCircuitCanvas(tileW, H, { cell: 60, period: 24, bold: 1, line: hexA(acc, 0.08), pad: hexA(accS, 0.1), chip: hexA(acc, 0.09) }),
+        wall: makeCircuitCanvas(tileW, H, { cell: 96, period: 16, bold: 2.4, glow: 6, line: hexA(accS, 0.62), pad: hexA(accS, 0.95), chip: hexA(accS, 0.6) }),
+      };
+    });
+    applyZoneTiles(game ? game.level : 0);
+  }
+  function applyZoneTiles(n) {
+    const z = zoneTiles[Math.max(0, Math.min(zoneTiles.length - 1, n || 0))];
+    if (z) { pcbTile = z.pcb; wallTile = z.wall; }
   }
 
   function blitTile(tile, parallax) {
@@ -2023,8 +2309,8 @@
         const by = top ? col.ceil - OV : (H - col.floor) - blk.h;
         const bh = blk.h + OV;
         const bg = ctx.createLinearGradient(0, by, 0, by + bh);
-        bg.addColorStop(0, top ? "#0b2b42" : "#06182e");
-        bg.addColorStop(1, top ? "#06182e" : "#0b2b42");
+        bg.addColorStop(0, top ? C.obstacle : C.terrain);
+        bg.addColorStop(1, top ? C.terrain : C.obstacle);
         ctx.fillStyle = bg;
         ctx.fillRect(x, by, bw, bh);
         ctx.strokeStyle = C.obstacleEdge; ctx.lineWidth = 2.5;
@@ -2037,15 +2323,29 @@
         // contact pads near the exposed tip + circuit detail
         const tipY = top ? by + bh : by;
         const pads = Math.max(2, Math.round(bw / 14));
-        ctx.fillStyle = "rgba(109,240,255,0.7)";
+        ctx.fillStyle = hexA(C.accentSoft, 0.7);
         for (let p = 0; p < pads; p++) {
           const px = x + (p + 0.5) * (bw / pads) - 2;
           ctx.fillRect(px, top ? tipY - 8 : tipY + 4, 4, 4);
         }
-        ctx.strokeStyle = "rgba(109,240,255,0.3)"; ctx.lineWidth = 1;
+        ctx.strokeStyle = hexA(C.accentSoft, 0.3); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x + bw / 2, by + 4); ctx.lineTo(x + bw / 2, by + bh - 4); ctx.stroke();
         // little IC tick rungs
         for (let yy = by + 10; yy < by + bh - 6; yy += 12) { ctx.beginPath(); ctx.moveTo(x + 4, yy); ctx.lineTo(x + bw - 4, yy); ctx.stroke(); }
+        // damage cue: red wash + cracks as standard shots chip the tower toward breaking
+        if (blk.hits) {
+          const dmg = Math.min(1, blk.hits / (T.obsHitsToBreak || 4));
+          ctx.save();
+          ctx.globalAlpha = 0.18 + 0.32 * dmg;
+          ctx.fillStyle = C.danger; ctx.fillRect(x, by, bw, bh);
+          ctx.globalAlpha = 0.7; ctx.strokeStyle = "#ffd9d9"; ctx.lineWidth = 1.3;
+          const cracks = Math.min(4, blk.hits);
+          for (let c = 0; c < cracks; c++) {
+            const cx = x + ((c + 0.5) / cracks) * bw;
+            ctx.beginPath(); ctx.moveTo(cx, by + 2); ctx.lineTo(cx + (c % 2 ? 5 : -5), by + bh * 0.45); ctx.lineTo(cx + (c % 2 ? -3 : 4), by + bh - 2); ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
     }
   }
@@ -2089,18 +2389,31 @@
   function drawBots() {
     for (const b of game.bots) {
       const r = T.botSize / 2, p = 0.5 + 0.5 * Math.sin(b.pulse * 8);
-      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.pulse * 2);
-      // glitchy malware mite — spiky body, red/violet, angry eye
-      ctx.shadowColor = C.danger; ctx.shadowBlur = 16;
-      starPath(6, r * (1 + 0.12 * p), r * 0.5, b.pulse * 3);
-      ctx.fillStyle = "rgba(30,8,22,0.95)"; ctx.fill();
-      ctx.strokeStyle = p > 0.5 ? C.danger : C.mystery; ctx.lineWidth = 2; ctx.stroke();
-      ctx.restore();
-      // eye
-      ctx.shadowBlur = 12; ctx.shadowColor = C.danger;
-      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.26, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = C.danger; ctx.beginPath(); ctx.arc(b.x, b.y, r * 0.13, 0, Math.PI * 2); ctx.fill();
+      const tint = b.tint || C.danger;
+      const flash = b.hitFlash > 0;
+      const dsc = b.dying ? Math.max(0, 1 - (b.deathT || 0) / 0.35) : 1;   // shrink out on death
+      ctx.save();
+      ctx.globalAlpha = b.dying ? dsc : 1;
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.pulse * 2 * (b.rotDir || 1) + (b.dying ? (b.deathT || 0) * 16 : 0));   // spin out on death
+      if (dsc !== 1) ctx.scale(dsc, dsc);
+      // glitchy malware mite — varied spiky/poly body + angry eye (flashes white on a hit)
+      ctx.shadowColor = flash ? "#ffffff" : tint; ctx.shadowBlur = 16;
+      const sh = b.shape || "star6";
+      if (sh === "star5") starPath(5, r * (1 + 0.14 * p), r * 0.45, b.pulse * 3);
+      else if (sh === "star4") starPath(4, r * (1 + 0.16 * p), r * 0.42, b.pulse * 3);
+      else if (sh === "hex") polyPath(6, r * (0.95 + 0.10 * p), b.pulse);
+      else if (sh === "tri") polyPath(3, r * (1 + 0.12 * p), b.pulse);
+      else if (sh === "diamond") polyPath(4, r * (1 + 0.12 * p), b.pulse + 0.785);
+      else starPath(6, r * (1 + 0.12 * p), r * 0.5, b.pulse * 3);
+      ctx.fillStyle = flash ? "#ffffff" : "rgba(30,8,22,0.95)"; ctx.fill();
+      ctx.strokeStyle = flash ? "#ffffff" : (p > 0.5 ? tint : C.mystery); ctx.lineWidth = 2; ctx.stroke();
+      // eye (local frame so it scales/fades with the death anim)
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, r * 0.26, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : tint; ctx.beginPath(); ctx.arc(0, 0, r * 0.13, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0;
+      ctx.restore();
     }
   }
 
@@ -2135,6 +2448,32 @@
           ctx.beginPath(); ctx.arc(p.x + Math.cos(a) * gr, y + Math.sin(a) * gr, 2.6, 0, Math.PI * 2); ctx.fill();
         }
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        continue;
+      }
+
+      if (p.kind === "lifecell") {
+        // atomic power-cell — glowing nucleus + 3 rotating electron orbits (no magnet, fly into it)
+        const tt = 0.5 + 0.5 * Math.sin(game.t * 6 + p.bob);
+        const us = (T.lifeCellSize || 50);
+        ctx.save(); ctx.translate(p.x, y);
+        const ha = ctx.createRadialGradient(0, 0, 0, 0, 0, us);
+        ha.addColorStop(0, hexA("#dff6ff", 0.5 + 0.3 * tt)); ha.addColorStop(0.5, hexA("#2dd4ff", 0.22)); ha.addColorStop(1, "transparent");
+        ctx.fillStyle = ha; ctx.beginPath(); ctx.arc(0, 0, us, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowColor = "#6df0ff"; ctx.shadowBlur = 18;
+        ctx.strokeStyle = hexA("#6df0ff", 0.85); ctx.lineWidth = 2;
+        for (let k = 0; k < 3; k++) {
+          ctx.save();
+          ctx.rotate(game.t * (1.2 + k * 0.4) * (k % 2 ? -1 : 1) + k * 2.094);
+          ctx.beginPath(); ctx.ellipse(0, 0, us * 0.42, us * 0.16, 0, 0, Math.PI * 2); ctx.stroke();
+          const ea = game.t * (2 + k);
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath(); ctx.arc(Math.cos(ea) * us * 0.42, Math.sin(ea) * us * 0.16, 2.6, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
+        ctx.fillStyle = "#eaffff"; ctx.beginPath(); ctx.arc(0, 0, us * 0.16 * (1 + 0.12 * tt), 0, Math.PI * 2); ctx.fill();
+        ctx.restore(); ctx.shadowBlur = 0;
+        ctx.fillStyle = "#9fe6ff"; ctx.font = `700 9px ${FONTS.mono}`; ctx.textAlign = "center";
+        ctx.fillText("⚛ LIFE", p.x, y + us * 0.6 + 12); ctx.textAlign = "left";
         continue;
       }
 
@@ -2785,15 +3124,22 @@
     const bob = Math.sin(game.t * 7) * PH * 0.06;
     const breathe = 1 + Math.sin(game.t * 7) * 0.03;
     if (!blink) {
-      const fr = (od ? odFrames : flyFrames)[0];
-      if (fr && fr.complete && fr.naturalWidth) {
-        const ar = od ? OD_AR : SPR_AR;
-        const dh = PH * 2.15 * breathe, dw = dh * ar;
-        ctx.imageSmoothingEnabled = false;
+      const frames = od ? odFrames : flyFrames;
+      const selectedFrame = pickFrame(frames, od ? 0 : playerStandard.fps);
+      let fr = isLoadedImg(selectedFrame) ? selectedFrame : firstLoadedImg(frames);
+      const usingStandardLoop = !od && configuredStandardFrames.length && fr;
+      if (!od && !fr && configuredStandardFrames.length) fr = firstLoadedImg(fallbackFlyFrames);
+      if (fr) {
+        const ar = fr.naturalWidth && fr.naturalHeight ? fr.naturalWidth / fr.naturalHeight : (od ? OD_AR : SPR_AR);
+        const sc = od ? 2.15 : (Number(playerStandard.scale) || 2.15);
+        const frameBreathe = usingStandardLoop ? 1 : breathe;
+        const frameBob = usingStandardLoop ? 0 : bob;
+        const dh = PH * sc * frameBreathe, dw = dh * ar;
+        ctx.imageSmoothingEnabled = !!configuredStandardFrames.length && !od;
         if (rew) ctx.scale(-1, 1);   // face backward while rewinding
         ctx.shadowColor = od ? C.accent : C.accentSoft;
-        ctx.shadowBlur = od ? 24 : 10;
-        ctx.drawImage(fr, -dw / 2, -dh / 2 + bob, dw, dh);
+        ctx.shadowBlur = od ? 24 : (Number(playerStandard.glow) || 10);
+        ctx.drawImage(fr, -dw / 2, -dh / 2 + frameBob, dw, dh);
         ctx.shadowBlur = 0;
         ctx.imageSmoothingEnabled = true;
       } else {
