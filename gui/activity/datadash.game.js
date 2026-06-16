@@ -270,8 +270,7 @@
     game.spd = levelSpeed(startLv);
     game.scroll = levelSpeed(startLv);
     setPalette(LEVELS[startLv].palette);   // reset zone colours (a prior run may have lerped C to a later level)
-    buildTiles();                          // re-tint the circuit tiles to the accent
-    if (startLv > 0 && typeof applyZoneTiles === "function") applyZoneTiles(startLv);
+    buildTiles();                          // re-tint the circuit tiles + applyZoneTiles(game.level=startLv) internally
     seedTerrain();
   }
 
