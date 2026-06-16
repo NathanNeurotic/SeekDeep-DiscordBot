@@ -106,8 +106,11 @@ async function run() {
   try {
     const rawVersion = process.version;
     const major = parseInt(rawVersion.substring(1), 10);
-    if (major >= 22) report('PASS', 'Node Version', `${rawVersion} (>= 22 required)`);
-    else report('FAIL', 'Node Version', `${rawVersion} is below required v22. Install Node.js 22+ LTS.`);
+    const minor = parseInt(rawVersion.split('.')[1] || '0', 10) || 0;
+    // engines floor is >=22.12.0 (@discordjs/voice 0.19 requires it); enforce the
+    // minor too so Node 22.0–22.11 don't falsely pass the major-only check.
+    if (major > 22 || (major === 22 && minor >= 12)) report('PASS', 'Node Version', `${rawVersion} (>= 22.12.0 required)`);
+    else report('FAIL', 'Node Version', `${rawVersion} is below required v22.12.0. Install Node.js 22.12+ LTS.`);
   } catch (err) {
     report('FAIL', 'Node Version', `Failed to determine Node version: ${err.message}`);
   }
