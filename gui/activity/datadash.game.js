@@ -293,7 +293,11 @@
     // first-launch race where the init resize() bailed on a 0-sized canvas — call
     // resize() (not buildTiles directly) so W/H are re-measured from the DOM first;
     // otherwise buildTiles would render 0-height canvases off an unset H.
-    if (!zoneTiles.length) resize();
+    if (!zoneTiles.length) {
+      resize();                 // measures a real W/H (the init resize had bailed on a 0-sized canvas)
+      game.px = W * T.playerX;  // re-anchor: px/py were computed above against H=0, so the
+      game.py = H * 0.5;        // player would otherwise start at the top, inside the ceiling
+    }
     applyZoneTiles(startLv);
     seedTerrain();
   }
