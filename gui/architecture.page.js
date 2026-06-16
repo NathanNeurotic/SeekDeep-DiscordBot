@@ -24,7 +24,7 @@ const NODES = {
     title: 'index.js',
     meta: 'Node · ~24.5k lines',
     summary: 'The Discord bot entry point. Handles three top-level event hooks and dispatches everything downstream.',
-    fields: { runtime: 'Node 20+', size: '~24.5k lines ESM', entry: 'node index.js' },
+    fields: { runtime: 'Node 22+', size: '~24.5k lines ESM', entry: 'node index.js' },
     talks: ['discord', 'msgCreate', 'interaction', 'reactionAdd', 'persistence'],
   },
 

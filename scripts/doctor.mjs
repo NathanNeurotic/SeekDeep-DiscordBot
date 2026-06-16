@@ -106,8 +106,8 @@ async function run() {
   try {
     const rawVersion = process.version;
     const major = parseInt(rawVersion.substring(1), 10);
-    if (major >= 20) report('PASS', 'Node Version', `${rawVersion} (>= 20 required)`);
-    else report('FAIL', 'Node Version', `${rawVersion} is below required v20. Install Node.js 20+ LTS.`);
+    if (major >= 22) report('PASS', 'Node Version', `${rawVersion} (>= 22 required)`);
+    else report('FAIL', 'Node Version', `${rawVersion} is below required v22. Install Node.js 22+ LTS.`);
   } catch (err) {
     report('FAIL', 'Node Version', `Failed to determine Node version: ${err.message}`);
   }
