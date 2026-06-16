@@ -18179,6 +18179,20 @@ function seekdeepReadArchiveNotifyConfig() {
   // Reads data/archive-config.json. Returns { mode, notify_self, channels }
   // with defaults for any missing fields. Falls back to env-flag semantics
   // when the file doesn't exist (backward compat with the v1 author-notify).
+  // In test mode, ignore the persistent file and use the env-flag defaults:
+  // data/archive-config.json is shared with the running bot + GUI, and a
+  // gui-smoke run (or a prior preflight) can leave it dirty (notify_self /
+  // per-channel mode), which made the notify-gate smoke checks flaky. The
+  // SEEKDEEP_TEST_MODE gate keeps index.js hermetic and never touches a real
+  // local config.
+  if (process.env.SEEKDEEP_TEST_MODE === '1') {
+    return {
+      mode: SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY ? 'react' : 'silent',
+      notify_self: false,
+      channels: {},
+      _source: 'test-env',
+    };
+  }
   try {
     if (!fs.existsSync(SEEKDEEP_ARCHIVE_CONFIG_PATH)) {
       // Env-flag fallback: 'on' → react, 'off' → silent
