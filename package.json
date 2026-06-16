@@ -25,14 +25,14 @@
     "purge:model-cache-quarantine": "node scripts/run-python.mjs warmup_local_cache.py --purge-quarantine"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.19.2",
+    "@discordjs/voice": "^0.18.0",
     "discord.js": "^14.18.0",
     "dotenv": "^17.4.2",
     "form-data": "^4.0.1",
     "jszip": "^3.10.1",
-    "libsodium-wrappers": "^0.8.4",
+    "libsodium-wrappers": "^0.7.13",
     "node-fetch": "^3.3.2",
-    "opusscript": "^0.1.1",
+    "opusscript": "^0.0.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {
