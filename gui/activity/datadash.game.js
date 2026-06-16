@@ -270,7 +270,13 @@
     game.spd = levelSpeed(startLv);
     game.scroll = levelSpeed(startLv);
     setPalette(LEVELS[startLv].palette);   // reset zone colours (a prior run may have lerped C to a later level)
-    buildTiles();                          // re-tint the circuit tiles + applyZoneTiles(game.level=startLv) internally
+    // Zone tiles are static per-zone canvases (built from each LEVEL's own palette
+    // + canvas H) — already pre-rendered at init/resize, so a restart only needs to
+    // SWAP to the starting zone, not rebuild every zone's offscreen canvases (that
+    // full rebuild was wasted work / restart stutter). Build-if-missing guards the
+    // first-launch race where the init resize() bailed on a 0-sized canvas.
+    if (!zoneTiles.length) buildTiles();
+    applyZoneTiles(startLv);
     seedTerrain();
   }
 
