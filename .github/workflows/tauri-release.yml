@@ -124,7 +124,11 @@ jobs:
 
           **No setup script. No terminal. No filesystem rummaging.** Configuration flows through the in-app Tweaks panel.
 
-          See [CHANGELOG](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) for what's in this build.
+          ### 🗺️ What's new & what's next
+
+          - **Changes in this build:** the [commit log](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) since the last nightly.
+          - **Roadmap & planned work:** [PLANNED.md](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/PLANNED.md) · [open issues](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/issues).
+          - **Voice/TTS** is wired but ships with **no bundled voice** — set \`SEEKDEEP_FEATURE_TTS_VOICE=on\` and point \`SEEKDEEP_TTS_PIPER_VOICE\` at a Piper \`.onnx\` voice (see \`.env.example\`) to use \`@SeekDeep tts\`.
           EOF
           gh release create nightly \
             --repo "${{ github.repository }}" \
@@ -269,7 +273,11 @@ jobs:
 
             **Optional:** [Ollama](https://ollama.com/) for local-model `/chat` via the Ollama daemon; Docker for self-hosted SearXNG web search.
 
-            See [CHANGELOG](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) for what's in this build.
+            ### 🗺️ What's new & what's next
+
+            - **Changes in this build:** the [commit log](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commits/main) since the last nightly.
+            - **Roadmap & planned work:** [PLANNED.md](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/blob/main/PLANNED.md) · [open issues](https://github.com/NathanNeurotic/SeekDeep-DiscordBot/issues).
+            - **Voice/TTS** is wired but ships with **no bundled voice** — set `SEEKDEEP_FEATURE_TTS_VOICE=on` and point `SEEKDEEP_TTS_PIPER_VOICE` at a Piper `.onnx` voice (see `.env.example`) to use `@SeekDeep tts`.
           releaseDraft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           args: ${{ matrix.args }}
