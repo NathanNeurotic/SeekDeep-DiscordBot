@@ -320,8 +320,8 @@ if not errorlevel 1 (
 call :cleanStaleAiOnly
 if errorlevel 1 exit /b 1
 if exist "%AI_PID_FILE%" del "%AI_PID_FILE%" >nul 2>nul
-echo Starting local AI server in a new PowerShell window...
-start "SeekDeep Local AI Server" powershell -NoExit -ExecutionPolicy Bypass -Command "& { Set-Location -LiteralPath '%CD%'; .\.venv\Scripts\Activate.ps1; $PID | Set-Content -Path '.\logs\local-ai.pid'; python local_ai_server.py }"
+echo Starting local AI server (supervised, auto-restarts on crash/wedge) in a new PowerShell window...
+start "SeekDeep Local AI Server" powershell -NoExit -ExecutionPolicy Bypass -File "%CD%\scripts\run-ai-server.ps1"
 call :waitHttp "%LOCAL_AI_BASE_URL%/health" 90
 exit /b %ERRORLEVEL%
 
