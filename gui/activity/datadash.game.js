@@ -290,8 +290,10 @@
     // + canvas H) — already pre-rendered at init/resize, so a restart only needs to
     // SWAP to the starting zone, not rebuild every zone's offscreen canvases (that
     // full rebuild was wasted work / restart stutter). Build-if-missing guards the
-    // first-launch race where the init resize() bailed on a 0-sized canvas.
-    if (!zoneTiles.length) buildTiles();
+    // first-launch race where the init resize() bailed on a 0-sized canvas — call
+    // resize() (not buildTiles directly) so W/H are re-measured from the DOM first;
+    // otherwise buildTiles would render 0-height canvases off an unset H.
+    if (!zoneTiles.length) resize();
     applyZoneTiles(startLv);
     seedTerrain();
   }
