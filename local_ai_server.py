@@ -9,6 +9,8 @@ import os
 import math
 import re
 import tempfile
+import faulthandler
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -1226,6 +1228,81 @@ async def _resolve_keep_resident_defaults():
         why = "explicit env" if _KEEP_RESIDENT_CHAT_ENV is not None else f"{total_gb:.1f}GB < {KEEP_RESIDENT_AUTO_VRAM_GB:.0f}GB"
         print(f"[SeekDeep] keep-resident: chat={KEEP_RESIDENT_CHAT} ({why}); "
               f"vision={KEEP_RESIDENT_VISION} image={KEEP_RESIDENT_IMAGE} (opt-in).", flush=True)
+
+
+# ===== event-loop wedge detector (self-healing) =====
+# The bot watchdog (gui_endpoints._tick_loop) runs ON this asyncio loop, so if
+# the loop ever wedges — the 100%-CPU hang that left the server unreachable
+# while nothing restarted it — that watchdog freezes too. This detector runs in
+# a DAEMON THREAD off the loop: the loop bumps a heartbeat every ~2s; if it
+# stalls past the threshold (or never starts within the startup grace), we dump
+# every thread's stack (so the cause is finally visible) and force-exit so the
+# launcher's supervisor restarts a clean process. Opt out: SEEKDEEP_LOOP_WATCHDOG=off.
+_loop_heartbeat = [time.time()]
+_loop_alive = [False]
+_LOOP_WATCHDOG_ON = os.getenv("SEEKDEEP_LOOP_WATCHDOG", "on").strip().lower() not in ("0", "false", "no", "off")
+_LOOP_WATCHDOG_STARTUP_GRACE_S = float(os.getenv("SEEKDEEP_LOOP_WATCHDOG_STARTUP_GRACE_S", "120") or 120)
+_LOOP_WATCHDOG_STALL_S = float(os.getenv("SEEKDEEP_LOOP_WATCHDOG_STALL_S", "30") or 30)
+
+
+def _loop_watchdog_fire(reason: str) -> None:
+    try:
+        print(f"[SeekDeep] LOOP WATCHDOG: {reason} — dumping all stacks then force-exiting "
+              f"so the launcher restarts a clean server.", flush=True)
+    except Exception:
+        pass
+    try:
+        faulthandler.dump_traceback(all_threads=True)
+    except Exception:
+        pass
+    os._exit(70)
+
+
+def _loop_watchdog_thread(proc_start: float) -> None:
+    # Off-loop guard: survives a wedged event loop. Must never raise.
+    while True:
+        time.sleep(2.0)
+        try:
+            now = time.time()
+            if not _loop_alive[0]:
+                if now - proc_start > _LOOP_WATCHDOG_STARTUP_GRACE_S:
+                    _loop_watchdog_fire(f"event loop never started after {_LOOP_WATCHDOG_STARTUP_GRACE_S:.0f}s")
+                continue
+            stall = now - _loop_heartbeat[0]
+            if stall > _LOOP_WATCHDOG_STALL_S:
+                _loop_watchdog_fire(f"event loop stalled {stall:.0f}s (> {_LOOP_WATCHDOG_STALL_S:.0f}s threshold)")
+        except Exception:
+            pass
+
+
+@app.on_event("startup")
+async def _start_loop_heartbeat():
+    """The loop side of the wedge detector: bump the heartbeat every ~2s so the
+    off-loop watchdog thread knows the event loop is alive and responsive."""
+    if not _LOOP_WATCHDOG_ON:
+        return
+    import asyncio as _asyncio
+
+    async def _beat():
+        while True:
+            try:
+                _loop_heartbeat[0] = time.time()
+                _loop_alive[0] = True
+                await _asyncio.sleep(2.0)
+            except _asyncio.CancelledError:
+                break
+            except Exception:
+                await _asyncio.sleep(2.0)
+
+    loop = _asyncio.get_running_loop()
+    app.state.seekdeep_heartbeat_task = loop.create_task(_beat())
+
+
+@app.on_event("shutdown")
+async def _stop_loop_heartbeat():
+    t = getattr(app.state, "seekdeep_heartbeat_task", None)
+    if t and not t.done():
+        t.cancel()
 
 
 # ===== queue.depth producer =====
@@ -6435,4 +6512,16 @@ def tts(req: TTSRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    # Self-healing: start the off-loop wedge detector BEFORE uvicorn so a
+    # startup-time hang is caught too. faulthandler lets it dump every thread's
+    # stack when it fires (see the loop watchdog above).
+    if _LOOP_WATCHDOG_ON:
+        try:
+            faulthandler.enable()
+            threading.Thread(
+                target=_loop_watchdog_thread, args=(time.time(),),
+                name="seekdeep-loop-watchdog", daemon=True,
+            ).start()
+        except Exception as _wd_exc:
+            print(f"[SeekDeep] loop watchdog failed to start: {_wd_exc}", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=7865)
