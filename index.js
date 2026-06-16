@@ -7133,11 +7133,13 @@ async function seekdeepArchiveImageStateToSharedDiscordThread(state, target) {
   }
 }
 
-async function seekdeepArchiveImageStateToDiscordThread(state, target) {
+async function seekdeepArchiveImageStateToDiscordThread(state, target, userOverride) {
   state = state || {};
   target = target || null;
 
-  const archiveInfo = await seekdeepGetOrCreateUserArchiveThread(target);
+  // userOverride: archive into THAT user's thread instead of the requester's
+  // (the "Archive to <user>" feature). null/undefined → requester's own archive.
+  const archiveInfo = await seekdeepGetOrCreateUserArchiveThread(target, userOverride || null);
   const thread = archiveInfo.thread;
   let threadName = archiveInfo.threadName;
   let archiveCount = Math.max(0, Number(archiveInfo?.archiveCount || 0) || 0);
@@ -8330,6 +8332,8 @@ function seekdeepHelpText(source = null) {
     'Refine as Image Prompt     - rewrite message as a stronger image prompt',
     'Describe Image (SeekDeep)  - run vision analysis on an image attachment',
     'Upscale Image (SeekDeep)   - upscale an image attachment 2x',
+    'Archive (SeekDeep)         - save the image(s) to YOUR archive',
+    'Archive to Author (SeekDeep) - save the image(s) to the message AUTHOR’s archive',
     ...(SEEKDEEP_FEATURE_IMG2IMG_ENABLED ? [
       'img2img from this          - img2img: use text as prompt on attached/recent image',
     ] : []),
@@ -9623,6 +9627,9 @@ const commands = [
   // right-clicks any Discord message.
   new ContextMenuCommandBuilder()
     .setName('Archive (SeekDeep)')
+    .setType(ApplicationCommandType.Message),
+  new ContextMenuCommandBuilder()
+    .setName('Archive to Author (SeekDeep)')
     .setType(ApplicationCommandType.Message),
   new ContextMenuCommandBuilder()
     .setName('Generate Image from this')
@@ -18098,7 +18105,7 @@ async function seekdeepHandleNaturalArchiveImageFollowup(message, prompt = '') {
 // Both surfaces share the existing archive flow (seekdeepArchiveImageStateToDiscordThread)
 // by constructing a state object from arbitrary message attachments + embed images.
 
-const SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE = /^(?:<@!?\d+>\s+|@?seekdeep\s+|@?seekotics\s+)?archive(?:\s+(?:this|that|it|please|now|to\s+(?:my\s+)?archive))?\s*\.?\s*$/i;
+const SEEKDEEP_UNIVERSAL_ARCHIVE_REPLY_RE = /^(?:<@!?\d+>\s+|@?seekdeep\s+|@?seekotics\s+)?archive(?:\s+(?:this|that|it|please|now|to\s+(?:my\s+)?archive|(?:to|for)\s+<@!?\d+>))?\s*\.?\s*$/i;
 
 function seekdeepExtractImagesFromMessage(message) {
   // Returns array of { url, filename, contentType, source } for every image
@@ -18320,7 +18327,7 @@ function seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage) {
   return true;
 }
 
-async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource) {
+async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource, forUser) {
   // Routes through the active mode (react / dm / reply). Silent failure
   // on permission errors. Returns { ok, mode } so callers can log what
   // actually happened.
@@ -18334,6 +18341,13 @@ async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource
     || requestSource?.author?.username
     || 'someone'
   );
+  // Accurate destination phrase: forUser routes the archive into a specific
+  // person's archive (the "Archive to <user>" feature). Default (null) = the
+  // requester's own archive.
+  const authorId = String(targetMessage?.author?.id || '');
+  const destPhrase = (forUser && forUser.id)
+    ? (String(forUser.id) === authorId ? 'your own Universal Archive' : '<@' + forUser.id + '>’s Universal Archive')
+    : 'their Universal Archive';
   try {
     if (mode === 'react') {
       await targetMessage.react(SEEKDEEP_UNIVERSAL_ARCHIVE_NOTIFY_EMOJI);
@@ -18341,7 +18355,7 @@ async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource
       // Reply on the message itself, no user-mention to avoid notification
       // spam — Discord already shows the reply preview to the author.
       await targetMessage.reply({
-        content: '\u{1F4C2} Your post was archived by **' + archiverTag + '**. It\'s now in their Universal Archive — kept locally, never re-shared without your permission. Opt out with `@SeekDeep archive opt-out`.',
+        content: '\u{1F4C2} Your post was archived by **' + archiverTag + '**. It\'s now in ' + destPhrase + ' — kept locally, never re-shared without your permission. Opt out with `@SeekDeep archive opt-out`.',
         allowedMentions: { repliedUser: false, parse: [] },
       });
     } else if (mode === 'dm') {
@@ -18352,7 +18366,7 @@ async function seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource
       const chName = String(targetMessage.channel?.name || 'this channel');
       const embed = {
         title: '\u{1F4C2} Your post was archived',
-        description: 'Your post in #' + chName + ' was archived by **' + archiverTag + '**. It\'s now in their Universal Archive — kept locally, never re-shared without your permission.',
+        description: 'Your post in #' + chName + ' was archived by **' + archiverTag + '**. It\'s now in ' + destPhrase + ' — kept locally, never re-shared without your permission.',
         color: 0x2dd4ff,
         footer: { text: 'Opt out with @SeekDeep archive opt-out' },
         timestamp: new Date().toISOString(),
@@ -18379,6 +18393,9 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
   // Returns: { ok, archived: N, duplicates: N, threadId, threadName, archiveCount, errors, notifiedAuthor }
   const states = seekdeepBuildUniversalArchiveStates(targetMessage);
   const wantsShared = !!opts.wantsShared;
+  // forUser: route into another user's archive ("Archive to <user>"). Ignored
+  // for shared-archive writes. null → the requester's own archive (default).
+  const forUser = (!wantsShared && opts.forUser && opts.forUser.id) ? opts.forUser : null;
   const sender = (
     requestSource?.author?.tag
     || requestSource?.user?.tag
@@ -18391,7 +18408,7 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
     return { ok: false, archived: 0, error: 'no_images', humanReason: 'No image attachments or embed images on that message.' };
   }
 
-  const out = { ok: true, archived: 0, duplicates: 0, threadId: '', threadName: '', archiveCount: 0, errors: [], notifiedAuthor: false };
+  const out = { ok: true, archived: 0, duplicates: 0, threadId: '', threadName: '', archiveCount: 0, errors: [], notifiedAuthor: false, forUserId: forUser ? forUser.id : '' };
   for (const state of states) {
     try {
       const result = wantsShared
@@ -18399,7 +18416,7 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
            ? await seekdeepArchiveImageStateToSharedDiscordThread(state, requestSource)
            : null)
         : (typeof seekdeepArchiveImageStateToDiscordThread === 'function'
-           ? await seekdeepArchiveImageStateToDiscordThread(state, requestSource)
+           ? await seekdeepArchiveImageStateToDiscordThread(state, requestSource, forUser)
            : null);
       if (!result) {
         out.errors.push('archive function unavailable');
@@ -18425,7 +18442,7 @@ async function seekdeepUniversalArchiveDispatch(requestSource, targetMessage, op
   // data/archive-config.json (react / dm / reply / silent), with
   // per-channel overrides and an opt-out check.
   if (out.archived > 0 && seekdeepUniversalArchiveShouldNotify(requestSource, targetMessage)) {
-    const result = await seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource);
+    const result = await seekdeepUniversalArchiveNotifyAuthor(targetMessage, requestSource, forUser);
     out.notifiedAuthor = !!(result && result.ok);
     if (result && result.mode) out.notifyMode = result.mode;
   }
@@ -18438,12 +18455,13 @@ function seekdeepUniversalArchiveSummaryText(result) {
     return result?.humanReason || 'Nothing archivable found on that message.';
   }
   const lines = [];
+  const dest = result.forUserId ? ` to <@${result.forUserId}>'s archive` : '';
   if (result.archived && result.duplicates) {
-    lines.push(`Archived ${result.archived} new + ${result.duplicates} duplicate from that message.`);
+    lines.push(`Archived ${result.archived} new + ${result.duplicates} duplicate${dest}.`);
   } else if (result.archived) {
-    lines.push(`Archived ${result.archived} image${result.archived === 1 ? '' : 's'}.`);
+    lines.push(`Archived ${result.archived} image${result.archived === 1 ? '' : 's'}${dest}.`);
   } else if (result.duplicates) {
-    lines.push(`Already archived (${result.duplicates} duplicate${result.duplicates === 1 ? '' : 's'} on that message).`);
+    lines.push(`Already archived${dest} (${result.duplicates} duplicate${result.duplicates === 1 ? '' : 's'} on that message).`);
   } else {
     lines.push('Archive attempt finished with no images saved.');
   }
@@ -18469,6 +18487,35 @@ async function seekdeepHandleContextMenuUniversalArchive(interaction, targetMess
     try { await interaction.editReply({ content: summary }); } catch {}
   } catch (err) {
     console.error('Universal archive (context menu) failed:', err?.stack || err?.message || err);
+    try { await interaction.editReply({ content: 'Archive failed: ' + String(err?.message || err).slice(0, 1500) }); } catch {}
+  }
+}
+
+async function seekdeepHandleContextMenuArchiveToAuthor(interaction, targetMessage) {
+  // Right-click → Apps → "Archive to Author (SeekDeep)". Archives the targeted
+  // message's images into the MESSAGE AUTHOR's archive (contribute to someone
+  // else's archive) instead of the requester's. A fun way to stock a friend's
+  // archive with their own posts.
+  if (!interaction?.guild) {
+    try { await interaction.reply({ content: 'Archive threads only work inside a server.', flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  const author = targetMessage?.author || null;
+  if (author && author.bot) {
+    try { await interaction.reply({ content: "That's a bot message — use **Archive (SeekDeep)** to save it to your own archive.", flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  if (!author?.id) {
+    try { await interaction.reply({ content: "Couldn't identify that message's author to route the archive.", flags: MessageFlags.Ephemeral }); } catch {}
+    return;
+  }
+  try { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); } catch {}
+  try {
+    const result = await seekdeepUniversalArchiveDispatch(interaction, targetMessage, { wantsShared: false, forUser: author });
+    const summary = seekdeepUniversalArchiveSummaryText(result);
+    try { await interaction.editReply({ content: summary }); } catch {}
+  } catch (err) {
+    console.error('Universal archive-to-author (context menu) failed:', err?.stack || err?.message || err);
     try { await interaction.editReply({ content: 'Archive failed: ' + String(err?.message || err).slice(0, 1500) }); } catch {}
   }
 }
@@ -18501,8 +18548,19 @@ async function seekdeepHandleReplyArchive(message) {
     try { seekdeepLogRoute('universal-archive-reply', raw); } catch {}
   }
 
+  // "archive to @user" / "archive for @user" → route into THAT user's archive.
+  // Read the id from the explicit "to/for <@id>" in the text (not message.mentions,
+  // which can include the reply-ping). Skip the bot itself → falls back to self.
+  let forUser = null;
+  const mTo = /(?:\bto|\bfor)\s+<@!?(\d+)>/i.exec(raw);
+  if (mTo && mTo[1] && mTo[1] !== String(message.client?.user?.id || '')) {
+    forUser = message.mentions?.users?.get?.(mTo[1])
+      || await (message.client?.users?.fetch?.(mTo[1]).catch(() => null))
+      || null;
+  }
+
   try {
-    const result = await seekdeepUniversalArchiveDispatch(message, targetMessage, { wantsShared: false });
+    const result = await seekdeepUniversalArchiveDispatch(message, targetMessage, { wantsShared: false, forUser });
     const summary = seekdeepUniversalArchiveSummaryText(result);
     await message.reply({ content: summary, allowedMentions: { repliedUser: false } });
   } catch (err) {
@@ -21822,6 +21880,9 @@ async function seekdeepHandleMessageContextMenu(interaction) {
   }
   if (name === 'Archive (SeekDeep)') {
     return seekdeepHandleContextMenuUniversalArchive(interaction, targetMessage);
+  }
+  if (name === 'Archive to Author (SeekDeep)') {
+    return seekdeepHandleContextMenuArchiveToAuthor(interaction, targetMessage);
   }
   if (name === 'Generate Image from this') {
     return seekdeepHandleContextMenuGenerateImage(interaction, targetMessage);
