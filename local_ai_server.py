@@ -404,9 +404,37 @@ MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 #   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) = ~11GB, comfortable.
 #   chat 8B 4bit (~5GB)  + vision 3B fp16 (~6GB) + Phi-4 14B 4bit swap (~9GB) = ~20GB, fits.
 #   chat 8B 4bit (~5GB)  + SDXL (~6.5GB) = ~11.5GB, comfortable.
-KEEP_RESIDENT_CHAT = os.getenv("LOCAL_CHAT_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
-KEEP_RESIDENT_VISION = os.getenv("LOCAL_VISION_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
-KEEP_RESIDENT_IMAGE = os.getenv("LOCAL_IMAGE_KEEP_RESIDENT", "false").lower() in {"1", "true", "yes", "on"}
+def _env_keep_resident_tristate(name: str):
+    """Parse a LOCAL_*_KEEP_RESIDENT env var. Returns True/False when explicitly
+    set, or None when UNSET/empty so the startup resolver can pick a VRAM-aware
+    default (a big GPU keeps the chat model resident; a small GPU keeps the
+    conservative evict-on-switch default)."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return None
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+_KEEP_RESIDENT_CHAT_ENV = _env_keep_resident_tristate("LOCAL_CHAT_KEEP_RESIDENT")
+_KEEP_RESIDENT_VISION_ENV = _env_keep_resident_tristate("LOCAL_VISION_KEEP_RESIDENT")
+_KEEP_RESIDENT_IMAGE_ENV = _env_keep_resident_tristate("LOCAL_IMAGE_KEEP_RESIDENT")
+# Provisional values: honour an explicit env setting; otherwise start False and
+# let the startup resolver (_resolve_keep_resident_defaults) flip chat resident
+# on a big GPU. Vision/image stay opt-in by default (set their env knobs on a
+# 24GB box if you interleave those tasks heavily).
+KEEP_RESIDENT_CHAT = bool(_KEEP_RESIDENT_CHAT_ENV)
+KEEP_RESIDENT_VISION = bool(_KEEP_RESIDENT_VISION_ENV)
+KEEP_RESIDENT_IMAGE = bool(_KEEP_RESIDENT_IMAGE_ENV)
+# Total-VRAM threshold (GB) at/above which an UNSET LOCAL_CHAT_KEEP_RESIDENT
+# defaults to ON. Set to 20 so only genuinely-big GPUs (24GB-class) auto-pin:
+# a 24GB box holds pinned chat (~5GB 4bit) alongside an on-demand SDXL (~6.5GB)
+# with comfortable headroom, killing the task-lru cold-reload thrash (the thing
+# that made chat replies take 20-30s when interleaved with image work). A 16GB
+# box stays on evict-on-switch because a pinned chat would crowd out SDXL. Set
+# the env knob to force either behaviour.
+try:
+    KEEP_RESIDENT_AUTO_VRAM_GB = float(os.getenv("LOCAL_KEEP_RESIDENT_AUTO_VRAM_GB", "20"))
+except ValueError:
+    KEEP_RESIDENT_AUTO_VRAM_GB = 20.0
 
 # ---------------------------------------------------------------------------
 # Text-to-speech (TTS) — /tts endpoint + GUI voice reader.
@@ -1173,6 +1201,31 @@ async def _stop_vram_sampler():
     t = getattr(app.state, "seekdeep_vram_task", None)
     if t and not t.done():
         t.cancel()
+
+
+@app.on_event("startup")
+async def _resolve_keep_resident_defaults():
+    """VRAM-aware keep-resident default. When LOCAL_CHAT_KEEP_RESIDENT is UNSET,
+    pin the chat model resident on a big GPU (>= LOCAL_KEEP_RESIDENT_AUTO_VRAM_GB)
+    so it isn't cold-reloaded after every image/vision task — the task-lru thrash
+    that made chat replies take 20-30s when interleaved with upscale/describe.
+    Explicit env always wins; vision/image stay opt-in; a small GPU keeps the
+    conservative evict-on-switch default. Only flips the default pin flag the
+    existing evict logic already respects — no change to load/evict behaviour."""
+    global KEEP_RESIDENT_CHAT
+    try:
+        total_gb = vram_total_mb() / 1024.0
+    except Exception:
+        total_gb = 0.0
+    if _KEEP_RESIDENT_CHAT_ENV is None and total_gb >= KEEP_RESIDENT_AUTO_VRAM_GB:
+        KEEP_RESIDENT_CHAT = True
+        print(f"[SeekDeep] keep-resident: {total_gb:.1f}GB VRAM >= {KEEP_RESIDENT_AUTO_VRAM_GB:.0f}GB "
+              f"-> chat model kept resident across task switches (no cold-reload thrash). "
+              f"Set LOCAL_CHAT_KEEP_RESIDENT=off to override.", flush=True)
+    else:
+        why = "explicit env" if _KEEP_RESIDENT_CHAT_ENV is not None else f"{total_gb:.1f}GB < {KEEP_RESIDENT_AUTO_VRAM_GB:.0f}GB"
+        print(f"[SeekDeep] keep-resident: chat={KEEP_RESIDENT_CHAT} ({why}); "
+              f"vision={KEEP_RESIDENT_VISION} image={KEEP_RESIDENT_IMAGE} (opt-in).", flush=True)
 
 
 # ===== queue.depth producer =====
