@@ -78,7 +78,17 @@
     H = Math.round(r.height * Z);
     const s = DPR / Z;
     ctx.setTransform(s, 0, 0, s, 0, 0);
-    if (game) game.px = W * T.playerX;   // keep the player anchored across resizes
+    if (game) {
+      game.px = W * T.playerX;            // keep the player anchored across resizes
+      // First sizing that yields a real H after a 0-H init (the first-launch race
+      // where newGame set game.py = H*0.5 = 0): center the player vertically so it
+      // doesn't spawn at y=0 inside the ceiling and instantly lose a life. During
+      // play game.py is always > 0 (resolveTerrain clamps it), so this never fires
+      // mid-game — it only seeds the uninitialized 0. Lives in resize() so EVERY
+      // call site (newGame recovery, frame-loop self-heal, window-resize listener)
+      // gets it.
+      if (!game.py) game.py = H * 0.5;
+    }
     buildTiles();
   }
   window.addEventListener("resize", resize);
@@ -293,10 +303,7 @@
     // first-launch race where the init resize() bailed on a 0-sized canvas — call
     // resize() (not buildTiles directly) so W/H are re-measured from the DOM first;
     // otherwise buildTiles would render 0-height canvases off an unset H.
-    if (!zoneTiles.length) {
-      resize();             // measures a real W/H + re-anchors game.px (init resize had bailed on a 0-sized canvas)
-      game.py = H * 0.5;    // resize() only anchors px, so re-center py too (it was computed above against H=0)
-    }
+    if (!zoneTiles.length) resize();   // build the zone tiles (init resize had bailed on a 0-sized canvas); resize() also re-anchors px + seeds py if it was 0
     applyZoneTiles(startLv);
     seedTerrain();
   }
