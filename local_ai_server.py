@@ -1238,8 +1238,13 @@ async def _resolve_keep_resident_defaults():
 # stalls past the threshold (or never starts within the startup grace), we dump
 # every thread's stack (so the cause is finally visible) and force-exit so the
 # launcher's supervisor restarts a clean process. Opt out: SEEKDEEP_LOOP_WATCHDOG=off.
-_loop_heartbeat = [time.time()]
-_loop_alive = [False]
+#
+# Cross-thread state: _loop_alive is a threading.Event (the canonical one-way
+# "loop is up" flag). _loop_heartbeat is a plain module float — rebinding and
+# reading a single name are atomic under the GIL, so the watchdog only ever sees
+# an old-or-new timestamp (both valid), never a torn value; no lock needed.
+_loop_heartbeat = time.time()
+_loop_alive = threading.Event()
 _LOOP_WATCHDOG_ON = os.getenv("SEEKDEEP_LOOP_WATCHDOG", "on").strip().lower() not in ("0", "false", "no", "off")
 _LOOP_WATCHDOG_STARTUP_GRACE_S = float(os.getenv("SEEKDEEP_LOOP_WATCHDOG_STARTUP_GRACE_S", "120") or 120)
 _LOOP_WATCHDOG_STALL_S = float(os.getenv("SEEKDEEP_LOOP_WATCHDOG_STALL_S", "30") or 30)
@@ -1264,11 +1269,11 @@ def _loop_watchdog_thread(proc_start: float) -> None:
         time.sleep(2.0)
         try:
             now = time.time()
-            if not _loop_alive[0]:
+            if not _loop_alive.is_set():
                 if now - proc_start > _LOOP_WATCHDOG_STARTUP_GRACE_S:
                     _loop_watchdog_fire(f"event loop never started after {_LOOP_WATCHDOG_STARTUP_GRACE_S:.0f}s")
                 continue
-            stall = now - _loop_heartbeat[0]
+            stall = now - _loop_heartbeat
             if stall > _LOOP_WATCHDOG_STALL_S:
                 _loop_watchdog_fire(f"event loop stalled {stall:.0f}s (> {_LOOP_WATCHDOG_STALL_S:.0f}s threshold)")
         except Exception:
@@ -1284,10 +1289,11 @@ async def _start_loop_heartbeat():
     import asyncio as _asyncio
 
     async def _beat():
+        global _loop_heartbeat
         while True:
             try:
-                _loop_heartbeat[0] = time.time()
-                _loop_alive[0] = True
+                _loop_heartbeat = time.time()
+                _loop_alive.set()
                 await _asyncio.sleep(2.0)
             except _asyncio.CancelledError:
                 break
