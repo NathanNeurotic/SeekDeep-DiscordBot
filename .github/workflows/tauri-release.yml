@@ -164,12 +164,13 @@ jobs:
         # warning since 2026-Q2 when GH Actions started forcing Node 24.
         uses: actions/checkout@v6
 
-      - name: Set up Node 20
+      - name: Set up Node 22
         # setup-node@v6 is the Node 24-based runner of this action;
-        # node-version is still 20 (what our app targets).
+        # node-version pins 22 — our engines floor (>=22.12.0), since
+        # Node 20 went EOL 2026-04-30.
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Set up Rust toolchain

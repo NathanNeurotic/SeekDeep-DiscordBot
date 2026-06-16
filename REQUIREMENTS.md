@@ -17,13 +17,13 @@ The current verified machine reports:
 
 ## Runtime Dependencies
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - npm
 - Python 3.11+
 - pip
 - Docker Desktop
 
-Node version is intentionally `>=20` to match `package.json`.
+Node version is intentionally `>=22.12.0` to match `package.json`.
 
 ## Node Packages
 
@@ -194,7 +194,7 @@ The server uses task-LRU model loading, so switching from chat refinement to ima
 
 ## Installation
 
-1. Install Node.js 20+, Python 3.11+, and Docker Desktop.
+1. Install Node.js 22+, Python 3.11+, and Docker Desktop.
 2. From the repo root, install Node dependencies:
    ```powershell
    npm install

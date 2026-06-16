@@ -2451,8 +2451,8 @@ def register_gui_endpoints(
                     "installed": True,
                     "version": v,
                     "major": major,
-                    "meets_min": major >= 20,  # discord.js v14 needs Node 20+
-                    "min_required": "20.x",
+                    "meets_min": major >= 22,  # @discordjs/voice 0.19+ needs Node 22.12+; Node 20 is EOL
+                    "min_required": "22.x",
                 }
             else:
                 out["node"] = {"installed": False, "error": (r.stderr or "").strip()[:160]}
@@ -3307,7 +3307,7 @@ def register_gui_endpoints(
                                         "data": {"exit_code": proc.returncode, "ok": proc.returncode == 0}})
             except FileNotFoundError:
                 event_bus.publish_sync({"type": "doctor.failed",
-                                        "data": {"error": "node not on PATH — install Node 20+ from nodejs.org"}})
+                                        "data": {"error": "node not on PATH — install Node 22+ from nodejs.org"}})
             except Exception as exc:
                 event_bus.publish_sync({"type": "doctor.failed", "data": {"error": str(exc)[:240]}})
         threading.Thread(target=run, daemon=True).start()
@@ -3615,7 +3615,7 @@ def register_gui_endpoints(
                                                     "data": {"step": "npm_install", "exit_code": proc.returncode}})
                             return
                     except FileNotFoundError:
-                        _publish("npm not on PATH — install Node 20+ (nodejs.org) and re-run this step")
+                        _publish("npm not on PATH — install Node 22+ (nodejs.org) and re-run this step")
                         event_bus.publish_sync({"type": "bootstrap.failed",
                                                 "data": {"step": "npm_install", "error": "npm not found"}})
                         return

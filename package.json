@@ -1,6 +1,6 @@
 {
   "name": "seekdeep-discordbot",
-  "version": "10.38.96",
+  "version": "10.38.97",
   "type": "module",
   "description": "SeekDeep local Discord bot with local chat, vision, image generation, and SearXNG web search.",
   "main": "index.js",
@@ -40,6 +40,6 @@
     "@tauri-apps/cli": "^2.0.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   }
 }

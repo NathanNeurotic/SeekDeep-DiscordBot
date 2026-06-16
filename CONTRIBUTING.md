@@ -6,7 +6,7 @@ SeekDeep is maintained as a local Discord bot project. Work evidence-first: insp
 
 Prerequisites:
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - Python 3.10 or newer
 - Docker Desktop (for SearXNG)
 - NVIDIA/CUDA-capable local environment for the configured models
