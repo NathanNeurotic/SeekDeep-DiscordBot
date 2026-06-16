@@ -6,7 +6,7 @@ name = "seekdeep"
 # package.json, the bundled FastAPI server (which reads package.json at
 # boot via _read_pkg_version) will report a different version than the
 # Rust shell — making the stale-server guard misfire on every launch.
-version = "10.38.87"
+version = "10.38.88"
 description = "SeekDeep — local AI assistant (Discord bot + standalone GUI)"
 authors = ["NathanNeurotic"]
 edition = "2021"

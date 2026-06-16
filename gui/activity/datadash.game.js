@@ -2434,6 +2434,48 @@
   // chip towers — extruded from the walls, detailed like chips on a board. Drawn
   // as its own pass that drawTerrain() calls BEFORE the wall fills, so each
   // tower's wall-buried base is hidden and the tower/wall seam disappears (item 12).
+  // Per-tier tower silhouette. The hitbox stays the full rectangle (x..x+bw,
+  // by..by+bh — see resolveTerrain); the shape only reshapes the LANE-FACING tip
+  // (the buried base stays full-width, hidden behind the wall fill). Tapers are
+  // kept mild so the rectangular hitbox barely over-reaches the visible edge.
+  function traceTowerPath(x, by, bw, bh, top) {
+    const shape = (LEVELS[game.level] && LEVELS[game.level].shape && LEVELS[game.level].shape.tower) || "rect";
+    const L = x, R = x + bw;
+    const baseY = top ? by : by + bh;        // buried (wall) edge
+    const tipY = top ? by + bh : by;          // exposed (lane-facing) edge
+    const dir = top ? 1 : -1;                 // base -> tip moves +dir in y
+    ctx.beginPath();
+    if (shape === "trapezoid") {
+      const ti = bw * 0.14;
+      ctx.moveTo(L, baseY); ctx.lineTo(L + ti, tipY); ctx.lineTo(R - ti, tipY); ctx.lineTo(R, baseY);
+    } else if (shape === "chamfer") {
+      const ch = Math.min(bw * 0.2, bh * 0.45);
+      ctx.moveTo(L, baseY); ctx.lineTo(L, tipY - dir * ch); ctx.lineTo(L + ch, tipY);
+      ctx.lineTo(R - ch, tipY); ctx.lineTo(R, tipY - dir * ch); ctx.lineTo(R, baseY);
+    } else if (shape === "oval") {
+      const dome = Math.min(bh * 0.5, bw * 0.5);
+      ctx.moveTo(L, baseY); ctx.lineTo(L, tipY - dir * dome);
+      ctx.quadraticCurveTo(L, tipY, L + bw * 0.5, tipY);
+      ctx.quadraticCurveTo(R, tipY, R, tipY - dir * dome);
+      ctx.lineTo(R, baseY);
+    } else if (shape === "stepped") {
+      const sw = bw * 0.18, midY = baseY + dir * bh * 0.5;
+      ctx.moveTo(L, baseY); ctx.lineTo(L, midY); ctx.lineTo(L + sw, midY); ctx.lineTo(L + sw, tipY);
+      ctx.lineTo(R - sw, tipY); ctx.lineTo(R - sw, midY); ctx.lineTo(R, midY); ctx.lineTo(R, baseY);
+    } else if (shape === "spike") {
+      const N = 3, seg = bw / N, toothH = Math.min(bh * 0.3, seg * 0.55);
+      ctx.moveTo(L, baseY); ctx.lineTo(L, tipY - dir * toothH);
+      for (let k = 0; k < N; k++) {
+        ctx.lineTo(L + (k + 0.5) * seg, tipY);              // jagged peak (into lane)
+        ctx.lineTo(L + (k + 1) * seg, tipY - dir * toothH);  // valley
+      }
+      ctx.lineTo(R, baseY);
+    } else {  // "rect" (default): flat full-width tip
+      ctx.moveTo(L, baseY); ctx.lineTo(L, tipY); ctx.lineTo(R, tipY); ctx.lineTo(R, baseY);
+    }
+    ctx.closePath();
+  }
+
   function drawChipBlocks() {
     for (let i = 0; i < game.cols.length; i++) {
       const col = game.cols[i];
@@ -2450,17 +2492,21 @@
         const bg = ctx.createLinearGradient(0, by, 0, by + bh);
         bg.addColorStop(0, top ? C.obstacle : C.terrain);
         bg.addColorStop(1, top ? C.terrain : C.obstacle);
-        ctx.fillStyle = bg;
-        ctx.fillRect(x, by, bw, bh);
+        // fill + edge stroke follow the per-tier silhouette (rect/chamfer/trapezoid/
+        // stepped/oval/spike). The buried-base edge is stroked too but hidden behind
+        // the wall fills drawn after this pass.
+        traceTowerPath(x, by, bw, bh, top);
+        ctx.fillStyle = bg; ctx.fill();
         ctx.strokeStyle = C.obstacleEdge; ctx.lineWidth = 2.5;
         ctx.shadowColor = C.obstacleEdge; ctx.shadowBlur = 11;
-        ctx.beginPath();
-        if (top) { ctx.moveTo(x, by); ctx.lineTo(x, by + bh); ctx.lineTo(x + bw, by + bh); ctx.lineTo(x + bw, by); }
-        else { ctx.moveTo(x, by + bh); ctx.lineTo(x, by); ctx.lineTo(x + bw, by); ctx.lineTo(x + bw, by + bh); }
         ctx.stroke();
         ctx.shadowBlur = 0;
-        // contact pads near the exposed tip + circuit detail
+        // chip detail (pads / center trace / IC rungs) clipped to the silhouette so
+        // it never spills past a tapered tip.
         const tipY = top ? by + bh : by;
+        ctx.save();
+        traceTowerPath(x, by, bw, bh, top);
+        ctx.clip();
         const pads = Math.max(2, Math.round(bw / 14));
         ctx.fillStyle = hexA(C.accentSoft, 0.7);
         for (let p = 0; p < pads; p++) {
@@ -2474,7 +2520,6 @@
         // damage cue: red wash + cracks as standard shots chip the tower toward breaking
         if (blk.hits) {
           const dmg = Math.min(1, blk.hits / (T.obsHitsToBreak || 4));
-          ctx.save();
           ctx.globalAlpha = 0.18 + 0.32 * dmg;
           ctx.fillStyle = C.danger; ctx.fillRect(x, by, bw, bh);
           ctx.globalAlpha = 0.7; ctx.strokeStyle = "#ffd9d9"; ctx.lineWidth = 1.3;
@@ -2483,8 +2528,8 @@
             const cx = x + ((c + 0.5) / cracks) * bw;
             ctx.beginPath(); ctx.moveTo(cx, by + 2); ctx.lineTo(cx + (c % 2 ? 5 : -5), by + bh * 0.45); ctx.lineTo(cx + (c % 2 ? -3 : 4), by + bh - 2); ctx.stroke();
           }
-          ctx.restore();
         }
+        ctx.restore();
       }
     }
   }
