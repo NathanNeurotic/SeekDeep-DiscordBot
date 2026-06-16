@@ -2144,7 +2144,7 @@ def register_gui_endpoints(
         checks.append({
             "id": "discord_client_id",
             "label": "DISCORD_CLIENT_ID set (for slash commands)",
-            "ok": bool(cid) and cid.isdigit() and 17 <= len(cid) <= 20,
+            "ok": bool(cid) and cid.isdecimal() and 17 <= len(cid) <= 20,
             "fix": "Paste your Discord Application ID below. Find it at discord.com/developers/applications -> your bot -> General Information -> Application ID.",
             "fix_action": {
                 "endpoint": "/config", "method": "POST", "label": "Save ID",
@@ -2166,7 +2166,7 @@ def register_gui_endpoints(
         admin_ok = False
         if admin:
             parts = [p.strip() for p in admin.split(",") if p.strip()]
-            admin_ok = bool(parts) and all(p.isdigit() and 17 <= len(p) <= 20 for p in parts)
+            admin_ok = bool(parts) and all(p.isdecimal() and 17 <= len(p) <= 20 for p in parts)
         checks.append({
             "id": "admin_ids",
             "label": "SEEKDEEP_ADMIN_IDS set (admin features need it)",
@@ -2447,8 +2447,8 @@ def register_gui_endpoints(
             if r.returncode == 0:
                 v = (r.stdout or "").strip().lstrip("v")
                 _p = v.split(".")
-                major = int(_p[0]) if v and _p[0].isdigit() else 0
-                minor = int(_p[1]) if len(_p) > 1 and _p[1].isdigit() else 0
+                major = int(_p[0]) if v and _p[0].isdecimal() else 0
+                minor = int(_p[1]) if len(_p) > 1 and _p[1].isdecimal() else 0
                 out["node"] = {
                     "installed": True,
                     "version": v,
@@ -6991,7 +6991,7 @@ def register_gui_endpoints(
         searxng_state = "unknown"
         try:
             port_str = (os.getenv("SEARXNG_PORT") or "").strip() or "8080"
-            port = int(port_str) if port_str.isdigit() else 8080
+            port = int(port_str) if port_str.isdecimal() else 8080
             with socket.create_connection(("127.0.0.1", port), timeout=0.4):
                 searxng_state = "running"
         except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError):
