@@ -25,7 +25,7 @@
     "purge:model-cache-quarantine": "node scripts/run-python.mjs warmup_local_cache.py --purge-quarantine"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.18.0",
+    "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.18.0",
     "dotenv": "^17.4.2",
     "form-data": "^4.0.1",
