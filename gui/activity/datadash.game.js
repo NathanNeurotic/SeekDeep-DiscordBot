@@ -162,17 +162,29 @@
   const DD_FREQ_KEYS = ["packet", "kernel", "mystery", "upgrade", "lifecell", "pepe", "shield"];
   const DD_FREQ_LEVELS = ["default", "less", "more", "excessive"];
   const DD_FREQ_LABELS = { default: "default", less: "less frequent", more: "more frequent", excessive: "excessive" };
+  const DD_LEVEL_PLAIN = { default: "default", less: "less", more: "more", excessive: "excessive" };
   const DD_FREQ_MULT = { default: 1, less: 2.5, more: 0.4, excessive: 0.1 };
+  const DD_BOSS_DIFF_MULT = { less: 0.6, default: 1, more: 1.5, excessive: 2.2 };   // boss fire-aggression mult (higher = harder = faster fire)
+  const DD_EVENT_KINDS = ["database", "ddos", "pepe", "doubleboss"];
+  const DD_EVENT_LABELS = { database: "DATA BASE", ddos: "DDoS", pepe: "OVERCLOCK CACHE", doubleboss: "DOUBLE BOSS" };
+  const DD_SPEED_MULTS = [0.25, 0.5, 1, 1.5, 2, 3];
   const DD_DEBUG = (function () {
-    const base = { enabled: false, startBytes: 0, freq: {} };
+    const base = { enabled: false, startBytes: 0, speedMult: 1, eventFreq: "default", bossDiff: "default", freq: {}, events: {} };
     for (const k of DD_FREQ_KEYS) base.freq[k] = "default";
+    for (const k of DD_EVENT_KINDS) base.events[k] = true;
     try {
       const saved = JSON.parse(localStorage.getItem("datadash.debug") || "null");
       if (saved && typeof saved === "object") {
         base.enabled = !!saved.enabled;
         base.startBytes = Math.max(0, +saved.startBytes || 0);
+        if (DD_SPEED_MULTS.indexOf(+saved.speedMult) >= 0) base.speedMult = +saved.speedMult;
+        if (DD_FREQ_LEVELS.indexOf(saved.eventFreq) >= 0) base.eventFreq = saved.eventFreq;
+        if (DD_FREQ_LEVELS.indexOf(saved.bossDiff) >= 0) base.bossDiff = saved.bossDiff;
         if (saved.freq && typeof saved.freq === "object") {
           for (const k of DD_FREQ_KEYS) if (DD_FREQ_LEVELS.indexOf(saved.freq[k]) >= 0) base.freq[k] = saved.freq[k];
+        }
+        if (saved.events && typeof saved.events === "object") {
+          for (const k of DD_EVENT_KINDS) base.events[k] = saved.events[k] !== false;   // default ON; only an explicit false disables
         }
       }
     } catch (e) {}
@@ -183,6 +195,10 @@
     if (!DD_DEBUG.enabled) return 1;
     return DD_FREQ_MULT[DD_DEBUG.freq[key]] || 1;
   }
+  function ddSpeedMult() { return DD_DEBUG.enabled ? (DD_DEBUG.speedMult || 1) : 1; }
+  function ddEventFreqMul() { return DD_DEBUG.enabled ? (DD_FREQ_MULT[DD_DEBUG.eventFreq] || 1) : 1; }
+  function ddBossDiffMult() { return DD_DEBUG.enabled ? (DD_BOSS_DIFF_MULT[DD_DEBUG.bossDiff] || 1) : 1; }
+  function ddEventEnabled(kind) { return !DD_DEBUG.enabled || DD_DEBUG.events[kind] !== false; }
 
   let game = null;
   function newGame() {
@@ -241,7 +257,7 @@
       boss2: null,             // second daemon during a Double Boss event
       _bossesActive: false,
       event: null,             // active random event { kind, dist, length, ... }
-      nextEventT: 50 + Math.random() * 40,   // first random-event window (seconds)
+      nextEventT: (50 + Math.random() * 40) * ddEventFreqMul(),   // first random-event window (seconds; debug-scaled)
       bullets: [],
       bars: [],
       playerBullets: [],
@@ -283,7 +299,7 @@
   // ---- terrain generation : continuous safe corridor -----------------------
   function curScroll() {
     // per-level base speed, eased on level-up (see update()); scrollFx multiplies on top
-    let s = game.spd || levelSpeed(game.level || 0);
+    let s = (game.spd || levelSpeed(game.level || 0)) * ddSpeedMult();   // debug speed-× multiplier (1 when debug off)
     if (game.resumeT > 0) s *= 0.25 + 0.75 * (1 - game.resumeT / 5);   // 5s slow restart after a continue
     return s;
   }
@@ -621,6 +637,18 @@
       const sel = document.getElementById("dbg-freq-" + k);
       if (sel) sel.value = DD_DEBUG.freq[k];
     }
+    const sm = document.getElementById("dbg-speed-mult"); if (sm) sm.value = String(DD_DEBUG.speedMult);
+    const bd = document.getElementById("dbg-boss-diff"); if (bd) bd.value = DD_DEBUG.bossDiff;
+    const ef = document.getElementById("dbg-event-freq"); if (ef) ef.value = DD_DEBUG.eventFreq;
+    for (const k of DD_EVENT_KINDS) { const cb = document.getElementById("dbg-event-" + k); if (cb) cb.checked = DD_DEBUG.events[k] !== false; }
+  }
+  // fill a <select> with options + bind change (used for the speed/boss/event dropdowns)
+  function ddFillSelect(id, values, labelFn, onChange) {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (const v of values) { const o = document.createElement("option"); o.value = String(v); o.textContent = labelFn(v); sel.appendChild(o); }
+    sel.addEventListener("change", () => onChange(sel.value));
   }
   function ddInitDebugUI() {
     for (const k of DD_FREQ_KEYS) {
@@ -637,6 +665,19 @@
         if (DD_FREQ_LEVELS.indexOf(sel.value) >= 0) { DD_DEBUG.freq[k] = sel.value; ddSaveDebug(); }
       });
     }
+    ddFillSelect("dbg-speed-mult", DD_SPEED_MULTS, (v) => "×" + v, (val) => {
+      const n = +val; if (DD_SPEED_MULTS.indexOf(n) >= 0) { DD_DEBUG.speedMult = n; ddSaveDebug(); }
+    });
+    ddFillSelect("dbg-boss-diff", DD_FREQ_LEVELS, (v) => DD_LEVEL_PLAIN[v], (val) => {
+      if (DD_FREQ_LEVELS.indexOf(val) >= 0) { DD_DEBUG.bossDiff = val; ddSaveDebug(); }
+    });
+    ddFillSelect("dbg-event-freq", DD_FREQ_LEVELS, (v) => DD_FREQ_LABELS[v], (val) => {
+      if (DD_FREQ_LEVELS.indexOf(val) >= 0) { DD_DEBUG.eventFreq = val; ddSaveDebug(); }
+    });
+    for (const k of DD_EVENT_KINDS) {
+      const cb = document.getElementById("dbg-event-" + k);
+      if (cb) cb.addEventListener("change", () => { DD_DEBUG.events[k] = !!cb.checked; ddSaveDebug(); });
+    }
     const en = document.getElementById("dbg-enabled");
     if (en) en.addEventListener("change", () => { DD_DEBUG.enabled = !!en.checked; ddSaveDebug(); });
     const amt = document.getElementById("dbg-start-amt");
@@ -647,7 +688,9 @@
     const reset = document.getElementById("dbg-reset");
     if (reset) reset.addEventListener("click", () => {
       DD_DEBUG.enabled = false; DD_DEBUG.startBytes = 0;
+      DD_DEBUG.speedMult = 1; DD_DEBUG.eventFreq = "default"; DD_DEBUG.bossDiff = "default";
       for (const k of DD_FREQ_KEYS) DD_DEBUG.freq[k] = "default";
+      for (const k of DD_EVENT_KINDS) DD_DEBUG.events[k] = true;
       ddSaveDebug(); ddSyncDebugUI();
     });
     ddSyncDebugUI();
@@ -1273,18 +1316,29 @@
   // Fire at unpredictable intervals. One of: Double Boss (rarest), DATA Base (wavy
   // kb stream), DDoS (stationary-malware maze), Pepe Packets (collectible grid).
   function triggerRandomEvent() {
-    game.nextEventT = game.t + T.eventEveryMin + Math.random() * (T.eventEveryMax - T.eventEveryMin);
+    game.nextEventT = game.t + (T.eventEveryMin + Math.random() * (T.eventEveryMax - T.eventEveryMin)) * ddEventFreqMul();
     const r = Math.random();
     // doubleboss -15% (0.10 -> 0.085); Overclock Cache (kind "pepe") occurrence halved
     // (0.28 -> 0.14) with DDoS taking up the slack.
     let kind = r < 0.085 ? "doubleboss" : (r < 0.40 ? "database" : (r < 0.86 ? "ddos" : "pepe"));
+    // DEBUG: honour per-event toggles — if the rolled kind is disabled, re-pick from the
+    // enabled set; if ALL events are off, skip this trigger entirely (no event).
+    if (DD_DEBUG.enabled) {
+      const enabled = DD_EVENT_KINDS.filter(ddEventEnabled);
+      if (!enabled.length) return;
+      if (!ddEventEnabled(kind)) kind = enabled[(Math.random() * enabled.length) | 0];
+    }
     if (kind === "doubleboss") {
       // Never a double daemon within 10s of ANY boss fight — active, imminent, or just-ended.
       const bossNear = game._bossesActive
         || (T.bossEverySeconds - game.bossClock) < 10
         || (game.t - (game.lastBossEndT != null ? game.lastBossEndT : -999)) < 10;
-      if (bossNear) { kind = Math.random() < 0.5 ? "ddos" : "database"; }
-      else { spawnDoubleBoss(); return; }
+      if (bossNear) {
+        // fall back to a non-doubleboss kind, respecting toggles when debug is on
+        const fbPool = ["ddos", "database"].filter((k) => ddEventEnabled(k));
+        if (!fbPool.length) return;
+        kind = fbPool[(Math.random() * fbPool.length) | 0];
+      } else { spawnDoubleBoss(); return; }
     }
     const spacing = kind === "database" ? T.colW * T.dbSpacingCols
                   : kind === "ddos" ? T.colW * T.ddosSpacingCols
@@ -1658,7 +1712,7 @@
       arch,
       patterns: playlist, pIdx: 0, pattern: playlist[0],
       patternT: 1.2, patternDur: T.bossPatternEvery * (0.7 + Math.random() * 0.7),
-      fireT: 0.6, fireRate: 0.62 + Math.random() * 0.4,
+      fireT: 0.6, fireRate: (0.62 + Math.random() * 0.4) / ddBossDiffMult(),   // smaller interval = faster fire = harder (debug boss difficulty)
       spiralA: Math.random() * 6.28, spiralDir: Math.random() < 0.5 ? 1 : -1,
       moveStyle: Math.floor(Math.random() * 3),
       moveSpeed: T.bossMoveSpeed * (0.75 + Math.random() * 0.7),
