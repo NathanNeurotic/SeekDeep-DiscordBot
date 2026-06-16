@@ -11,7 +11,7 @@
 # fine without them; ML-dependent handlers return ML_DEPS_MISSING until
 # the user opts to install.
 
-fastapi>=0.115.0
+fastapi>=0.136.3
 uvicorn[standard]>=0.48.0
 pydantic>=2.10.0
 python-dotenv>=1.2.2
@@ -19,7 +19,7 @@ pillow>=12.2.0
 requests>=2.32.0
 huggingface_hub>=0.30.0
 matplotlib>=3.9.0
-psutil>=6.0.0
+psutil>=7.2.2
 
 # Tokenizer backends. These are TINY (~10 MB combined) and pure-import —
 # no GPU, no torch, no diffusers. Promoting them to boot deps because
