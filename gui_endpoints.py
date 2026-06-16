@@ -2446,13 +2446,18 @@ def register_gui_endpoints(
             r = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=2)
             if r.returncode == 0:
                 v = (r.stdout or "").strip().lstrip("v")
-                major = int(v.split(".")[0]) if v else 0
+                _p = v.split(".")
+                major = int(_p[0]) if v and _p[0].isdigit() else 0
+                minor = int(_p[1]) if len(_p) > 1 and _p[1].isdigit() else 0
                 out["node"] = {
                     "installed": True,
                     "version": v,
                     "major": major,
-                    "meets_min": major >= 22,  # @discordjs/voice 0.19+ needs Node 22.12+; Node 20 is EOL
-                    "min_required": "22.x",
+                    "minor": minor,
+                    # @discordjs/voice 0.19+ needs Node >=22.12.0 (Node 20 is EOL);
+                    # enforce the minor so 22.0–22.11 don't falsely meet the floor.
+                    "meets_min": major > 22 or (major == 22 and minor >= 12),
+                    "min_required": "22.12.0",
                 }
             else:
                 out["node"] = {"installed": False, "error": (r.stderr or "").strip()[:160]}
