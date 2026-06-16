@@ -9728,7 +9728,21 @@ client.once('clientReady', async () => {
   try { seekdeepConnectCommandBridge(); } catch (_) {}
 
   try {
-    await client.application.commands.set(commands);
+    // Discord auto-creates a PRIMARY_ENTRY_POINT command (type 4) for the
+    // DataDash Activity. A bulk set() that omits it is rejected with error
+    // 50240 ("cannot remove this app's Entry Point command in a bulk update"),
+    // which would make EVERY slash command silently fail to register. So fetch
+    // the live commands and re-include the Entry Point in our overwrite. If the
+    // fetch fails for any reason, fall back to the plain set (no worse off).
+    let toSet = commands;
+    try {
+      const existing = await client.application.commands.fetch();
+      const entryPoint = existing.find((c) => c.type === 4);
+      if (entryPoint) toSet = [...commands, entryPoint];
+    } catch (fetchErr) {
+      console.warn('[SeekDeep] Entry Point preserve: command fetch failed, proceeding without it —', fetchErr?.message || fetchErr);
+    }
+    await client.application.commands.set(toSet);
   } catch (err) {
     console.error('[SeekDeep] Command registration failed:', err);
   }
