@@ -3609,7 +3609,11 @@ def register_gui_endpoints(
                             ["npm", "install"],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1, cwd=str(root),
-                            shell=(os.name == "nt"),  # npm.cmd on Windows
+                            # SECURITY: shell=True only to route to npm.cmd on
+                            # Windows. The argv is a HARDCODED literal — NEVER add
+                            # user/Discord-supplied package names or flags here, or
+                            # this becomes command injection. (DeepSeek audit C-2.)
+                            shell=(os.name == "nt"),
                         )
                         if proc.stdout:
                             for line in proc.stdout:
@@ -5994,6 +5998,11 @@ def register_gui_endpoints(
                     except OSError:
                         continue
                     if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
+                        # Fail-open is intentional: forward progress beats a hang.
+                        # JSON corruption is prevented regardless by atomic
+                        # temp-file+rename writes; this lock only avoids the rare
+                        # lost-update when bot+server mutate the same file at once
+                        # (DeepSeek audit M-5).
                         print(f"[SeekDeep] file lock timeout on {os.path.basename(self._lock_path)}; proceeding without it (fail-open).", flush=True)
                         break
                     time.sleep(0.025)
@@ -6521,7 +6530,15 @@ def register_gui_endpoints(
                 if not k:
                     continue
                 new_env[k] = v
+            skipped: list[str] = []
             for k, v in new_env.items():
+                # Never let a .env reload apply auth-critical / self-update keys
+                # (mirrors the POST /config protected-key guard above). A reload
+                # must not be a backdoor to disable the token gate via a tampered
+                # .env (e.g. SEEKDEEP_GUI_TOKEN_DISABLED=1).
+                if k in _CONFIG_PROTECTED_KEYS:
+                    skipped.append(k)
+                    continue
                 old = os.environ.get(k)
                 if old is None:
                     added.append(k)
@@ -6534,7 +6551,7 @@ def register_gui_endpoints(
             except Exception:
                 pass
             return {"ok": True, "changed": changed, "added": added,
-                    "total_keys": len(new_env)}
+                    "skipped_protected": skipped, "total_keys": len(new_env)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)[:240]}
 

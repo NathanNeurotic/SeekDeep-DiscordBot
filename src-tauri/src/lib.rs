@@ -540,6 +540,11 @@ pub fn run() {
                                     page, hash
                                 )
                             };
+                            // SECURITY (audit H-3): w.eval() bypasses CSP. eval_js
+                            // here is built ONLY from hardcoded page/hash literals;
+                            // never interpolate user/untrusted data into eval strings
+                            // (the other eval sites below use only literals + the
+                            // urlsafe GUI token, which is JS-string-safe).
                             let _ = w.eval(&eval_js);
                         }
                     }
