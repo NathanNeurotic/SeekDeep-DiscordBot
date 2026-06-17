@@ -1413,6 +1413,7 @@
       { title: 'Personas',    path: 'personas.html'  },
       { title: 'Add a Model', path: 'add-model.html' },
       { title: 'Changelog',   path: 'changelog.html' },
+      { title: 'TTS Voice',   path: 'tts.html'       },
       { title: 'DATA DASH!',  path: 'activity/index.html' },
     ];
     // Feature-gated items: shown only when their env flag is ON (read from the

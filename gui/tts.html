@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>SeekDeep — TTS preview</title>
+<title>SeekDeep — Text-to-Speech</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -209,144 +209,68 @@
 <div class="app-wrap"><div class="win">
   <div class="body" id="ttsPage">
 
-    <!-- ===== LEFT · VOICE CHANNELS ===== -->
+    <!-- ===== LEFT · STATUS + HOW IT WORKS ===== -->
     <aside class="col">
       <div>
-        <h2>Voice channels</h2>
-        <div class="sub" style="margin-top: 4px;">▸ Discord-only · @SeekDeep tts join</div>
+        <h2>Text-to-Speech</h2>
+        <div class="sub" style="margin-top: 4px;">▸ Piper · local · offline</div>
       </div>
 
       <div class="preview-banner" id="ttsStatus" data-state="checking">
         <strong>● TTS</strong> · Checking…
       </div>
 
-      <div class="vc-list">
-        <div class="vc active">
-          <span class="ic">🔊</span>
-          <div>
-            <div>General</div>
-            <div class="ct">3 members listening</div>
-          </div>
-          <span class="ct">connected</span>
-        </div>
-        <div class="vc">
-          <span class="ic">🔊</span>
-          <div>
-            <div>dev-pair</div>
-            <div class="ct">empty</div>
-          </div>
-          <span class="ct">join</span>
-        </div>
-        <div class="vc">
-          <span class="ic">🔊</span>
-          <div>
-            <div>night-shift</div>
-            <div class="ct">2 members · music bot</div>
-          </div>
-          <span class="ct">join</span>
-        </div>
-        <div class="vc locked">
-          <span class="ic">🔒</span>
-          <div>
-            <div>mods-only</div>
-            <div class="ct">private · no access</div>
-          </div>
-          <span class="ct">locked</span>
-        </div>
-        <div class="vc">
-          <span class="ic">🔊</span>
-          <div>
-            <div>watercooler</div>
-            <div class="ct">7 members listening</div>
-          </div>
-          <span class="ct">join</span>
+      <div style="margin-top: 2px;">
+        <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">HOW IT WORKS</h2>
+        <ol style="margin: 10px 0 0; padding-left: 18px; font-size: 12px; color: var(--hull-2); line-height: 1.7;">
+          <li>Pick a voice on the right and hit <strong style="color:var(--cyan-1)">download</strong>.</li>
+          <li>SeekDeep fetches the Piper model (~60–110&nbsp;MB) and switches to it automatically — no restart.</li>
+          <li>Type text in the middle and press <strong style="color:var(--cyan-1)">Speak</strong> to hear it right here.</li>
+        </ol>
+        <div style="margin-top: 10px; font-size: 11px; color: var(--hull-3); line-height: 1.6;">
+          Downloading a voice also writes <code>SEEKDEEP_TTS_PIPER_VOICE</code> + <code>SEEKDEEP_FEATURE_TTS_VOICE=on</code> to your <code>.env</code>, so it survives a restart.
         </div>
       </div>
 
       <div style="margin-top: 6px;">
-        <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">PER-CHANNEL OPT-IN</h2>
-        <div class="pref-row">
-          <div><div class="k">SEEKDEEP_TTS_IN_CHANNEL</div><div class="d">Reads bot replies aloud in the connected VC.</div></div>
-          <div class="toggle on"></div>
-        </div>
-        <div class="pref-row">
-          <div><div class="k">READ_AUTHOR_NAME</div><div class="d">"Nathan asked: …" prefix.</div></div>
-          <div class="toggle"></div>
-        </div>
-        <div class="pref-row">
-          <div><div class="k">SKIP_CODE_BLOCKS</div><div class="d">Don't try to read ```fenced``` content.</div></div>
-          <div class="toggle on"></div>
+        <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">IN DISCORD</h2>
+        <div style="margin-top: 8px; font-size: 12px; color: var(--hull-3); line-height: 1.7;">
+          Join a voice channel, then mention the bot:
+          <div style="margin-top: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--cyan-1); line-height: 1.8;">
+            @SeekDeep tts join<br/>
+            @SeekDeep tts say &lt;text&gt;<br/>
+            @SeekDeep tts leave
+          </div>
         </div>
       </div>
     </aside>
 
-    <!-- ===== CENTER · NOW READING + QUEUE ===== -->
+    <!-- ===== CENTER · TESTER ===== -->
     <main class="col" style="background: transparent;">
       <div>
-        <h2>Now reading</h2>
-        <div class="sub" style="margin-top: 4px;">▸ #general · Piper en_US-amy-medium</div>
+        <h2>Test your voice</h2>
+        <div class="sub" style="margin-top: 4px;">▸ synthesized locally · plays in your browser</div>
       </div>
 
       <div class="stage">
-        <h3>CURRENTLY SPEAKING</h3>
+        <h3>SYNTHESIZED AUDIO</h3>
         <div class="now" id="nowText">
-          <em>SeekDeep ▸</em> Bioluminescence is light produced by a chemical reaction within a living organism — the most common case is the luciferin-luciferase pathway, where luciferin reacts with oxygen catalyzed by luciferase to emit a photon.
+          <em>SeekDeep ▸</em> Download a voice on the right, then type below and hit Speak — the audio shows up here.
         </div>
         <div class="player">
-          <button class="play-btn" id="pp">▮▮</button>
-          <div class="wave" id="wave"></div>
-          <div class="timecode" id="tc">00:08 / 00:24</div>
+          <button class="play-btn" id="pp">▶</button>
+          <div class="wave" id="wave" style="filter: grayscale(1) brightness(0.6);"></div>
+          <div class="timecode" id="tc"></div>
         </div>
         <audio id="ttsAudio" hidden preload="none"></audio>
         <div class="stage-meta">
-          <span><em>voice</em> en_US-amy-medium</span>
-          <span><em>rate</em> 1.0×</span>
-          <span><em>pitch</em> +0</span>
-          <span><em>audio</em> 48 kHz · opus</span>
-          <span><em>via</em> SeekDeep #general</span>
+          <span><em>engine</em> Piper</span>
+          <span><em>tip</em> Ctrl+Enter to speak</span>
         </div>
-      </div>
-
-      <h2 style="font-size: 14px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase; margin-top: 8px;">QUEUE · 3 PENDING</h2>
-
-      <div class="q-card now-reading">
-        <span class="idx">→</span>
-        <div>
-          <div class="txt"><em style="color:var(--cyan-1); font-style: normal;">SeekDeep ▸</em> Bioluminescence is light produced by a chemical reaction…</div>
-          <div class="who">replying to nautilus · 4s in · ~24s remaining</div>
-        </div>
-        <span class="pill cyan"><span class="dot"></span>READING</span>
-      </div>
-
-      <div class="q-card">
-        <span class="idx">1</span>
-        <div>
-          <div class="txt"><em style="color:var(--cyan-1); font-style: normal;">SeekDeep ▸</em> the colossal squid grows up to 14 m and has the largest eyes of any animal — roughly the size of a basketball — adapted to detect bioluminescence in total darkness.</div>
-          <div class="who">replying to deepdiver · ~38s estimated</div>
-        </div>
-        <button>SKIP</button>
-      </div>
-
-      <div class="q-card">
-        <span class="idx">2</span>
-        <div>
-          <div class="txt"><em style="color:var(--cyan-1); font-style: normal;">SeekDeep ▸</em> at 10,000 m the only mechanical light is from biolume; sunlight effectively stops past 1 km depth, and the bottom of the Mariana Trench sits at 10,935 m below sea level.</div>
-          <div class="who">replying to k-ray · ~32s estimated</div>
-        </div>
-        <button>SKIP</button>
-      </div>
-
-      <div class="q-card">
-        <span class="idx">3</span>
-        <div>
-          <div class="txt"><em style="color:var(--cyan-1); font-style: normal;">SeekDeep ▸</em> hydrothermal vents host life that doesn't depend on sunlight at all — chemosynthesis from sulfur compounds is the base of those ecosystems.</div>
-          <div class="who">replying to lanternjaw · ~28s estimated</div>
-        </div>
-        <button>SKIP</button>
       </div>
 
       <div class="composer">
-        <textarea id="ttsText" placeholder="Type text and press Speak to synthesize it in your browser…">The kraken is real — it's just smaller than you'd hope.</textarea>
+        <textarea id="ttsText" placeholder="Type text and press Speak to synthesize it locally…">The kraken is real — it's just smaller than you'd hope.</textarea>
         <button class="btn btn-primary" id="ttsSpeak">▸ Speak</button>
       </div>
     </main>
@@ -355,68 +279,18 @@
     <aside class="col">
       <div>
         <h2>Voice</h2>
-        <div class="sub" style="margin-top: 4px;">▸ Piper voices · disk-pinned</div>
+        <div class="sub" style="margin-top: 4px;">▸ Piper voices · click to download</div>
       </div>
 
       <div class="voice-grid" id="voiceGrid">
-        <div class="voice active" data-v="en_US-amy-medium">
-          <div class="av">A</div>
-          <div><div>en_US-amy-medium</div><div class="meta">female · 22 kHz · 63 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="en_US-ryan-high">
-          <div class="av">R</div>
-          <div><div>en_US-ryan-high</div><div class="meta">male · 22 kHz · 109 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="en_GB-northern_english_male-medium">
-          <div class="av">N</div>
-          <div><div>en_GB-northern_english_male</div><div class="meta">male · 22 kHz · 63 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="en_US-libritts_r-medium">
-          <div class="av">L</div>
-          <div><div>en_US-libritts_r-medium</div><div class="meta">multi-speaker · 22 kHz · 75 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="en_US-hfc_female-medium">
-          <div class="av">H</div>
-          <div><div>en_US-hfc_female-medium</div><div class="meta">female · 22 kHz · 63 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="es_ES-davefx-medium">
-          <div class="av">D</div>
-          <div><div>es_ES-davefx-medium</div><div class="meta">male · spanish · 63 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
-        <div class="voice" data-v="ja_JP-takumi-medium">
-          <div class="av">T</div>
-          <div><div>ja_JP-takumi-medium</div><div class="meta">male · japanese · 63 MB</div></div>
-          <button class="preview-btn">▶ TEST</button>
-        </div>
+        <div class="meta">Loading voices…</div>
       </div>
 
       <div style="margin-top: 12px;">
-        <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">SYNTHESIS KNOBS</h2>
+        <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">SYNTHESIS</h2>
         <div class="pref-row">
           <div><div class="k">RATE</div><div class="d">speech speed multiplier · 0.5–2.0</div></div>
           <input type="number" id="ttsRate" value="1.0" step="0.1" min="0.5" max="2.0" />
-        </div>
-        <div class="pref-row">
-          <div><div class="k">PITCH</div><div class="d">semitones · −6 to +6</div></div>
-          <input type="number" value="0" step="1" min="-6" max="6" />
-        </div>
-        <div class="pref-row">
-          <div><div class="k">VOLUME</div><div class="d">0–100% · ducked when others speak</div></div>
-          <input type="number" value="80" step="5" min="0" max="100" />
-        </div>
-        <div class="pref-row">
-          <div><div class="k">DUCK ON SPEECH</div><div class="d">drop volume 60% when humans talk</div></div>
-          <div class="toggle on"></div>
-        </div>
-        <div class="pref-row">
-          <div><div class="k">CHARS BEFORE STREAM</div><div class="d">buffer before emitting audio · trade latency vs prosody</div></div>
-          <input type="number" value="40" step="10" min="10" max="200" />
         </div>
       </div>
     </aside>
