@@ -6516,6 +6516,143 @@ def tts(req: TTSRequest):
     }
 
 
+# ===== TTS voice catalog + self-service download =====
+# Curated Piper voices (rhasspy/piper-voices on HF). The GUI lists these, the
+# user one-click downloads .onnx + .onnx.json on demand to TTS_VOICES_DIR as REAL
+# files (local_dir, NOT the symlinked HF cache the Windows server can't follow),
+# then we point SEEKDEEP_TTS_PIPER_VOICE at the result + drop the cached engine so
+# /tts works immediately. The GUI persists the path to .env via /config (so it
+# survives a restart) and flips SEEKDEEP_FEATURE_TTS_VOICE=on for the bot.
+TTS_VOICES_DIR = (MODEL_CACHE_DIR.parent / "piper-voices")
+_PIPER_VOICE_REPO = "rhasspy/piper-voices"
+_PIPER_VOICE_CATALOG = [
+    {"key": "en_US-amy-medium",  "label": "Amy",  "lang": "en_US", "gender": "female", "quality": "medium", "size_mb": 63,  "rel": "en/en_US/amy/medium/en_US-amy-medium"},
+    {"key": "en_US-ryan-high",   "label": "Ryan", "lang": "en_US", "gender": "male",   "quality": "high",   "size_mb": 109, "rel": "en/en_US/ryan/high/en_US-ryan-high"},
+    {"key": "en_US-hfc_female-medium", "label": "HFC Female", "lang": "en_US", "gender": "female", "quality": "medium", "size_mb": 63, "rel": "en/en_US/hfc_female/medium/en_US-hfc_female-medium"},
+    {"key": "en_US-libritts_r-medium", "label": "LibriTTS-R", "lang": "en_US", "gender": "multi", "quality": "medium", "size_mb": 75, "rel": "en/en_US/libritts_r/medium/en_US-libritts_r-medium"},
+    {"key": "en_GB-northern_english_male-medium", "label": "Northern English (M)", "lang": "en_GB", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium"},
+    {"key": "es_ES-davefx-medium", "label": "DaveFX · Spanish", "lang": "es_ES", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "es/es_ES/davefx/medium/es_ES-davefx-medium"},
+    {"key": "de_DE-thorsten-medium", "label": "Thorsten · German", "lang": "de_DE", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"},
+]
+
+# Serialize concurrent downloads: tts_voice_download is a sync route (threadpool)
+# and its offline-flag override mutates process-global huggingface_hub state, so
+# two overlapping downloads must not interleave. See tts_voice_download.
+_TTS_DOWNLOAD_LOCK = threading.Lock()
+
+
+def _piper_voice_local_onnx(rel: str) -> Path:
+    return TTS_VOICES_DIR / (rel + ".onnx")
+
+
+def _tts_voices_state() -> list:
+    cur = (SEEKDEEP_TTS_PIPER_VOICE or "").replace("\\", "/").lower()
+    out = []
+    for v in _PIPER_VOICE_CATALOG:
+        onnx = _piper_voice_local_onnx(v["rel"])
+        # Require BOTH the model and its sibling config: a partial download (.onnx
+        # landed, .onnx.json failed) would otherwise show as ready but fail to load
+        # in Piper. str(onnx)+".json" -> the ....onnx.json sidecar (double suffix).
+        downloaded = onnx.is_file() and Path(str(onnx) + ".json").is_file()
+        out.append({
+            "key": v["key"], "label": v["label"], "lang": v["lang"], "gender": v["gender"],
+            "quality": v["quality"], "size_mb": v["size_mb"],
+            "downloaded": downloaded,
+            "path": str(onnx) if downloaded else "",
+            "active": downloaded and str(onnx).replace("\\", "/").lower() == cur,
+        })
+    return out
+
+
+@app.get("/tts/voices")
+def tts_voices():
+    """List the curated Piper voice catalog + which are downloaded/active. Open
+    (read-only) like /health, so the TTS page can render before any token use."""
+    return {
+        "ok": True,
+        "engine": SEEKDEEP_TTS_ENGINE,
+        "enabled": _tts_voice_configured(),
+        "configured_voice": _tts_configured_voice() or "",
+        "voices_dir": str(TTS_VOICES_DIR),
+        "voices": _tts_voices_state(),
+    }
+
+
+class TTSVoiceDownloadRequest(BaseModel):
+    key: str = Field(..., description="catalog voice key, e.g. en_US-amy-medium")
+
+
+@app.post("/tts/voices/download", dependencies=[Depends(require_gui_token)])
+def tts_voice_download(req: TTSVoiceDownloadRequest):
+    """Download a curated Piper voice (.onnx + .onnx.json) and activate it LIVE.
+    Persisting to .env (restart-survival) + enabling the bot flag is the GUI's
+    job via POST /config afterward."""
+    global SEEKDEEP_TTS_PIPER_VOICE, SEEKDEEP_TTS_ENGINE, tts_engine
+    entry = next((v for v in _PIPER_VOICE_CATALOG if v["key"] == req.key), None)
+    if entry is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"unknown voice key {req.key!r}"})
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return JSONResponse(status_code=501, content={"ok": False, "error": "huggingface_hub not installed."})
+    try:
+        TTS_VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    onnx_rel = entry["rel"] + ".onnx"
+    json_rel = entry["rel"] + ".onnx.json"
+    onnx_path = None
+    # Hold the download lock around the WHOLE offline-override + fetch: this route
+    # is a sync def, so Starlette runs it in a threadpool and two overlapping
+    # downloads would race the save/restore of the process-global HF offline state
+    # (constants.HF_HUB_OFFLINE + the offline env vars) — a lost restore could leave
+    # the server permanently online. The server runs HF offline by default; we lift
+    # it JUST for this fetch (a new voice needs network), then restore. Mutating
+    # constants.HF_HUB_OFFLINE directly + clearing the env vars + local_files_only=False
+    # is what actually overrides the offline posture for the request.
+    with _TTS_DOWNLOAD_LOCK:
+        import huggingface_hub.constants as _hfc
+        saved_const = getattr(_hfc, "HF_HUB_OFFLINE", False)
+        saved_env = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")}
+        try:
+            try: _hfc.HF_HUB_OFFLINE = False
+            except Exception: pass
+            for k in saved_env: os.environ.pop(k, None)
+            kw = {"repo_id": _PIPER_VOICE_REPO, "local_dir": str(TTS_VOICES_DIR), "local_files_only": False}
+            if os.getenv("HF_TOKEN"): kw["token"] = os.getenv("HF_TOKEN")
+            onnx_path = hf_hub_download(filename=onnx_rel, **kw)
+            hf_hub_download(filename=json_rel, **kw)
+        except Exception as exc:  # noqa: BLE001 — surface a trimmed message to the GUI
+            print(f"[SeekDeep Local AI] /tts/voices/download error: {exc}")
+            traceback.print_exc()
+            # If the .onnx landed but its .onnx.json sidecar didn't, drop the orphan
+            # so the voice isn't reported half-downloaded and a retry starts clean.
+            if onnx_path:
+                try: Path(onnx_path).unlink(missing_ok=True)
+                except OSError: pass
+            return JSONResponse(status_code=502, content={"ok": False, "error": f"download failed: {str(exc)[:300]}"})
+        finally:
+            try: _hfc.HF_HUB_OFFLINE = saved_const
+            except Exception: pass
+            for k, val in saved_env.items():
+                if val is not None:
+                    os.environ[k] = val
+    # Forward-slash the path: Path/Piper accept it on Windows, and it avoids any
+    # backslash-escape ambiguity when the GUI persists it to .env (a value like
+    # C:\Users\...\amy.onnx could be mangled by some dotenv parsers on reload).
+    # The active-voice check in _tts_voices_state() already normalizes slashes.
+    voice_path = str(onnx_path).replace("\\", "/")
+    # Activate live: set the globals + drop the cached engine so the next /tts
+    # (incl. the GUI's Speak test) uses the new voice with NO server restart.
+    SEEKDEEP_TTS_ENGINE = "piper"
+    SEEKDEEP_TTS_PIPER_VOICE = voice_path
+    os.environ["SEEKDEEP_TTS_ENGINE"] = "piper"
+    os.environ["SEEKDEEP_TTS_PIPER_VOICE"] = voice_path
+    tts_engine = None
+    print(f"[SeekDeep Local AI] TTS voice downloaded + activated: {voice_path}", flush=True)
+    return {"ok": True, "key": req.key, "voice_path": voice_path, "engine": "piper"}
+
+
 if __name__ == "__main__":
     import uvicorn
     # Self-healing: start the off-loop wedge detector BEFORE uvicorn so a

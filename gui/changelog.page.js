@@ -1,5 +1,6 @@
 const RELEASES = [
-  { v: 'v10.38', kind: 'major', tagline: 'GUI⇄Discord parity · CSP Phase A · DataDash Activity · audit round-2', tags: ['feat','fix','perf'], items: [
+  { v: 'v10.38', kind: 'major', tagline: 'GUI⇄Discord parity · self-service TTS · CSP Phase A · DataDash Activity · audit round-2', tags: ['feat','fix','perf'], items: [
+    '<strong>Self-service TTS setup:</strong> the <strong>TTS Voice</strong> page (Control Center → More) now lists curated Piper voices and downloads them on demand — one click fetches the model, switches the engine to it live (no restart), persists <span class="mono">SEEKDEEP_TTS_PIPER_VOICE</span> + <span class="mono">SEEKDEEP_FEATURE_TTS_VOICE=on</span> to <span class="mono">.env</span>, then you Speak to test it in the browser. Replaces the old mock UI.',
     '<strong>GUI⇄Discord parity:</strong> a read-only <strong>Emoji Vault</strong> page and a <strong>Force React</strong> config page (per-guild cumulative react cap + emoji pool), both feature-gated, both reachable from Control Center → More.',
     '<strong>Force React per-guild cap:</strong> configurable 1–20 cumulative cap per user-per-message (default 3) + emoji allow-list · mtime-aware so GUI edits apply without a bot restart.',
     '<strong>CSP Phase A:</strong> <span class="mono">connect-src</span> + security headers on the Tauri WebView and the loopback browser path · the Discord Activity is exempted. (Dropping <span class="mono">unsafe-inline</span> from script-src is the remaining defense-in-depth step.)',
