@@ -1527,7 +1527,7 @@
       // non-blocking). Emoji Vault only appears when SEEKDEEP_FEATURE_EMOJI_VAULT
       // is on; the GET /config/features endpoint is open (no token).
       if (GATED_ITEMS.length && /^https?:/.test(location.protocol)) {
-        fetch('/config/features')
+        fetch(getBase() + '/config/features')
           .then((r) => (r.ok ? r.json() : null))
           .then((j) => {
             const feats = (j && j.features) || {};
@@ -1642,7 +1642,7 @@
     if (!ok) return;
     let body = null;
     try {
-      const r = await fetch('/launcher/bot/kill-all', { method: 'POST',
+      const r = await fetch(getBase() + '/launcher/bot/kill-all', { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: '{}' });
       body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body?.detail || body?.error || `HTTP ${r.status}`);

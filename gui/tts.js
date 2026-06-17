@@ -19,6 +19,18 @@
 
   const $ = (id) => document.getElementById(id);
 
+  // CRITICAL: Tauri serves bundled GUI pages from tauri.localhost, so server
+  // calls MUST target the loopback API base — a relative fetch('/tts/voices')
+  // resolves to tauri.localhost and never reaches the Python server. Use nav.js's
+  // shared resolver (with the standard Tauri-aware fallback), exactly like every
+  // other GUI page (api.page.js / app.page2.js). This was the root cause of the
+  // TTS page showing "server not responding" while the server was healthy.
+  const BASE = (function () {
+    try { if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase(); } catch (_) {}
+    if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
   // ----- status pill ---------------------------------------------------------
   function setStatus(state, label) {
     const el = $('ttsStatus');
@@ -32,13 +44,13 @@
   }
 
   async function getJSON(url) {
-    const r = await fetch(url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+    const r = await fetch(BASE + url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
     let body = null; try { body = await r.json(); } catch (_) {}
     if (!r.ok) { const e = new Error((body && (body.detail || body.error)) || ('HTTP ' + r.status)); e.status = r.status; e.body = body; throw e; }
     return body || {};
   }
   async function postJSON(url, payload) {
-    const r = await fetch(url, {
+    const r = await fetch(BASE + url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(payload || {}),
@@ -280,7 +292,7 @@
     if (btn) { btn.disabled = true; btn.textContent = '▸ Synthesizing…'; }
     setStatus('checking', 'Synthesizing…');
     try {
-      const r = await fetch('/tts', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify({ text: text, voice: selectedVoice(), rate: readRate() }) });
+      const r = await fetch(BASE + '/tts', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify({ text: text, voice: selectedVoice(), rate: readRate() }) });
       let body = null; try { body = await r.json(); } catch (_) {}
       if (!r.ok || !body || body.ok === false) { setStatus(r.status === 503 ? 'off' : 'error', (body && (body.error || body.detail)) || ('HTTP ' + r.status)); return; }
       if (!body.audio_b64) { setStatus('error', 'Server returned no audio.'); return; }
