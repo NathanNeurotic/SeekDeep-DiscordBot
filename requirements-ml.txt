@@ -71,7 +71,7 @@ safetensors>=0.5.0,<1.0
 # users hit with Llama 3.1 / Granite 3.3 (tokenizer-load-failure 503).
 sentencepiece>=0.2.1
 tiktoken>=0.8.0
-protobuf>=7.35.0
+protobuf>=7.35.1
 einops>=0.8.0
 timm>=1.0.27
 open-clip-torch>=3.3.0
