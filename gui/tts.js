@@ -1,12 +1,13 @@
 /* SeekDeep · tts.js
    Live wiring for gui/tts.html — the Text-to-Speech setup + tester page.
-   Self-service flow: list curated Piper voices, one-click download, auto-configure
-   + enable, then Speak to test. Talks to the Python AI server:
-     • GET  /health             → health.tts {enabled, engine, voice} (open)
-     • GET  /tts/voices         → curated catalog + which are downloaded/active (open)
+   Self-service flow: install the speech engine (if missing) → pick a curated
+   Piper voice → one-click download → auto-configure + enable → Speak to test.
+   Talks to the Python AI server:
+     • GET  /tts/voices          → catalog + downloaded/active + engine_installed (open)
+     • POST /tts/engine/install  → pip-install the Piper engine (piper-tts) live
      • POST /tts/voices/download → download a voice's .onnx/.onnx.json + activate live
-     • POST /config            → persist SEEKDEEP_TTS_* to .env (survives restart)
-     • POST /tts                → {text, voice, rate} → {ok, audio_b64 (WAV)}
+     • POST /config             → persist SEEKDEEP_TTS_* to .env (survives restart)
+     • POST /tts                 → {text, voice, rate} → {ok, audio_b64 (WAV)}
    nav.js monkey-patches fetch to attach X-SeekDeep-Token to same-origin POSTs, so
    we never set that header here. External + addEventListener-only (CSP-clean).
    Self-gates: no-ops unless #ttsPage is present. */
@@ -56,9 +57,14 @@
   }
 
   // ----- state ---------------------------------------------------------------
+  let engineInstalled = true; // Piper engine importable; assume true until /tts/voices says otherwise (no false-missing flash)
   let ttsEnabled = false;     // a voice is configured (server can synthesize)
+  let configuredVoice = '';   // path of the configured voice, for display
   let activeVoiceKey = '';    // catalog key of the configured voice, if any
-  let busy = false;           // a download/use op is in flight
+  let busy = false;           // a voice download/use op is in flight
+  let installingEngine = false;
+
+  const canSpeak = () => engineInstalled && ttsEnabled;
 
   function selectedVoice() {
     // Piper synthesis uses the engine's *configured* voice (the one you
@@ -73,6 +79,61 @@
     return Math.min(2.0, Math.max(0.5, v));
   }
 
+  // ----- overall status (engine → voice → ready) -----------------------------
+  function reflectStatus() {
+    const btn = $('ttsSpeak');
+    if (!engineInstalled) {
+      setStatus('off', 'Speech engine not installed — install it (left panel) to enable TTS.');
+    } else if (!ttsEnabled) {
+      setStatus('off', 'Engine ready — pick a voice on the right and hit Download.');
+    } else {
+      setStatus('ready', 'Ready' + (configuredVoice ? ' · ' + configuredVoice.split(/[\\/]/).pop() : ''));
+    }
+    if (btn) { btn.disabled = !canSpeak(); btn.title = canSpeak() ? '' : (engineInstalled ? 'Download a voice first' : 'Install the Piper engine first'); }
+  }
+
+  // ----- engine install box (left column, shown only when engine missing) ----
+  function renderEngineBox() {
+    const box = $('ttsEngineBox');
+    if (!box) return;
+    box.textContent = '';
+    if (engineInstalled) return;
+    const card = document.createElement('div');
+    card.className = 'preview-banner';
+    card.dataset.state = 'off';
+    const t = document.createElement('strong');
+    t.textContent = '⚙ Speech engine needed';
+    const p = document.createElement('div');
+    p.style.margin = '4px 0 10px';
+    p.style.lineHeight = '1.5';
+    p.textContent = 'The voices need the Piper engine (~30 MB) to actually speak. One click installs it — no terminal needed.';
+    const btn = document.createElement('button');
+    btn.id = 'ttsEngineInstall';
+    btn.className = 'btn btn-primary';
+    btn.textContent = '⬇ Install speech engine';
+    btn.addEventListener('click', () => installEngine(btn));
+    card.appendChild(t); card.appendChild(p); card.appendChild(btn);
+    box.appendChild(card);
+  }
+
+  async function installEngine(btn) {
+    if (installingEngine) return;
+    installingEngine = true;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Installing… (~30–60s, don’t close)'; }
+    setStatus('checking', 'Installing the Piper speech engine…');
+    try {
+      await postJSON('/tts/engine/install', {});
+      engineInstalled = true;
+      renderEngineBox();
+      await loadVoices(); // re-reads engine_installed + enabled + catalog and reflects status
+    } catch (err) {
+      setStatus('error', 'Engine install failed: ' + (err && err.message ? err.message : err));
+      if (btn) { btn.disabled = false; btn.textContent = '⬇ Install speech engine'; }
+    } finally {
+      installingEngine = false;
+    }
+  }
+
   // ----- voice catalog (GET /tts/voices → render #voiceGrid) -----------------
   async function loadVoices() {
     const grid = $('voiceGrid');
@@ -80,8 +141,13 @@
     grid.textContent = 'Loading voices…';
     let data;
     try { data = await getJSON('/tts/voices'); }
-    catch (err) { grid.textContent = ''; const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Could not load voice catalog: ' + (err && err.message ? err.message : err); grid.appendChild(p); return; }
+    catch (err) { grid.textContent = ''; const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Could not load voice catalog: ' + (err && err.message ? err.message : err); grid.appendChild(p); setStatus('error', 'Could not reach the server.'); return; }
+    if (typeof data.engine_installed === 'boolean') engineInstalled = data.engine_installed;
+    if (typeof data.enabled === 'boolean') ttsEnabled = data.enabled;
+    configuredVoice = data.configured_voice || '';
+    renderEngineBox();
     renderVoices(data);
+    reflectStatus();
   }
 
   function renderVoices(data) {
@@ -142,9 +208,9 @@
         // The voice IS active live; persistence just failed (e.g. token). Warn but continue.
         setStatus('ready', 'Active (not saved to .env: ' + (cfgErr && cfgErr.message ? cfgErr.message : cfgErr) + ')');
       }
-      await loadVoices();
-      try { const h = await getJSON('/health'); applyEnabled((h.tts || {}).enabled, (h.tts || {}).voice, (h.tts || {}).engine); } catch (_) {}
-      setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
+      await loadVoices(); // refreshes catalog + engine/enabled state + status
+      if (engineInstalled) setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
+      // else loadVoices already surfaced the "install the engine" prompt
     } catch (err) {
       setStatus('error', 'Voice setup failed: ' + (err && err.message ? err.message : err));
       btn.textContent = label; btn.disabled = false;
@@ -169,6 +235,7 @@
   let speaking = false;
   async function speak() {
     if (speaking) return;
+    if (!engineInstalled) { setStatus('off', 'Install the speech engine first (left panel).'); return; }
     if (!ttsEnabled) { setStatus('off', 'Download a voice first (right panel) to enable TTS.'); return; }
     const btn = $('ttsSpeak'); const audio = $('ttsAudio');
     const text = ($('ttsText') && $('ttsText').value || '').trim();
@@ -186,23 +253,11 @@
       objectUrl = URL.createObjectURL(new Blob([b64ToBytes(body.audio_b64)], { type: 'audio/wav' }));
       if (audio) { audio.src = objectUrl; try { await audio.play(); } catch (_) {} }
       const nt = $('nowText'); if (nt) nt.textContent = text;
-      setStatus('ready', 'Speaking · ' + (body.voice || selectedVoice() || '') + (body.engine ? ' · ' + body.engine : ''));
+      setStatus('ready', 'Speaking · ' + (body.voice || configuredVoice || '').split(/[\\/]/).pop() + (body.engine ? ' · ' + body.engine : ''));
     } catch (err) {
       setStatus('error', 'Request failed: ' + (err && err.message ? err.message : err));
     } finally {
-      speaking = false; if (btn) { btn.disabled = !ttsEnabled; btn.textContent = label || '▸ Speak'; }
-    }
-  }
-
-  function applyEnabled(enabled, voice, engine) {
-    ttsEnabled = !!enabled;
-    const btn = $('ttsSpeak');
-    if (ttsEnabled) {
-      setStatus('ready', 'Ready' + (voice ? ' · ' + voice.split(/[\\/]/).pop() : (engine ? ' · ' + engine : '')));
-      if (btn) { btn.disabled = false; btn.title = ''; }
-    } else {
-      setStatus('off', 'No voice yet — pick one on the right and hit download.');
-      if (btn) { btn.disabled = true; btn.title = 'Download a Piper voice first'; }
+      speaking = false; if (btn) { btn.disabled = !canSpeak(); btn.textContent = label || '▸ Speak'; }
     }
   }
 
@@ -216,13 +271,7 @@
     if (pp) pp.addEventListener('click', () => { const a = $('ttsAudio'); if (!a || !a.src) return; if (a.paused) a.play().catch(() => {}); else a.pause(); });
 
     setStatus('checking', 'Checking…');
-    try {
-      const health = await getJSON('/health');
-      applyEnabled((health.tts || {}).enabled, (health.tts || {}).voice, (health.tts || {}).engine);
-    } catch (err) {
-      setStatus('error', 'Could not reach server: ' + (err && err.message ? err.message : err));
-    }
-    await loadVoices();
+    await loadVoices(); // single source: engine_installed + enabled + configured_voice + catalog
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });

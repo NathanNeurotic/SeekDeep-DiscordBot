@@ -6539,6 +6539,20 @@ _PIPER_VOICE_CATALOG = [
 # and its offline-flag override mutates process-global huggingface_hub state, so
 # two overlapping downloads must not interleave. See tts_voice_download.
 _TTS_DOWNLOAD_LOCK = threading.Lock()
+# Serialize engine installs so a double-click can't run two concurrent pips.
+_TTS_ENGINE_INSTALL_LOCK = threading.Lock()
+
+
+def _tts_engine_installed() -> bool:
+    """True if the Piper speech engine (the `piper` module, shipped by the
+    piper-tts wheel) is importable. The voice .onnx files are inert without it —
+    /tts returns 501 'tts-deps-missing' until this is True. Cheap find_spec (no
+    import side effects), safe to call on every /tts/voices poll."""
+    try:
+        import importlib.util
+        return importlib.util.find_spec("piper") is not None
+    except Exception:
+        return False
 
 
 def _piper_voice_local_onnx(rel: str) -> Path:
@@ -6572,6 +6586,7 @@ def tts_voices():
         "ok": True,
         "engine": SEEKDEEP_TTS_ENGINE,
         "enabled": _tts_voice_configured(),
+        "engine_installed": _tts_engine_installed(),
         "configured_voice": _tts_configured_voice() or "",
         "voices_dir": str(TTS_VOICES_DIR),
         "voices": _tts_voices_state(),
@@ -6651,6 +6666,48 @@ def tts_voice_download(req: TTSVoiceDownloadRequest):
     tts_engine = None
     print(f"[SeekDeep Local AI] TTS voice downloaded + activated: {voice_path}", flush=True)
     return {"ok": True, "key": req.key, "voice_path": voice_path, "engine": "piper"}
+
+
+@app.post("/tts/engine/install", dependencies=[Depends(require_gui_token)])
+def tts_engine_install():
+    """Install the Piper speech engine (the piper-tts wheel) into the running
+    interpreter so /tts works with NO terminal. The downloaded .onnx voices are
+    inert until this package is present. Targeted — just piper-tts (~30 MB incl.
+    onnxruntime), unlike POST /deps/install which pulls the whole ~2 GB ML stack,
+    so a remote-backend user can add TTS without installing torch. Blocks ~30-60s
+    while pip runs; no server restart needed (we invalidate import caches so the
+    next /tts picks the engine up). Modeled on _ensure_tokenizer_deps_synchronously."""
+    if _tts_engine_installed():
+        return {"ok": True, "installed": True, "already": True}
+    # Non-blocking acquire: a second click while pip is mid-run gets a clean 409
+    # instead of stacking a duplicate install behind the lock.
+    if not _TTS_ENGINE_INSTALL_LOCK.acquire(blocking=False):
+        return JSONResponse(status_code=409, content={"ok": False, "error": "an engine install is already running."})
+    try:
+        import sys, importlib
+        import subprocess as _sub
+        _nw = getattr(_sub, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        proc = _sub.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+             "--disable-pip-version-check", "piper-tts"],
+            capture_output=True, text=True, creationflags=_nw, timeout=600,
+        )
+        if proc.returncode != 0:
+            tail = ((proc.stderr or "") + (proc.stdout or ""))[-500:]
+            print(f"[SeekDeep Local AI] /tts/engine/install pip rc={proc.returncode}\n{tail}", flush=True)
+            return JSONResponse(status_code=502, content={"ok": False, "error": "pip install piper-tts failed.", "log_tail": tail})
+        importlib.invalidate_caches()  # so the just-installed package is importable now
+        if not _tts_engine_installed():
+            return JSONResponse(status_code=502, content={"ok": False, "error": "piper-tts installed but 'piper' is still not importable."})
+        print("[SeekDeep Local AI] Piper speech engine installed (piper-tts).", flush=True)
+        return {"ok": True, "installed": True, "already": False}
+    except _sub.TimeoutExpired:
+        return JSONResponse(status_code=504, content={"ok": False, "error": "pip install timed out (600s)."})
+    except Exception as exc:  # noqa: BLE001 — return a trimmed message
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"engine install failed: {str(exc)[:200]}"})
+    finally:
+        _TTS_ENGINE_INSTALL_LOCK.release()
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@
 | POST | `/system/warmup` | token | installer.page5.js | no |
 | GET | `/token` | open | nav.js | yes |
 
-## local_ai_server.py (26 routes)
+## local_ai_server.py (27 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -115,6 +115,7 @@
 | GET | `/models/installed` | open | app.page4.js | yes |
 | GET | `/route/debug` | open | api.page.js | yes |
 | POST | `/tts` | token | tts.js | yes |
+| POST | `/tts/engine/install` | token | tts.js | no |
 | GET | `/tts/voices` | open | tts.js | no |
 | POST | `/tts/voices/download` | token | tts.js | no |
 | POST | `/unload` | token | api.page.js | yes |
@@ -127,7 +128,7 @@
 
 ## Summary
 
-- Total routes: **103**
+- Total routes: **104**
 - Open (no token): **28**
-- Not referenced by any test suite: **27**
+- Not referenced by any test suite: **28**
 
