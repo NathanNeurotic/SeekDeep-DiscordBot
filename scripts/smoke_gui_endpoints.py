@@ -160,8 +160,37 @@ def _self_update_checks() -> None:
         os.environ.pop("SEEKDEEP_SELF_UPDATE_ENABLED", None)
         check("POST /system/self-update disabled -> 403", r.status_code == 403, f"got {r.status_code}")
 
-        r = c2.post("/system/self-update", json={"ref": "main"}, headers=H)
-        check("POST /system/self-update ref=main (strict) -> 400", r.status_code == 400, f"got {r.status_code}")
+        # ref=main is no longer refused under strict: a rolling channel resolves to
+        # its immutable commit SHA BEFORE the policy check (a 40-char SHA passes strict).
+        # Unit-level, network-free: non-rolling refs pass through untouched; a rolling
+        # ref resolves to the SHA the GitHub commits API returns (urlopen mocked).
+        check("_resolve_self_update_ref: vX.Y.Z tag passes through",
+              _ge._resolve_self_update_ref("v1.2.3") == ("v1.2.3", ""))
+        check("_resolve_self_update_ref: explicit 40-char SHA passes through",
+              _ge._resolve_self_update_ref("a" * 40) == ("a" * 40, ""))
+
+        class _ShaResp:
+            def __init__(self, d): self._d = d
+            def read(self, n=-1): return self._d
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        with mock.patch.object(_urlreq, "urlopen", lambda *a, **k: _ShaResp(b"b" * 40)):
+            _sha, _note = _ge._resolve_self_update_ref("main")
+        check("_resolve_self_update_ref: rolling 'main' -> 40-char SHA (mocked)",
+              _sha == "b" * 40 and "main" in _note, f"got {_sha!r}")
+
+        # Endpoint: ref=main now gets PAST the strict policy (it would 400 if refused).
+        # Mock the resolver + hold the lock so the route returns 409 (in-progress)
+        # instead of performing a live download — proves resolution+policy passed.
+        with mock.patch.object(_ge, "_resolve_self_update_ref", lambda ref: ("c" * 40, "pinned")):
+            _got_m = _ge._SELF_UPDATE_LOCK.acquire(blocking=False)
+            try:
+                r = c2.post("/system/self-update", json={"ref": "main"}, headers=H)
+                check("POST /system/self-update ref=main resolves (not 400) -> 409 w/ lock held",
+                      r.status_code == 409, f"got {r.status_code}")
+            finally:
+                if _got_m:
+                    _ge._SELF_UPDATE_LOCK.release()
 
         r = c2.post("/system/self-update", json={"ref": "garbage!!"}, headers=H)
         check("POST /system/self-update bad ref -> 400", r.status_code == 400, f"got {r.status_code}")

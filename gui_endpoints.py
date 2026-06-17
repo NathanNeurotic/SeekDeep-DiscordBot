@@ -362,6 +362,45 @@ _SELF_UPDATE_SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)
 _SELF_UPDATE_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SELF_UPDATE_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
+# Rolling release channels. The latest code ships on `main` + a `nightly` rolling
+# pre-release, NOT as fresh vMAJOR.MINOR.PATCH tags (the newest numbered release
+# can be OLDER than the running build, so "update to the latest tag" would be a
+# downgrade). The strict policy refuses those mutable channel names, so
+# self-update always failed for the rolling workflow. Fix: resolve a known
+# rolling channel to its CURRENT commit SHA in our repo BEFORE the policy check —
+# a 40-char SHA is immutable (strict accepts it), the audit log records the exact
+# commit installed, and the hardcoded repo guarantees it is still only OUR code.
+# Only this small allowlist of channels is resolved; arbitrary branch names are not.
+_SELF_UPDATE_REPO = "NathanNeurotic/SeekDeep-DiscordBot"
+_SELF_UPDATE_ROLLING_REFS = {"main", "nightly"}
+
+
+def _resolve_self_update_ref(ref: str) -> tuple[str, str]:
+    """Resolve a rolling channel (main/nightly) to its 40-char commit SHA via the
+    GitHub commits API. Returns (resolved_ref, note); a non-rolling ref (a release
+    tag or an explicit SHA) passes through unchanged with an empty note. Raises on
+    a network/garbled failure so the caller surfaces a clear error instead of
+    silently falling back to a refused mutable ref."""
+    rl = (ref or "").strip().lower()
+    if rl not in _SELF_UPDATE_ROLLING_REFS:
+        return (ref or "").strip(), ""
+    # rl is now exactly "main" or "nightly". Select the channel as a LITERAL rather
+    # than interpolating the request-derived string into the URL: the URL is then
+    # provably constant (fixed host + fixed path), which is both genuinely safe and
+    # clears CodeQL py/partial-ssrf (set-membership isn't treated as sanitization).
+    channel = "nightly" if rl == "nightly" else "main"
+    import urllib.request
+    url = "https://api.github.com/repos/" + _SELF_UPDATE_REPO + "/commits/" + channel
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github.sha",  # asks GitHub for the bare 40-char SHA
+        "User-Agent": "SeekDeep-self-update",
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed https GitHub host
+        sha = resp.read(64).decode("ascii", "replace").strip()
+    if not _SELF_UPDATE_FULL_SHA_RE.match(sha):
+        raise ValueError(f"GitHub did not return a commit SHA for {channel!r}")
+    return sha, f"rolling channel {channel!r} pinned to commit {sha[:12]}"
+
 
 def _self_update_ref_is_allowed(ref: str) -> tuple[bool, str]:
     """Return (allowed, reason). Policy is read from env at call time:
@@ -2885,6 +2924,17 @@ def register_gui_endpoints(
             event_bus.publish_sync({"type": "self-update.failed",
                                     "data": {"error": "self-update disabled (SEEKDEEP_SELF_UPDATE_ENABLED=off)"}})
             raise HTTPException(403, "Self-update is disabled on this install (SEEKDEEP_SELF_UPDATE_ENABLED=off).")
+        # Resolve rolling channels (main/nightly) to an immutable commit SHA so the
+        # strict ref policy accepts them and the audit records the exact commit —
+        # this is what makes self-update actually work for the rolling-release
+        # workflow (latest code lives on main/nightly, not on vX.Y.Z tags).
+        resolve_note = ""
+        try:
+            ref, resolve_note = _resolve_self_update_ref(ref)
+        except Exception as exc:  # noqa: BLE001 — network/garbled GitHub response
+            event_bus.publish_sync({"type": "self-update.failed",
+                                    "data": {"error": f"could not resolve update ref from GitHub: {exc}"}})
+            raise HTTPException(502, f"Could not resolve the update ref from GitHub: {exc}")
         # AUD-001: ref allowlist (strict by default — immutable tag or full SHA).
         ok_ref, ref_reason = _self_update_ref_is_allowed(ref)
         if not ok_ref:
@@ -2898,6 +2948,8 @@ def register_gui_endpoints(
                                     "data": {"error": "a self-update is already in progress"}})
             raise HTTPException(409, "A self-update is already in progress on this install.")
         try:
+            if resolve_note:
+                event_bus.publish_sync({"type": "self-update.line", "data": {"line": resolve_note}})
             return _post_self_update_locked(ref)
         finally:
             _SELF_UPDATE_LOCK.release()
@@ -2905,7 +2957,7 @@ def register_gui_endpoints(
     def _post_self_update_locked(ref: str):
         import urllib.request, urllib.error, urllib.parse, posixpath
         _seekdeep_audit("self_update", ref=ref)
-        REPO = "NathanNeurotic/SeekDeep-DiscordBot"
+        REPO = _SELF_UPDATE_REPO
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
         single_files = [
             "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
