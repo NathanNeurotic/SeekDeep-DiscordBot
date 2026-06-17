@@ -6532,8 +6532,13 @@ _PIPER_VOICE_CATALOG = [
     {"key": "en_US-libritts_r-medium", "label": "LibriTTS-R", "lang": "en_US", "gender": "multi", "quality": "medium", "size_mb": 75, "rel": "en/en_US/libritts_r/medium/en_US-libritts_r-medium"},
     {"key": "en_GB-northern_english_male-medium", "label": "Northern English (M)", "lang": "en_GB", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium"},
     {"key": "es_ES-davefx-medium", "label": "DaveFX · Spanish", "lang": "es_ES", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "es/es_ES/davefx/medium/es_ES-davefx-medium"},
-    {"key": "ja_JP-takumi-medium", "label": "Takumi · Japanese", "lang": "ja_JP", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "ja/ja_JP/takumi/medium/ja_JP-takumi-medium"},
+    {"key": "de_DE-thorsten-medium", "label": "Thorsten · German", "lang": "de_DE", "gender": "male", "quality": "medium", "size_mb": 63, "rel": "de/de_DE/thorsten/medium/de_DE-thorsten-medium"},
 ]
+
+# Serialize concurrent downloads: tts_voice_download is a sync route (threadpool)
+# and its offline-flag override mutates process-global huggingface_hub state, so
+# two overlapping downloads must not interleave. See tts_voice_download.
+_TTS_DOWNLOAD_LOCK = threading.Lock()
 
 
 def _piper_voice_local_onnx(rel: str) -> Path:
@@ -6545,7 +6550,10 @@ def _tts_voices_state() -> list:
     out = []
     for v in _PIPER_VOICE_CATALOG:
         onnx = _piper_voice_local_onnx(v["rel"])
-        downloaded = onnx.is_file()
+        # Require BOTH the model and its sibling config: a partial download (.onnx
+        # landed, .onnx.json failed) would otherwise show as ready but fail to load
+        # in Piper. str(onnx)+".json" -> the ....onnx.json sidecar (double suffix).
+        downloaded = onnx.is_file() and Path(str(onnx) + ".json").is_file()
         out.append({
             "key": v["key"], "label": v["label"], "lang": v["lang"], "gender": v["gender"],
             "quality": v["quality"], "size_mb": v["size_mb"],
@@ -6593,30 +6601,42 @@ def tts_voice_download(req: TTSVoiceDownloadRequest):
         pass
     onnx_rel = entry["rel"] + ".onnx"
     json_rel = entry["rel"] + ".onnx.json"
-    # The server runs HF offline by default; lift it JUST for this fetch (a new
-    # voice needs network), then restore. constants.HF_HUB_OFFLINE is read at
-    # import so we flip it directly, and clear the env vars + force local_files_only=False.
-    import huggingface_hub.constants as _hfc
-    saved_const = getattr(_hfc, "HF_HUB_OFFLINE", False)
-    saved_env = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")}
-    try:
-        try: _hfc.HF_HUB_OFFLINE = False
-        except Exception: pass
-        for k in saved_env: os.environ.pop(k, None)
-        kw = {"repo_id": _PIPER_VOICE_REPO, "local_dir": str(TTS_VOICES_DIR), "local_files_only": False}
-        if os.getenv("HF_TOKEN"): kw["token"] = os.getenv("HF_TOKEN")
-        onnx_path = hf_hub_download(filename=onnx_rel, **kw)
-        hf_hub_download(filename=json_rel, **kw)
-    except Exception as exc:  # noqa: BLE001 — surface a trimmed message to the GUI
-        print(f"[SeekDeep Local AI] /tts/voices/download error: {exc}")
-        traceback.print_exc()
-        return JSONResponse(status_code=502, content={"ok": False, "error": f"download failed: {str(exc)[:300]}"})
-    finally:
-        try: _hfc.HF_HUB_OFFLINE = saved_const
-        except Exception: pass
-        for k, val in saved_env.items():
-            if val is not None:
-                os.environ[k] = val
+    onnx_path = None
+    # Hold the download lock around the WHOLE offline-override + fetch: this route
+    # is a sync def, so Starlette runs it in a threadpool and two overlapping
+    # downloads would race the save/restore of the process-global HF offline state
+    # (constants.HF_HUB_OFFLINE + the offline env vars) — a lost restore could leave
+    # the server permanently online. The server runs HF offline by default; we lift
+    # it JUST for this fetch (a new voice needs network), then restore. Mutating
+    # constants.HF_HUB_OFFLINE directly + clearing the env vars + local_files_only=False
+    # is what actually overrides the offline posture for the request.
+    with _TTS_DOWNLOAD_LOCK:
+        import huggingface_hub.constants as _hfc
+        saved_const = getattr(_hfc, "HF_HUB_OFFLINE", False)
+        saved_env = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")}
+        try:
+            try: _hfc.HF_HUB_OFFLINE = False
+            except Exception: pass
+            for k in saved_env: os.environ.pop(k, None)
+            kw = {"repo_id": _PIPER_VOICE_REPO, "local_dir": str(TTS_VOICES_DIR), "local_files_only": False}
+            if os.getenv("HF_TOKEN"): kw["token"] = os.getenv("HF_TOKEN")
+            onnx_path = hf_hub_download(filename=onnx_rel, **kw)
+            hf_hub_download(filename=json_rel, **kw)
+        except Exception as exc:  # noqa: BLE001 — surface a trimmed message to the GUI
+            print(f"[SeekDeep Local AI] /tts/voices/download error: {exc}")
+            traceback.print_exc()
+            # If the .onnx landed but its .onnx.json sidecar didn't, drop the orphan
+            # so the voice isn't reported half-downloaded and a retry starts clean.
+            if onnx_path:
+                try: Path(onnx_path).unlink(missing_ok=True)
+                except OSError: pass
+            return JSONResponse(status_code=502, content={"ok": False, "error": f"download failed: {str(exc)[:300]}"})
+        finally:
+            try: _hfc.HF_HUB_OFFLINE = saved_const
+            except Exception: pass
+            for k, val in saved_env.items():
+                if val is not None:
+                    os.environ[k] = val
     # Forward-slash the path: Path/Piper accept it on Windows, and it avoids any
     # backslash-escape ambiguity when the GUI persists it to .env (a value like
     # C:\Users\...\amy.onnx could be mangled by some dotenv parsers on reload).
