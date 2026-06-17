@@ -1527,7 +1527,8 @@
       // non-blocking). Emoji Vault only appears when SEEKDEEP_FEATURE_EMOJI_VAULT
       // is on; the GET /config/features endpoint is open (no token).
       if (GATED_ITEMS.length && /^https?:/.test(location.protocol)) {
-        fetch(getBase() + '/config/features')
+        const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
+        fetch(base + '/config/features')
           .then((r) => (r.ok ? r.json() : null))
           .then((j) => {
             const feats = (j && j.features) || {};
@@ -1642,7 +1643,8 @@
     if (!ok) return;
     let body = null;
     try {
-      const r = await fetch(getBase() + '/launcher/bot/kill-all', { method: 'POST',
+      const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
+      const r = await fetch(base + '/launcher/bot/kill-all', { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: '{}' });
       body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body?.detail || body?.error || `HTTP ${r.status}`);
