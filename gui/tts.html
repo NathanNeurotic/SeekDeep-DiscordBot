@@ -220,9 +220,14 @@
         <strong>● TTS</strong> · Checking…
       </div>
 
+      <!-- Engine-install prompt — tts.js populates this only when the Piper
+           engine (piper-tts) isn't installed; one click runs the install. -->
+      <div id="ttsEngineBox"></div>
+
       <div style="margin-top: 2px;">
         <h2 style="font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.18em; color: var(--cyan-1); text-transform: uppercase;">HOW IT WORKS</h2>
         <ol style="margin: 10px 0 0; padding-left: 18px; font-size: 12px; color: var(--hull-2); line-height: 1.7;">
+          <li>If prompted above, click <strong style="color:var(--cyan-1)">Install speech engine</strong> (one-time, ~30&nbsp;MB).</li>
           <li>Pick a voice on the right and hit <strong style="color:var(--cyan-1)">download</strong>.</li>
           <li>SeekDeep fetches the Piper model (~60–110&nbsp;MB) and switches to it automatically — no restart.</li>
           <li>Type text in the middle and press <strong style="color:var(--cyan-1)">Speak</strong> to hear it right here.</li>
