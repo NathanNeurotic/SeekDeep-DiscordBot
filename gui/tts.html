@@ -249,6 +249,9 @@
           <div style="margin-top: 10px; color: var(--warn); font-size: 11px; line-height: 1.6;">
             ⚠ The Speak test above works immediately, but the Discord bot reads the TTS flag and the voice-channel intent only at startup — <strong>restart the bot once</strong> after enabling a voice for the <code>tts</code> commands to work in Discord.
           </div>
+          <div style="margin-top: 8px; color: var(--hull-3); font-size: 10.5px; line-height: 1.6;">
+            Discord voice playback uses a bundled <strong>FFmpeg</strong> (<code>ffmpeg-static</code>) — no install needed. If <code>tts say</code> ever reports an FFmpeg error, install FFmpeg on the host PATH.
+          </div>
         </div>
       </div>
     </aside>
