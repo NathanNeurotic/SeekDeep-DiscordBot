@@ -14,6 +14,15 @@
   const $ = (id) => document.getElementById(id);
   const show = (el, on) => { if (el) el.classList.toggle('ev-hidden', !on); };
 
+  // Tauri serves bundled pages from tauri.localhost — server calls must target
+  // the loopback API base, not the page origin (a relative fetch never reaches
+  // the Python server in the desktop app). Mirrors api.page.js / app.page2.js.
+  const BASE = (function () {
+    try { if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase(); } catch (_) {}
+    if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
   function setError(msg) {
     const e = $('ev-error');
     if (!e) return;
@@ -23,7 +32,7 @@
   }
 
   async function getJSON(url) {
-    const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const r = await fetch(BASE + url, { headers: { 'Accept': 'application/json' } });
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
@@ -118,7 +127,7 @@
     if (backup) { backup.disabled = true; backup.textContent = 'Building…'; }
     setError('');
     try {
-      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/backup.zip');
+      const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/backup.zip');
       if (!r.ok) {
         let detail = 'HTTP ' + r.status;
         try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (_) {}
@@ -150,7 +159,7 @@
     if (!window.confirm('Delete :' + name + ': permanently from this server? This cannot be undone.')) return;
     setError('');
     try {
-      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), {
+      const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), {
         method: 'DELETE', headers: { 'Accept': 'application/json' }
       });
       if (!r.ok) {
@@ -189,7 +198,7 @@
     show($('ev-importresult'), false);
     try {
       // Raw .zip bytes as the body; nav.js attaches the GUI token to the POST.
-      const r = await fetch('/emoji-vault/' + encodeURIComponent(guildId) + '/import', { method: 'POST', body: file });
+      const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/import', { method: 'POST', body: file });
       let body = null;
       try { body = await r.json(); } catch (_) {}
       if (!r.ok) {

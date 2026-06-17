@@ -16,6 +16,15 @@
   const $ = (id) => document.getElementById(id);
   const show = (el, on) => { if (el) el.classList.toggle('bb-hidden', !on); };
 
+  // Tauri serves bundled pages from tauri.localhost — server calls must target
+  // the loopback API base, not the page origin (a relative fetch never reaches
+  // the Python server in the desktop app). Mirrors api.page.js / app.page2.js.
+  const BASE = (function () {
+    try { if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase(); } catch (_) {}
+    if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
   function setError(msg) {
     const e = $('bb-error');
     if (!e) return;
@@ -25,7 +34,7 @@
   }
 
   async function getJSON(url, opts) {
-    const r = await fetch(url, opts || { headers: { 'Accept': 'application/json' } });
+    const r = await fetch(BASE + url, opts || { headers: { 'Accept': 'application/json' } });
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
@@ -42,7 +51,7 @@
   // wraps the bot reply in {ok, cid, result, error}; surface `error` on a
   // logical failure even when the HTTP status is 200.
   async function command(action) {
-    const r = await fetch('/bot/command', {
+    const r = await fetch(BASE + '/bot/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ action }),
