@@ -1812,9 +1812,12 @@ def register_gui_endpoints(
     async def post_config(patch: ConfigPatch):
         if not patch.updates:
             return {"ok": True, "updated": []}
-        blocked = _CONFIG_PROTECTED_KEYS.intersection(patch.updates)
+        # Case-insensitive match (Gemini audit): Windows env vars are
+        # case-insensitive, so a lowercase key (e.g. seekdeep_gui_token_disabled)
+        # would still take effect — block it too. _CONFIG_PROTECTED_KEYS is upper.
+        blocked = sorted(k for k in patch.updates if k.upper() in _CONFIG_PROTECTED_KEYS)
         if blocked:
-            raise HTTPException(400, f"refusing to set protected key(s) via /config: {', '.join(sorted(blocked))}")
+            raise HTTPException(400, f"refusing to set protected key(s) via /config: {', '.join(blocked)}")
         result = _merge_env(_env_path, patch.updates)
         _seekdeep_audit("config.write", keys=",".join(list(patch.updates.keys())[:32]))
         # Routing/persona/model knobs are env-driven, so any /config write
@@ -6535,8 +6538,10 @@ def register_gui_endpoints(
                 # Never let a .env reload apply auth-critical / self-update keys
                 # (mirrors the POST /config protected-key guard above). A reload
                 # must not be a backdoor to disable the token gate via a tampered
-                # .env (e.g. SEEKDEEP_GUI_TOKEN_DISABLED=1).
-                if k in _CONFIG_PROTECTED_KEYS:
+                # .env (e.g. SEEKDEEP_GUI_TOKEN_DISABLED=1). Case-insensitive
+                # (Gemini audit): Windows env vars ignore case, so a lowercase
+                # key would still take effect — normalize before the check.
+                if k.upper() in _CONFIG_PROTECTED_KEYS:
                     skipped.append(k)
                     continue
                 old = os.environ.get(k)
