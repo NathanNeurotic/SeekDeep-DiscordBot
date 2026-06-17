@@ -57,14 +57,18 @@
   }
 
   // ----- state ---------------------------------------------------------------
-  let engineInstalled = true; // Piper engine importable; assume true until /tts/voices says otherwise (no false-missing flash)
+  // engineInstalled is null until /tts/voices answers — we must NOT claim the
+  // engine is ready (or missing) before we know, or the page lies about its state
+  // and either hides the Install button or shows it spuriously.
+  let engineInstalled = null; // null = unknown, true/false once the server answers
   let ttsEnabled = false;     // a voice is configured (server can synthesize)
   let configuredVoice = '';   // path of the configured voice, for display
   let activeVoiceKey = '';    // catalog key of the configured voice, if any
   let busy = false;           // a voice download/use op is in flight
   let installingEngine = false;
 
-  const canSpeak = () => engineInstalled && ttsEnabled;
+  const canSpeak = () => engineInstalled === true && ttsEnabled;
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
   function selectedVoice() {
     // Piper synthesis uses the engine's *configured* voice (the one you
@@ -82,14 +86,16 @@
   // ----- overall status (engine → voice → ready) -----------------------------
   function reflectStatus() {
     const btn = $('ttsSpeak');
-    if (!engineInstalled) {
+    if (engineInstalled === null) {
+      setStatus('checking', 'Checking…');
+    } else if (engineInstalled === false) {
       setStatus('off', 'Speech engine not installed — install it (left panel) to enable TTS.');
     } else if (!ttsEnabled) {
       setStatus('off', 'Engine ready — pick a voice on the right and hit Download.');
     } else {
       setStatus('ready', 'Ready' + (configuredVoice ? ' · ' + configuredVoice.split(/[\\/]/).pop() : ''));
     }
-    if (btn) { btn.disabled = !canSpeak(); btn.title = canSpeak() ? '' : (engineInstalled ? 'Download a voice first' : 'Install the Piper engine first'); }
+    if (btn) { btn.disabled = !canSpeak(); btn.title = canSpeak() ? '' : (engineInstalled === true ? 'Download a voice first' : 'Install the Piper engine first'); }
   }
 
   // ----- engine install box (left column, shown only when engine missing) ----
@@ -97,7 +103,7 @@
     const box = $('ttsEngineBox');
     if (!box) return;
     box.textContent = '';
-    if (engineInstalled) return;
+    if (engineInstalled !== false) return; // only when KNOWN-missing (not null/unknown)
     const card = document.createElement('div');
     card.className = 'preview-banner';
     card.dataset.state = 'off';
@@ -135,19 +141,48 @@
   }
 
   // ----- voice catalog (GET /tts/voices → render #voiceGrid) -----------------
-  async function loadVoices() {
+  // The catalog is ALWAYS non-empty on a healthy server, so an empty/unreachable
+  // response means the AI server is still booting (a sidecar respawn takes a few
+  // seconds). Retry briefly instead of showing a dead "No voices" screen, and end
+  // on a Retry button — never a state the user can't get out of.
+  async function loadVoices(opts) {
     const grid = $('voiceGrid');
     if (!grid) return;
+    const maxTries = (opts && opts.tries) || 6;
     grid.textContent = 'Loading voices…';
-    let data;
-    try { data = await getJSON('/tts/voices'); }
-    catch (err) { grid.textContent = ''; const p = document.createElement('div'); p.className = 'meta'; p.textContent = 'Could not load voice catalog: ' + (err && err.message ? err.message : err); grid.appendChild(p); setStatus('error', 'Could not reach the server.'); return; }
-    if (typeof data.engine_installed === 'boolean') engineInstalled = data.engine_installed;
-    if (typeof data.enabled === 'boolean') ttsEnabled = data.enabled;
-    configuredVoice = data.configured_voice || '';
-    renderEngineBox();
-    renderVoices(data);
-    reflectStatus();
+    for (let attempt = 1; attempt <= maxTries; attempt++) {
+      let data = null;
+      try { data = await getJSON('/tts/voices'); } catch (_) { data = null; }
+      const voices = (data && Array.isArray(data.voices)) ? data.voices : [];
+      if (voices.length) {
+        if (typeof data.engine_installed === 'boolean') engineInstalled = data.engine_installed;
+        if (typeof data.enabled === 'boolean') ttsEnabled = data.enabled;
+        configuredVoice = data.configured_voice || '';
+        renderEngineBox();
+        renderVoices(data);
+        reflectStatus();
+        return;
+      }
+      if (attempt < maxTries) {
+        const msg = 'Connecting to the server… (' + attempt + '/' + maxTries + ')';
+        setStatus('checking', msg);
+        grid.textContent = msg;
+        await sleep(Math.min(2500, 500 * attempt));
+      }
+    }
+    renderVoicesUnavailable(grid); // exhausted — honest + recoverable
+  }
+
+  function renderVoicesUnavailable(grid) {
+    grid.textContent = '';
+    const p = document.createElement('div');
+    p.className = 'meta'; p.style.marginBottom = '8px'; p.style.lineHeight = '1.5';
+    p.textContent = "Couldn’t reach the speech server — it may still be starting.";
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.textContent = '↻ Retry';
+    btn.addEventListener('click', () => loadVoices());
+    grid.appendChild(p); grid.appendChild(btn);
+    setStatus('error', 'Server not responding — hit Retry, or reopen the app.');
   }
 
   function renderVoices(data) {
