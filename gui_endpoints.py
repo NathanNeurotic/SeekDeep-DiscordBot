@@ -381,11 +381,16 @@ def _resolve_self_update_ref(ref: str) -> tuple[str, str]:
     tag or an explicit SHA) passes through unchanged with an empty note. Raises on
     a network/garbled failure so the caller surfaces a clear error instead of
     silently falling back to a refused mutable ref."""
-    r = (ref or "").strip()
-    if r.lower() not in _SELF_UPDATE_ROLLING_REFS:
-        return r, ""
-    import urllib.request, urllib.parse
-    url = f"https://api.github.com/repos/{_SELF_UPDATE_REPO}/commits/{urllib.parse.quote(r, safe='')}"
+    rl = (ref or "").strip().lower()
+    if rl not in _SELF_UPDATE_ROLLING_REFS:
+        return (ref or "").strip(), ""
+    # rl is now exactly "main" or "nightly". Select the channel as a LITERAL rather
+    # than interpolating the request-derived string into the URL: the URL is then
+    # provably constant (fixed host + fixed path), which is both genuinely safe and
+    # clears CodeQL py/partial-ssrf (set-membership isn't treated as sanitization).
+    channel = "nightly" if rl == "nightly" else "main"
+    import urllib.request
+    url = "https://api.github.com/repos/" + _SELF_UPDATE_REPO + "/commits/" + channel
     req = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github.sha",  # asks GitHub for the bare 40-char SHA
         "User-Agent": "SeekDeep-self-update",
@@ -393,8 +398,8 @@ def _resolve_self_update_ref(ref: str) -> tuple[str, str]:
     with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed https GitHub host
         sha = resp.read(64).decode("ascii", "replace").strip()
     if not _SELF_UPDATE_FULL_SHA_RE.match(sha):
-        raise ValueError(f"GitHub did not return a commit SHA for {r!r}")
-    return sha, f"rolling channel {r!r} pinned to commit {sha[:12]}"
+        raise ValueError(f"GitHub did not return a commit SHA for {channel!r}")
+    return sha, f"rolling channel {channel!r} pinned to commit {sha[:12]}"
 
 
 def _self_update_ref_is_allowed(ref: str) -> tuple[bool, str]:
