@@ -10909,6 +10909,79 @@ function seekdeepLooksLikeOcrPrompt(text = '') {
 }
 // SEEKDEEP_OCR_MODE_END
 
+// SEEKDEEP_VISION_MODE_DEFAULT_START
+// Operator-settable DEFAULT vision mode (describe vs OCR) for @mention / reply
+// image requests. The GUI (Bot Bridge page) writes data/vision-mode-config.json
+// via gui_endpoints.py; the bot reads it LIVE here (mtime-aware, mirroring the
+// force-react config) so a GUI change applies without a bot restart. An explicit
+// per-message cue ALWAYS wins — "read this" forces OCR, "describe this" forces
+// describe — the operator default only decides the AMBIGUOUS / no-text case
+// (a bare @mention with an image, "what is this", an empty reply). Absent file +
+// absent/invalid env => 'describe', preserving the historical default exactly.
+const SEEKDEEP_VISION_MODE_CONFIG_PATH = path.join(__dirname, 'data', 'vision-mode-config.json');
+const SEEKDEEP_VISION_MODES = ['describe', 'ocr'];
+let _seekdeepVisionModeConfigCache = null;
+let _seekdeepVisionModeConfigMtime = -1;
+
+function seekdeepReadVisionModeDefault() {
+  // mtime-aware: re-read only when the GUI-written file changes. Vision is a
+  // cold path, so the stat() per call is negligible.
+  let mtime = 0;
+  try {
+    if (fs.existsSync(SEEKDEEP_VISION_MODE_CONFIG_PATH)) mtime = fs.statSync(SEEKDEEP_VISION_MODE_CONFIG_PATH).mtimeMs;
+  } catch {}
+  if (_seekdeepVisionModeConfigCache !== null && mtime === _seekdeepVisionModeConfigMtime) {
+    return _seekdeepVisionModeConfigCache;
+  }
+  let mode = '';
+  try {
+    if (mtime) {
+      const raw = readJsonSafe(SEEKDEEP_VISION_MODE_CONFIG_PATH, {});
+      const m = String(raw?.mode || '').toLowerCase().trim();
+      if (SEEKDEEP_VISION_MODES.includes(m)) mode = m;
+    }
+  } catch {}
+  if (!mode) {
+    // Cold default from .env, else the historical 'describe'.
+    const envMode = String(process.env.SEEKDEEP_VISION_DEFAULT_MODE || '').toLowerCase().trim();
+    mode = SEEKDEEP_VISION_MODES.includes(envMode) ? envMode : 'describe';
+  }
+  _seekdeepVisionModeConfigCache = mode;
+  _seekdeepVisionModeConfigMtime = mtime;
+  return mode;
+}
+
+// Narrow "explicit describe/caption/analyze" cue — DELIBERATELY stricter than
+// seekdeepLooksLikeVisionPrompt (which also treats the generic "what is this" /
+// empty case as describe). Only a clear describe verb pins the mode to describe
+// and overrides an operator OCR default; the generic catch-alls fall through to
+// the operator default instead.
+function seekdeepLooksLikeExplicitDescribePrompt(text = '') {
+  // Normalize the same way seekdeepLooksLikeVisionPrompt does (typo repair +
+  // whitespace collapse) so "what do you see" still matches through stray
+  // double-spaces / common typos.
+  const t = normalizeUserText(text).toLowerCase().trim();
+  if (!t) return false;
+  return (
+    /\bdescribe\b/.test(t) ||
+    /\bcaption\b/.test(t) ||
+    /\banaly[sz]e\b/.test(t) ||
+    /\bidentify\b/.test(t) ||
+    /\bwhat do you see\b/.test(t)
+  );
+}
+
+// Resolve the effective vision mode for a request: explicit OCR cue → 'ocr';
+// explicit describe cue → 'describe'; otherwise the operator default. Returns
+// 'ocr' | 'describe'.
+function seekdeepResolveVisionMode(prompt = '') {
+  const t = String(prompt || '').toLowerCase().trim();
+  if (seekdeepLooksLikeOcrPrompt(t)) return 'ocr';
+  if (seekdeepLooksLikeExplicitDescribePrompt(t)) return 'describe';
+  return seekdeepReadVisionModeDefault();
+}
+// SEEKDEEP_VISION_MODE_DEFAULT_END
+
 // SEEKDEEP_ROUTING_TEXT_GUARD_HELPERS_START
 function seekdeepHasVisualMediumIndicator(p = '') {
   const text = String(p).toLowerCase();
@@ -12274,7 +12347,7 @@ async function seekdeepHandleDiscordMessageLinkRoute(message, prompt, key) {
       : await seekdeepFetchDiscordMessageFromLink(message, linkInfo);
     const visual = firstVisualAttachmentFrom(targetMessage);
     const promptMentionsEmbed = /\bembed\b/i.test(prompt);
-    const wantsOcr = visual && seekdeepLooksLikeOcrPrompt(prompt) && !promptMentionsEmbed;
+    const wantsOcr = visual && !promptMentionsEmbed && seekdeepResolveVisionMode(prompt) === 'ocr';
     const wantsVision = visual && !seekdeepLooksLikeEmbedInspectPrompt(prompt) && (
       isNaturalVisionPrompt(prompt) || seekdeepLooksLikeVisionPrompt(prompt)
     );
@@ -12500,8 +12573,8 @@ async function seekdeepHandleImageReplyIntent(message, prompt = '', key = '') {
   }
 
   if (route.intent === 'vision') {
-    const isOcr = seekdeepLooksLikeOcrPrompt(prompt);
-    const answer = await askVision(route.attachment, buildPromptWithMemory(prompt || 'Describe this image clearly.', key), isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {});
+    const isOcr = seekdeepResolveVisionMode(prompt) === 'ocr';
+    const answer = await askVision(route.attachment, buildPromptWithMemory(prompt || (isOcr ? 'Read this image.' : 'Describe this image clearly.'), key), isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {});
     remember(key, 'user', `[image-reply-vision] ${prompt || 'describe image'}`);
     remember(key, 'assistant', `[vision-description] ${answer}`);
     seekdeepSetResponseModel(message, seekdeepVisionModelLabel());
@@ -20010,7 +20083,13 @@ client.on('messageCreate', async (message) => {
       try { await message.channel?.sendTyping?.(); } catch {}
       let seekdeepVisionReply;
       try {
-        const answer = await askVision(seekdeepMentionImages[0], 'Describe this image clearly and in detail.');
+        // Image-only mention has no text → operator default decides OCR vs describe.
+        const isOcr = seekdeepReadVisionModeDefault() === 'ocr';
+        const answer = await askVision(
+          seekdeepMentionImages[0],
+          isOcr ? 'Read this image.' : 'Describe this image clearly and in detail.',
+          isOcr ? { systemHint: SEEKDEEP_OCR_SYSTEM_PROMPT } : {},
+        );
         seekdeepVisionReply = (answer && answer.trim()) ? answer.trim().slice(0, MAX_DISCORD_CHARS) : '(no description returned)';
       } catch (err) {
         console.error('[SeekDeep] image-only mention vision failed:', err?.stack || err?.message || err);
@@ -21309,7 +21388,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     if (!shouldUseVision && !visionTarget.attachment && prompt && typeof seekdeepLooksLikeRecentImageFollowup === 'function' && seekdeepLooksLikeRecentImageFollowup(prompt)) {
       const recent = seekdeepConsumeRecentVisionTarget(message);
       if (recent?.url) {
-        const isOcr = seekdeepLooksLikeOcrPrompt(prompt);
+        const isOcr = seekdeepResolveVisionMode(prompt) === 'ocr';
         seekdeepLogRoute(isOcr ? 'vision-followup-ocr' : 'vision-followup-cached', prompt);
         const rawPrompt = prompt;
         const cachedAttachment = { url: recent.url, contentType: recent.contentType || '', name: recent.name || 'upload' };
@@ -21326,7 +21405,7 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     }
 
     if (shouldUseVision) {
-      const isOcr = seekdeepLooksLikeOcrPrompt(prompt);
+      const isOcr = seekdeepResolveVisionMode(prompt) === 'ocr';
       seekdeepLogRoute(isOcr ? 'vision-ocr' : 'vision', prompt);
       try { seekdeepTrackStatEvent({ guildId: message.guild?.id, userId: message.author?.id, kind: 'vision' }); } catch {}
       const rawPrompt = prompt || 'Describe this media clearly.';
@@ -24195,6 +24274,10 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepParseCleanDuration,
     // v10.18: OCR mode
     seekdeepLooksLikeOcrPrompt,
+    // v10.38: operator-settable default vision mode (describe/ocr)
+    seekdeepResolveVisionMode,
+    seekdeepReadVisionModeDefault,
+    seekdeepLooksLikeExplicitDescribePrompt,
     // v10.17: help search
     seekdeepHelpSearch,
     // v10.16: rotating status bank

@@ -591,6 +591,12 @@ def main() -> int:
     r = c.post("/bot/command", json={"action": "ping"})
     check("POST /bot/command without token -> 401", r.status_code == 401, f"got {r.status_code}")
 
+    # ---- Auth: default vision-mode config without token -> 401 -----------
+    r = c.get("/bot/vision-mode")
+    check("GET /bot/vision-mode without token -> 401", r.status_code == 401, f"got {r.status_code}")
+    r = c.post("/bot/vision-mode", json={"mode": "ocr"})
+    check("POST /bot/vision-mode without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
     # ---- GET /system/docker (open; installer page Docker probe) -----------
     r = c.get("/system/docker")
     check("GET /system/docker -> 200 (no auth required)", r.status_code == 200, f"got {r.status_code}")

@@ -4845,6 +4845,65 @@ def register_gui_endpoints(
         _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
         return {"ok": True, "config": {"cap": cap, "cooldown_ms": cooldown_ms, "allowed_emoji_ids": allowed}}
 
+    # ----- Bot default vision mode (describe vs OCR) · SEEKDEEP_FEATURE_BOT_BRIDGE
+    # GUI parity for the bot's default @mention-image behavior. The GUI writes
+    # data/vision-mode-config.json here; the BOT (index.js) reads it LIVE
+    # (mtime-aware) and applies it as the DEFAULT only when a request carries no
+    # explicit OCR/describe cue. Token-gated; feature-gated on the bot-bridge flag
+    # (404 when off) since it's part of the GUI<->Discord parity surface. The
+    # write goes through the same cross-process file lock + fsync-durable atomic
+    # write as the other data/*.json the bot also reads.
+    _vision_mode_config_file = (_data_dir / "vision-mode-config.json")
+    _VISION_MODES = ("describe", "ocr")
+
+    def _vision_mode_read() -> tuple[str, str]:
+        # File (GUI-set) wins; else the .env cold default; else 'describe' — the
+        # bot resolves the same precedence, so the GUI always shows bot truth.
+        # Returns (mode, source) where source is 'file' | 'env' | 'default'; the
+        # source reflects where the RETURNED mode actually came from, so a file
+        # that exists but holds an invalid mode reports the real fallback origin.
+        try:
+            if _vision_mode_config_file.is_file():
+                raw = json.loads(_vision_mode_config_file.read_text(encoding="utf-8"))
+                m = str((raw or {}).get("mode") or "").strip().lower()
+                if m in _VISION_MODES:
+                    return m, "file"
+        except Exception:
+            pass
+        env_mode = str(_read_env_kv(_env_path).get("SEEKDEEP_VISION_DEFAULT_MODE") or "").strip().lower()
+        if env_mode in _VISION_MODES:
+            return env_mode, "env"
+        return "describe", "default"
+
+    @app.get("/bot/vision-mode", dependencies=[Depends(_require_gui_token)])
+    async def get_vision_mode():
+        if not _bot_bridge_enabled():
+            raise HTTPException(404, "Bot bridge is disabled (set SEEKDEEP_FEATURE_BOT_BRIDGE=on).")
+        mode, source = _vision_mode_read()
+        return {"ok": True, "mode": mode, "source": source}
+
+    @app.post("/bot/vision-mode", dependencies=[Depends(_require_gui_token)])
+    async def set_vision_mode(request: Request):
+        if not _bot_bridge_enabled():
+            raise HTTPException(404, "Bot bridge is disabled (set SEEKDEEP_FEATURE_BOT_BRIDGE=on).")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        mode = str((body or {}).get("mode") or "").strip().lower()
+        if mode not in _VISION_MODES:
+            raise HTTPException(400, f"mode must be one of {', '.join(_VISION_MODES)}")
+
+        def _save_vision_mode():
+            with _seekdeep_file_lock(_vision_mode_config_file):
+                _atomic_write_json(_vision_mode_config_file, {"mode": mode})
+        try:
+            await asyncio.to_thread(_save_vision_mode)
+        except Exception as exc:
+            raise HTTPException(500, f"could not save vision mode: {str(exc)[:200]}")
+        _seekdeep_audit("vision-mode-write", mode=mode)
+        return {"ok": True, "mode": mode}
+
     # ----- GET /config -----
     # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
     # the Models / Search / Runtime cells against live config. Secret-tagged
