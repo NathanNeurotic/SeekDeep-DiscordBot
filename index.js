@@ -7452,9 +7452,17 @@ function seekdeepStartGpuLogging() {
   const intervalSec = seekdeepGpuLogIntervalSeconds();
   console.log(`[SeekDeep] Background GPU logging started (interval: ${intervalSec}s).`);
   
+  let gpuSampleInFlight = false;
   setInterval(async () => {
+    // Skip this tick if the previous sample is still pending (wedged server) so
+    // pending /gpu requests can't stack up indefinitely, and bound each request
+    // with a timeout like every other LOCAL_AI_BASE_URL fetch in this file.
+    if (gpuSampleInFlight) return;
+    gpuSampleInFlight = true;
+    const controller = new AbortController();
+    const tm = setTimeout(() => controller.abort(), 3000);
     try {
-      const res = await fetch(`${LOCAL_AI_BASE_URL}/gpu`);
+      const res = await fetch(`${LOCAL_AI_BASE_URL}/gpu`, { signal: controller.signal });
       if (res.ok) {
         const gpu = await res.json().catch(() => null);
         if (gpu && typeof gpu === 'object') {
@@ -7463,6 +7471,9 @@ function seekdeepStartGpuLogging() {
       }
     } catch (err) {
       // Quietly swallow server offline errors during background logs
+    } finally {
+      clearTimeout(tm);
+      gpuSampleInFlight = false;
     }
   }, intervalSec * 1000).unref?.();
 }

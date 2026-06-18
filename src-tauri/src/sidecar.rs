@@ -1595,15 +1595,34 @@ pub fn boot_sequence(app: AppHandle) {
     // Kill it before extraction so the new server spawns against the
     // freshly-extracted files.
     if server_already_listening() && bundle_is_fresh {
-        let _ = app.emit(
-            "sidecar:status",
-            serde_json::json!({
-                "code": "STALE_SERVER_REPLACED",
-                "detail": "newer bundle detected; killing existing :7865 server to load fresh code",
-            }),
-        );
-        kill_listener_on_7865();
-        std::thread::sleep(Duration::from_millis(800));
+        // Even with a fresh bundle, confirm the listener is actually a SeekDeep
+        // server before force-killing it — mirror the not-fresh branch's None arm
+        // so we never clobber an unrelated local process that merely happens to
+        // hold :7865 (a fresh bundle doesn't license killing a stranger).
+        match server_identity() {
+            Some(remote_version) => {
+                let _ = app.emit(
+                    "sidecar:status",
+                    serde_json::json!({
+                        "code": "STALE_SERVER_REPLACED",
+                        "detail": format!("newer bundle detected; killing existing SeekDeep :7865 server (v{remote_version}) to load fresh code"),
+                    }),
+                );
+                kill_listener_on_7865();
+                std::thread::sleep(Duration::from_millis(800));
+            }
+            None => {
+                emit_status(&app, "PORT_OCCUPIED_BY_UNKNOWN");
+                let _ = app.emit(
+                    "sidecar:status",
+                    serde_json::json!({
+                        "code": "PORT_OCCUPIED_BY_UNKNOWN",
+                        "detail": "127.0.0.1:7865 is bound by a non-SeekDeep process; refusing to take the port even with a fresh bundle. Quit whatever's listening and retry.",
+                    }),
+                );
+                return;
+            }
+        }
     }
     if server_already_listening() && !bundle_is_fresh {
         match server_identity() {

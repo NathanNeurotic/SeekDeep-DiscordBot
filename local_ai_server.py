@@ -1705,6 +1705,31 @@ def _resolve_chat_backend(role: str) -> str:
     return global_val if global_val in CHAT_BACKEND_KINDS else "hf"
 
 
+try:
+    SEEKDEEP_PROVIDER_MAX_RESP_BYTES = int(
+        os.environ.get("SEEKDEEP_PROVIDER_MAX_RESP_BYTES", str(16 * 1024 * 1024)))
+except (TypeError, ValueError):
+    SEEKDEEP_PROVIDER_MAX_RESP_BYTES = 16 * 1024 * 1024
+
+
+def _seekdeep_read_capped(resp, max_bytes: int | None = None) -> str:
+    """Read an HTTP response body in 64 KB chunks with a hard byte cap, then
+    utf-8 decode. Raises ValueError if the body exceeds the cap. The threat model
+    lets users point /chat at arbitrary provider base URLs, so a hostile or buggy
+    endpoint returning a multi-GB body could OOM the server if read whole; this
+    mirrors the bounded read the self-updater already uses."""
+    cap = SEEKDEEP_PROVIDER_MAX_RESP_BYTES if max_bytes is None else max_bytes
+    buf = bytearray()
+    while True:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > cap:
+            raise ValueError(f"provider response exceeds {cap} bytes")
+    return bytes(buf).decode("utf-8", errors="replace")
+
+
 def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
                      timeout: float | None = None) -> dict:
     """Bare-metal Ollama HTTP call using stdlib urllib (no extra runtime dep).
@@ -1720,7 +1745,7 @@ def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
         req.add_header("Authorization", f"Bearer {OLLAMA_API_KEY}")
     t = timeout if timeout is not None else OLLAMA_TIMEOUT_SECS
     with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
+        raw = _seekdeep_read_capped(resp)
         if not raw:
             return {}
         try:
@@ -1925,7 +1950,7 @@ def _openai_compat_request(base_url: str, api_key: str, path: str,
         req.add_header("Authorization", f"Bearer {api_key}")
     t = timeout if timeout is not None else OPENAI_COMPAT_TIMEOUT_SECS
     with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
+        raw = _seekdeep_read_capped(resp)
         if not raw:
             return {}
         return json.loads(raw)
@@ -2030,7 +2055,7 @@ def _anthropic_request(base_url: str, api_key: str, version: str,
     req.add_header("anthropic-version", version or ANTHROPIC_VERSION_DEFAULT)
     t = timeout if timeout is not None else ANTHROPIC_TIMEOUT_SECS
     with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
+        raw = _seekdeep_read_capped(resp)
         return json.loads(raw) if raw else {}
 
 
@@ -2139,7 +2164,7 @@ def _gemini_request(base_url: str, api_key: str, path: str,
         req.add_header("x-goog-api-key", api_key)
     t = timeout if timeout is not None else GEMINI_TIMEOUT_SECS
     with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
+        raw = _seekdeep_read_capped(resp)
         return json.loads(raw) if raw else {}
 
 
