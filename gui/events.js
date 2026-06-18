@@ -55,6 +55,7 @@
   let ws = null;
   let reconnectMs = 1000;
   let reconnectTimer = null;
+  let consecutiveFailures = 0;
   let manualClose = false;
 
   function emit(type, data, fullEvent) {
@@ -112,6 +113,7 @@
     }
     ws.onopen = () => {
       reconnectMs = 250;
+      consecutiveFailures = 0;
       emit('_open', {});
     };
     ws.onmessage = (e) => {
@@ -137,13 +139,17 @@
 
   function scheduleReconnect() {
     if (reconnectTimer) return;
+    consecutiveFailures += 1;
     const delay = reconnectMs;
-    // Cap at 5s instead of 30s. The server is on loopback — there's no
-    // bandwidth-conservation case for backing off to half-a-minute.
-    // Aggressive retry means a server restart (e.g. from a sidecar
-    // respawn after stale-version detection) reconnects almost
-    // immediately instead of leaving the sd-live-pill OFFLINE.
-    reconnectMs = Math.min(5_000, Math.round(reconnectMs * 1.8));
+    // Keep the fast 250ms→5s ramp for the common case — a sidecar respawn
+    // (stale-version detection, crash-watchdog) reconnects in well under a
+    // second, and the server is on loopback so there's no bandwidth case for
+    // backing off early. But once the server has been unreachable for a while
+    // (>~6 straight failures), widen the cap to 20s so a durably-down server
+    // isn't retried ~every 5s forever — that also throttles the downstream
+    // launcher status/gpu pumps. Resets to fast on the next successful _open.
+    const cap = consecutiveFailures > 6 ? 20_000 : 5_000;
+    reconnectMs = Math.min(cap, Math.round(reconnectMs * 1.8));
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
   }
 

@@ -217,24 +217,39 @@
     setTimeout(() => { if (!liveSeen) setMode('poll'); }, 6000);
     return true;
   }
-  // Fall back to /logs/tail polling when bus isn't pumping log.line
+  // Fall back to /logs/tail polling when bus isn't pumping log.line.
+  // Returns true on a good poll, false on a failed fetch, null when skipped
+  // (live bus active, paused, or tab hidden) — the scheduler backs off only on
+  // real failures.
   async function pollOnce() {
-    if (liveMode || paused) return;
+    if (liveMode || paused || (typeof document !== 'undefined' && document.hidden)) return null;
     try {
       const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
       const r = await fetch(base + '/logs/tail?n=20', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const data = await r.json().catch(() => null);
       const lines = Array.isArray(data?.lines) ? data.lines : [];
       for (const ln of lines.slice(-5)) {
         appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
       }
-    } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); }
+      return true;
+    } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); return false; }
   }
   if (!attachLogBus()) {
     let n = 0; const iv = setInterval(() => { if (attachLogBus() || ++n > 30) clearInterval(iv); }, 250);
   }
-  setInterval(pollOnce, 3000);
+  // Self-rescheduling poll with failure backoff (3s → cap 30s), reset to 3s on a
+  // good poll or a skip. Replaces a flat setInterval(3000) that fetched
+  // /logs/tail every 3s forever even while the server was down or the tab was
+  // hidden (~20 doomed requests/min).
+  let _logPollDelay = 3000;
+  (function scheduleLogPoll() {
+    setTimeout(async () => {
+      const res = await pollOnce();
+      _logPollDelay = (res === false) ? Math.min(30000, Math.round(_logPollDelay * 2)) : 3000;
+      scheduleLogPoll();
+    }, _logPollDelay);
+  })();
 })();
 
 // ===== Model picker: HF cache + Ollama tags · Bot config quick picker =====
