@@ -867,7 +867,7 @@
     <div class="sd-jump-backdrop" id="sdJumpBack"></div>
     <div class="sd-jump-panel" id="sdJumpPanel" role="dialog" aria-label="Jump anywhere">
       <div class="sd-jump-head">
-        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · <span data-stat-surfaces>${(window.SeekDeepPages && typeof window.SeekDeepPages.navigable === 'function') ? window.SeekDeepPages.navigable().length : PAGES.length}</span> SURFACES</em></div>
+        <div class="label"><span>JUMP ANYWHERE</span><em>SEEKDEEP · <span data-stat-surfaces>${window.SeekDeepPages?.navigable?.()?.length ?? PAGES.length}</span> SURFACES</em></div>
         <input id="sdJumpSearch" type="text" placeholder="Type to filter · ↑↓ to navigate · ↵ to jump" autocomplete="off" />
       </div>
       <div class="sd-jump-list" id="sdJumpList"></div>
