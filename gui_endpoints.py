@@ -6070,7 +6070,11 @@ def register_gui_endpoints(
             _bot_command_pending.pop(cid, None)
         if not isinstance(result, dict):
             result = {"ok": False, "error": "malformed bot reply"}
-        _seekdeep_audit("bot-command", action=action, ok=bool(result.get("ok")))
+        # NB: _seekdeep_audit's first positional IS its own `action` (the audit
+        # event name), so the bot action goes under a distinct `cmd` field —
+        # passing action= here collided ("multiple values for argument 'action'")
+        # and 500'd every bridge command (latent until the bridge was enabled).
+        _seekdeep_audit("bot-command", cmd=action, ok=bool(result.get("ok")))
         return {"ok": bool(result.get("ok", True)), "cid": cid,
                 "result": result.get("result"), "error": result.get("error")}
 
