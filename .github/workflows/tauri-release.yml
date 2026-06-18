@@ -144,7 +144,9 @@ jobs:
     # to run. On main pushes cleanup must succeed first.
     if: always() && (needs.cleanup-nightly.result == 'success' || needs.cleanup-nightly.result == 'skipped')
     permissions:
-      contents: write   # needed to create/update the nightly release
+      contents: write       # needed to create/update the nightly release
+      id-token: write       # OIDC for build-provenance attestation
+      attestations: write   # write the SLSA provenance attestation
     strategy:
       fail-fast: false
       matrix:
@@ -166,13 +168,13 @@ jobs:
       - name: Checkout
         # v5 runs on Node.js 24. v4 still works but emits a deprecation
         # warning since 2026-Q2 when GH Actions started forcing Node 24.
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Node 22
         # setup-node@v6 is the Node 24-based runner of this action;
         # node-version pins 22 — our engines floor (>=22.12.0), since
         # Node 20 went EOL 2026-04-30.
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
           cache: 'npm'
@@ -282,6 +284,27 @@ jobs:
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           args: ${{ matrix.args }}
 
+      - name: Attest build provenance (SLSA)
+        # The installers ship unsigned (no Authenticode/codesign cert), so this is
+        # the verifiable integrity anchor: a signed SLSA provenance attestation for
+        # each produced installer, checkable by anyone with
+        #   gh attestation verify <file> --repo ${{ github.repository }}
+        # Runs AFTER tauri-action has already uploaded the assets, so even if a
+        # path glob misses on some platform the published installers are unaffected
+        # (the step would just fail loudly and get fixed forward). Each matrix OS
+        # attests its own artifacts; patterns that match nothing on a given OS are
+        # ignored as long as at least one matches.
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            src-tauri/target/**/release/bundle/**/*.msi
+            src-tauri/target/**/release/bundle/**/*.exe
+            src-tauri/target/**/release/bundle/**/*.dmg
+            src-tauri/target/**/release/bundle/**/*.AppImage
+            src-tauri/target/**/release/bundle/**/*.deb
+            src-tauri/target/**/release/bundle/**/*.rpm
+            src-tauri/target/**/release/bundle/**/*.app.tar.gz
+
   # Attach the EXACT source tree that built the installers above as a durable,
   # provenance-stamped asset: SeekDeep-source-v<version>-<shortsha>.zip.
   #
@@ -304,7 +327,7 @@ jobs:
       contents: write   # upload the source asset to the release
     steps:
       - name: Checkout (the built commit)
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Build + upload source archive
         env:
