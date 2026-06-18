@@ -1910,10 +1910,15 @@ def register_gui_endpoints(
                 raise ValueError("commits response exceeds cap")
             data = json.loads(raw.decode("utf-8", "replace"))
         except Exception as exc:  # noqa: BLE001 — network/garbled GitHub response
+            # Log the detail server-side; never echo the exception text to the
+            # client (CodeQL "information exposure through an exception"). The
+            # GUI only reads ok/commits/stale/cached, so a generic message is safe.
+            print(f"[SeekDeep] /changelog/commits refresh failed: {exc}", flush=True)
             if cached is not None:
                 return {"ok": True, "commits": cached[:n], "cached": True, "stale": True,
-                        "fetched_at": _CHANGELOG_COMMITS_CACHE.get("iso"), "note": f"refresh failed: {exc}"}
-            return {"ok": False, "commits": [], "error": f"could not fetch commits: {exc}"}
+                        "fetched_at": _CHANGELOG_COMMITS_CACHE.get("iso"),
+                        "note": "refresh failed (serving cached; see server log)"}
+            return {"ok": False, "commits": [], "error": "could not fetch recent commits"}
         commits = []
         for c in (data if isinstance(data, list) else []):
             if not isinstance(c, dict):
@@ -4890,7 +4895,9 @@ def register_gui_endpoints(
             body = await request.json()
         except Exception:
             body = {}
-        mode = str((body or {}).get("mode") or "").strip().lower()
+        if not isinstance(body, dict):
+            body = {}  # valid-but-non-dict JSON (list/str/number) -> 400, not 500
+        mode = str(body.get("mode") or "").strip().lower()
         if mode not in _VISION_MODES:
             raise HTTPException(400, f"mode must be one of {', '.join(_VISION_MODES)}")
 
@@ -4946,7 +4953,9 @@ def register_gui_endpoints(
             body = await request.json()
         except Exception:
             body = {}
-        mode = str((body or {}).get("mode") or "").strip().lower()
+        if not isinstance(body, dict):
+            body = {}  # valid-but-non-dict JSON (list/str/number) -> 400, not 500
+        mode = str(body.get("mode") or "").strip().lower()
         if mode not in _WEB_SEARCH_MODES:
             raise HTTPException(400, f"mode must be one of {', '.join(_WEB_SEARCH_MODES)}")
 

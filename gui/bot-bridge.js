@@ -312,7 +312,7 @@
       }
     } catch (err) {
       setError('Could not update binding: ' + explain(err));
-      loadBindings(); // re-sync the selects to server truth on failure
+      await loadBindings(); // re-sync the selects to server truth on failure (keep selects disabled until done)
     } finally {
       if (sel) sel.disabled = false;
     }
@@ -551,7 +551,7 @@
       }
     } catch (err) {
       setError('Could not set the default vision mode: ' + explain(err));
-      loadVisionMode(); // re-sync the buttons to server truth on failure
+      await loadVisionMode(); // re-sync the buttons to server truth on failure (keep them disabled until done)
     } finally {
       if (dBtn) dBtn.disabled = false;
       if (oBtn) oBtn.disabled = false;
@@ -614,7 +614,7 @@
       }
     } catch (err) {
       setError('Could not set the web-search default: ' + explain(err));
-      loadWebSearch(); // re-sync the buttons to server truth on failure
+      await loadWebSearch(); // re-sync the buttons to server truth on failure (keep them disabled until done)
     } finally {
       btns.forEach((b) => { if (b) b.disabled = false; });
     }
