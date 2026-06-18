@@ -119,9 +119,11 @@
                   body: JSON.stringify({ guild_id: gid, enabled: next }),
                 });
                 if (!r.ok) throw new Error('HTTP ' + r.status);
+                (window.SeekDeepNotify?.toast || (() => {}))({ tone: 'good', title: `${key} ${next ? 'on' : 'off'}`, ttl: 2500 });
               } catch (err) {
                 t.classList.toggle('on', !next);  // revert
-                alert(`Toggle ${key} failed: ${err.message}`);
+                // WebView2 suppresses alert(); use the in-app toast so the failure is visible.
+                (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'bad', title: `Toggle ${key} failed`, body: String(err.message || err) });
               }
             });
           }
@@ -222,12 +224,12 @@
             if (pattern.trim()) body.pattern = pattern.trim();
             if (!Object.keys(body).length) return;
             try { await callRule('PATCH', rule.id, body); loaded = false; load(); }
-            catch (err) { alert('Edit failed: ' + err.message); }
+            catch (err) { (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'bad', title: 'Edit failed', body: String(err.message || err) }); }
           }
           async function doRemove(rule) {
             if (!await (window.SeekDeepConfirm || window.confirm)(`Remove rule ${rule.emoji} → ${rule.pattern}?`)) return;
             try { await callRule('DELETE', rule.id); loaded = false; load(); }
-            catch (err) { alert('Remove failed: ' + err.message); }
+            catch (err) { (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'bad', title: 'Remove failed', body: String(err.message || err) }); }
           }
           async function doToggle(rule, toggleEl) {
             const next = !(rule.enabled !== false);
@@ -235,7 +237,7 @@
               await callRule('PATCH', rule.id, { enabled: next });
               toggleEl.classList.toggle('on', next);
               rule.enabled = next;
-            } catch (err) { alert('Toggle failed: ' + err.message); }
+            } catch (err) { (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'bad', title: 'Toggle failed', body: String(err.message || err) }); }
           }
           btnInspect.addEventListener('click', () => {
             const m = document.createElement('div');

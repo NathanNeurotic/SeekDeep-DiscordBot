@@ -11,6 +11,16 @@
   if (window.__seekdeepForceReactLoaded) return;
   window.__seekdeepForceReactLoaded = true;
 
+  // Tauri-aware loopback base — the app webview is locked to http://tauri.localhost,
+  // so a RELATIVE fetch('/force-react/...') hits the WebView, not the Python server.
+  // Prefer the shared resolver nav.js stashes; fall back to the inline pattern used
+  // by emoji-vault.js / stats.js. In a plain browser this is just location.origin.
+  const BASE = (function () {
+    try { if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase(); } catch (_) {}
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
   const $ = (id) => document.getElementById(id);
   const show = (el, on) => { if (el) el.classList.toggle('fr-hidden', !on); };
   let currentGuild = '';
@@ -26,7 +36,7 @@
   function flashSaved() { const s = $('fr-saved'); if (!s) return; show(s, true); setTimeout(() => show(s, false), 2500); }
 
   async function getJSON(url, opts) {
-    const r = await fetch(url, opts || {});
+    const r = await fetch(BASE + url, opts || {});
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
