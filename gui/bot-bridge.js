@@ -50,11 +50,11 @@
   // POST /bot/command {action}. nav.js auto-attaches the GUI token. The server
   // wraps the bot reply in {ok, cid, result, error}; surface `error` on a
   // logical failure even when the HTTP status is 200.
-  async function command(action) {
+  async function command(action, args) {
     const r = await fetch(BASE + '/bot/command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(args ? { action, args } : { action }),
     });
     let body = null;
     try { body = await r.json(); } catch (_) {}
@@ -210,6 +210,92 @@
     setOut(wrap);
   }
 
+  // ----- Discord bindings (per-guild digest + auto-translate channels) -------
+  // bindings.get returns each guild's current bindings + its text channels;
+  // bindings.set writes one binding (live, no restart). Rendered as per-guild
+  // rows with a <select> per binding; changing a select fires bindings.set.
+  function mkChannelSelect(guild, kind, currentId) {
+    const sel = document.createElement('select');
+    const off = document.createElement('option');
+    off.value = ''; off.textContent = '— off —';
+    sel.appendChild(off);
+    (guild.channels || []).forEach((c) => {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = '#' + c.name;
+      sel.appendChild(o);
+    });
+    sel.value = currentId || '';
+    sel.addEventListener('change', () => setBinding(guild.id, kind, sel.value, sel));
+    return sel;
+  }
+
+  function renderBindings(guilds) {
+    const box = $('bb-bindings');
+    if (!box) return;
+    box.textContent = '';
+    if (!guilds.length) {
+      const none = document.createElement('div');
+      none.className = 'sub'; none.textContent = 'No guilds.';
+      box.appendChild(none); return;
+    }
+    guilds.forEach((g) => {
+      const row = document.createElement('div');
+      row.className = 'bb-bind-row';
+      const name = document.createElement('div');
+      name.className = 'bb-bind-guild';
+      name.textContent = g.name || g.id || '(unknown)';
+      row.appendChild(name);
+      const fields = document.createElement('div');
+      fields.className = 'bb-bind-fields';
+      [['digest', 'Daily digest', g.digestChannelId],
+       ['translate', 'Auto-translate', g.translateChannelId]].forEach(function (spec) {
+        const f = document.createElement('div');
+        f.className = 'bb-bind-field';
+        const l = document.createElement('span');
+        l.className = 'lbl'; l.textContent = spec[1];
+        f.appendChild(l);
+        f.appendChild(mkChannelSelect(g, spec[0], spec[2]));
+        fields.appendChild(f);
+      });
+      row.appendChild(fields);
+      box.appendChild(row);
+    });
+  }
+
+  async function loadBindings() {
+    const btn = $('bb-bind-load');
+    if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+    setError('');
+    try {
+      const body = await command('bindings.get');
+      renderBindings((((body && body.result) || {}).guilds) || []);
+    } catch (err) {
+      setError('Could not load bindings: ' + explain(err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Load bindings'; }
+    }
+  }
+
+  async function setBinding(guildId, kind, channelId, sel) {
+    if (sel) sel.disabled = true;
+    setError('');
+    try {
+      await command('bindings.set', { guildId: guildId, kind: kind, channelId: channelId });
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'good',
+          title: (kind === 'digest' ? 'Daily-digest' : 'Auto-translate') + ' channel ' + (channelId ? 'set' : 'cleared'),
+          ttl: 3000,
+        });
+      }
+    } catch (err) {
+      setError('Could not update binding: ' + explain(err));
+      loadBindings(); // re-sync the selects to server truth on failure
+    } finally {
+      if (sel) sel.disabled = false;
+    }
+  }
+
   async function init() {
     // Feature gate — defensive: the nav hides the link, but the URL can be
     // opened directly. GET /config/features is open (no token).
@@ -235,6 +321,8 @@
     if (status) status.addEventListener('click', () => runAction('bb-status', 'status', renderStatus));
     const guilds = $('bb-guilds');
     if (guilds) guilds.addEventListener('click', () => runAction('bb-guilds', 'guilds', renderGuilds));
+    const bindLoad = $('bb-bind-load');
+    if (bindLoad) bindLoad.addEventListener('click', loadBindings);
 
     refreshStatus();
   }

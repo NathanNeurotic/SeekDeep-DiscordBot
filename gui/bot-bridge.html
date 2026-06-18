@@ -42,6 +42,16 @@
   .bb-msg.err { border: 1px solid rgba(255,90,90,0.4); background: rgba(255,90,90,0.08); color: #ffb3b3; margin-bottom: 14px; }
   .bb-msg.info { border: 1px solid var(--stroke); background: rgba(6,18,31,0.5); color: var(--hull-2, #c7d6f0); }
   .bb-hidden { display: none !important; }
+  .bb-bind-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .bb-bind-title { font-family: var(--font-display); font-weight: 600; color: var(--hull); }
+  .bb-bind-row { padding: 12px 0; border-top: 1px solid var(--stroke); }
+  .bb-bind-row:first-child { border-top: none; }
+  .bb-bind-guild { font-family: var(--font-display); font-weight: 600; color: var(--hull); margin-bottom: 8px; }
+  .bb-bind-fields { display: flex; flex-wrap: wrap; gap: 18px; }
+  .bb-bind-field { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--hull-2, #c7d6f0); }
+  .bb-bind-field .lbl { color: var(--cyan-1); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+  .bb-bind-field select { background: rgba(6,18,31,0.7); color: var(--hull-2, #c7d6f0); border: 1px solid var(--stroke); border-radius: 6px; padding: 5px 8px; font-family: var(--font-mono); font-size: 12px; max-width: 240px; }
+  .bb-bind-field select:disabled { opacity: 0.5; cursor: progress; }
 </style>
 </head>
 <body class="has-topnav">
@@ -105,6 +115,17 @@
           <button id="bb-guilds" class="bb-btn" type="button">Guilds</button>
         </div>
         <div id="bb-out" class="bb-out"></div>
+      </div>
+
+      <div class="bb-card">
+        <div class="bb-bind-head">
+          <div>
+            <div class="bb-bind-title">Discord bindings</div>
+            <div class="sub">Per-server <code>daily digest</code> + <code>auto-translate</code> channels — the automatic behaviors the bot binds in Discord. Changes apply live (no restart).</div>
+          </div>
+          <button id="bb-bind-load" class="bb-btn ghost" type="button">Load bindings</button>
+        </div>
+        <div id="bb-bindings"></div>
       </div>
     </div>
   </div>
