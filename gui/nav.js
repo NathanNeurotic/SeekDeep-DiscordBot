@@ -286,6 +286,37 @@
     };
   }
 
+  // ===== External links open in the system browser ============================
+  // In the Tauri desktop app the webview is locked to the app origin, so a plain
+  // `<a href="https://…">` click just dies — the webview won't navigate out and
+  // there's no new-tab. Route external links (+ discord: deep-links) through the
+  // shipped `open_external` Tauri command, which opens the OS browser after an
+  // allowlist check (github / huggingface / discord / python.org / pytorch /
+  // ollama / docker / nvidia — see src-tauri lib.rs). JS-only, so it ships via
+  // self-update. In a plain browser this is a no-op: links navigate normally.
+  (function () {
+    const inTauri = !!(window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function');
+    if (!inTauri) return;
+    const APP_HOSTS = new Set(['tauri.localhost', '127.0.0.1', 'localhost', '']);
+    document.addEventListener('click', function (e) {
+      const a = (e.target && e.target.closest) ? e.target.closest('a[href]') : null;
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      if (!/^(https?:|discord:)/i.test(href)) return; // only absolute external schemes
+      if (/^https?:/i.test(href)) {
+        let host = '';
+        try { host = new URL(href, location.href).hostname.toLowerCase(); } catch (_) { return; }
+        if (APP_HOSTS.has(host)) return; // same-origin / loopback — let the webview handle it
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      window.__TAURI__.core.invoke('open_external', { url: href }).catch(function (err) {
+        console.warn('[SeekDeep] external link blocked/failed:', href, String(err));
+        try { window.SeekDeepNotify && window.SeekDeepNotify.toast && window.SeekDeepNotify.toast('Could not open link: ' + href, 'warn'); } catch (_) {}
+      });
+    }, true); // capture phase: beat in-page handlers + the webview navigation
+  })();
+
   // ===== Global error logger ===================================================
   // Surface silent failures so empty `catch {}` patterns elsewhere don't hide
   // real bugs. Two hooks:
