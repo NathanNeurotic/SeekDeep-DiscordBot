@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Operations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .app-wrap { padding: 22px 28px 44px; }
+  .ops-win { width: 100%; max-width: 1080px; margin: 0 auto; }
+  .ops-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ops-head h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; color: var(--hull); margin: 0; }
+  .ops-head h1 em { font-style: normal; color: var(--cyan-1); }
+  .ops-sub { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-1); }
+  .ops-lead { color: var(--hull-2, #c7d6f0); margin: 4px 0 22px; max-width: 78ch; line-height: 1.55; }
+  .ops-lead code { font-family: var(--font-mono); color: var(--cyan-1); font-size: 0.92em; }
+  .ops-group { margin: 0 0 26px; }
+  .ops-group h2 {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--hull-3, #8aa0c0); margin: 0 0 10px; padding-bottom: 6px;
+    border-bottom: 1px solid color-mix(in oklab, var(--cyan-1) 10%, transparent);
+  }
+  .ops-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 12px; }
+  .ops-card {
+    text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 5px;
+    border: 1px solid var(--stroke); border-radius: var(--r-md, 12px);
+    background: linear-gradient(180deg, rgba(10,26,48,0.55), rgba(6,18,31,0.75));
+    padding: 14px 16px; color: var(--hull-2, #c7d6f0); transition: border-color .15s ease, background .15s ease, transform .1s ease;
+  }
+  .ops-card:hover { border-color: rgba(45,212,255,0.45); background: linear-gradient(180deg, rgba(13,40,72,0.7), rgba(8,22,38,0.85)); }
+  .ops-card:active { transform: translateY(1px); }
+  .ops-card-title { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--hull); }
+  .ops-card-desc { font-size: 12.5px; line-height: 1.45; color: var(--hull-3, #8aa0c0); }
+  .ops-card.danger { border-color: rgba(255,104,104,0.4); }
+  .ops-card.danger:hover { border-color: rgba(255,104,104,0.7); background: linear-gradient(180deg, rgba(58,18,18,0.7), rgba(30,10,10,0.85)); }
+  .ops-card.danger .ops-card-title { color: #ff9a9a; }
+  .ops-msg { padding: 14px 16px; border-radius: 10px; font-size: 14px; line-height: 1.5; border: 1px solid var(--stroke); background: rgba(6,18,31,0.5); color: var(--hull-2, #c7d6f0); }
+  .ops-hidden { display: none !important; }
+</style>
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+
+<nav class="topnav">
+  <div class="lockup">
+    <img src="assets/seekdeep-mark.webp" alt="SeekDeep" />
+    <span class="wm">SEEK<em>DEEP</em></span>
+  </div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+    <a href="api.html">API</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="roadmap.html">Roadmap</a>
+  </div>
+  <div class="row">
+    <span class="pill"><span class="dot"></span><span data-version>v—</span> · LOCAL</span>
+  </div>
+</nav>
+
+<div class="app-wrap">
+  <div class="ops-win">
+    <div class="ops-head">
+      <h1>Oper<em>ations</em></h1>
+      <span class="ops-sub">stack control · recovery · GUI</span>
+    </div>
+    <p class="ops-lead">
+      One-click stack actions — restart services, flush the model cache, reload <code>.env</code>,
+      run diagnostics, or self-update. These are the same recovery operations as the right-click
+      menu, surfaced as real buttons so they're discoverable when you need them most (e.g. when the
+      server feels unreachable). Destructive actions prompt for confirmation.
+    </p>
+    <div id="ops-grid"><!-- rendered by operations.page.js from window.SeekDeepOps --></div>
+    <div id="ops-empty" class="ops-msg ops-hidden">
+      Operations registry unavailable — reload the page (nav.js failed to load).
+    </div>
+  </div>
+</div>
+
+<script src="pages.js" defer></script>
+<script src="nav.js" defer></script>
+<script src="operations.page.js" defer></script>
+</body>
+</html>
