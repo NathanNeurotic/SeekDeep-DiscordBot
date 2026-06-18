@@ -9,7 +9,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 <style>
-  .app-wrap { padding: 22px 28px 44px; }
+  /* body.has-topnav (styles.css) locks body overflow + pins .app-wrap to the
+     viewport height for the fixed .win pages. This page is a normal content
+     layout, so scroll the app-wrap itself or a long emoji grid gets clipped. */
+  .app-wrap { padding: 22px 28px 44px; overflow-y: auto; }
   .ev-win { width: 100%; max-width: 1080px; margin: 0 auto; }
   .ev-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
   .ev-head h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; color: var(--hull); margin: 0; }
