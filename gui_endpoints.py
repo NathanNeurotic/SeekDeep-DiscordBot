@@ -2978,6 +2978,13 @@ def register_gui_endpoints(
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
         single_files = [
             "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
+            # release_signing.py is imported by the self-update SIGNATURE GATE
+            # below (`import release_signing`). It MUST ship or self-update 500s
+            # with ModuleNotFoundError before it can ever commit — which is
+            # exactly how this install's self-update was silently dead (the
+            # module landed in the repo but was never added here, so it never
+            # reached the app dir). Keep it in this list.
+            "release_signing.py",
             "package.json", "requirements-local.txt", "requirements-ml.txt",
         ]
         event_bus.publish_sync({"type": "self-update.started",
@@ -3177,9 +3184,19 @@ def register_gui_endpoints(
         # signing public key is pinned, require a valid maintainer Ed25519
         # signature over a manifest whose sha256s match the staged files, BEFORE
         # commit. A present-but-invalid signature ALWAYS aborts (attack signal).
-        import release_signing as _rsign
+        # Import the signer defensively: an older install (or a partial tree)
+        # may not have release_signing.py yet, and the import used to crash the
+        # WHOLE updater with ModuleNotFoundError BEFORE it could ever commit the
+        # file that fixes the gap — a self-update that could never self-heal.
+        # Now: if the module is absent we fail CLOSED only when signatures are
+        # REQUIRED; otherwise we skip the gate and let the update proceed, which
+        # commits the shipped release_signing.py and heals the signer for next
+        # time. (The git-blob integrity gate above already ran regardless.)
+        try:
+            import release_signing as _rsign
+        except ImportError:
+            _rsign = None
         _sig_require = str(os.environ.get("SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE", "")).strip().lower() in ("1", "true", "yes", "on")
-        _pubkey_hex = str(os.environ.get("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "") or _rsign.RELEASE_SIGNING_PUBKEY_HEX or "").strip()
 
         def _abort_sig(reason: str):
             try: shutil.rmtree(staging, ignore_errors=True)
@@ -3188,34 +3205,41 @@ def register_gui_endpoints(
                                     "data": {"error": "signature check failed", "detail": reason}})
             raise HTTPException(409, f"Self-update aborted: {reason} (live tree untouched).")
 
-        if not _pubkey_hex:
+        if _rsign is None:
             if _sig_require:
-                _abort_sig("signature required (SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on) but no release-signing key is pinned")
+                _abort_sig("signature required (SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on) but the release_signing module is not present on this install")
             event_bus.publish_sync({"type": "self-update.line",
-                                    "data": {"line": "signature check skipped: no pinned release-signing key"}})
+                                    "data": {"line": "signature check skipped: release_signing module absent (this update installs it)"}})
         else:
-            _have_manifest = True
-            try:
-                _manifest_bytes = _fetch(base_url + _rsign.MANIFEST_NAME)
-                _sig_bytes = _fetch(base_url + _rsign.MANIFEST_SIG_NAME)
-            except Exception:
-                _have_manifest = False
-            if not _have_manifest:
+            _pubkey_hex = str(os.environ.get("SEEKDEEP_RELEASE_SIGNING_PUBKEY", "") or _rsign.RELEASE_SIGNING_PUBKEY_HEX or "").strip()
+            if not _pubkey_hex:
                 if _sig_require:
-                    _abort_sig(f"signature required but no signed manifest is published for ref {ref}")
+                    _abort_sig("signature required (SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on) but no release-signing key is pinned")
                 event_bus.publish_sync({"type": "self-update.line",
-                                        "data": {"line": f"no signed manifest for ref {ref}; proceeding unsigned (set SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on to refuse)"}})
+                                        "data": {"line": "signature check skipped: no pinned release-signing key"}})
             else:
-                _ok, _reason, _manifest = _rsign.verify_release_bytes(_manifest_bytes, _sig_bytes, _pubkey_hex)
-                if not _ok:
-                    _abort_sig(f"release signature invalid: {_reason}")
-                if str((_manifest or {}).get("ref") or "") != ref:
-                    _abort_sig(f"manifest ref mismatch (manifest={(_manifest or {}).get('ref')!r}, requested={ref!r})")
-                _files_ok, _files_reason = _rsign.check_staged_against_manifest(_manifest, staging, staged)
-                if not _files_ok:
-                    _abort_sig(_files_reason)
-                event_bus.publish_sync({"type": "self-update.line",
-                                        "data": {"line": f"signature ok: manifest verified against pinned key ({len((_manifest or {}).get('files', {}))} files)"}})
+                _have_manifest = True
+                try:
+                    _manifest_bytes = _fetch(base_url + _rsign.MANIFEST_NAME)
+                    _sig_bytes = _fetch(base_url + _rsign.MANIFEST_SIG_NAME)
+                except Exception:
+                    _have_manifest = False
+                if not _have_manifest:
+                    if _sig_require:
+                        _abort_sig(f"signature required but no signed manifest is published for ref {ref}")
+                    event_bus.publish_sync({"type": "self-update.line",
+                                            "data": {"line": f"no signed manifest for ref {ref}; proceeding unsigned (set SEEKDEEP_SELF_UPDATE_REQUIRE_SIGNATURE=on to refuse)"}})
+                else:
+                    _ok, _reason, _manifest = _rsign.verify_release_bytes(_manifest_bytes, _sig_bytes, _pubkey_hex)
+                    if not _ok:
+                        _abort_sig(f"release signature invalid: {_reason}")
+                    if str((_manifest or {}).get("ref") or "") != ref:
+                        _abort_sig(f"manifest ref mismatch (manifest={(_manifest or {}).get('ref')!r}, requested={ref!r})")
+                    _files_ok, _files_reason = _rsign.check_staged_against_manifest(_manifest, staging, staged)
+                    if not _files_ok:
+                        _abort_sig(_files_reason)
+                    event_bus.publish_sync({"type": "self-update.line",
+                                            "data": {"line": f"signature ok: manifest verified against pinned key ({len((_manifest or {}).get('files', {}))} files)"}})
         # Phase 2: commit. Each src.replace(target) is atomic on the same
         # volume (staging is a sibling so always same vol). Live tree only
         # transitions consistent old → consistent new per file.

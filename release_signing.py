@@ -53,6 +53,7 @@ MANIFEST_SINGLE_FILES = [
     "local_ai_server.py",
     "gui_endpoints.py",
     "warmup_local_cache.py",
+    "release_signing.py",
     "package.json",
     "requirements-local.txt",
     "requirements-ml.txt",

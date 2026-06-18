@@ -283,6 +283,7 @@ def _self_update_checks() -> None:
         # (c) happy path: tree SHAs match fetched bytes -> commit into temp root.
         content = b"# patched by self-update smoke test\n"
         single = ["local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
+                  "release_signing.py",
                   "package.json", "requirements-local.txt", "requirements-ml.txt"]
         tree_paths = {name: _git_blob_sha(content) for name in single}
         with mock.patch.object(_urlreq, "urlopen", _make_urlopen(content, tree_paths)):
@@ -298,6 +299,27 @@ def _self_update_checks() -> None:
               (tmp / "local_ai_server.py").exists() and (tmp / "local_ai_server.py").read_bytes() == content)
         check("self-update happy path: .self-updated sentinel written",
               (tmp / ".self-updated").exists())
+
+        # (c-bis) signer module ABSENT (an older install predating release_signing,
+        # or a tree that never shipped it). `import release_signing` used to crash
+        # the WHOLE updater with ModuleNotFoundError BEFORE it could commit the
+        # very file that fixes the gap — a self-update that could never recover.
+        # Now: import fails gracefully, the signature gate is skipped (require=off),
+        # the update commits, and release_signing.py (a shipped core file) lands —
+        # self-healing the signer. Regression test for that exact deadlock.
+        import sys as _sys
+        cbis_content = b"# self-heal: signer module was absent\n"
+        cbis_tree = {n: _git_blob_sha(cbis_content) for n in single}
+        with mock.patch.dict(_sys.modules, {"release_signing": None}):
+            with mock.patch.object(_urlreq, "urlopen", _make_urlopen(cbis_content, cbis_tree)):
+                r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
+        body = {}
+        try: body = r.json()
+        except Exception: pass
+        check("self-update: absent release_signing module doesn't crash updater (skips gate, commits)",
+              r.status_code == 200 and body.get("ok") is True, f"status={r.status_code} body={str(body)[:160]}")
+        check("self-update: self-heal committed release_signing.py with fetched bytes",
+              (tmp / "release_signing.py").exists() and (tmp / "release_signing.py").read_bytes() == cbis_content)
 
         # (d) AUD-001 follow-up: release-signature gate. Ephemeral offline key →
         # pin its public half via env; sign a manifest covering the staged files.
