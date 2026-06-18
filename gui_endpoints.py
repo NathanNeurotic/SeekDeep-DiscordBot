@@ -4380,8 +4380,15 @@ def register_gui_endpoints(
             dest_dir = home / "Downloads"
             if not dest_dir.is_dir():
                 dest_dir = home
-            fname = f"emoji-backup-{guild_id}-{_time.strftime('%Y%m%d-%H%M%S')}.zip"
-            dest = dest_dir / fname
+            stem = f"emoji-backup-{guild_id}-{_time.strftime('%Y%m%d-%H%M%S')}"
+            # Uniquify: second-resolution timestamps collide on rapid repeat backups
+            # of the same guild, and write_bytes would silently overwrite.
+            dest = dest_dir / f"{stem}.zip"
+            n = 1
+            while dest.exists():
+                dest = dest_dir / f"{stem}-{n}.zip"
+                n += 1
+            fname = dest.name
             try:
                 # Offload the blocking disk write — this is an async handler, so a
                 # synchronous write_bytes would stall the event loop (and every
@@ -4414,8 +4421,16 @@ def register_gui_endpoints(
         safe = _re.sub(r"[^A-Za-z0-9._-]", "_", _Path(req.filename or "").name)[:120]
         if not safe or safe in (".", ".."):
             raise HTTPException(400, "invalid filename")
+        b64 = req.content_b64 or ""
+        # Guard the RAW base64 length BEFORE decoding — b64decode allocates the
+        # full decoded buffer in memory, so checking only the decoded size (below)
+        # would let an oversize request OOM us first (uvicorn/h11 caps headers, not
+        # body). Base64 inflates ~4/3, so 64 MB decoded is ~86 MB of text; 90 MB
+        # leaves headroom while the exact 64 MB cap still enforces post-decode.
+        if len(b64) > 90 * 1024 * 1024:
+            raise HTTPException(413, "file too large (max 64 MB)")
         try:
-            data = _b64.b64decode(req.content_b64 or "", validate=False)
+            data = _b64.b64decode(b64, validate=False)
         except Exception:
             raise HTTPException(400, "invalid content_b64")
         if not data:
@@ -4427,7 +4442,14 @@ def register_gui_endpoints(
         if not dest_dir.is_dir():
             dest_dir = home
         p = _Path(safe)
-        dest = dest_dir / f"{p.stem}-{_time.strftime('%Y%m%d-%H%M%S')}{p.suffix}"
+        stem = f"{p.stem}-{_time.strftime('%Y%m%d-%H%M%S')}"
+        # Second-resolution timestamps collide on rapid repeat saves; uniquify so a
+        # second save in the same second doesn't silently overwrite the first.
+        dest = dest_dir / f"{stem}{p.suffix}"
+        n = 1
+        while dest.exists():
+            dest = dest_dir / f"{stem}-{n}{p.suffix}"
+            n += 1
         try:
             dest.write_bytes(data)
         except OSError as exc:
