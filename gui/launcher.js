@@ -1266,10 +1266,22 @@
       // will fail and increment _launchStatusMisses. Three quick misses
       // flip every card to UNKNOWN within ~6s instead of ~90s. Once the
       // bus reconnects ('_open'), pull a fresh launchers.tick.
-      window.SeekDeepEvents.on('_close',   () => { pumpStatus(); pumpGpuBadge(); });
-      window.SeekDeepEvents.on('_probing', () => { pumpStatus(); pumpGpuBadge(); });
-      window.SeekDeepEvents.on('_error',   () => { pumpStatus(); pumpGpuBadge(); });
-      window.SeekDeepEvents.on('_open',    () => { pumpStatus(); pumpGpuBadge(); pumpStatsSnapshot(); });
+      // Bus-drop pumps are debounced into one fetch/sec. A single disconnect
+      // emits _close AND _probing (and maybe _error), and the reconnect loop
+      // repeats that — without coalescing it was ~80+ failing /launchers/status
+      // + /gpu fetches per minute while the server was down. One quick miss
+      // still flips cards toward UNKNOWN within ~1-3s; the 30s safety nets cover
+      // steady state. _open stays immediate so recovery is snappy (and cancels
+      // any pending drop-pump).
+      let _busDropPump = null;
+      const pumpOnBusDrop = () => {
+        if (_busDropPump) return;
+        _busDropPump = setTimeout(() => { _busDropPump = null; pumpStatus(); pumpGpuBadge(); }, 1000);
+      };
+      window.SeekDeepEvents.on('_close',   pumpOnBusDrop);
+      window.SeekDeepEvents.on('_probing', pumpOnBusDrop);
+      window.SeekDeepEvents.on('_error',   pumpOnBusDrop);
+      window.SeekDeepEvents.on('_open',    () => { if (_busDropPump) { clearTimeout(_busDropPump); _busDropPump = null; } pumpStatus(); pumpGpuBadge(); pumpStatsSnapshot(); });
       // Safety nets: relaxed because the WS ticks above carry the live path.
       setInterval(pumpStatus,        30000);
       setInterval(pumpGpuBadge,      30000);
