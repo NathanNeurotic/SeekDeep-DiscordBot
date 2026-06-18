@@ -7806,18 +7806,30 @@ function seekdeepHasNoSearchOverride(prompt) {
 }
 
 async function seekdeepFetchGpuStats() {
-  try {
+  // Two quick attempts. A server that's mid-restart (uvicorn rebinding :7865
+  // after a self-update / crash-watchdog respawn) or momentarily overloaded
+  // refuses the first connection but answers the retry a beat later. Without
+  // this, a single transient blip surfaced a hard "OFFLINE" to the channel —
+  // the 2026-06-18 restart-window incident where `@SeekDeep gpu` reported the
+  // server dead while it was simply coming back up. A genuine outage still
+  // fails both attempts and reports unreachable.
+  const ATTEMPTS = 2;
+  const RETRY_DELAY_MS = 1200;
+  let lastErr = '';
+  for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
       const data = await fetchJson(`${LOCAL_AI_BASE_URL}/gpu`, { signal: controller.signal });
       return { ok: true, data };
+    } catch (err) {
+      lastErr = err?.message || String(err);
     } finally {
       clearTimeout(timer);
     }
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) };
   }
+  return { ok: false, error: lastErr };
 }
 
 async function seekdeepBuildGpuStatusText({ live = false, tick = 0 } = {}) {
@@ -7830,7 +7842,8 @@ async function seekdeepBuildGpuStatusText({ live = false, tick = 0 } = {}) {
     return [
       '**GPU**',
       asTextBlock(seekdeepRedactStatusConnectionInfo([
-        'Local AI server: OFFLINE or /gpu endpoint missing',
+        'Local AI server: unreachable (it may be starting up or restarting —',
+        'try again in ~20s; if it persists the server is down)',
         `Error: ${result.error}`,
       ].join('\n'))),
     ].join('\n');
