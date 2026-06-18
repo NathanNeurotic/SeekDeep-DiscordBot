@@ -1362,7 +1362,16 @@
     const KEY = 'seekdeep.reduceMotion';
     let mql = null;
     try { mql = window.matchMedia('(prefers-reduced-motion: reduce)'); } catch (_) {}
-    const stored = () => { try { return localStorage.getItem(KEY); } catch (_) { return null; } };
+    // Session fallback for when localStorage is unavailable (blocked storage /
+    // private window in the loopback browser). Without it a toggle click would
+    // show a success toast but have no effect (stored() -> null -> falls back to
+    // the OS pref). In-memory choice wins for the session; localStorage carries
+    // a prior-session value when readable.
+    let memoryStored = null;
+    const stored = () => {
+      try { return memoryStored !== null ? memoryStored : localStorage.getItem(KEY); }
+      catch (_) { return memoryStored; }
+    };
     // Effective lite state: an explicit user choice wins; otherwise follow the OS.
     const liteNow = () => { const s = stored(); return s === '1' ? true : s === '0' ? false : !!(mql && mql.matches); };
     function apply() {
@@ -1387,7 +1396,9 @@
     }
     function toggle() {
       const lite = !(document.body && document.body.classList.contains('sd-lite'));
-      try { localStorage.setItem(KEY, lite ? '1' : '0'); } catch (_) {}
+      const val = lite ? '1' : '0';
+      memoryStored = val; // keep working this session even if persistence fails
+      try { localStorage.setItem(KEY, val); } catch (_) {}
       apply();
       if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
         window.SeekDeepNotify.toast({
