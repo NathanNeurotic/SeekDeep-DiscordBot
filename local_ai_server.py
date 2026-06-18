@@ -2382,6 +2382,11 @@ def unload_image_model(reason: str = "explicit-unload") -> None:
     print("[SeekDeep Local AI] unloading image pipeline", flush=True)
     _log_vram("before image unload")
     had_pipe = image_pipe is not None
+    # Capture BEFORE nulling: if only the pix2pix editing pipe was resident
+    # (image_pipe is None), had_pipe alone would skip the model.evicted event and
+    # desync the GUI. Announce the image-role eviction if EITHER generative pipe
+    # was loaded.
+    had_pix2pix = instruct_pix2pix_pipe is not None
     image_pipe = None
     instruct_pix2pix_pipe = None
     clipseg_model = None
@@ -2390,7 +2395,7 @@ def unload_image_model(reason: str = "explicit-unload") -> None:
         loaded_task = None
     cleanup_cuda()
     _log_vram("after image unload")
-    if had_pipe:
+    if had_pipe or had_pix2pix:
         _emit_event("model.evicted", {"task": "image", "role": "image",
                                       "model": IMAGE_MODEL_ID or "", "reason": reason})
 
