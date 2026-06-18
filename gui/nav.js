@@ -560,7 +560,11 @@
     };
   })();
 
-  const PAGES = [
+  // Palette list — derived from the shared registry (gui/pages.js). The inline
+  // array below is a regression-safe fallback if pages.js failed to load.
+  const PAGES = (window.SeekDeepPages && typeof window.SeekDeepPages.palette === 'function')
+    ? window.SeekDeepPages.palette()
+    : [
     { id: 'index',        title: 'Hub',                 path: 'index.html',        glyph: '⌂', meta: '01 · home' },
     { id: 'app',          title: 'Control Center',      path: 'app.html',          glyph: '⌘', meta: '02 · wired · events bus' },
     { id: 'chat',         title: 'Chat Client',         path: 'chat.html',         glyph: '▸', meta: '03 · PWA · service worker' },
@@ -1479,7 +1483,10 @@
   // doesn't pick up the drawer's "close on link click" handler.
   // ====================================================================
   (function injectMoreMenu() {
-    const MORE_ITEMS = [
+    // Derived from the shared registry (gui/pages.js); inline array is fallback.
+    const MORE_ITEMS = (window.SeekDeepPages && typeof window.SeekDeepPages.more === 'function')
+      ? window.SeekDeepPages.more().map(function (p) { return { title: p.title, path: p.path }; })
+      : [
       { title: 'All Settings', path: 'settings.html'  },
       { title: 'Memory',      path: 'memory.html'    },
       { title: 'Image A/B',   path: 'image-ab.html'  },
@@ -1493,7 +1500,9 @@
     // Feature-gated items: shown only when their env flag is ON (read from the
     // open GET /config/features). Keeps Discord-only admin tools out of the nav
     // until the operator enables the feature.
-    const GATED_ITEMS = [
+    const GATED_ITEMS = (window.SeekDeepPages && typeof window.SeekDeepPages.gated === 'function')
+      ? window.SeekDeepPages.gated().map(function (p) { return { title: p.title, path: p.path, flag: p.gateFlag }; })
+      : [
       { title: 'Emoji Vault', path: 'emoji-vault.html', flag: 'SEEKDEEP_FEATURE_EMOJI_VAULT' },
       { title: 'Force React', path: 'force-react.html', flag: 'SEEKDEEP_FEATURE_FORCE_REACT' },
       { title: 'Bot Bridge', path: 'bot-bridge.html', flag: 'SEEKDEEP_FEATURE_BOT_BRIDGE' },
