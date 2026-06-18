@@ -464,6 +464,47 @@ async function seekdeepDispatchBotCommand(action, args) {
       });
       return { guildId: safeGid, kind, channelId: clear ? '' : rawCh, cleared: clear };
     }
+    case 'queue.status': {
+      // Image-generation queue live state — bot-side (Python can't see it). The
+      // queue is where a burst of /image requests backs up; surface the active
+      // job + the pending list so the GUI can show depth without a Discord cmd.
+      const st = seekdeepImageQueueState || {};
+      const pending = st.pending || [];
+      const summarize = (job) => (job ? {
+        id: job.id || '',
+        source: job.source || '',
+        userId: job.userId || '',
+        prompt: String(job.prompt || '').slice(0, 120),
+        width: job.width || null,
+        height: job.height || null,
+        enqueuedAt: job.enqueuedAt || null,
+        startedAt: job.startedAt || null,
+      } : null);
+      return {
+        active: summarize(st.active),
+        pendingCount: pending.length,
+        pending: pending.slice(0, 25).map((e) => summarize(e && e.job)).filter(Boolean),
+        completed: st.completed || 0,
+        failed: st.failed || 0,
+        text: seekdeepImageQueueStatusText(),
+      };
+    }
+    case 'queue.clear': {
+      // Drop every PENDING image job. The ACTIVE job keeps running — it's mid-
+      // generation on the server and can't be cancelled cleanly. Reject each
+      // dropped waiter so the Discord caller awaiting it gets a "cancelled"
+      // message instead of hanging on a promise that would never resolve.
+      const st = seekdeepImageQueueState || {};
+      const dropped = (st.pending || []).splice(0);
+      for (const entry of dropped) {
+        try {
+          if (entry && typeof entry.reject === 'function') {
+            entry.reject(new Error('image queue cleared by operator'));
+          }
+        } catch (_) { /* a settled promise can't re-reject — ignore */ }
+      }
+      return { cleared: dropped.length, activeKept: !!st.active };
+    }
     default:
       throw new Error(`unknown action: ${action}`);
   }
