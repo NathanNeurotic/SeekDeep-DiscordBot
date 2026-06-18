@@ -17,6 +17,16 @@
         ? 'http://127.0.0.1:7865'
         : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
 
+  // Surface count — derived from the page registry (gui/pages.js), the single
+  // source of truth, so the Hub KPI stays accurate as pages are added/removed.
+  // stats.js skips the 'surfaces' key so the server value can't clobber this.
+  try {
+    if (window.SeekDeepPages && typeof window.SeekDeepPages.navigable === 'function') {
+      const n = String(window.SeekDeepPages.navigable().length);
+      document.querySelectorAll('[data-stat-surfaces]').forEach((el) => { el.textContent = n; });
+    }
+  } catch (_) {}
+
   // Friendly family labels — match against the model ID and emit the first hit.
   // Order matters: more-specific patterns above more-generic ones.
   const FAMILIES = [
