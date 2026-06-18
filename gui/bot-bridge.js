@@ -390,6 +390,95 @@
     }
   }
 
+  // ----- Say (operator send-to-channel) -------------------------------------
+  // Reuses bindings.get for the guild+channel picker data (same {guilds:[{id,
+  // name,channels:[…]}]} shape), then posts via the `say` action. The server
+  // strips mentions, so a typed message can't ping the channel.
+  let bbSayGuilds = [];
+
+  function updateSayCount() {
+    const txt = $('bb-say-text');
+    const cnt = $('bb-say-count');
+    if (txt && cnt) cnt.textContent = txt.value.length + ' / 2000';
+  }
+
+  function populateSayChannels() {
+    const gSel = $('bb-say-guild');
+    const cSel = $('bb-say-channel');
+    if (!gSel || !cSel) return;
+    const g = bbSayGuilds.find((x) => x.id === gSel.value);
+    cSel.textContent = '';
+    const chans = (g && g.channels) || [];
+    if (!chans.length) {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = '(no text channels)';
+      cSel.appendChild(o);
+      return;
+    }
+    chans.forEach((c) => {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = '#' + c.name;
+      cSel.appendChild(o);
+    });
+  }
+
+  async function loadSayTargets() {
+    const btn = $('bb-say-load');
+    if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+    setError('');
+    try {
+      const body = await command('bindings.get');
+      bbSayGuilds = (((body && body.result) || {}).guilds) || [];
+      const gSel = $('bb-say-guild');
+      if (gSel) {
+        gSel.textContent = '';
+        if (!bbSayGuilds.length) {
+          const o = document.createElement('option');
+          o.value = ''; o.textContent = '(no servers)';
+          gSel.appendChild(o);
+        } else {
+          bbSayGuilds.forEach((g) => {
+            const o = document.createElement('option');
+            o.value = g.id; o.textContent = g.name || g.id;
+            gSel.appendChild(o);
+          });
+        }
+      }
+      populateSayChannels();
+      show($('bb-say-form'), true);
+    } catch (err) {
+      setError('Could not load servers: ' + explain(err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Load servers'; }
+    }
+  }
+
+  async function sendSay() {
+    const gSel = $('bb-say-guild');
+    const cSel = $('bb-say-channel');
+    const txt = $('bb-say-text');
+    const guildId = gSel ? gSel.value : '';
+    const channelId = cSel ? cSel.value : '';
+    const content = txt ? txt.value : '';
+    if (!guildId || !channelId) { setError('Pick a server and channel first.'); return; }
+    if (!content.trim()) { setError('Type a message to send.'); return; }
+    const btn = $('bb-say-send');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    setError('');
+    try {
+      const body = await command('say', { guildId: guildId, channelId: channelId, content: content });
+      const res = (body && body.result) || {};
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({ tone: 'good', title: 'Message sent', body: 'to #' + (res.channelName || channelId), ttl: 3000 });
+      }
+      if (txt) { txt.value = ''; updateSayCount(); }
+    } catch (err) {
+      setError('Could not send: ' + explain(err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Send'; }
+    }
+  }
+
   async function init() {
     // Feature gate — defensive: the nav hides the link, but the URL can be
     // opened directly. GET /config/features is open (no token).
@@ -421,6 +510,14 @@
     if (queueLoad) queueLoad.addEventListener('click', loadQueue);
     const queueClear = $('bb-queue-clear');
     if (queueClear) queueClear.addEventListener('click', clearQueue);
+    const sayLoad = $('bb-say-load');
+    if (sayLoad) sayLoad.addEventListener('click', loadSayTargets);
+    const sayGuild = $('bb-say-guild');
+    if (sayGuild) sayGuild.addEventListener('change', populateSayChannels);
+    const sayText = $('bb-say-text');
+    if (sayText) sayText.addEventListener('input', updateSayCount);
+    const saySend = $('bb-say-send');
+    if (saySend) saySend.addEventListener('click', sendSay);
 
     refreshStatus();
   }
