@@ -1,5 +1,6 @@
 const RELEASES = [
   { v: 'v10.38', kind: 'major', tagline: 'GUI⇄Discord parity · self-service TTS · CSP Phase A · DataDash Activity · audit round-2', tags: ['feat','fix','perf'], items: [
+    '<strong>Live changelog — this page now shows recent commits too:</strong> above the curated release notes, a <strong>Recent commits</strong> section pulls the actual latest commits on <span class="mono">main</span> straight from GitHub. The GUI can\'t reach <span class="mono">api.github.com</span> directly (the desktop CSP <span class="mono">connect-src</span> is loopback-only), so the server proxies it: new <span class="mono">GET /changelog/commits</span> fetches a fixed repo URL (no request input → no SSRF), trims each commit to sha/subject/author/date/link, and TTL-caches the result (<span class="mono">SEEKDEEP_CHANGELOG_COMMITS_TTL_S</span>, default 5 min) to stay under GitHub\'s rate limit — serving stale cache if a refresh fails. Commit text is rendered injection-safe (textContent, never innerHTML), and the sha links open on GitHub via the external-link handler.',
     '<strong>Image queue, now visible + clearable from the GUI (parity):</strong> the bot\'s image-generation queue — where a burst of <span class="mono">/image</span> requests backs up — was only inspectable in Discord. The <strong>Bot Bridge</strong> page gained an <strong>Image queue</strong> card: <strong>Refresh</strong> shows the active job, the pending count + list, and completed/failed tallies; <strong>Clear pending</strong> drops the waiting jobs (their Discord requesters get a cancelled notice via a rejected promise — no hang) while the job that\'s actively generating keeps running. Backed by two new bridge actions <span class="mono">queue.status</span> / <span class="mono">queue.clear</span> against the bot\'s live <span class="mono">seekdeepImageQueueState</span>. (Requires <span class="mono">SEEKDEEP_FEATURE_BOT_BRIDGE=on</span>.)',
     '<strong>Self-update was silently dead — fixed (and made self-healing):</strong> the self-updater\'s signature gate does <span class="mono">import release_signing</span>, but <span class="mono">release_signing.py</span> was in <em>none</em> of the shipped-file lists (not bundled, not extracted, not self-updated), so it never reached the installed app — every self-update 500\'d with <span class="mono">ModuleNotFoundError: No module named \'release_signing\'</span> <em>before</em> committing a single file (atomic staging meant it failed clean, but it could never recover — the update that would deliver the module couldn\'t run without it). Two-part fix: (1) <span class="mono">release_signing.py</span> is now a first-class shipped core file across every consumer (bundle resources, sidecar extraction, the self-update manifest, and the signing manifest — enforced by the release-files drift guard); (2) the updater now imports the signer <em>defensively</em> — an absent signer skips the signature gate (unless <span class="mono">REQUIRE_SIGNATURE=on</span>, which still fails closed) instead of crashing, so the update proceeds and commits the very module that was missing, self-healing for next time. (Found while pushing the bridge fix to the running app, which had been stuck unable to pull any update.)',
     '<strong>Bot Bridge command relay fixed (every command was 500ing):</strong> the GUI→bot command bridge (<span class="mono">POST /bot/command</span>) crashed with <span class="mono">TypeError: _seekdeep_audit() got multiple values for argument \'action\'</span> on <em>every</em> action — ping, status, guilds, and the new bindings. The audit helper\'s first positional is its own <span class="mono">action</span> (the audit event name), and the relay also passed <span class="mono">action=</span> for the bot action, colliding. Latent the whole time because the bridge ships gated off (<span class="mono">SEEKDEEP_FEATURE_BOT_BRIDGE</span>) and had never been exercised; it surfaced the instant the bridge was enabled. Now logs the bot action under a distinct <span class="mono">cmd</span> field, so the entire bridge surface works.',
@@ -263,3 +264,82 @@ RELEASES.forEach(r => {
   `;
   tl.appendChild(sec);
 });
+
+// ---- Recent commits (live, from GitHub via the loopback server) -------------
+// The curated RELEASES above are hand-written; this section shows the actual
+// recent commits on main, fetched through GET /changelog/commits (the server
+// proxies api.github.com because the GUI's CSP connect-src is loopback-only).
+// Commit text is external data → built with textContent (never innerHTML) to
+// stay injection-safe. Prepended above the curated releases.
+(function loadRecentCommits() {
+  const tlEl = document.getElementById('timeline');
+  if (!tlEl) return;
+
+  // Tauri-aware base: a relative fetch resolves to tauri.localhost in the app
+  // and never reaches the Python server. Mirror the shared resolver.
+  const BASE = (function () {
+    try { if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase(); } catch (_) {}
+    if (window.__TAURI__ || (window.location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    return (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865';
+  })();
+
+  function relTime(iso) {
+    const t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    let s = Math.floor((Date.now() - t) / 1000);
+    if (s < 0) s = 0;
+    if (s < 60) return s + 's ago';
+    const m = Math.floor(s / 60); if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+    const d = Math.floor(h / 24); if (d < 30) return d + 'd ago';
+    return new Date(t).toISOString().slice(0, 10);
+  }
+
+  const sec = document.createElement('div');
+  sec.className = 'release';
+  sec.id = 'recent-commits';
+  const head = document.createElement('div');
+  head.className = 'release-head';
+  head.innerHTML = '<h2>Recent commits</h2><span class="tagline">live from GitHub · main</span><span class="badge fresh">git</span>';
+  sec.appendChild(head);
+  const status = document.createElement('div');
+  status.className = 'meta';
+  status.innerHTML = '<span>loading recent commits…</span>';
+  sec.appendChild(status);
+  const ul = document.createElement('ul');
+  ul.className = 'commits';
+  sec.appendChild(ul);
+  tlEl.insertBefore(sec, tlEl.firstChild);
+
+  fetch(BASE + '/changelog/commits?limit=20', { headers: { 'Accept': 'application/json' } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+    .then((body) => {
+      const commits = (body && Array.isArray(body.commits)) ? body.commits : [];
+      if (!body || body.ok === false || !commits.length) {
+        status.innerHTML = '<span>recent commits unavailable</span>';
+        return;
+      }
+      status.textContent = '';
+      const live = document.createElement('span');
+      live.textContent = (body.stale ? 'CACHED' : (body.cached ? 'LIVE · cached' : 'LIVE')) + ' · GitHub API';
+      const cnt = document.createElement('span');
+      cnt.textContent = commits.length + ' commit' + (commits.length === 1 ? '' : 's');
+      status.appendChild(live); status.appendChild(cnt);
+      commits.forEach((c) => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.className = 'commit-sha';
+        a.textContent = c.shortSha || '';
+        if (c.url) { a.href = c.url; a.rel = 'noopener noreferrer'; }
+        const msg = document.createElement('span');
+        msg.className = 'commit-msg';
+        msg.textContent = ' ' + (c.message || '');
+        const meta = document.createElement('span');
+        meta.className = 'commit-meta';
+        meta.textContent = '  — ' + (c.author || 'unknown') + (c.date ? ' · ' + relTime(c.date) : '');
+        li.appendChild(a); li.appendChild(msg); li.appendChild(meta);
+        ul.appendChild(li);
+      });
+    })
+    .catch(() => { status.innerHTML = '<span>recent commits unavailable (server offline?)</span>'; });
+})();

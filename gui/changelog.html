@@ -88,6 +88,13 @@
   .release ul li .mono { color: var(--cyan-1); }
   .release .meta { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(45,212,255,0.15); display: flex; justify-content: space-between; }
   .release .meta em { font-style: normal; color: var(--cyan-1); }
+  .release ul.commits { list-style: none; padding-left: 0; }
+  .release ul.commits li { padding: 5px 0; border-bottom: 1px solid rgba(45,212,255,0.07); }
+  .release ul.commits li:last-child { border-bottom: none; }
+  .commit-sha { font-family: var(--font-mono); color: var(--cyan-1); text-decoration: none; }
+  .commit-sha:hover { text-decoration: underline; }
+  .commit-msg { color: var(--hull-2); }
+  .commit-meta { color: var(--hull-3); font-size: 11px; }
 </style>
 </head>
 <body class="has-topnav">
