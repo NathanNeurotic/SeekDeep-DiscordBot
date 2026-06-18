@@ -1525,6 +1525,47 @@ def main() -> int:
         check("POST /deps/install with random requirements_file -> 400",
               r.status_code == 400, f"got {r.status_code}")
 
+    # ---- GET /changelog/commits: server-side GitHub proxy (hermetic; mocked) ----
+    # The endpoint exists so the changelog page can show live commits without the
+    # GUI hitting api.github.com directly (CSP connect-src is loopback-only). Mock
+    # urlopen so CI never touches the network / GitHub rate limit; assert the
+    # trimmed shape the GUI consumes.
+    try:
+        from unittest import mock as _cmock
+        import urllib.request as _curlreq
+        import json as _cjson
+        import gui_endpoints as _cge
+        _cge._CHANGELOG_COMMITS_CACHE["data"] = None  # bypass the TTL cache -> hit the mock
+        _cfake = _cjson.dumps([{
+            "sha": "a" * 40,
+            "html_url": "https://github.com/NathanNeurotic/SeekDeep-DiscordBot/commit/" + "a" * 40,
+            "commit": {"message": "feat: a thing\n\nbody text", "author": {"name": "Dev", "date": "2026-06-18T00:00:00Z"}},
+            "author": {"login": "dev"},
+        }]).encode()
+
+        class _FakeCommitsResp:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self, n=-1):
+                return _cfake
+
+        with _cmock.patch.object(_curlreq, "urlopen", lambda req, timeout=None: _FakeCommitsResp()):
+            r = c.get("/changelog/commits?limit=5")
+        check("GET /changelog/commits -> 200", r.status_code == 200, f"got {r.status_code}")
+        _cb = r.json() if r.status_code == 200 else {}
+        _commits = _cb.get("commits") or []
+        check("changelog commits: ok + trimmed shape (shortSha/subject/url)",
+              _cb.get("ok") is True and isinstance(_commits, list) and len(_commits) == 1
+              and _commits[0].get("shortSha") == "aaaaaaa"
+              and _commits[0].get("message") == "feat: a thing"
+              and str(_commits[0].get("url", "")).startswith("https://github.com/"),
+              f"body={str(_cb)[:180]}")
+        _cge._CHANGELOG_COMMITS_CACHE["data"] = None  # don't leak the mock payload to later state
+    except Exception as _ce:
+        check("GET /changelog/commits smoke ran without harness error", False, repr(_ce))
+
     # ---- AUD-001 / AUD-004: self-update hardening (hermetic; temp root) ----
     _self_update_checks()
 

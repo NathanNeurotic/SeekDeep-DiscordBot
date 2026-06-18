@@ -374,6 +374,15 @@ _SELF_UPDATE_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _SELF_UPDATE_REPO = "NathanNeurotic/SeekDeep-DiscordBot"
 _SELF_UPDATE_ROLLING_REFS = {"main", "nightly"}
 
+# GET /changelog/commits proxy cache. The GUI's CSP connect-src is loopback-only,
+# so the changelog page can't hit api.github.com directly — the server fetches it
+# (fixed repo URL, no user input → no SSRF) and caches the trimmed result. TTL
+# keeps us well under GitHub's unauthenticated 60 req/hr cap; a GITHUB_TOKEN (if
+# set) raises that ceiling. Module-level so it survives across requests.
+_CHANGELOG_COMMITS_CACHE: dict = {"at": 0.0, "iso": "", "data": None}
+_CHANGELOG_COMMITS_TTL_S = float(os.environ.get("SEEKDEEP_CHANGELOG_COMMITS_TTL_S", "300") or 300)
+_CHANGELOG_COMMITS_MAX_BYTES = 512 * 1024  # ~30 commits of GitHub JSON is well under this
+
 
 def _resolve_self_update_ref(ref: str) -> tuple[str, str]:
     """Resolve a rolling channel (main/nightly) to its 40-char commit SHA via the
@@ -1871,6 +1880,61 @@ def register_gui_endpoints(
         except Exception:
             pass
         return result
+
+    # ----- GET /changelog/commits -----
+    # Public changelog data, proxied server-side (the GUI's CSP connect-src is
+    # loopback-only, so it can't reach api.github.com directly). Open — no token
+    # gate — it's public repo data and the changelog page renders pre-auth. The
+    # URL is built from the fixed _SELF_UPDATE_REPO constant with NO request
+    # input, so the host+path are provably constant (no SSRF). TTL-cached; on a
+    # fetch failure we serve stale cache if we have it rather than going blank.
+    @app.get("/changelog/commits")
+    def get_changelog_commits(limit: int = 20):
+        n = max(1, min(int(limit or 20), 30))
+        now = time.time()
+        cached = _CHANGELOG_COMMITS_CACHE.get("data")
+        if cached is not None and (now - float(_CHANGELOG_COMMITS_CACHE.get("at") or 0)) < _CHANGELOG_COMMITS_TTL_S:
+            return {"ok": True, "commits": cached[:n], "cached": True,
+                    "fetched_at": _CHANGELOG_COMMITS_CACHE.get("iso")}
+        import urllib.request
+        url = "https://api.github.com/repos/" + _SELF_UPDATE_REPO + "/commits?per_page=30&sha=main"
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "SeekDeep-changelog"}
+        gh_tok = str(os.environ.get("GITHUB_TOKEN", "")).strip()
+        if gh_tok:
+            headers["Authorization"] = f"Bearer {gh_tok}"
+        try:
+            req = urllib.request.Request(url, headers=headers)  # noqa: S310 — fixed https GitHub host+path
+            with urllib.request.urlopen(req, timeout=12) as resp:  # noqa: S310
+                raw = resp.read(_CHANGELOG_COMMITS_MAX_BYTES + 1)
+            if len(raw) > _CHANGELOG_COMMITS_MAX_BYTES:
+                raise ValueError("commits response exceeds cap")
+            data = json.loads(raw.decode("utf-8", "replace"))
+        except Exception as exc:  # noqa: BLE001 — network/garbled GitHub response
+            if cached is not None:
+                return {"ok": True, "commits": cached[:n], "cached": True, "stale": True,
+                        "fetched_at": _CHANGELOG_COMMITS_CACHE.get("iso"), "note": f"refresh failed: {exc}"}
+            return {"ok": False, "commits": [], "error": f"could not fetch commits: {exc}"}
+        commits = []
+        for c in (data if isinstance(data, list) else []):
+            if not isinstance(c, dict):
+                continue
+            sha = str(c.get("sha") or "")
+            commit = c.get("commit") or {}
+            author = commit.get("author") or {}
+            subject = str(commit.get("message") or "").split("\n", 1)[0][:160]
+            commits.append({
+                "sha": sha,
+                "shortSha": sha[:7],
+                "message": subject,
+                "author": str(author.get("name") or (c.get("author") or {}).get("login") or ""),
+                "date": str(author.get("date") or ""),
+                "url": str(c.get("html_url") or ""),
+            })
+        iso = _now_iso()
+        _CHANGELOG_COMMITS_CACHE["data"] = commits
+        _CHANGELOG_COMMITS_CACHE["at"] = now
+        _CHANGELOG_COMMITS_CACHE["iso"] = iso
+        return {"ok": True, "commits": commits[:n], "cached": False, "fetched_at": iso}
 
     # ----- GET /logs/tail -----
     # Token-gated: log bodies leak prompts, file paths, model state, errors.
