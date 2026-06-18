@@ -2,7 +2,15 @@
   // pane so users don't hunt for them in Config). Hydrate from /config; POST the
   // single changed LOCAL_*_KEEP_RESIDENT key on toggle (nav.js adds the token).
   (function () {
-    var base = (typeof window.SEEKDEEP_BASE === 'string') ? window.SEEKDEEP_BASE : location.origin;
+    // Tauri-aware loopback base — window.SEEKDEEP_BASE was never a real global
+    // (the SEEKDEEP_BASE consts elsewhere are block-scoped), so this used to always
+    // fall back to location.origin = http://tauri.localhost in the app and the
+    // toggles never reached the server. Use the shared resolver like every other page.
+    var base = (typeof window.SeekDeepResolveBase === 'function')
+      ? window.SeekDeepResolveBase()
+      : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost')
+          ? 'http://127.0.0.1:7865'
+          : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
     var ctls = Array.prototype.slice.call(document.querySelectorAll('[data-resident-key]'));
     if (!ctls.length) return;
     function toast(tone, title, body) {

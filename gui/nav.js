@@ -1725,7 +1725,7 @@
     } catch (e) {
       const msg = (e && e.message) || String(e);
       if (window.SeekDeepNotify?.toast) {
-        window.SeekDeepNotify.toast({ title: 'Kill-all failed', body: msg, tone: 'error' });
+        window.SeekDeepNotify.toast({ title: 'Kill-all failed', body: msg, tone: 'bad' });
       } else {
         alert('Kill-all failed: ' + msg);
       }
@@ -1734,7 +1734,7 @@
     const killedN = (body?.killed || []).length;
     const failedN = (body?.failed || []).length;
     const foundN  = body?.found ?? (killedN + failedN);
-    const tone = failedN ? 'warning' : (killedN ? 'success' : 'info');
+    const tone = failedN ? 'warn' : (killedN ? 'good' : 'info');
     const title = killedN === 0 && foundN === 0
       ? 'No bot processes found'
       : `Killed ${killedN} bot process${killedN === 1 ? '' : 'es'}`

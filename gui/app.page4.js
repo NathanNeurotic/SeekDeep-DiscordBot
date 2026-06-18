@@ -268,7 +268,7 @@
       const role = row.dataset.role || '';
       const model = row.dataset.model || row.querySelector('.name')?.firstChild?.textContent?.trim() || '';
       if (!role) {
-        alert(`⚠ this row has no assigned role (${model}); /model/warm needs a role`);
+        (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'warn', title: 'No role assigned', body: `${model} has no role; /model/warm needs one.` });
         return;
       }
       const stateEl = row.querySelector('[data-role-state]');

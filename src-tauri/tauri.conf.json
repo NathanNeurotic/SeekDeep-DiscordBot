@@ -23,6 +23,7 @@
         "fullscreen": false,
         "decorations": true,
         "transparent": false,
+        "dragDropEnabled": false,
         "url": "seekdeep-loading.html"
       }
     ],

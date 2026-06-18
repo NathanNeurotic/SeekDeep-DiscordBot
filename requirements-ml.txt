@@ -46,8 +46,12 @@ torchvision==0.26.0+cu128 ; platform_system == "Windows"
 # Unsupported CUDA/CPU platform? Override explicitly, e.g.:
 #   pip install "torch>=2.6,<2.12" torchvision --index-url https://download.pytorch.org/whl/cpu
 #   pip install "torch>=2.6,<2.12" torchvision --index-url https://download.pytorch.org/whl/cu124
-torch>=2.4,<2.12 ; platform_system != "Windows"
-torchvision>=0.19,<0.27 ; platform_system != "Windows"
+# Floor raised to 2.6 (was >=2.4): torch <=2.5.1 is vulnerable to CVE-2025-32434
+# (torch.load RCE, triggers even with weights_only=True on a crafted legacy .tar;
+# fixed in 2.6.0). The known-good 2.11/0.26 install stays in range; the override
+# examples above already recommend >=2.6, so this just makes the floor consistent.
+torch>=2.6,<2.12 ; platform_system != "Windows"
+torchvision>=0.21,<0.27 ; platform_system != "Windows"
 # FIX-3: upper bounds cap the major so a future breaking release can't
 # silently install on `pip install -r`. Bounds chosen to NOT exclude the
 # known-good versions running in the dev venv as of 2026-05 (transformers
