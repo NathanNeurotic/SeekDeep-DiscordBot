@@ -670,7 +670,13 @@
     return modal({
       tone,
       title,
+      // The body is wrapped in a mono-styled <div> with the caller's text
+      // HTML-escaped above, so it must render as HTML (innerHTML) — without
+      // html:true the modal falls back to textContent and shows the raw
+      // "<div style=...>" markup as literal text. Guard to !!body so an empty
+      // body still hits modal()'s drop-the-body-element path.
       body: body ? `<div style="white-space:pre-wrap;font-family:var(--font-mono);font-size:12px;line-height:1.55;color:var(--hull-2);">${String(body).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>` : '',
+      html: !!body,
       primary:   opts.primary   || { label: okLabel     || 'OK',     tone },
       secondary: opts.secondary || { label: cancelLabel || 'Cancel', tone: 'neutral' },
       dismissible: true,

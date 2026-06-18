@@ -758,6 +758,14 @@ body.has-topnav { overflow: hidden; }
 body.has-topnav .app-wrap {
   height: calc(100dvh - var(--topnav-h));
   min-height: 360px;
+  /* Scroll when the page content is taller than the pinned viewport height.
+     Content pages (.app-wrap is a plain block, e.g. Bot Bridge / Operations)
+     would otherwise clip below the fold with no way to scroll. The fixed-window
+     .win pages size their .win 48px shorter than this, so it fits and no
+     scrollbar appears for them — overflow-y:auto only kicks in when needed.
+     (Was per-page on Emoji Vault / Force React; promoted to the shared rule so
+     every current + future has-topnav page scrolls by default.) */
+  overflow-y: auto;
 }
 body.has-topnav .win {
   height: calc(100dvh - var(--topnav-h) - 48px);
