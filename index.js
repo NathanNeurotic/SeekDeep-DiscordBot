@@ -396,8 +396,10 @@ let seekdeepBridgeWs = null;
 let seekdeepBridgeRetryMs = 1000;
 
 async function seekdeepDispatchBotCommand(action, args) {
-  // Whitelisted, read-only commands that need the bot's LIVE in-process state
-  // (things Python can't get from Discord REST). Unknown actions are rejected.
+  // Whitelisted bridge commands. Most need the bot's LIVE in-process state
+  // (things Python can't get from Discord REST); a couple are admin writes the
+  // GUI operator (already GUI-token-gated) drives, e.g. the per-guild Discord
+  // bindings. Unknown actions are rejected.
   switch (String(action || '')) {
     case 'ping':
       return { wsPing: Math.round(client.ws?.ping ?? 0), uptimeMs: Date.now() - seekdeepBotMetrics.startedAt };
@@ -410,6 +412,51 @@ async function seekdeepDispatchBotCommand(action, args) {
           id: g.id, name: g.name, members: g.memberCount ?? null, channels: g.channels?.cache?.size ?? null,
         })),
       };
+    case 'bindings.get': {
+      // Per-guild Discord bindings the bot owns in persona-overrides.json — the
+      // daily-digest channel + the auto-translate channel — plus each guild's
+      // text channels so the GUI can render a picker. Read-only.
+      const ov = seekdeepReadPersonaOverrides();
+      const guilds = Array.from(client.guilds?.cache?.values() || []).map((g) => {
+        const gcfg = (ov.guilds && ov.guilds[g.id]) || {};
+        const channels = Array.from(g.channels?.cache?.values() || [])
+          .filter((c) => c && (c.type === 0 || c.type === 5)) // GuildText / GuildAnnouncement
+          .map((c) => ({ id: c.id, name: c.name }))
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        return {
+          id: g.id, name: g.name,
+          digestChannelId: gcfg.digestChannelId || '',
+          translateChannelId: gcfg.autoTranslateChannelId || '',
+          channels,
+        };
+      });
+      return { guilds };
+    }
+    case 'bindings.set': {
+      // Set or clear a per-guild binding from the GUI. args:
+      //   { guildId, kind: 'digest'|'translate', channelId? }  (omit/'off' => clear)
+      // Mutates persona-overrides.json under the SAME lock the Discord command
+      // uses; the digest scheduler + translate handler re-read it live (no restart).
+      const gid = String((args && args.guildId) || '').trim();
+      const kind = String((args && args.kind) || '').trim();
+      const rawCh = String((args && args.channelId) || '').trim();
+      const clear = !rawCh || rawCh.toLowerCase() === 'off';
+      if (!/^\d{5,25}$/.test(gid)) throw new Error('invalid guildId');
+      if (kind !== 'digest' && kind !== 'translate') throw new Error("kind must be 'digest' or 'translate'");
+      const g = client.guilds?.cache?.get(gid);
+      if (!g) throw new Error('the bot is not in that guild');
+      if (!clear) {
+        const ch = g.channels?.cache?.get(rawCh);
+        if (!ch || !(ch.type === 0 || ch.type === 5)) throw new Error('text channel not found in that guild');
+      }
+      const field = kind === 'digest' ? 'digestChannelId' : 'autoTranslateChannelId';
+      seekdeepMutatePersonaOverrides((d) => {
+        if (!d.guilds) d.guilds = {};
+        if (!d.guilds[gid]) d.guilds[gid] = {};
+        if (clear) delete d.guilds[gid][field]; else d.guilds[gid][field] = rawCh;
+      });
+      return { guildId: gid, kind, channelId: clear ? '' : rawCh, cleared: clear };
+    }
     default:
       throw new Error(`unknown action: ${action}`);
   }
