@@ -1351,6 +1351,73 @@
   setTimeout(injectLivePill, 200);
   setTimeout(injectLivePill, 1200);
 
+  // ── GUI effects / reduced-motion toggle ──────────────────────────────────
+  // A persistent, app-wide lever (opt-in). Flipping it adds body.sd-lite,
+  // which removes the animated decorative layers + every backdrop blur (see
+  // styles.css) — the bulk of idle GPU/CPU compositing. Default is FULL effects;
+  // when the user hasn't made an explicit choice we follow the OS "reduce
+  // motion" setting. nav.js loads on every page, so the choice applies app-wide
+  // and survives navigation. Persisted in localStorage (not the .env).
+  (function sdFxToggle() {
+    const KEY = 'seekdeep.reduceMotion';
+    let mql = null;
+    try { mql = window.matchMedia('(prefers-reduced-motion: reduce)'); } catch (_) {}
+    const stored = () => { try { return localStorage.getItem(KEY); } catch (_) { return null; } };
+    // Effective lite state: an explicit user choice wins; otherwise follow the OS.
+    const liteNow = () => { const s = stored(); return s === '1' ? true : s === '0' ? false : !!(mql && mql.matches); };
+    function apply() {
+      if (document.body) document.body.classList.toggle('sd-lite', liteNow());
+      const pill = document.getElementById('sdFxToggle');
+      if (pill) {
+        const lite = !!(document.body && document.body.classList.contains('sd-lite'));
+        pill.dataset.lite = lite ? '1' : '0';
+        const label = pill.querySelector('.sd-fx-label');
+        if (label) label.textContent = lite ? 'FX: Lite' : 'FX: On';
+        pill.title = lite
+          ? 'GUI effects reduced (lighter on CPU/GPU). Click to restore full effects.'
+          : 'Full GUI effects. Click for Lite mode — removes the animated background + blur to cut CPU/GPU load.';
+      }
+    }
+    // Apply ASAP (nav.js is deferred, so document.body already exists) to avoid
+    // a flash of full motion before the class lands.
+    apply();
+    if (mql) {
+      const onOs = () => { if (stored() === null) apply(); };
+      try { mql.addEventListener('change', onOs); } catch (_) { try { mql.addListener(onOs); } catch (__) {} }
+    }
+    function toggle() {
+      const lite = !(document.body && document.body.classList.contains('sd-lite'));
+      try { localStorage.setItem(KEY, lite ? '1' : '0'); } catch (_) {}
+      apply();
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'neutral',
+          title: lite ? 'Lite mode on' : 'Full effects on',
+          body: lite ? 'Animated background + blur disabled to reduce CPU/GPU load.' : 'Full GUI effects restored.',
+          ttl: 2600,
+        });
+      }
+    }
+    function injectPill() {
+      if (document.getElementById('sdFxToggle')) { apply(); return; }
+      const host = document.querySelector('.topnav .row') || document.querySelector('.topnav');
+      if (!host) return;
+      const pill = document.createElement('span');
+      pill.id = 'sdFxToggle';
+      pill.className = 'pill sd-fx-pill';
+      pill.setAttribute('role', 'button');
+      pill.setAttribute('tabindex', '0');
+      pill.innerHTML = '<span class="dot"></span><span class="sd-fx-label">FX: On</span>';
+      pill.addEventListener('click', toggle);
+      pill.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      host.appendChild(pill);
+      apply();
+    }
+    injectPill();
+    setTimeout(injectPill, 200);
+    setTimeout(injectPill, 1200);
+  })();
+
   function wireLivePill() {
     if (window.SeekDeepEvents && typeof window.SeekDeepEvents.on === 'function') {
       try {
