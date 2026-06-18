@@ -47,6 +47,28 @@
     return body || {};
   }
 
+  // POST a JSON body to a REST endpoint (token auto-attached by nav.js). Used by
+  // the persisted-setting controls (e.g. default vision mode) that write a config
+  // file via Python rather than going over the WS command bridge — so they work
+  // even when the bot isn't connected to the bus.
+  async function postJSON(url, payload) {
+    const r = await fetch(BASE + url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    let body = null;
+    try { body = await r.json(); } catch (_) {}
+    if (!r.ok) {
+      const detail = (body && (body.detail || body.error)) || ('HTTP ' + r.status);
+      const err = new Error(detail);
+      err.status = r.status;
+      err.body = body;
+      throw err;
+    }
+    return body || {};
+  }
+
   // POST /bot/command {action}. nav.js auto-attaches the GUI token. The server
   // wraps the bot reply in {ok, cid, result, error}; surface `error` on a
   // logical failure even when the HTTP status is 200.
@@ -479,6 +501,63 @@
     }
   }
 
+  // ----- Default vision mode (describe vs OCR) ------------------------------
+  // GET/POST /bot/vision-mode persist the bot's DEFAULT @mention-image behavior
+  // to data/vision-mode-config.json (Python writes; the bot live-reads). REST,
+  // not the WS bridge, so it works even when the bot is offline. A per-message
+  // cue always overrides this default — it only decides the ambiguous case.
+  function renderVisionMode(mode) {
+    const m = (mode === 'ocr') ? 'ocr' : 'describe';
+    const dBtn = $('bb-vision-describe');
+    const oBtn = $('bb-vision-ocr');
+    if (dBtn) dBtn.classList.toggle('sel', m === 'describe');
+    if (oBtn) oBtn.classList.toggle('sel', m === 'ocr');
+    const pill = $('bb-vision-state');
+    const label = $('bb-vision-state-text');
+    if (label) label.textContent = (m === 'ocr') ? 'OCR · text extraction' : 'Describe · caption';
+    if (pill) { pill.classList.remove('off'); pill.classList.add('on'); }
+  }
+
+  async function loadVisionMode() {
+    try {
+      const body = await getJSON('/bot/vision-mode');
+      renderVisionMode(body && body.mode);
+    } catch (err) {
+      const label = $('bb-vision-state-text');
+      if (label) label.textContent = 'unavailable';
+      const pill = $('bb-vision-state');
+      if (pill) { pill.classList.remove('on'); pill.classList.add('off'); }
+      setError('Could not read the default vision mode: ' + explain(err));
+    }
+  }
+
+  async function setVisionMode(mode) {
+    const dBtn = $('bb-vision-describe');
+    const oBtn = $('bb-vision-ocr');
+    if (dBtn) dBtn.disabled = true;
+    if (oBtn) oBtn.disabled = true;
+    setError('');
+    try {
+      const body = await postJSON('/bot/vision-mode', { mode: mode });
+      const applied = (body && body.mode) || mode;
+      renderVisionMode(applied);
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'good',
+          title: 'Default vision mode set',
+          body: (applied === 'ocr') ? 'OCR — text extraction' : 'Describe — caption / analyze',
+          ttl: 3000,
+        });
+      }
+    } catch (err) {
+      setError('Could not set the default vision mode: ' + explain(err));
+      loadVisionMode(); // re-sync the buttons to server truth on failure
+    } finally {
+      if (dBtn) dBtn.disabled = false;
+      if (oBtn) oBtn.disabled = false;
+    }
+  }
+
   async function init() {
     // Feature gate — defensive: the nav hides the link, but the URL can be
     // opened directly. GET /config/features is open (no token).
@@ -518,8 +597,13 @@
     if (sayText) sayText.addEventListener('input', updateSayCount);
     const saySend = $('bb-say-send');
     if (saySend) saySend.addEventListener('click', sendSay);
+    const visDescribe = $('bb-vision-describe');
+    if (visDescribe) visDescribe.addEventListener('click', () => setVisionMode('describe'));
+    const visOcr = $('bb-vision-ocr');
+    if (visOcr) visOcr.addEventListener('click', () => setVisionMode('ocr'));
 
     refreshStatus();
+    loadVisionMode();
   }
 
   if (document.readyState === 'loading') {

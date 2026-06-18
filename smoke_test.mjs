@@ -485,6 +485,33 @@ check('ocr: "what is this" does NOT trigger', ocrDetect('what is this') === fals
 check('ocr: empty does NOT trigger', ocrDetect('') === false);
 
 // ---------------------------------------------------------------------------
+// Suite 19b: operator-default vision mode resolver (describe vs ocr)
+// Under test mode there is no data/vision-mode-config.json and no
+// SEEKDEEP_VISION_DEFAULT_MODE env, so the default resolves to 'describe' —
+// this pins the zero-regression guarantee (shipped behavior unchanged) AND the
+// per-message-cue-wins semantics. The env/file override is mtime-cached (keyed
+// on the config file) and mirrors the force-react reader; its precedence is
+// covered on the Python side.
+// ---------------------------------------------------------------------------
+console.log('19b. Default vision mode resolver (real seekdeepResolveVisionMode).');
+const resolveVisionMode = T.seekdeepResolveVisionMode;
+check('vision-mode: resolver exported', typeof resolveVisionMode === 'function');
+check('vision-mode: default reader exported', typeof T.seekdeepReadVisionModeDefault === 'function');
+// Explicit OCR cue always wins over the default.
+check('vision-mode: "read this" -> ocr', resolveVisionMode('read this') === 'ocr');
+check('vision-mode: "what does it say" -> ocr', resolveVisionMode('what does it say') === 'ocr');
+// Explicit describe cue always wins over the default.
+check('vision-mode: "describe this" -> describe', resolveVisionMode('describe this') === 'describe');
+check('vision-mode: "caption this image" -> describe', resolveVisionMode('caption this image') === 'describe');
+check('vision-mode: "analyze this" -> describe', resolveVisionMode('analyze this') === 'describe');
+check('vision-mode: "what do you see" -> describe', resolveVisionMode('what do you see') === 'describe');
+// Ambiguous / empty falls to the operator default, which is 'describe' as shipped.
+check('vision-mode: ambiguous "what is this" -> default describe', resolveVisionMode('what is this') === 'describe');
+check('vision-mode: empty -> default describe', resolveVisionMode('') === 'describe');
+check('vision-mode: bare "this" -> default describe', resolveVisionMode('this') === 'describe');
+check('vision-mode: shipped default is describe', T.seekdeepReadVisionModeDefault() === 'describe');
+
+// ---------------------------------------------------------------------------
 // Suite 20: Help search
 // ---------------------------------------------------------------------------
 console.log('20. Help search (real seekdeepHelpSearch).');

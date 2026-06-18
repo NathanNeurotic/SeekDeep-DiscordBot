@@ -29,6 +29,7 @@
   .bb-btn:hover:not([disabled]) { background: rgba(45,212,255,0.2); }
   .bb-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
   .bb-btn.ghost { background: transparent; font-weight: 500; padding: 6px 12px; }
+  .bb-btn.sel { background: rgba(45,212,255,0.28); border-color: var(--cyan-1); color: var(--hull); font-weight: 600; }
   .bb-out { font-family: var(--font-mono); font-size: 13px; color: var(--hull-2, #c7d6f0); margin-top: 12px; line-height: 1.6; }
   .bb-out strong { color: var(--hull); }
   .bb-out .k { color: var(--cyan-1); }
@@ -105,8 +106,8 @@
     <p class="bb-lead">
       Send whitelisted commands straight to the running Discord bot over the local bridge — no
       Discord needed: <code>ping</code>, <code>status</code>, <code>guilds</code>, per-server
-      Discord bindings, and image-queue status/clear. Needs
-      <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> and the bot connected.
+      Discord bindings, image-queue status/clear, <code>say</code> to a channel, and the bot's
+      default vision mode. Needs <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> and the bot connected.
     </p>
 
     <div id="bb-disabled" class="bb-msg info bb-hidden">
@@ -176,6 +177,20 @@
             <span id="bb-say-count" class="sub">0 / 2000</span>
             <button id="bb-say-send" class="bb-btn" type="button">Send</button>
           </div>
+        </div>
+      </div>
+
+      <div class="bb-card">
+        <div class="bb-bind-head">
+          <div>
+            <div class="bb-bind-title">Default vision mode</div>
+            <div class="sub">What the bot does with an <code>@mention</code> image that has no clear instruction — <strong>Describe</strong> (caption / analyze) or <strong>OCR</strong> (extract text). A per-message cue (&ldquo;read this&rdquo; / &ldquo;describe this&rdquo;) always overrides this default. Applies live (no restart).</div>
+          </div>
+          <span id="bb-vision-state" class="bb-pill"><span class="dot"></span><span id="bb-vision-state-text">Checking…</span></span>
+        </div>
+        <div class="bb-row" id="bb-vision-controls">
+          <button id="bb-vision-describe" class="bb-btn ghost" type="button">Describe</button>
+          <button id="bb-vision-ocr" class="bb-btn ghost" type="button">OCR · text extraction</button>
         </div>
       </div>
     </div>
