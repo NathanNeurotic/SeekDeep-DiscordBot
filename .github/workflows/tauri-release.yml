@@ -281,3 +281,50 @@ jobs:
           releaseDraft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           args: ${{ matrix.args }}
+
+  # Attach the EXACT source tree that built the installers above as a durable,
+  # provenance-stamped asset: SeekDeep-source-v<version>-<shortsha>.zip.
+  #
+  # Why not rely on GitHub's auto "Source code (zip)"? For the rolling nightly
+  # that archive is tied to the `nightly` tag, which is force-moved on every
+  # build — so it is NOT a stable artifact a tester can pair with a specific
+  # installer they downloaded. `git archive` captures the tracked tree at this
+  # exact commit (honoring any .gitattributes export-ignore), giving a
+  # deterministic restore/preservation bundle named for its provenance.
+  #
+  # Runs ONCE (not per-OS) after the matrix, for nightly AND tag builds.
+  source-archive:
+    needs: [build]
+    # always() so it still attaches source even if one OS leg of the matrix
+    # failed; the release-existence check below skips cleanly if no release
+    # was published at all.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload the source asset to the release
+    steps:
+      - name: Checkout (the built commit)
+        uses: actions/checkout@v6
+
+      - name: Build + upload source archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
+          # The release is created by the build job (tauri-action on tag pushes,
+          # or the pre-created nightly on main pushes). If the build failed and no
+          # release exists, skip cleanly instead of erroring the workflow.
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "No '$TAG' release present (build likely failed) — skipping source archive."
+            exit 0
+          fi
+          VERSION=$(jq -r .version package.json)
+          SHORT=$(git rev-parse --short HEAD)
+          NAME="SeekDeep-source-v${VERSION}-${SHORT}.zip"
+          echo "Archiving tracked source at $(git rev-parse HEAD) -> ${NAME}"
+          git archive --format=zip -o "${NAME}" HEAD
+          ls -la "${NAME}"
+          # --clobber so a re-run, or the force-moved nightly, overwrites cleanly.
+          gh release upload "$TAG" "${NAME}" --repo "${{ github.repository }}" --clobber
+          echo "Uploaded ${NAME} to the '$TAG' release."
