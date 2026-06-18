@@ -2330,7 +2330,7 @@ loaded_chat_model_id: Optional[str] = None
 last_loaded_at = 0.0
 
 
-def unload_chat_model() -> None:
+def unload_chat_model(reason: str = "explicit-unload") -> None:
     """Unload only the chat model, preserving any vision/image state."""
     global chat_model, chat_tokenizer, loaded_chat_role, loaded_chat_model_id, loaded_task
     if chat_model is None and chat_tokenizer is None and loaded_chat_role is None:
@@ -2351,10 +2351,10 @@ def unload_chat_model() -> None:
     cleanup_cuda()
     _log_vram("after chat unload")
     _emit_event("model.evicted", {"task": "chat", "role": role or "chat",
-                                  "model": model_id or "", "reason": "explicit-unload"})
+                                  "model": model_id or "", "reason": reason})
 
 
-def unload_vision_model() -> None:
+def unload_vision_model(reason: str = "explicit-unload") -> None:
     """Unload only the vision model, preserving any chat/image state."""
     global vision_model, vision_processor, vision_tokenizer, loaded_task
     if vision_model is None and vision_processor is None and vision_tokenizer is None:
@@ -2369,10 +2369,10 @@ def unload_vision_model() -> None:
     cleanup_cuda()
     _log_vram("after vision unload")
     _emit_event("model.evicted", {"task": "vision", "role": "vision",
-                                  "model": VISION_MODEL_ID or "", "reason": "explicit-unload"})
+                                  "model": VISION_MODEL_ID or "", "reason": reason})
 
 
-def unload_image_model() -> None:
+def unload_image_model(reason: str = "explicit-unload") -> None:
     """Unload only the image-generation pipeline plus the pix2pix / clipseg
     image-editing auxiliaries, preserving any chat/vision state."""
     global image_pipe, instruct_pix2pix_pipe, clipseg_model, clipseg_processor, loaded_task
@@ -2382,17 +2382,22 @@ def unload_image_model() -> None:
     print("[SeekDeep Local AI] unloading image pipeline", flush=True)
     _log_vram("before image unload")
     had_pipe = image_pipe is not None
+    # Capture BEFORE nulling: if only the pix2pix editing pipe was resident
+    # (image_pipe is None), had_pipe alone would skip the model.evicted event and
+    # desync the GUI. Announce the image-role eviction if EITHER generative pipe
+    # was loaded.
+    had_pix2pix = instruct_pix2pix_pipe is not None
     image_pipe = None
     instruct_pix2pix_pipe = None
     clipseg_model = None
     clipseg_processor = None
-    if loaded_task == "image":
+    if loaded_task in ("image", "instruct_pix2pix"):
         loaded_task = None
     cleanup_cuda()
     _log_vram("after image unload")
-    if had_pipe:
+    if had_pipe or had_pix2pix:
         _emit_event("model.evicted", {"task": "image", "role": "image",
-                                      "model": IMAGE_MODEL_ID or "", "reason": "explicit-unload"})
+                                      "model": IMAGE_MODEL_ID or "", "reason": reason})
 
 
 def unload_all(force: bool = False) -> None:
@@ -2528,15 +2533,17 @@ def _evict_for_budget(task: str, role: str = "") -> None:
     evictable.sort(key=lambda x: (x[2], -x[1]))
 
     def _do_evict(name: str, est_mb: int) -> None:
-        nonlocal_g = globals()
+        # Route through the per-role unload helpers (not raw global clears) so
+        # auto-eviction frees the same auxiliaries (pix2pix / clipseg for image),
+        # clears loaded_task, and emits the same model.evicted event the explicit
+        # /unload path does — just tagged reason="task-lru" so the GUI shows it as
+        # an automatic budget eviction rather than an operator unload.
         if name == "image":
-            nonlocal_g["image_pipe"] = None
+            unload_image_model(reason="task-lru")
         elif name == "vision":
-            nonlocal_g["vision_model"] = None
-            nonlocal_g["vision_processor"] = None
-            nonlocal_g["vision_tokenizer"] = None
+            unload_vision_model(reason="task-lru")
         elif name == "chat":
-            unload_chat_model()
+            unload_chat_model(reason="task-lru")
 
     # First pass: only non-pinned.
     for name, est_mb, is_pinned in evictable:
