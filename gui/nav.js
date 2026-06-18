@@ -1441,13 +1441,17 @@
         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
       nav.appendChild(btn);
-      // Close on link click (drawer was open).
-      nav.querySelectorAll('.links a').forEach(a =>
-        a.addEventListener('click', () => {
+      // Close on link click (drawer was open). Delegated on nav so it also
+      // covers the dynamically-rendered registry links; the group-dropdown
+      // triggers (.sd-more-btn) are excluded so opening a group inside the
+      // drawer doesn't collapse it.
+      nav.addEventListener('click', (e) => {
+        const a = e.target.closest && e.target.closest('.links a');
+        if (a && !a.classList.contains('sd-more-btn')) {
           nav.classList.remove('is-open');
           btn.setAttribute('aria-expanded', 'false');
-        })
-      );
+        }
+      });
       // Close on outside click + Esc.
       document.addEventListener('click', (e) => {
         if (!nav.contains(e.target)) {
@@ -1533,6 +1537,9 @@
         border-color: rgba(45,212,255,0.30);
         color: var(--cyan-1, #2dd4ff);
       }
+      /* Verb-group dropdowns (phase 2) drop down LEFT-aligned under their
+         trigger, unlike the legacy rightmost "More" which anchored right:0. */
+      .topnav .links .sd-group .sd-more-panel { left: 0; right: auto; }
       /* In the mobile hamburger drawer the links stack vertically; render the
          panel inline (indented) instead of as a floating popover. */
       @media (max-width: 760px) {
@@ -1553,6 +1560,94 @@
       const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
       const onMore = MORE_ITEMS.concat(GATED_ITEMS).some((it) => it.path === here);
 
+      // ── Registry-driven verb-group topnav (reorg phase 2) ───────────────
+      // When the shared registry is present, TAKE OVER the .links container:
+      // RUN items render as direct links; CREATE / MANAGE / LEARN render as
+      // per-group dropdowns. The static <a> list in each page's HTML is the
+      // no-JS fallback — if the registry is absent we fall through to the
+      // legacy single "More" dropdown below (current behaviour preserved).
+      if (window.SeekDeepPages && typeof window.SeekDeepPages.group === 'function') {
+        const reg = window.SeekDeepPages;
+        links.innerHTML = '';
+        const mkLink = (p, role) => {
+          const a = document.createElement('a');
+          a.href = p.path;
+          a.textContent = p.title;
+          if (role) a.setAttribute('role', role);
+          if (p.path.toLowerCase() === here) a.classList.add(role === 'menuitem' ? 'here' : 'active');
+          return a;
+        };
+        const wireDropdown = (grp, trigger) => {
+          const setOpen = (open) => {
+            grp.classList.toggle('open', open);
+            trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+          };
+          trigger.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!grp.classList.contains('open')); });
+          trigger.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!grp.classList.contains('open')); }
+            else if (e.key === 'Escape') setOpen(false);
+          });
+          document.addEventListener('click', (e) => { if (!grp.contains(e.target)) setOpen(false); });
+          document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+        };
+        const GROUPS = [
+          { key: 'run',    label: null     },
+          { key: 'create', label: 'Create' },
+          { key: 'manage', label: 'Manage' },
+          { key: 'learn',  label: 'Learn'  },
+        ];
+        GROUPS.forEach((g) => {
+          // gated items are appended into MANAGE after GET /config/features resolves
+          const items = reg.group(g.key).filter((p) => !p.gateFlag);
+          if (g.key === 'run') { items.forEach((p) => links.appendChild(mkLink(p))); return; }
+          if (!items.length && g.key !== 'manage') return; // MANAGE always rendered (gated may fill it)
+          const onHere = reg.group(g.key).some((p) => p.path.toLowerCase() === here);
+          const grp = document.createElement('div');
+          grp.className = 'sd-more sd-group';
+          if (g.key === 'manage') grp.dataset.sdGroup = 'manage';
+          const trigger = document.createElement('a');
+          trigger.className = 'sd-more-btn' + (onHere ? ' active' : '');
+          trigger.href = '#';
+          trigger.setAttribute('role', 'button');
+          trigger.setAttribute('tabindex', '0');
+          trigger.setAttribute('aria-haspopup', 'true');
+          trigger.setAttribute('aria-expanded', 'false');
+          trigger.innerHTML = g.label + '<span class="sd-more-caret" aria-hidden="true">▾</span>';
+          const panel = document.createElement('div');
+          panel.className = 'sd-more-panel';
+          panel.setAttribute('role', 'menu');
+          items.forEach((p) => panel.appendChild(mkLink(p, 'menuitem')));
+          grp.appendChild(trigger);
+          grp.appendChild(panel);
+          links.appendChild(grp);
+          wireDropdown(grp, trigger);
+        });
+        // Feature-gated items (Emoji Vault / Force React / Bot Bridge) → into the
+        // MANAGE panel once the open GET /config/features endpoint answers.
+        const gated = reg.gated();
+        if (gated.length && /^https?:/.test(location.protocol)) {
+          const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
+          fetch(base + '/config/features')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+              const feats = (j && j.features) || {};
+              const managePanel = links.querySelector('.sd-group[data-sd-group="manage"] .sd-more-panel');
+              if (!managePanel) return;
+              gated.forEach((p) => {
+                if (!feats[p.gateFlag]) return;
+                if (managePanel.querySelector(`a[href="${p.path}"]`)) return;
+                managePanel.appendChild(mkLink(p, 'menuitem'));
+                if (p.path.toLowerCase() === here) {
+                  const trig = managePanel.parentElement.querySelector('.sd-more-btn');
+                  if (trig) trig.classList.add('active');
+                }
+              });
+            })
+            .catch(() => {});
+        }
+        return true;
+      }
+      // ── Legacy fallback (registry absent): single "More" dropdown ──────────
       const wrap = document.createElement('div');
       wrap.className = 'sd-more';
 

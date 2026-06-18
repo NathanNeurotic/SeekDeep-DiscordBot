@@ -50,7 +50,7 @@
     // ---- MANAGE (config + admin) ----
     { id: 'settings',     title: 'All Settings',    path: 'settings.html',     group: 'manage', glyph: '⛭', meta: 'every .env key · typed + grouped', live: true, navigable: true, gateFlag: null, palette: true, more: true },
     { id: 'memory',       title: 'Memory',          path: 'memory.html',       group: 'manage', glyph: '⌗', meta: 'user-facts · live', live: true, navigable: true, gateFlag: null, palette: true, more: true },
-    { id: 'changelog',    title: 'Changelog',       path: 'changelog.html',    group: 'manage', glyph: '⊞', meta: 'v10.x history', live: true, navigable: true, gateFlag: null, palette: true, more: true },
+    { id: 'changelog',    title: 'Changelog',       path: 'changelog.html',    group: 'learn',  glyph: '⊞', meta: 'v10.x history', live: true, navigable: true, gateFlag: null, palette: true, more: true },
     { id: 'emoji_vault',  title: 'Emoji Vault',     path: 'emoji-vault.html',  group: 'manage', glyph: '☻', meta: 'per-guild emoji browse / backup / import', live: true, navigable: true, gateFlag: 'SEEKDEEP_FEATURE_EMOJI_VAULT', palette: false, more: false },
     { id: 'force_react',  title: 'Force React',     path: 'force-react.html',  group: 'manage', glyph: '✦', meta: 'per-guild cumulative react cap + emoji pool', live: true, navigable: true, gateFlag: 'SEEKDEEP_FEATURE_FORCE_REACT', palette: false, more: false },
     { id: 'bot_bridge',   title: 'Bot Bridge',      path: 'bot-bridge.html',   group: 'manage', glyph: '⇄', meta: 'read-only bot ping / status / guilds', live: true, navigable: true, gateFlag: 'SEEKDEEP_FEATURE_BOT_BRIDGE', palette: false, more: false },
