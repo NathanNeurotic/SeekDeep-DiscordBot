@@ -605,6 +605,10 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         "local_ai_server.py",
         "gui_endpoints.py",
         "warmup_local_cache.py",
+        // Imported by the self-update signature gate (gui_endpoints.py); MUST be
+        // bundled + extracted so a fresh/older install has it before self-update
+        // runs. Was absent everywhere (repo-only) → self-update 500'd on import.
+        "release_signing.py",
         "package.json",
         "requirements-local.txt",
         "requirements-ml.txt",
