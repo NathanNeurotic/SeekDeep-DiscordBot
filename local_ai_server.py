@@ -3139,6 +3139,19 @@ def models_catalog_endpoint():
     }
 
 
+# /models/available walks the HF cache (scan_cache_dir) — multi-second on a large
+# cache. Cache the result with a short TTL so the GUI's concurrent Bot-config
+# page-load fetches don't EACH re-trigger a fresh walk; under load that walk
+# starved the asyncio loop, so concurrent /config reads hit their client abort
+# timeout and rendered "UNKNOWN" (+ laggy saves). 'current' (the selected model
+# IDs) is overlaid fresh on every cache hit so the dropdown highlight stays live.
+_models_avail_cache: dict = {"data": None, "ts": 0.0}
+try:
+    _MODELS_AVAIL_TTL = float(os.environ.get("SEEKDEEP_MODELS_AVAIL_TTL_S", "20"))
+except (TypeError, ValueError):
+    _MODELS_AVAIL_TTL = 20.0
+
+
 @app.get("/models/available")
 def models_available_endpoint():
     """Full inventory of models the user has on this machine right now —
@@ -3161,6 +3174,18 @@ def models_available_endpoint():
         current: { LOCAL_CHAT_MODEL_ID, LOCAL_IMAGE_MODEL_ID, LOCAL_VISION_MODEL_ID }
       }
     """
+    import time as _t
+    _now = _t.monotonic()
+    _cur = {
+        "LOCAL_CHAT_MODEL_ID":   os.getenv("LOCAL_CHAT_MODEL_ID", "") or "",
+        "LOCAL_IMAGE_MODEL_ID":  os.getenv("LOCAL_IMAGE_MODEL_ID", "") or "",
+        "LOCAL_VISION_MODEL_ID": os.getenv("LOCAL_VISION_MODEL_ID", "") or "",
+    }
+    _cached = _models_avail_cache.get("data")
+    if _cached is not None and (_now - _models_avail_cache["ts"]) < _MODELS_AVAIL_TTL:
+        # Serve the cached scan; overlay the live current-model selection.
+        return {**_cached, "current": _cur, "cached": True}
+
     out: dict = {"ok": True, "ml_deps_missing": False,
                  "hf": {"cache_dir": None, "total_size_bytes": 0, "repos": []},
                  "ollama": {"available": False, "base_url": OLLAMA_BASE_URL, "tags": []},
@@ -3241,6 +3266,10 @@ def models_available_endpoint():
                 pass
     except Exception:
         pass
+    # Cache the freshly-computed scan (success path only — the ml_deps-missing
+    # early return above is cheap and intentionally not cached).
+    _models_avail_cache["data"] = out
+    _models_avail_cache["ts"] = _now
     return out
 
 
