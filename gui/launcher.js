@@ -782,7 +782,7 @@
         btn.addEventListener('click', async () => {
           // Multi-window guard: prompt before racing with another window
           // that might be doing its own restart. Was: silent fight.
-          if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple('Reload .env (restart AI server + bot)')) return;
+          if (window.SeekDeepWindows && !(await window.SeekDeepWindows.confirmIfMultiple('Reload .env (restart AI server + bot)'))) return;
           // .env changes only take effect on process restart. Both the AI
           // server (Python uvicorn) and the Discord bot (node index.js)
           // need to be restarted: AI-server-side keys (LOCAL_*_MODEL_ID,
@@ -826,7 +826,7 @@
         btn.addEventListener('click', unloadAll);
       } else if (label === '↯ force kill all') {
         btn.addEventListener('click', async () => {
-          if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple('Force kill bot + ai-server + searxng')) return;
+          if (window.SeekDeepWindows && !(await window.SeekDeepWindows.confirmIfMultiple('Force kill bot + ai-server + searxng'))) return;
           if (!await (window.SeekDeepConfirm || window.confirm)('Force-kill all services?\nbot + ai-server + searxng will all be terminated. Models in VRAM drop. In-flight requests fail.')) return;
           for (const svc of ['bot', 'ai-server', 'searxng']) await launcherCall(svc, 'stop');
         });
@@ -874,7 +874,7 @@
         if (lockBusy) return;
         const desired = lockState === true ? '0' : '1';
         const action = lockState === true ? 'Unlock' : 'Lock';
-        if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple(`${action} HF cache (writes .env + restarts sidecar)`)) return;
+        if (window.SeekDeepWindows && !(await window.SeekDeepWindows.confirmIfMultiple(`${action} HF cache (writes .env + restarts sidecar)`))) return;
         if (!await (window.SeekDeepConfirm || window.confirm)(`${action} HF cache?\nThis will:\n  1. Write HF_HUB_OFFLINE=${desired} + TRANSFORMERS_OFFLINE=${desired} to .env\n  2. Restart the AI server so it picks up the new env\n\nIn-flight requests will be dropped.`)) return;
         lockBusy = true;
         paintLock();
