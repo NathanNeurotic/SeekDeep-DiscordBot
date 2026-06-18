@@ -45,6 +45,9 @@
     // into a number cell.
     for (const k of Object.keys(data)) {
       const v = data[k];
+      // 'surfaces' is owned by the page registry (index.page.js sets it from
+      // gui/pages.js); don't let the server's count clobber the registry value.
+      if (k === 'surfaces') continue;
       if (v == null || typeof v === 'object' || typeof v === 'boolean') continue;
       document.querySelectorAll('[data-stat-' + k + ']').forEach((el) => {
         el.textContent = String(v);

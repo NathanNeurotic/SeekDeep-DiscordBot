@@ -42,7 +42,15 @@
         desc.textContent = op.desc || '';
         card.appendChild(title);
         card.appendChild(desc);
-        card.addEventListener('click', () => { try { window.SeekDeepOps.run(op.id); } catch (_) {} });
+        // Disable while the (async) op is pending so a double-click can't fire
+        // a heavy restart/kill twice. run() returns sdContextAction's promise.
+        card.addEventListener('click', async () => {
+          if (card.disabled) return;
+          card.disabled = true;
+          try { await window.SeekDeepOps.run(op.id); }
+          catch (_) {}
+          finally { card.disabled = false; }
+        });
         cards.appendChild(card);
       });
       sec.appendChild(cards);

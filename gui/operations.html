@@ -29,7 +29,9 @@
     border: 1px solid var(--stroke); border-radius: var(--r-md, 12px);
     background: linear-gradient(180deg, rgba(10,26,48,0.55), rgba(6,18,31,0.75));
     padding: 14px 16px; color: var(--hull-2, #c7d6f0); transition: border-color .15s ease, background .15s ease, transform .1s ease;
+    font-family: inherit; /* <button> doesn't inherit the body font by default */
   }
+  .ops-card[disabled] { opacity: 0.55; cursor: progress; }
   .ops-card:hover { border-color: rgba(45,212,255,0.45); background: linear-gradient(180deg, rgba(13,40,72,0.7), rgba(8,22,38,0.85)); }
   .ops-card:active { transform: translateY(1px); }
   .ops-card-title { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--hull); }

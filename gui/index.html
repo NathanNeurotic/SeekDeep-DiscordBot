@@ -502,7 +502,7 @@
   <div class="kpis">
     <div class="kpi"><span class="n" data-stat-releases>35</span><span class="l">Releases</span></div>
     <div class="kpi"><span class="n" data-stat-smoke_tests>565</span><span class="l">Smoke tests</span></div>
-    <div class="kpi"><span class="n" data-stat-surfaces>18</span><span class="l">Surfaces</span></div>
+    <div class="kpi"><span class="n" data-stat-surfaces>21</span><span class="l">Surfaces</span></div>
     <div class="kpi"><span class="n" data-stat-commands>109</span><span class="l">Commands</span></div>
   </div>
 
@@ -606,48 +606,11 @@
     </a>
   </div>
 
-  <!-- ===== REFERENCE & MARKETING ===== -->
-  <div class="sec-head">
-    <h2>Reference &amp; marketing</h2>
-    <span class="count">05 · external surfaces</span>
-  </div>
-  <div class="dir">
-    <a class="dir-row" href="landing.html">
-      <span class="dir-num">13</span>
-      <span class="dir-name">Landing</span>
-      <span class="dir-desc">External-facing overview of the project.</span>
-      <span class="dir-badge empty">·</span>
-      <span class="dir-path">landing.html <span class="dir-arrow">→</span></span>
-    </a>
-    <a class="dir-row" href="pitch.html">
-      <span class="dir-num">14</span>
-      <span class="dir-name">Pitch deck</span>
-      <span class="dir-desc">Nine slides at 1920×1080, scaled to fit. ← / → to navigate.</span>
-      <span class="dir-badge empty">·</span>
-      <span class="dir-path">pitch.html <span class="dir-arrow">→</span></span>
-    </a>
-    <a class="dir-row" href="tour.html">
-      <span class="dir-num">15</span>
-      <span class="dir-name">Tour</span>
-      <span class="dir-desc">Seven-step guided overlay with spotlight and keyboard navigation.</span>
-      <span class="dir-badge empty">·</span>
-      <span class="dir-path">tour.html <span class="dir-arrow">→</span></span>
-    </a>
-    <a class="dir-row" href="mobile.html">
-      <span class="dir-num">16</span>
-      <span class="dir-name">Mobile mocks</span>
-      <span class="dir-desc">Hub, Chat, Control Center at 375×812. Chat is a real PWA.</span>
-      <span class="dir-badge empty">·</span>
-      <span class="dir-path">mobile.html <span class="dir-arrow">→</span></span>
-    </a>
-    <a class="dir-row" href="boot.html">
-      <span class="dir-num">17</span>
-      <span class="dir-name">Boot animation</span>
-      <span class="dir-desc">Fourteen-step boot log with logo materialization.</span>
-      <span class="dir-badge empty">·</span>
-      <span class="dir-path">boot.html <span class="dir-arrow">→</span></span>
-    </a>
-  </div>
+  <!-- Reference/marketing mock pages (landing · pitch · tour · mobile · boot)
+       were removed from the Hub directory (GUI reorg phase 4): they are
+       self-labeled design mocks with no live backend, so listing them here
+       landed users on dead-ends. The files remain in-repo (live:false in the
+       page registry) for a separate web/marketing context. -->
 
   <!-- ===== AFFILIATES ===== -->
   <div class="sec-head">
@@ -683,9 +646,8 @@
   </div>
 </main>
 
-<script src="index.page.js" defer></script>
-
 <script src="pages.js" defer></script>
+<script src="index.page.js" defer></script>
 <script src="nav.js" defer></script>
 </body>
 </html>
