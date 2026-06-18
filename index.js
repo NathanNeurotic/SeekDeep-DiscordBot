@@ -2364,6 +2364,88 @@ function shouldAutoSearch(prompt) {
   return false;
 }
 
+// SEEKDEEP_WEB_SEARCH_DEFAULT_START
+// Operator-settable DEFAULT for whether chat AUTO-augments with web search
+// (SearXNG) on the web:'auto' path. The GUI (Bot Bridge page) writes
+// data/web-search-config.json via gui_endpoints.py; the bot reads it LIVE here
+// (mtime-aware, mirroring the force-react / vision-mode config) so a GUI change
+// applies without a bot restart.
+//   'auto'   => historical behavior: shouldAutoSearch(prompt) decides. [default]
+//   'off'    => no automatic augmentation; only an EXPLICIT in-prompt search
+//               command (seekdeepHasExplicitSearchRequest) still searches —
+//               mirroring the per-message-cue-wins rule of the vision-mode
+//               default. (Explicit web:'always' callers — research, comparison
+//               tables, /ask web:always — are unaffected; they never take this
+//               path.)
+//   'always' => augment every web:'auto' chat (still subject to the per-prompt
+//               no-search override + the contextual-followup bypass).
+// Absent file + absent/invalid env => 'auto', preserving today's behavior exactly.
+const SEEKDEEP_WEB_SEARCH_CONFIG_PATH = path.join(__dirname, 'data', 'web-search-config.json');
+const SEEKDEEP_WEB_SEARCH_MODES = ['auto', 'off', 'always'];
+let _seekdeepWebSearchConfigCache = null;
+let _seekdeepWebSearchConfigMtime = -1;
+
+function seekdeepReadWebSearchDefault() {
+  // mtime-aware: re-read only when the GUI-written file changes. Chat is a warm
+  // path but a single stat() per turn is negligible next to a model call.
+  let mtime = 0;
+  try {
+    if (fs.existsSync(SEEKDEEP_WEB_SEARCH_CONFIG_PATH)) mtime = fs.statSync(SEEKDEEP_WEB_SEARCH_CONFIG_PATH).mtimeMs;
+  } catch {}
+  if (_seekdeepWebSearchConfigCache !== null && mtime === _seekdeepWebSearchConfigMtime) {
+    return _seekdeepWebSearchConfigCache;
+  }
+  let mode = '';
+  try {
+    if (mtime) {
+      const raw = readJsonSafe(SEEKDEEP_WEB_SEARCH_CONFIG_PATH, {});
+      const m = String(raw?.mode || '').toLowerCase().trim();
+      if (SEEKDEEP_WEB_SEARCH_MODES.includes(m)) mode = m;
+    }
+  } catch {}
+  if (!mode) {
+    const envMode = String(process.env.SEEKDEEP_WEB_SEARCH_DEFAULT || '').toLowerCase().trim();
+    mode = SEEKDEEP_WEB_SEARCH_MODES.includes(envMode) ? envMode : 'auto';
+  }
+  _seekdeepWebSearchConfigCache = mode;
+  _seekdeepWebSearchConfigMtime = mtime;
+  return mode;
+}
+
+// Narrow "explicit web-search COMMAND" detector — so an operator 'off' default
+// still honors a clear in-prompt search request (search the web / look it up /
+// google it / web search / check online / fact-check / cite sources).
+// DELIBERATELY excludes the soft current-info heuristics (latest/current/news/
+// price/…) that 'off' is meant to suppress; those are automatic augmentation,
+// not an explicit command.
+function seekdeepHasExplicitSearchRequest(prompt = '') {
+  const p = normalizeUserText(prompt).toLowerCase().trim();
+  if (p.length < 4) return false;
+  return (
+    // "search the web/internet/online" or "search google/bing/ddg ..." — a real
+    // search TARGET, never the conversational bare "search for a job".
+    /\bsearch\s+(?:the\s+)?(?:web|net|internet|online|google|bing|duck\s?duck\s?go|ddg)\b/.test(p) ||
+    // "web search" / "internet search" / "online search"
+    /\b(?:web|internet|online)\s+search\b/.test(p) ||
+    // unambiguous command form: "search/look it|this|that|them up"
+    /\b(?:search|look)\s+(?:it|this|that|them)\s+up\b/.test(p) ||
+    // imperative "look up <X>" but NOT "look up to" (admire / direction)
+    /\blook\s+up\b(?!\s+to\b)/.test(p) ||
+    // "google it|this|that|for|the ..." — google-as-verb command (not "what does google do")
+    /\bgoogle\s+(?:it|this|that|for|the)\b/.test(p) ||
+    // "find/look it|this|that|them online" / "check online"
+    /\b(?:find|look)\s+(?:it|this|that|them)?\s*online\b/.test(p) ||
+    /\bcheck\s+online\b/.test(p) ||
+    // "use the web/internet/google TO search|find|look|check" (not "I use the internet")
+    /\b(?:use|using)\s+(?:the\s+)?(?:web|internet|google)\s+to\s+(?:search|find|look|check)\b/.test(p) ||
+    // explicit "fact-check"
+    /\bfact[\s-]?check\b/.test(p) ||
+    // imperative "cite (your/the) sources" — NOT passive "with sources" / bare "citation"
+    /\bcite\s+(?:your\s+|the\s+)?sources?\b/.test(p)
+  );
+}
+// SEEKDEEP_WEB_SEARCH_DEFAULT_END
+
 // Detects "tell me about KK Slider", "more about Mario", "what is Skyrim",
 // "Its KK Slider from Animal Crossing. What can you tell me about him?", etc.
 // Used by both shouldAutoSearch and the chat-role selector to route franchise/
@@ -3071,11 +3153,26 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
       searchTriggerReason = 'web-always';
       autoSearchTriggered = true;
     } else if (web === 'auto') {
-      if (shouldAutoSearch(cleanPrompt)) {
+      // Operator-settable default for automatic web augmentation (live, mtime-
+      // aware). 'auto' = historical shouldAutoSearch heuristic; 'always' =
+      // augment every auto chat; 'off' = no auto-augment unless the prompt is an
+      // explicit search command. The no-search override above still wins.
+      const webDefault = seekdeepReadWebSearchDefault();
+      if (webDefault === 'always') {
+        autoSearchTriggered = true;
+        searchTriggerReason = 'web-default-always';
+      } else if (webDefault === 'off') {
+        if (seekdeepHasExplicitSearchRequest(cleanPrompt)) {
+          autoSearchTriggered = true;
+          searchTriggerReason = 'explicit-search-over-off-default';
+        } else {
+          searchTriggerReason = 'web-default-off';
+        }
+      } else if (shouldAutoSearch(cleanPrompt)) {
         autoSearchTriggered = true;
         searchTriggerReason = 'auto-search-match';
       }
-      
+
       // If web === "auto" and the prompt is a contextual follow-up with valid local context, bypass web search.
       if (autoSearchTriggered && seekdeepLooksLikeContextualFollowup(cleanPrompt) && contextText) {
         autoSearchTriggered = false;
@@ -24278,6 +24375,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     seekdeepResolveVisionMode,
     seekdeepReadVisionModeDefault,
     seekdeepLooksLikeExplicitDescribePrompt,
+    // v10.38: operator-settable default web-search mode (auto/off/always)
+    seekdeepReadWebSearchDefault,
+    seekdeepHasExplicitSearchRequest,
     // v10.17: help search
     seekdeepHelpSearch,
     // v10.16: rotating status bank

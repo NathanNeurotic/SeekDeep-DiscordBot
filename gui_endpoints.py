@@ -4904,6 +4904,62 @@ def register_gui_endpoints(
         _seekdeep_audit("vision-mode-write", mode=mode)
         return {"ok": True, "mode": mode}
 
+    # ----- Bot default web-search mode (auto/off/always) · SEEKDEEP_FEATURE_BOT_BRIDGE
+    # GUI parity for whether chat AUTO-augments with web search (SearXNG). The GUI
+    # writes data/web-search-config.json here; the BOT (index.js) reads it LIVE
+    # (mtime-aware) and applies it on the chat web:'auto' path. 'auto' keeps the
+    # historical shouldAutoSearch heuristic, 'off' disables auto-augment (an
+    # explicit in-prompt search command still searches), 'always' augments every
+    # auto chat. Token-gated; feature-gated on the bot-bridge flag (404 when off).
+    _web_search_config_file = (_data_dir / "web-search-config.json")
+    _WEB_SEARCH_MODES = ("auto", "off", "always")
+
+    def _web_search_read() -> tuple[str, str]:
+        # File (GUI-set) wins; else the .env cold default; else 'auto' — the bot
+        # resolves the same precedence, so the GUI always shows bot truth.
+        # Returns (mode, source) where source is 'file' | 'env' | 'default'.
+        try:
+            if _web_search_config_file.is_file():
+                raw = json.loads(_web_search_config_file.read_text(encoding="utf-8"))
+                m = str((raw or {}).get("mode") or "").strip().lower()
+                if m in _WEB_SEARCH_MODES:
+                    return m, "file"
+        except Exception:
+            pass
+        env_mode = str(_read_env_kv(_env_path).get("SEEKDEEP_WEB_SEARCH_DEFAULT") or "").strip().lower()
+        if env_mode in _WEB_SEARCH_MODES:
+            return env_mode, "env"
+        return "auto", "default"
+
+    @app.get("/bot/web-search", dependencies=[Depends(_require_gui_token)])
+    async def get_web_search_mode():
+        if not _bot_bridge_enabled():
+            raise HTTPException(404, "Bot bridge is disabled (set SEEKDEEP_FEATURE_BOT_BRIDGE=on).")
+        mode, source = _web_search_read()
+        return {"ok": True, "mode": mode, "source": source}
+
+    @app.post("/bot/web-search", dependencies=[Depends(_require_gui_token)])
+    async def set_web_search_mode(request: Request):
+        if not _bot_bridge_enabled():
+            raise HTTPException(404, "Bot bridge is disabled (set SEEKDEEP_FEATURE_BOT_BRIDGE=on).")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        mode = str((body or {}).get("mode") or "").strip().lower()
+        if mode not in _WEB_SEARCH_MODES:
+            raise HTTPException(400, f"mode must be one of {', '.join(_WEB_SEARCH_MODES)}")
+
+        def _save_web_search():
+            with _seekdeep_file_lock(_web_search_config_file):
+                _atomic_write_json(_web_search_config_file, {"mode": mode})
+        try:
+            await asyncio.to_thread(_save_web_search)
+        except Exception as exc:
+            raise HTTPException(500, f"could not save web-search mode: {str(exc)[:200]}")
+        _seekdeep_audit("web-search-write", mode=mode)
+        return {"ok": True, "mode": mode}
+
     # ----- GET /config -----
     # Read-only env map. Used by index.html's dynamic-facts IIFE to populate
     # the Models / Search / Runtime cells against live config. Secret-tagged

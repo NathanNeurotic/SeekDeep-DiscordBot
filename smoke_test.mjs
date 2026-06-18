@@ -512,6 +512,43 @@ check('vision-mode: bare "this" -> default describe', resolveVisionMode('this') 
 check('vision-mode: shipped default is describe', T.seekdeepReadVisionModeDefault() === 'describe');
 
 // ---------------------------------------------------------------------------
+// Suite 19c: operator-default web-search mode (auto / off / always)
+// No data/web-search-config.json and no SEEKDEEP_WEB_SEARCH_DEFAULT env under
+// test mode, so the default resolves to 'auto' — the zero-regression guarantee.
+// seekdeepHasExplicitSearchRequest is the 'off'-override detector: it must fire
+// on clear search COMMANDS but NOT on the soft current-info heuristics.
+// ---------------------------------------------------------------------------
+console.log('19c. Default web-search mode (real seekdeepReadWebSearchDefault / seekdeepHasExplicitSearchRequest).');
+delete process.env.SEEKDEEP_WEB_SEARCH_DEFAULT; // ensure the shipped fallback path
+const readWebDefault = T.seekdeepReadWebSearchDefault;
+const explicitSearch = T.seekdeepHasExplicitSearchRequest;
+check('web-search: reader exported', typeof readWebDefault === 'function');
+check('web-search: detector exported', typeof explicitSearch === 'function');
+check('web-search: shipped default is auto', readWebDefault() === 'auto');
+// Explicit search COMMANDS fire (these override an operator 'off' default).
+check('web-search: "search the web for X" -> explicit', explicitSearch('search the web for the rtx 5090 price') === true);
+check('web-search: "look it up" -> explicit', explicitSearch('look it up') === true);
+check('web-search: "google it" -> explicit', explicitSearch('google it') === true);
+check('web-search: "web search" -> explicit', explicitSearch('do a web search') === true);
+check('web-search: "fact-check this" -> explicit', explicitSearch('fact-check this claim') === true);
+check('web-search: "cite sources" -> explicit', explicitSearch('answer and cite sources') === true);
+check('web-search: "find this online" -> explicit', explicitSearch('find this online for me') === true);
+check('web-search: "search bing for X" -> explicit', explicitSearch('search bing for the answer') === true);
+// Soft current-info heuristics are NOT explicit commands ('off' suppresses them).
+check('web-search: "latest news" not explicit', explicitSearch('what is the latest news on mars') === false);
+check('web-search: "current price" not explicit', explicitSearch('whats the current price of eth') === false);
+check('web-search: plain chat not explicit', explicitSearch('tell me a story about a dog') === false);
+check('web-search: empty not explicit', explicitSearch('') === false);
+// Precision guards — these benign prompts must NOT defeat operator 'off'
+// (false positives caught in adversarial review of the detector).
+check('web-search: "essay with sources" not explicit', explicitSearch('write an essay with sources') === false);
+check('web-search: "what is a citation" not explicit', explicitSearch('what is a citation') === false);
+check('web-search: "search for a job" not explicit', explicitSearch('how do I search for a job') === false);
+check('web-search: "use the internet daily" not explicit', explicitSearch('I use the internet every day') === false);
+check('web-search: "check internet speed" not explicit', explicitSearch('how do I check the internet speed') === false);
+check('web-search: "look up to mentor" not explicit', explicitSearch('I look up to my mentor') === false);
+
+// ---------------------------------------------------------------------------
 // Suite 20: Help search
 // ---------------------------------------------------------------------------
 console.log('20. Help search (real seekdeepHelpSearch).');

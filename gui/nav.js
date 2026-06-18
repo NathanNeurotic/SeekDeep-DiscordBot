@@ -212,7 +212,7 @@
     // attached, every Logs Viewer poll wasted a 401 round-trip before the
     // catch-all retry kicked in. Now any of /, ?, or end-of-string ends
     // the matched path segment.
-    const SENSITIVE_READ_RE = /\/(memory|logs\/(tail|stream)|emoji-vault|force-react|bot\/vision-mode|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|\?|$)/;
+    const SENSITIVE_READ_RE = /\/(memory|logs\/(tail|stream)|emoji-vault|force-react|bot\/vision-mode|bot\/web-search|data\/(user-facts|memory-presets|archive-config|archive-optout|archive-guild-config|archive-snapshot|prompt-templates)\.json)(\/|\?|$)/;
     window.fetch = async function patchedFetch(input, init) {
       init = init || {};
       const method = (init.method || (input && input.method) || 'GET').toUpperCase();
