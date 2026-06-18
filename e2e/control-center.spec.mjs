@@ -123,21 +123,33 @@ test.describe('Control Center', () => {
     await expect(wrap).not.toContainText('start the AI server', { timeout: 8_000 });
   });
 
-  test('nav "More" menu surfaces the hidden-but-real features; Cmd-K drops the mocks (SURFACES.md)', async ({ page }) => {
+  test('verb-group nav surfaces the real secondary features; Cmd-K drops the mocks (SURFACES.md)', async ({ page }) => {
     await page.goto('/gui/index.html');
 
-    // nav.js injects a "More v" trigger into the standard topnav so the real
-    // but secondary surfaces (Memory, Image A/B, Prompts, Add a Model) are
-    // reachable from every page — not only via Cmd-K.
-    const moreBtn = page.locator('.topnav .links a.sd-more-btn');
-    await expect(moreBtn).toBeVisible({ timeout: 10_000 });
+    // nav.js renders the topnav from the shared registry (gui/pages.js) as verb
+    // groups: RUN as direct links, CREATE / MANAGE / LEARN as dropdowns. The real
+    // but secondary surfaces live in those dropdowns, reachable from every page.
+    const links = page.locator('.topnav .links');
+    const triggers = links.locator('a.sd-more-btn');
+    await expect(triggers.first()).toBeVisible({ timeout: 10_000 });
+    await expect(triggers).toHaveCount(3); // Create · Manage · Learn
 
-    const panel = page.locator('.topnav .links .sd-more-panel');
-    await expect(panel).toBeHidden();
-    await moreBtn.click();
-    await expect(panel).toBeVisible();
-    for (const href of ['memory.html', 'image-ab.html', 'prompts.html', 'add-model.html']) {
-      await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
+    // CREATE surfaces the creative tools.
+    const createGroup = links.locator('.sd-group').filter({ hasText: 'Create' });
+    await createGroup.locator('a.sd-more-btn').click();
+    const createPanel = createGroup.locator('.sd-more-panel');
+    await expect(createPanel).toBeVisible();
+    for (const href of ['image-ab.html', 'prompts.html', 'add-model.html']) {
+      await expect(createPanel.locator(`a[href="${href}"]`)).toHaveCount(1);
+    }
+
+    // MANAGE surfaces config/admin.
+    const manageGroup = links.locator('.sd-group').filter({ hasText: 'Manage' });
+    await manageGroup.locator('a.sd-more-btn').click();
+    const managePanel = manageGroup.locator('.sd-more-panel');
+    await expect(managePanel).toBeVisible();
+    for (const href of ['memory.html', 'settings.html']) {
+      await expect(managePanel.locator(`a[href="${href}"]`)).toHaveCount(1);
     }
 
     // The Cmd-K jump palette must no longer offer the cut mock/marketing pages.
