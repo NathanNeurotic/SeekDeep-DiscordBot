@@ -648,8 +648,9 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
                 val = f'"{val}"'
             out.append(f"{k}={val}\n")
 
-    # Atomic write
-    tmp = env_path.with_suffix(env_path.suffix + ".tmp")
+    # Atomic write. pid-scope the temp name (mirrors _atomic_write_json) so two
+    # concurrent writers can't both target the same `.env.tmp` and interleave.
+    tmp = env_path.with_suffix(env_path.suffix + ".tmp." + str(os.getpid()))
     with tmp.open("w", encoding="utf-8") as f:
         f.writelines(out)
     tmp.replace(env_path)
@@ -1921,21 +1922,27 @@ def register_gui_endpoints(
         _begin_transition("bot")
         try:
             bot_cwd = _resolve_bot_cwd(root)
-            procs = _find_bot_processes(bot_cwd)
-            killed: list[dict] = []
-            failed: list[dict] = []
-            for entry in procs:
-                pid = entry["pid"]
-                ok, err = _kill_pid(pid)
-                row = {"pid": pid, "cmdline": entry.get("cmdline", "")[:200],
-                       "source": entry.get("source", "?")}
-                if ok:
-                    if err:
-                        row["note"] = err  # e.g. "already-dead"
-                    killed.append(row)
-                else:
-                    row["error"] = err or "unknown"
-                    failed.append(row)
+            # Offload the WMI/ps enumeration + the per-PID taskkill/SIGTERM-sleep
+            # loop to a worker thread — they block for seconds, and this is an async
+            # handler, so running them on the loop stalls /health + the status poll.
+            def _enumerate_and_kill():
+                procs_ = _find_bot_processes(bot_cwd)
+                killed_: list[dict] = []
+                failed_: list[dict] = []
+                for entry in procs_:
+                    pid = entry["pid"]
+                    ok, err = _kill_pid(pid)
+                    row = {"pid": pid, "cmdline": entry.get("cmdline", "")[:200],
+                           "source": entry.get("source", "?")}
+                    if ok:
+                        if err:
+                            row["note"] = err  # e.g. "already-dead"
+                        killed_.append(row)
+                    else:
+                        row["error"] = err or "unknown"
+                        failed_.append(row)
+                return procs_, killed_, failed_
+            procs, killed, failed = await asyncio.to_thread(_enumerate_and_kill)
             # Also clear in-process tracking + stale PID file so the launcher
             # card flips to "not-running" on the next status poll.
             proc = _PROCESSES.pop("bot", None)
@@ -1984,10 +1991,16 @@ def register_gui_endpoints(
         # red/green during the action.
         _begin_transition(service)
         try:
+            # Offload the blocking subprocess/wait/sleep work to a worker thread.
+            # This is an async handler, so running Popen / proc.wait(timeout=5) /
+            # the SIGTERM->SIGKILL sleep loop on the event loop stalls /health, the
+            # /launchers/status poll, and the /events WS for seconds (the read-only
+            # get_launchers_status twin was already fixed this way). The transition
+            # bookkeeping in `finally` stays on the loop.
             if action == "start":
-                return _start_service(service, root, _log_dir)
+                return await asyncio.to_thread(_start_service, service, root, _log_dir)
             if action == "stop":
-                return _stop_service(service, _log_dir)
+                return await asyncio.to_thread(_stop_service, service, _log_dir)
             if action == "restart":
                 # Refuse restart for self-hosted services up-front rather than
                 # killing this very request handler half-way through.
@@ -1995,9 +2008,11 @@ def register_gui_endpoints(
                     raise HTTPException(409,
                         f"{service} is self-hosted; refusing to restart it from inside the AI server. "
                         f"Use seekdeep_launcher.bat instead.")
-                _stop_service(service, _log_dir)
-                time.sleep(0.5)
-                return _start_service(service, root, _log_dir)
+                def _restart_sync():
+                    _stop_service(service, _log_dir)
+                    time.sleep(0.5)
+                    return _start_service(service, root, _log_dir)
+                return await asyncio.to_thread(_restart_sync)
         finally:
             _end_transition(service)
             # Force a state recomputation + event publish so UI pills
@@ -4104,14 +4119,19 @@ def register_gui_endpoints(
         # Only allow .json
         if target.suffix.lower() != ".json":
             raise HTTPException(400, "only .json files exposed")
-        try:
+        # Offload the blocking read+parse+normalize to a worker thread — large data
+        # files (server-stats / auto-reactions / archive-snapshot) parsed on the
+        # event loop would momentarily stall /health + the /events WS.
+        def _read_normalize():
             with target.open("r", encoding="utf-8") as f:
                 raw = json.load(f)
+            normalizer = _DATA_NORMALIZERS.get(target.name)
+            return (normalizer(raw) if normalizer else raw), bool(normalizer)
+        try:
+            data, normalized = await asyncio.to_thread(_read_normalize)
         except json.JSONDecodeError as e:
             return {"ok": False, "error": f"invalid json: {e}", "file": target.name}
-        normalizer = _DATA_NORMALIZERS.get(target.name)
-        data = normalizer(raw) if normalizer else raw
-        return {"ok": True, "file": target.name, "data": data, "normalized": bool(normalizer)}
+        return {"ok": True, "file": target.name, "data": data, "normalized": normalized}
 
     # ----- POST /model/warm -----
     @app.post("/model/warm", dependencies=[Depends(_require_gui_token)])
@@ -4437,11 +4457,19 @@ def register_gui_endpoints(
             raise HTTPException(400, "empty content")
         if len(data) > 64 * 1024 * 1024:
             raise HTTPException(413, "file too large (max 64 MB)")
+        p = _Path(safe)
+        # Extension allowlist: this endpoint backs image/JSON/text exports only, so
+        # refuse to write executable/script/shortcut types into ~/Downloads where
+        # they sit next to real downloads and could be double-clicked.
+        _ALLOWED_SAVE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif",
+                                  ".json", ".txt", ".csv", ".md", ".zip"}
+        if p.suffix.lower() not in _ALLOWED_SAVE_SUFFIXES:
+            raise HTTPException(400, f"unsupported file type '{p.suffix}'; allowed: "
+                                     + ", ".join(sorted(_ALLOWED_SAVE_SUFFIXES)))
         home = _Path.home()
         dest_dir = home / "Downloads"
         if not dest_dir.is_dir():
             dest_dir = home
-        p = _Path(safe)
         stem = f"{p.stem}-{_time.strftime('%Y%m%d-%H%M%S')}"
         # Second-resolution timestamps collide on rapid repeat saves; uniquify so a
         # second save in the same second doesn't silently overwrite the first.
