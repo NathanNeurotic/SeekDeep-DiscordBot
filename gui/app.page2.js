@@ -846,7 +846,7 @@ const SEEKDEEP_BASE = (function() {
     const btn = e.currentTarget;
     // Multi-window guard: another window saving simultaneously means
     // last-writer-wins and earlier user thinks their save took effect.
-    if (window.SeekDeepWindows && !window.SeekDeepWindows.confirmIfMultiple('Save config to .env')) return;
+    if (window.SeekDeepWindows && !(await window.SeekDeepWindows.confirmIfMultiple('Save config to .env'))) return;
     // Validation gate — refuse to save if any field has a CFG_VALIDATORS
     // error active. Was: silently sent garbage and let the server 422.
     validateAll();

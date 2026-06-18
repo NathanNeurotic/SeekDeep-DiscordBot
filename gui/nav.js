@@ -434,7 +434,7 @@
     if (typeof BroadcastChannel !== 'function') {
       // Older browsers (Safari < 15.4 etc) skip the guard. Single-window
       // behavior remains correct; we just lose the "other windows" warning.
-      window.SeekDeepWindows = { count: () => 1, peers: () => [], confirmIfMultiple: () => true };
+      window.SeekDeepWindows = { count: () => 1, peers: () => [], confirmIfMultiple: async () => true };
       return;
     }
     const SELF_ID = 'sd-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
@@ -505,14 +505,17 @@
       id: SELF_ID,
       count: () => peers.size + 1,
       peers: () => [...peers.values()],
-      confirmIfMultiple: (action) => {
+      // async + in-app modal: WebView2 in the Tauri app suppresses window.confirm
+      // (returns false, no dialog), which silently BLOCKED every multi-window-
+      // guarded action (Save config / Reload .env / Force-kill / HF-cache-lock).
+      confirmIfMultiple: async (action) => {
         if (peers.size === 0) return true;
         const list = [...peers.values()].map(p => '  · ' + p.page).join('\n');
-        return confirm(
-          'You have ' + peers.size + ' other SeekDeep window' + (peers.size === 1 ? '' : 's') + ' open:\n' +
-          list + '\n\nProceed with "' + action + '" anyway?\n\n' +
-          'This action affects the shared local stack and may race with the other window(s).'
-        );
+        const body = 'You have ' + peers.size + ' other SeekDeep window' + (peers.size === 1 ? '' : 's') + ' open:\n' +
+          list + '\n\nProceed with "' + action + '" anyway? This affects the shared local stack and may race with the other window(s).';
+        return window.SeekDeepConfirm
+          ? await window.SeekDeepConfirm({ title: 'Other SeekDeep windows open', body, confirmLabel: 'Proceed', destructive: true })
+          : true; // no notify.js -> preserve the legacy "proceed" intent
       },
     };
   })();

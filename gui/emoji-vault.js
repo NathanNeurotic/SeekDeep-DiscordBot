@@ -156,7 +156,13 @@
 
   async function deleteEmoji(guildId, emojiId, name, tile) {
     if (!guildId || !emojiId) return;
-    if (!window.confirm('Delete :' + name + ': permanently from this server? This cannot be undone.')) return;
+    // In-app modal, not raw confirm() — WebView2 in the Tauri app suppresses
+    // window.confirm (returns false, no dialog), which silently blocked deletes.
+    if (!await (window.SeekDeepConfirm || window.confirm)({
+      title: 'Delete :' + name + ':?',
+      body: 'This permanently removes the emoji from this server and cannot be undone.',
+      confirmLabel: 'Delete', destructive: true,
+    })) return;
     setError('');
     try {
       const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), {

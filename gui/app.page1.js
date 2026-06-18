@@ -183,10 +183,40 @@
             return r.json();
           }
           async function doEdit(rule) {
-            const emoji = prompt('New emoji (blank = keep current):', rule.emoji || '');
-            if (emoji == null) return;
-            const pattern = prompt('New pattern (blank = keep current):', rule.pattern || '');
-            if (pattern == null) return;
+            // In-app modal, not raw prompt() — WebView2 in the Tauri app returns
+            // null from window.prompt (no dialog), which silently aborted Edit.
+            let emoji, pattern;
+            const modalFn = window.SeekDeepNotify && window.SeekDeepNotify.modal;
+            if (modalFn) {
+              let emojiIn, patIn;
+              const res = await modalFn({
+                title: 'Edit auto-react rule', tone: 'info',
+                render: (bodyEl) => {
+                  const mk = (lbl, val, ph) => {
+                    const w = document.createElement('label');
+                    w.style.cssText = 'display:block;margin:6px 0;font:11px var(--font-mono);letter-spacing:0.06em;color:var(--hull-2);';
+                    w.textContent = lbl;
+                    const i = document.createElement('input');
+                    i.type = 'text'; i.value = val || ''; i.placeholder = ph || '';
+                    i.style.cssText = 'width:100%;margin-top:4px;padding:8px 10px;background:rgba(6,18,31,0.9);color:var(--hull);border:1px solid var(--stroke);border-radius:8px;font-size:14px;box-sizing:border-box;';
+                    w.appendChild(i); bodyEl.appendChild(w); return i;
+                  };
+                  emojiIn = mk('Emoji (blank = keep current)', rule.emoji, rule.emoji || '🙂');
+                  patIn = mk('Pattern (blank = keep current)', rule.pattern, rule.pattern || 'word|regex');
+                },
+                primary: { label: 'Save' },
+                secondary: { label: 'Cancel', tone: 'neutral' },
+                dismissible: true,
+              });
+              if (res !== 'primary') return;
+              emoji = emojiIn ? emojiIn.value : '';
+              pattern = patIn ? patIn.value : '';
+            } else {
+              emoji = prompt('New emoji (blank = keep current):', rule.emoji || '');
+              if (emoji == null) return;
+              pattern = prompt('New pattern (blank = keep current):', rule.pattern || '');
+              if (pattern == null) return;
+            }
             const body = {};
             if (emoji.trim()) body.emoji = emoji.trim();
             if (pattern.trim()) body.pattern = pattern.trim();
