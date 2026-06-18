@@ -203,14 +203,46 @@ body {
   animation: tumble linear infinite;
   opacity: 0.18;
 }
-/* no-motion toggle (set by app.html's theme config when ambientMotion=false) */
-body.no-motion .bubbles span,
-body.no-motion .rays::before,
-body.no-motion .rays::after,
-body.no-motion .abyss::before,
-body.no-motion .abyss::after { animation: none; }
+/* ── Lite / reduced-motion mode ──────────────────────────────────────────────
+   nav.js adds body.no-motion when the user flips the topnav FX toggle OR the OS
+   "reduce motion" accessibility setting is on. The two dominant idle-GPU costs
+   are (1) the animated, heavily-blurred .abyss/.rays/.bubbles decorative layers
+   and (2) the ~68 stacked backdrop-filter:blur glass panels that re-blur every
+   frame because those layers move behind them. Lite mode removes the decorative
+   layers entirely and drops every backdrop-filter — the panel gradients carry
+   the glass look without the per-frame blur. Opt-in: full effects stay default.
+   (Previously this only paused 5 layers' animations and left the blurs running.)
+   backdrop-filter uses !important so it also overrides the inline blur that
+   app.page3.js writes onto .panel/.panel-flat. */
+/* Two independent triggers, same effect: .sd-lite is the runtime FX toggle
+   (nav.js, persisted, app-wide); .no-motion is the legacy edit-mode "Ambient
+   drift" tweak. Keeping them separate avoids a writer conflict on the Control
+   Center, where app.page3.js toggles .no-motion from the React tweak. */
+body.no-motion .abyss, body.no-motion .rays, body.no-motion .bubbles,
+body.sd-lite .abyss,  body.sd-lite .rays,  body.sd-lite .bubbles { display: none !important; }
+body.no-motion, body.no-motion *, body.no-motion *::before, body.no-motion *::after,
+body.sd-lite,  body.sd-lite *,  body.sd-lite *::before,  body.sd-lite *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Pure-CSS fallback so the OS "reduce motion" setting still helps even if nav.js
+   hasn't applied the class yet (no-JS / pre-paint). Mirrors the lite rule. */
+@media (prefers-reduced-motion: reduce) {
+  .abyss, .rays, .bubbles { display: none !important; }
+  *, *::before, *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
 .bubbles span.cube.big { width: 22px; height: 22px; }
 .bubbles span.cube.sm  { width: 9px;  height: 9px; }
+
+/* FX / Lite toggle pill in the topnav (injected by nav.js on every page). */
+.sd-fx-pill { cursor: pointer; user-select: none; }
+.sd-fx-pill .dot { background: var(--good, #58e6a1); box-shadow: 0 0 8px rgba(88,230,161,0.6); }
+.sd-fx-pill[data-lite="1"] { opacity: 0.72; }
+.sd-fx-pill[data-lite="1"] .dot { background: var(--hull-3, #7d92b8); box-shadow: none; }
 
 @keyframes drift {
   0%   { transform: translateY(110vh) scale(0.6); opacity: 0; }
