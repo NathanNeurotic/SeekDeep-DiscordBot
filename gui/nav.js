@@ -1398,6 +1398,11 @@
       const onOs = () => { if (stored() === null) apply(); };
       try { mql.addEventListener('change', onOs); } catch (_) { try { mql.addListener(onOs); } catch (__) {} }
     }
+    // Live cross-window sync: 'storage' fires in OTHER windows when one flips the
+    // toggle (localStorage[KEY] changed), so every window re-applies instantly
+    // instead of waiting for its next navigation. Fires only on a real change —
+    // no polling. (The originating window already re-applied in toggle().)
+    try { window.addEventListener('storage', (e) => { if (e && e.key === KEY) apply(); }); } catch (_) {}
     function toggle() {
       const lite = !(document.body && document.body.classList.contains('sd-lite'));
       const val = lite ? '1' : '0';
