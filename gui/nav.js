@@ -1368,8 +1368,12 @@
     // the OS pref). In-memory choice wins for the session; localStorage carries
     // a prior-session value when readable.
     let memoryStored = null;
+    // Read localStorage FIRST when it's available, so a toggle in another tab /
+    // window is reflected here (memoryStored is tab-scoped and would otherwise
+    // permanently shadow external updates → cross-tab desync). Fall back to the
+    // in-memory value only when storage throws (blocked / private window).
     const stored = () => {
-      try { return memoryStored !== null ? memoryStored : localStorage.getItem(KEY); }
+      try { return localStorage.getItem(KEY); }
       catch (_) { return memoryStored; }
     };
     // Effective lite state: an explicit user choice wins; otherwise follow the OS.
@@ -1394,6 +1398,11 @@
       const onOs = () => { if (stored() === null) apply(); };
       try { mql.addEventListener('change', onOs); } catch (_) { try { mql.addListener(onOs); } catch (__) {} }
     }
+    // Live cross-window sync: 'storage' fires in OTHER windows when one flips the
+    // toggle (localStorage[KEY] changed), so every window re-applies instantly
+    // instead of waiting for its next navigation. Fires only on a real change —
+    // no polling. (The originating window already re-applied in toggle().)
+    try { window.addEventListener('storage', (e) => { if (e && e.key === KEY) apply(); }); } catch (_) {}
     function toggle() {
       const lite = !(document.body && document.body.classList.contains('sd-lite'));
       const val = lite ? '1' : '0';
