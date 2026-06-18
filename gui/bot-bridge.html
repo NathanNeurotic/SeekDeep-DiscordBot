@@ -61,6 +61,12 @@
   .bb-queue-list li.active { border-color: rgba(45,212,255,0.45); }
   .bb-queue-list li b { color: var(--hull); }
   .bb-queue-list .sub { color: var(--hull-3, #8aa0c0); }
+  .bb-say-form { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .bb-say-targets { display: flex; gap: 10px; flex-wrap: wrap; }
+  .bb-say-targets select { flex: 1; min-width: 180px; background: rgba(6,18,31,0.7); color: var(--hull-2, #c7d6f0); border: 1px solid var(--stroke); border-radius: 6px; padding: 7px 9px; font-family: var(--font-mono); font-size: 12px; }
+  .bb-say-form textarea { width: 100%; box-sizing: border-box; resize: vertical; background: rgba(6,18,31,0.7); color: var(--hull, #e6f0ff); border: 1px solid var(--stroke); border-radius: 8px; padding: 10px 12px; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+  .bb-say-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .bb-say-actions .sub { font-family: var(--font-mono); font-size: 11px; color: var(--hull-3, #8aa0c0); }
 </style>
 </head>
 <body class="has-topnav">
@@ -150,6 +156,27 @@
           </div>
         </div>
         <div id="bb-queue"></div>
+      </div>
+
+      <div class="bb-card">
+        <div class="bb-bind-head">
+          <div>
+            <div class="bb-bind-title">Say</div>
+            <div class="sub">Post a message to a channel as the bot. Pick a server + channel, type, Send. Mentions are stripped server-side — no <code>@everyone</code> / <code>@here</code> / role pings.</div>
+          </div>
+          <button id="bb-say-load" class="bb-btn ghost" type="button">Load servers</button>
+        </div>
+        <div id="bb-say-form" class="bb-say-form bb-hidden">
+          <div class="bb-say-targets">
+            <select id="bb-say-guild" aria-label="Server"></select>
+            <select id="bb-say-channel" aria-label="Channel"></select>
+          </div>
+          <textarea id="bb-say-text" rows="3" maxlength="2000" placeholder="Message to send…"></textarea>
+          <div class="bb-say-actions">
+            <span id="bb-say-count" class="sub">0 / 2000</span>
+            <button id="bb-say-send" class="bb-btn" type="button">Send</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

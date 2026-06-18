@@ -505,6 +505,26 @@ async function seekdeepDispatchBotCommand(action, args) {
       }
       return { cleared: dropped.length, activeKept: !!st.active };
     }
+    case 'say': {
+      // Operator send-to-channel from the GUI (GUI-token + bridge gated). The
+      // guild + channel are resolved from the LIVE client cache (not trusted as
+      // raw input), and allowedMentions is HARD-locked to none so a GUI-typed
+      // message can never ping @everyone/@here/a role no matter its text.
+      const gid = String((args && args.guildId) || '').trim();
+      const chId = String((args && args.channelId) || '').trim();
+      const content = String((args && args.content) || '');
+      if (!/^\d{5,25}$/.test(gid)) throw new Error('invalid guildId');
+      if (!/^\d{5,25}$/.test(chId)) throw new Error('invalid channelId');
+      if (!content.trim()) throw new Error('message is empty');
+      if (content.length > 2000) throw new Error("message exceeds Discord's 2000-character limit");
+      const g = client.guilds?.cache?.get(gid);
+      if (!g) throw new Error('the bot is not in that guild');
+      const ch = g.channels?.cache?.get(chId);
+      if (!ch || !(ch.type === 0 || ch.type === 5)) throw new Error('text channel not found in that guild');
+      if (typeof ch.send !== 'function') throw new Error('that channel cannot receive messages');
+      const sent = await ch.send({ content: content, allowedMentions: { parse: [] } });
+      return { messageId: sent.id, channelId: ch.id, channelName: ch.name, guildId: g.id };
+    }
     default:
       throw new Error(`unknown action: ${action}`);
   }
