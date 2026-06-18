@@ -4383,7 +4383,10 @@ def register_gui_endpoints(
             fname = f"emoji-backup-{guild_id}-{_time.strftime('%Y%m%d-%H%M%S')}.zip"
             dest = dest_dir / fname
             try:
-                dest.write_bytes(data)
+                # Offload the blocking disk write — this is an async handler, so a
+                # synchronous write_bytes would stall the event loop (and every
+                # other in-flight request) for the duration of the write.
+                await asyncio.to_thread(dest.write_bytes, data)
             except OSError as exc:
                 raise HTTPException(500, f"could not write backup to disk: {exc}")
             return {"ok": True, "path": str(dest), "filename": fname,

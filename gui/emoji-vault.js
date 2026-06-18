@@ -138,7 +138,9 @@
       if (!r.ok || !body || body.ok === false) {
         throw new Error((body && (body.detail || body.error)) || ('HTTP ' + r.status));
       }
-      if (result) {
+      // Only paint the result if we're still on the guild we backed up — the
+      // save can take seconds and the user may have switched servers since.
+      if (result && currentGuild === guildId) {
         result.className = 'ev-msg info';
         result.textContent = '✓ Backed up ' + (body.count != null ? body.count : '?') + ' emoji(s) → ' + (body.path || '(saved)');
       }
@@ -158,11 +160,17 @@
     if (!guildId || !emojiId) return;
     // In-app modal, not raw confirm() — WebView2 in the Tauri app suppresses
     // window.confirm (returns false, no dialog), which silently blocked deletes.
-    if (!await (window.SeekDeepConfirm || window.confirm)({
-      title: 'Delete :' + name + ':?',
-      body: 'This permanently removes the emoji from this server and cannot be undone.',
-      confirmLabel: 'Delete', destructive: true,
-    })) return;
+    // The two APIs take different args: SeekDeepConfirm wants an options object,
+    // window.confirm wants a plain string (passing the object yields "[object
+    // Object]"), so branch rather than `(SeekDeepConfirm || confirm)(opts)`.
+    const ok = window.SeekDeepConfirm
+      ? await window.SeekDeepConfirm({
+          title: 'Delete :' + name + ':?',
+          body: 'This permanently removes the emoji from this server and cannot be undone.',
+          confirmLabel: 'Delete', destructive: true,
+        })
+      : window.confirm('Delete :' + name + ':?\nThis permanently removes the emoji from this server and cannot be undone.');
+    if (!ok) return;
     setError('');
     try {
       const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/emojis/' + encodeURIComponent(emojiId), {
