@@ -596,6 +596,9 @@ _CONFIG_PROTECTED_KEYS = frozenset({
 _MAX_WS_SUBSCRIBERS = 64
 
 
+_SEEKDEEP_ENV_LOCK = threading.Lock()
+
+
 def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
     """Merge `updates` into the on-disk .env file, preserving comments and order.
 
@@ -618,44 +621,48 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
         if "\n" in sv or "\r" in sv:
             raise HTTPException(400, f"env value for {k!r} contains newline; refusing to write")
 
-    with env_path.open("r", encoding="utf-8") as f:
-        lines = f.readlines()
+    # Serialize the whole read-merge-write under a process-wide lock so two
+    # threads (FastAPI runs sync handlers in a threadpool) can't lost-update each
+    # other on the .env. The main writers — POST /config and /config/reload — are
+    # async and thus already loop-serialized; this additionally covers the sync
+    # callers (boot token/cwd seed, /system/use-venv).
+    with _SEEKDEEP_ENV_LOCK:
+        with env_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
 
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in lines:
-        m = _ENV_LINE_RE.match(line)
-        if m and m.group(1) in updates:
-            key = m.group(1)
-            val = str(updates[key])
-            # Quote if it contains whitespace
-            if any(c in val for c in " #") and not (val.startswith('"') and val.endswith('"')):
-                val = f'"{val}"'
-            out.append(f"{key}={val}\n")
-            seen.add(key)
-        else:
-            out.append(line)
+        seen: set[str] = set()
+        out: list[str] = []
+        for line in lines:
+            m = _ENV_LINE_RE.match(line)
+            if m and m.group(1) in updates:
+                key = m.group(1)
+                val = str(updates[key])
+                # Quote if it contains whitespace
+                if any(c in val for c in " #") and not (val.startswith('"') and val.endswith('"')):
+                    val = f'"{val}"'
+                out.append(f"{key}={val}\n")
+                seen.add(key)
+            else:
+                out.append(line)
 
-    # Append new keys at the bottom
-    new_keys = [k for k in updates if k not in seen]
-    if new_keys:
-        if out and not out[-1].endswith("\n"):
-            out.append("\n")
-        out.append("\n# === Added by SeekDeep GUI ===\n")
-        for k in new_keys:
-            val = str(updates[k])
-            if any(c in val for c in " #"):
-                val = f'"{val}"'
-            out.append(f"{k}={val}\n")
+        # Append new keys at the bottom
+        new_keys = [k for k in updates if k not in seen]
+        if new_keys:
+            if out and not out[-1].endswith("\n"):
+                out.append("\n")
+            out.append("\n# === Added by SeekDeep GUI ===\n")
+            for k in new_keys:
+                val = str(updates[k])
+                if any(c in val for c in " #"):
+                    val = f'"{val}"'
+                out.append(f"{k}={val}\n")
 
-    # Atomic write. pid- AND thread-scope the temp name (mirrors _atomic_write_json)
-    # so two concurrent writers — even two threads in one process, since FastAPI
-    # runs sync handlers in a threadpool — can't both target the same temp file and
-    # interleave / collide on the rename.
-    tmp = env_path.with_suffix(env_path.suffix + ".tmp." + str(os.getpid()) + "." + str(threading.get_ident()))
-    with tmp.open("w", encoding="utf-8") as f:
-        f.writelines(out)
-    tmp.replace(env_path)
+        # pid- AND thread-scope the temp name so concurrent writers never collide
+        # on the rename; the lock above already serializes the full RMW.
+        tmp = env_path.with_suffix(env_path.suffix + ".tmp." + str(os.getpid()) + "." + str(threading.get_ident()))
+        with tmp.open("w", encoding="utf-8") as f:
+            f.writelines(out)
+        tmp.replace(env_path)
 
     return {
         "ok": True,
