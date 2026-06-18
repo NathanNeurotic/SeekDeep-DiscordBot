@@ -432,10 +432,23 @@ The user wants information density, not company.`,
       window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Delete failed', body: err.message || String(err), ttl: 6000 });
     }
   });
-  $('#vExport').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(active, null, 2)], { type: 'application/json' });
+  $('#vExport').addEventListener('click', async () => {
+    const json = JSON.stringify(active, null, 2);
+    const fname = active.name + '.template.json';
+    // <a download> is silently dropped by the Tauri WebView2 — save through the
+    // loopback server (writes to Downloads, returns path); anchor as browser fallback.
+    if (window.SeekDeepSaveFile) {
+      try {
+        const path = await window.SeekDeepSaveFile(fname, json);
+        window.SeekDeepNotify?.toast?.({ tone: 'good', title: '✓ Exported', body: '→ ' + path });
+      } catch (err) {
+        window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Export failed', body: String(err && err.message || err) });
+      }
+      return;
+    }
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = active.name + '.template.json';
+    const a = document.createElement('a'); a.href = url; a.download = fname;
     // Defer revoke — revoking synchronously right after click() cancels the
     // download in Firefox/Safari before the browser reads the blob.
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 100);

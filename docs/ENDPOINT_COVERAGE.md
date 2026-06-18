@@ -12,7 +12,7 @@
 > references it. `—` / `no` are drift signals, not necessarily bugs (some routes
 > are tray-only or future-facing); investigate before assuming coverage.
 
-## gui_endpoints.py (77 routes)
+## gui_endpoints.py (78 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -68,6 +68,7 @@
 | POST | `/reacts/rule` | token | app.page1.js | yes |
 | DELETE | `/reacts/rule/{rule_id}` | token | — | yes |
 | PATCH | `/reacts/rule/{rule_id}` | token | — | yes |
+| POST | `/save-file` | token | nav.js | yes |
 | GET | `/stats/counts` | open | stats.js | yes |
 | GET | `/stats/snapshot` | open | api.page.js | yes |
 | POST | `/system/bootstrap` | token | installer.page2.js | no |
@@ -128,7 +129,7 @@
 
 ## Summary
 
-- Total routes: **104**
+- Total routes: **105**
 - Open (no token): **28**
 - Not referenced by any test suite: **28**
 

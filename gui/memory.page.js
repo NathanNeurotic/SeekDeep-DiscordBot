@@ -432,12 +432,25 @@
     });
   });
 
-  $('#exportBtn').addEventListener('click', () => {
+  $('#exportBtn').addEventListener('click', async () => {
     if (!state.activeId) return;
     const payload = { user_id: state.activeId, display: $('#hUserName').textContent, facts: state.facts, presets: state.presets, exportedAt: new Date().toISOString() };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const json = JSON.stringify(payload, null, 2);
+    const fname = `seekdeep-memory-${state.activeId}.json`;
+    // <a download> is silently dropped by the Tauri WebView2 — save through the
+    // loopback server (writes to Downloads, returns path); anchor as browser fallback.
+    if (window.SeekDeepSaveFile) {
+      try {
+        const path = await window.SeekDeepSaveFile(fname, json);
+        window.SeekDeepNotify?.toast?.({ tone: 'good', title: '✓ Exported', body: '→ ' + path });
+      } catch (err) {
+        window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Export failed', body: String(err && err.message || err) });
+      }
+      return;
+    }
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `seekdeep-memory-${state.activeId}.json`;
+    const a = document.createElement('a'); a.href = url; a.download = fname;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   });
 

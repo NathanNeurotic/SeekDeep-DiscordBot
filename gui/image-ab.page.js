@@ -193,7 +193,7 @@
   // a browser download via a synthetic <a download> click. Works for both
   // blob: URLs (image/* response) and data: URLs (b64 in JSON response).
   // Filename: <pipe>-<seed>.png so multiple pipes don't overwrite each other.
-  $$('[data-act="save"]').forEach(b => b.addEventListener('click', e => {
+  $$('[data-act="save"]').forEach(b => b.addEventListener('click', async e => {
     const panel = e.target.closest('.pipe-panel');
     const img = panel?.querySelector('[data-out] img');
     if (!img || !img.src) {
@@ -202,9 +202,22 @@
     }
     const pipe = panel.dataset.pipe || 'image';
     const seed = panel.querySelector('[data-seed]')?.textContent || 'unknown';
+    const fname = `seekdeep-${pipe}-seed${seed}.png`;
+    // <a download> is silently dropped by the Tauri WebView2 — save through the
+    // loopback server (writes to Downloads, returns path); anchor only as a
+    // plain-browser fallback.
+    if (window.SeekDeepSaveFile) {
+      try {
+        const path = await window.SeekDeepSaveFile(fname, img.src);
+        window.SeekDeepNotify?.toast?.({ tone: 'good', title: '✓ Saved', body: '→ ' + path });
+      } catch (err) {
+        window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Save failed', body: String(err && err.message || err) });
+      }
+      return;
+    }
     const a = document.createElement('a');
     a.href = img.src;
-    a.download = `seekdeep-${pipe}-seed${seed}.png`;
+    a.download = fname;
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();

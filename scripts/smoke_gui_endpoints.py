@@ -552,6 +552,10 @@ def main() -> int:
     r = c.delete("/emoji-vault/123456789012345678/emojis/123456789012345678")
     check("DELETE /emoji-vault/{guild}/emojis/{id} without token -> 401", r.status_code == 401, f"got {r.status_code}")
 
+    # ---- Auth: generic save-file endpoint without token -> 401 -----------
+    r = c.post("/save-file", json={"filename": "x.txt", "content_b64": "eA=="})
+    check("POST /save-file without token -> 401", r.status_code == 401, f"got {r.status_code}")
+
     # ---- Auth: Force React config GUI endpoints without token -> 401 ------
     for ep in ("/force-react/guilds",
                "/force-react/123456789012345678/emojis",

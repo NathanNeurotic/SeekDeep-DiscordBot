@@ -317,6 +317,44 @@
     }, true); // capture phase: beat in-page handlers + the webview navigation
   })();
 
+  // ===== Save a file to the user's Downloads ==================================
+  // The Tauri WebView2 silently drops blob/anchor downloads, so GUI "download/
+  // export/save" buttons can't rely on <a download>.click(). This routes the
+  // bytes through the loopback server (POST /save-file), which runs on the same
+  // machine as the GUI and writes to ~/Downloads, returning the path. Accepts a
+  // Blob, a blob:/data: URL string, or a plain text/JSON string. Returns the
+  // saved absolute path (string); throws on failure. Used by image-studio,
+  // image-A/B, memory + prompt exports. (Loopback browser works the same way.)
+  async function blobToBase64(blob) {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    const CHUNK = 0x8000; // avoid arg-count limits in String.fromCharCode
+    for (let i = 0; i < buf.length; i += CHUNK) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+    return btoa(bin);
+  }
+  window.SeekDeepSaveFile = async function (filename, source) {
+    let b64;
+    if (source instanceof Blob) {
+      b64 = await blobToBase64(source);
+    } else if (typeof source === 'string' && source.startsWith('blob:')) {
+      b64 = await blobToBase64(await (await fetch(source)).blob());
+    } else if (typeof source === 'string' && source.startsWith('data:')) {
+      b64 = source.slice(source.indexOf(',') + 1);
+    } else if (typeof source === 'string') {
+      b64 = btoa(unescape(encodeURIComponent(source))); // UTF-8 safe
+    } else {
+      throw new Error('SeekDeepSaveFile: unsupported source');
+    }
+    const base = (typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : '';
+    const r = await fetch(base + '/save-file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ filename: filename, content_b64: b64 }),
+    });
+    let body = null; try { body = await r.json(); } catch (_) {}
+    if (!r.ok || !body || body.ok === false) throw new Error((body && (body.error || body.detail)) || ('HTTP ' + r.status));
+    return body.path;
+  };
+
   // ===== Global error logger ===================================================
   // Surface silent failures so empty `catch {}` patterns elsewhere don't hide
   // real bugs. Two hooks:
