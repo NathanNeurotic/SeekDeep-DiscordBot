@@ -160,6 +160,13 @@ fn open_external_url_allowed(raw: &str) -> Result<(), String> {
         "ollama.ai",
         "docker.com",
         "nvidia.com",
+        // Hosts the GUI itself links to (installer help + the About-page partner
+        // link) — without these, those <a> links route to open_external and get
+        // refused. All are first-party product/partner destinations.
+        "git-scm.com",
+        "nodejs.org",
+        "virustotal.com",
+        "demonbot.win",
     ];
     // Exact match, or a dot-boundary subdomain. strip_suffix avoids the
     // per-call heap allocation `format!(".{h}")` would do (per PR review).
@@ -196,6 +203,10 @@ mod open_external_tests {
         assert!(chk("https://cdn-lfs.huggingface.co/repos/x").is_ok()); // subdomain
         assert!(chk("https://discord.com/channels/1/2").is_ok());
         assert!(chk("https://developer.nvidia.com/cuda").is_ok());
+        assert!(chk("https://git-scm.com/").is_ok());                // installer help link
+        assert!(chk("https://nodejs.org/").is_ok());                 // installer help link
+        assert!(chk("https://www.virustotal.com/").is_ok());         // installer scan link (www. subdomain)
+        assert!(chk("https://www.demonbot.win/").is_ok());           // About-page partner link
     }
 
     #[test]
