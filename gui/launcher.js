@@ -699,18 +699,25 @@
     setTimeout(pumpStatus, 600);
   }
 
-  async function unloadAll() {
+  // kind: 'all' | 'chat' | 'vision' | 'image'. Per-role frees one role's VRAM
+  // without dropping the others (server /unload?kind=…); 'all' is the legacy
+  // free-everything path.
+  async function unloadKind(kind) {
+    const k = kind || 'all';
+    const q = k === 'all' ? '' : ('?kind=' + encodeURIComponent(k));
+    const label = k === 'all' ? 'Models unloaded · VRAM freed' : (k + ' model unloaded · VRAM freed');
     try {
-      const r = await fetch(BASE + '/unload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const r = await fetch(BASE + '/unload' + q, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const sdn = notify();
       if (sdn) {
-        if (r.ok) sdn.toast({ tone: 'good', title: 'Models unloaded · VRAM freed', ttl: 3500 });
-        else sdn.toast({ tone: 'bad', title: '/unload failed · HTTP ' + r.status, ttl: 5000 });
+        if (r.ok) sdn.toast({ tone: 'good', title: label, ttl: 3500 });
+        else sdn.toast({ tone: 'bad', title: '/unload ' + k + ' failed · HTTP ' + r.status, ttl: 5000 });
       }
     } catch (err) {
       const sdn = notify();
       if (sdn) sdn.toast({ tone: 'bad', title: 'Network error', body: String(err), ttl: 5000 });
     }
+    setTimeout(pumpStatus, 600);
   }
 
   function wireButtons() {
@@ -744,12 +751,10 @@
       }
     });
 
-    // GPU pane "/unload all"
-    document.querySelectorAll('button').forEach((btn) => {
-      const label = (btn.textContent || '').trim();
-      if (label === '/unload all') {
-        btn.addEventListener('click', unloadAll);
-      }
+    // GPU pane unload buttons — per-role (data-unload="chat|vision|image") +
+    // the legacy "/unload all" (data-unload="all").
+    document.querySelectorAll('button[data-unload]').forEach((btn) => {
+      btn.addEventListener('click', () => unloadKind(btn.dataset.unload));
     });
 
     // Prune cache button (Models pane)
@@ -823,7 +828,7 @@
           });
         });
       } else if (label === '⤓ flush model cache') {
-        btn.addEventListener('click', unloadAll);
+        btn.addEventListener('click', () => unloadKind('all'));
       } else if (label === '↯ force kill all') {
         btn.addEventListener('click', async () => {
           if (window.SeekDeepWindows && !(await window.SeekDeepWindows.confirmIfMultiple('Force kill bot + ai-server + searxng'))) return;
