@@ -648,9 +648,11 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
                 val = f'"{val}"'
             out.append(f"{k}={val}\n")
 
-    # Atomic write. pid-scope the temp name (mirrors _atomic_write_json) so two
-    # concurrent writers can't both target the same `.env.tmp` and interleave.
-    tmp = env_path.with_suffix(env_path.suffix + ".tmp." + str(os.getpid()))
+    # Atomic write. pid- AND thread-scope the temp name (mirrors _atomic_write_json)
+    # so two concurrent writers — even two threads in one process, since FastAPI
+    # runs sync handlers in a threadpool — can't both target the same temp file and
+    # interleave / collide on the rename.
+    tmp = env_path.with_suffix(env_path.suffix + ".tmp." + str(os.getpid()) + "." + str(threading.get_ident()))
     with tmp.open("w", encoding="utf-8") as f:
         f.writelines(out)
     tmp.replace(env_path)
@@ -6109,7 +6111,7 @@ def register_gui_endpoints(
 
     def _atomic_write_json(path: Path, data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp." + str(os.getpid()))
+        tmp = path.with_suffix(path.suffix + ".tmp." + str(os.getpid()) + "." + str(threading.get_ident()))
         # PERSIST-3: fsync the temp file before replace so a crash/power-loss can't
         # leave a torn file the readers would treat as empty (silent data loss).
         with open(tmp, "w", encoding="utf-8") as f:

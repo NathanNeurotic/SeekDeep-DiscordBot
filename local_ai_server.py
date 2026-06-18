@@ -1727,7 +1727,8 @@ def _seekdeep_read_capped(resp, max_bytes: int | None = None) -> str:
         buf.extend(chunk)
         if len(buf) > cap:
             raise ValueError(f"provider response exceeds {cap} bytes")
-    return bytes(buf).decode("utf-8", errors="replace")
+    # bytearray.decode() directly — avoids an extra full-buffer copy via bytes().
+    return buf.decode("utf-8", errors="replace")
 
 
 def _ollama_request(path: str, body: dict | None = None, method: str = "POST",

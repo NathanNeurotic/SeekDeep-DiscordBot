@@ -461,7 +461,7 @@
   function openCatalogModal(focusRole) {
     // focusRole: 'chat' | 'vision' | 'image' | 'ollama' | undefined (= chat default)
     if (!lastScan || !lastScan.catalog) {
-      (window.SeekDeepNotify?.toast || ((o) => alert(o.title)))({ tone: 'info', title: 'Catalog still loading', body: 'Try again in a moment.' });
+      (window.SeekDeepNotify?.toast || ((o) => alert(o.title + ': ' + o.body)))({ tone: 'info', title: 'Catalog still loading', body: 'Try again in a moment.' });
       return;
     }
     const cat = lastScan.catalog;
