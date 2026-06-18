@@ -558,6 +558,68 @@
     }
   }
 
+  // ----- Default web search (auto / off / always) --------------------------
+  // GET/POST /bot/web-search persist whether chat auto-augments with SearXNG to
+  // data/web-search-config.json (Python writes; the bot live-reads). REST, works
+  // even when the bot is offline. Under 'off' an explicit in-prompt search
+  // command still searches — only the automatic augmentation is suppressed.
+  const BB_WEB_BTNS = [['bb-web-auto', 'auto'], ['bb-web-off', 'off'], ['bb-web-always', 'always']];
+
+  function renderWebSearch(mode) {
+    const m = (mode === 'off' || mode === 'always') ? mode : 'auto';
+    BB_WEB_BTNS.forEach(function (pair) {
+      const b = $(pair[0]);
+      if (b) b.classList.toggle('sel', m === pair[1]);
+    });
+    const pill = $('bb-web-state');
+    const label = $('bb-web-state-text');
+    if (label) {
+      label.textContent = (m === 'off') ? 'Off · no auto-search'
+        : (m === 'always') ? 'Always · every chat'
+        : 'Auto · when needed';
+    }
+    if (pill) { pill.classList.remove('off'); pill.classList.add('on'); }
+  }
+
+  async function loadWebSearch() {
+    try {
+      const body = await getJSON('/bot/web-search');
+      renderWebSearch(body && body.mode);
+    } catch (err) {
+      const label = $('bb-web-state-text');
+      if (label) label.textContent = 'unavailable';
+      const pill = $('bb-web-state');
+      if (pill) { pill.classList.remove('on'); pill.classList.add('off'); }
+      setError('Could not read the web-search default: ' + explain(err));
+    }
+  }
+
+  async function setWebSearch(mode) {
+    const btns = BB_WEB_BTNS.map((pair) => $(pair[0]));
+    btns.forEach((b) => { if (b) b.disabled = true; });
+    setError('');
+    try {
+      const body = await postJSON('/bot/web-search', { mode: mode });
+      const applied = (body && body.mode) || mode;
+      renderWebSearch(applied);
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'good',
+          title: 'Default web search set',
+          body: (applied === 'off') ? 'Off — no automatic web search'
+            : (applied === 'always') ? 'Always — every chat augmented'
+            : 'Auto — searched when needed',
+          ttl: 3000,
+        });
+      }
+    } catch (err) {
+      setError('Could not set the web-search default: ' + explain(err));
+      loadWebSearch(); // re-sync the buttons to server truth on failure
+    } finally {
+      btns.forEach((b) => { if (b) b.disabled = false; });
+    }
+  }
+
   async function init() {
     // Feature gate — defensive: the nav hides the link, but the URL can be
     // opened directly. GET /config/features is open (no token).
@@ -601,9 +663,14 @@
     if (visDescribe) visDescribe.addEventListener('click', () => setVisionMode('describe'));
     const visOcr = $('bb-vision-ocr');
     if (visOcr) visOcr.addEventListener('click', () => setVisionMode('ocr'));
+    BB_WEB_BTNS.forEach(function (pair) {
+      const b = $(pair[0]);
+      if (b) b.addEventListener('click', () => setWebSearch(pair[1]));
+    });
 
     refreshStatus();
     loadVisionMode();
+    loadWebSearch();
   }
 
   if (document.readyState === 'loading') {
