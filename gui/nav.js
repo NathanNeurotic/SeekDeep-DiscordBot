@@ -1582,7 +1582,7 @@
             grp.classList.toggle('open', open);
             trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
           };
-          trigger.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!grp.classList.contains('open')); });
+          trigger.addEventListener('click', (e) => { e.preventDefault(); setOpen(!grp.classList.contains('open')); });
           trigger.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!grp.classList.contains('open')); }
             else if (e.key === 'Escape') setOpen(false);
@@ -1625,7 +1625,7 @@
         // Feature-gated items (Emoji Vault / Force React / Bot Bridge) → into the
         // MANAGE panel once the open GET /config/features endpoint answers.
         const gated = reg.gated();
-        if (gated.length && /^https?:/.test(location.protocol)) {
+        if (gated.length && /^(https?|tauri):/.test(location.protocol)) {
           const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
           fetch(base + '/config/features')
             .then((r) => (r.ok ? r.json() : null))
@@ -1704,7 +1704,7 @@
       // Append feature-gated items once the flags are known (additive,
       // non-blocking). Emoji Vault only appears when SEEKDEEP_FEATURE_EMOJI_VAULT
       // is on; the GET /config/features endpoint is open (no token).
-      if (GATED_ITEMS.length && /^https?:/.test(location.protocol)) {
+      if (GATED_ITEMS.length && /^(https?|tauri):/.test(location.protocol)) {
         const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
         fetch(base + '/config/features')
           .then((r) => (r.ok ? r.json() : null))

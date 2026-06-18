@@ -268,7 +268,7 @@
       const role = row.dataset.role || '';
       const model = row.dataset.model || row.querySelector('.name')?.firstChild?.textContent?.trim() || '';
       if (!role) {
-        (window.SeekDeepNotify?.toast || ((o) => alert(o.title + ': ' + o.body)))({ tone: 'warn', title: 'No role assigned', body: `${model} has no role; /model/warm needs one.` });
+        (window.SeekDeepNotify?.toast || ((o) => alert(o.body ? o.title + ': ' + o.body : o.title)))({ tone: 'warn', title: 'No role assigned', body: `${model} has no role; /model/warm needs one.` });
         return;
       }
       const stateEl = row.querySelector('[data-role-state]');

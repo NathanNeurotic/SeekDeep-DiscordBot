@@ -71,11 +71,18 @@
     { id: 'mobile',          title: 'Mobile',         path: 'mobile.html',          group: 'system', glyph: '▢', meta: 'mobile layout (mock)', live: false, navigable: false, gateFlag: null, palette: false, more: false },
   ];
 
+  // Freeze the registry + each page object so it stays a read-only single
+  // source of truth — no script can mutate gateFlag/live/group at runtime.
+  if (typeof Object.freeze === 'function') {
+    PAGES.forEach(Object.freeze);
+    Object.freeze(PAGES);
+  }
+
   // Convenience accessors. Filters preserve registry array order.
   window.SEEKDEEP_PAGES = PAGES;
   window.SeekDeepPages = {
     all: function () { return PAGES.slice(); },
-    byId: function (id) { return PAGES.filter(function (p) { return p.id === id; })[0] || null; },
+    byId: function (id) { return PAGES.find(function (p) { return p.id === id; }) || null; },
     palette: function () { return PAGES.filter(function (p) { return p.palette; }); },
     more: function () { return PAGES.filter(function (p) { return p.more; }); },
     gated: function () { return PAGES.filter(function (p) { return !!p.gateFlag; }); },
