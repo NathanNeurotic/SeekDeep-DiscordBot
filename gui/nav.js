@@ -1899,8 +1899,13 @@
       }
     }
     if (!endpoint) return null;
+    // Prefix the loopback base — in the Tauri app the webview origin is
+    // tauri.localhost, so a RELATIVE fetch(endpoint) never reaches the server
+    // (the token interceptor attaches the header but does NOT rewrite the URL).
+    // Without this, every right-click recovery action was a no-op in the app.
+    const base = (window.SeekDeepResolveBase ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865')));
     try {
-      const r = await fetch(endpoint, {
+      const r = await fetch(base + endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: body == null ? '{}' : (typeof body === 'string' ? body : JSON.stringify(body)),
@@ -1931,6 +1936,52 @@
       return null;
     }
   }
+
+  // ===== Shared operations registry ====================================
+  // One list of one-shot stack actions consumed by BOTH the right-click context
+  // menu (below) and the Operations page (operations.html / operations.page.js),
+  // so they can never drift. Each routes through sdContextAction (loopback-base
+  // prefix + requireConfirm + Tauri-command preference + toast) or
+  // killAllBotInstances. Exposed on window for the page script.
+  const SEEKDEEP_OPS = [
+    { id: 'restart-bot', group: 'Services', icon: '⟳', label: 'Restart bot',
+      desc: 'Bounce the Discord bot; the ready-watchdog re-restarts if connect fails.',
+      run: () => sdContextAction({ endpoint: '/launcher/bot/restart', label: 'Bot restart', successTitle: 'Bot restarting', successBody: 'Discord-ready watchdog will auto-restart again if connect fails' }) },
+    { id: 'restart-ai', group: 'Services', icon: '⟳', label: 'Restart AI server',
+      desc: 'Respawn the local AI server (~5–10s); the bot stays up.',
+      run: () => sdContextAction({ tauriCommand: 'restart_sidecar', endpoint: '/launcher/ai-server/restart', label: 'AI server restart', successTitle: 'AI server restarting', successBody: '~5–10s; the bot stays up' }) },
+    { id: 'restart-searxng', group: 'Services', icon: '⟳', label: 'Restart SearXNG',
+      desc: 'Restart the local SearXNG web-search container.',
+      run: () => sdContextAction({ endpoint: '/launcher/searxng/restart', label: 'SearXNG restart' }) },
+    { id: 'restart-stack', group: 'Services', icon: '▸', label: 'Restart whole stack',
+      desc: 'Relaunch SearXNG → AI server → bot, in order.',
+      run: () => sdContextAction({ endpoint: '/system/launch-all', label: 'Stack restart', successTitle: 'Stack relaunched', successBody: 'SearXNG → AI server → bot, in order' }) },
+    { id: 'flush-cache', group: 'Models & config', icon: '⤓', label: 'Flush model cache',
+      desc: 'Unload resident models; the next request reloads from disk cache.',
+      run: () => sdContextAction({ endpoint: '/unload', body: { force: true }, label: 'Flush', successTitle: 'Models unloaded', successBody: 'Next request reloads from disk cache' }) },
+    { id: 'reload-env', group: 'Models & config', icon: '⟳', label: 'Reload .env',
+      desc: 'Re-read .env into the running server (no restart).',
+      run: () => sdContextAction({ endpoint: '/config/reload', label: 'Reload .env', successTitle: 'Reloaded .env', successBody: 'In-memory config refreshed' }) },
+    { id: 'smoke', group: 'Diagnostics', icon: '⟳', label: 'Smoke test',
+      desc: 'Run the server smoke suite; see the banner / Logs viewer.',
+      run: () => sdContextAction({ endpoint: '/system/smoke', label: 'Smoke', successTitle: 'Smoke test ran', successBody: 'See banner / Logs viewer for details' }) },
+    { id: 'doctor', group: 'Diagnostics', icon: '⚕', label: 'Doctor (preflight)',
+      desc: 'Run environment diagnostics; open the wizard for findings.',
+      run: () => sdContextAction({ endpoint: '/system/doctor', label: 'Doctor', successTitle: 'Doctor finished', successBody: 'Open the wizard to see findings' }) },
+    { id: 'self-update', group: 'Diagnostics', icon: '⤴', label: 'Self-update from GitHub',
+      desc: 'Pull latest server + GUI from main and auto-restart the AI server.',
+      run: () => sdContextAction({ endpoint: '/system/self-update', label: 'Self-update', successTitle: 'Self-update started', successBody: 'AI server will auto-restart when files land', requireConfirm: { title: 'Self-update from GitHub?', body: 'Pulls latest local_ai_server.py + gui_endpoints.py + gui/ + scripts/ from main, writes them to the runtime dir, then auto-restarts the AI server.', confirmLabel: 'Update' } }) },
+    { id: 'kill-all-bot', group: 'Danger', icon: '↯', label: 'Kill all bot instances', danger: true,
+      desc: 'Force-kill every stray bot process scoped to this repo.',
+      run: () => killAllBotInstances() },
+    { id: 'force-kill', group: 'Danger', icon: '↯', label: 'Force kill entire stack', danger: true,
+      desc: 'Hard-kill bot + SearXNG (AI server kept — it serves this request).',
+      run: () => sdContextAction({ endpoint: '/system/kill-all', label: 'Force kill all', successTitle: 'Stack killed', successBody: "bot + searxng force-killed · AI server kept (it's us)", requireConfirm: { title: 'Force-kill bot + SearXNG?', body: 'Hard kill, no graceful shutdown. AI server is NOT killed (it would terminate this request). Use the tray icon to bounce the AI server.', confirmLabel: 'Force kill', destructive: true } }) },
+  ];
+  window.SeekDeepOps = {
+    actions: SEEKDEEP_OPS,
+    run: (id) => { const a = SEEKDEEP_OPS.find((o) => o.id === id); return a ? a.run() : null; },
+  };
 
   // ===== Custom contextmenu: SeekDeep-styled, no generic browser menu =====
   // Default Chromium right-click made the app feel like a webpage (Save As,
@@ -2027,79 +2078,21 @@
       // PAGE
       items.push({ label: '↻ Reload page', kbd: 'F5', action: () => location.reload() });
 
-      // SERVICES — every launcher action one click away from anywhere
-      items.push('-');
-      items.push({ label: '⟳ Restart bot', action: () => sdContextAction({
-        endpoint: '/launcher/bot/restart', label: 'Bot restart',
-        successTitle: 'Bot restarting',
-        successBody: 'Discord-ready watchdog will auto-restart again if connect fails',
-      })});
-      items.push({ label: '⟳ Restart AI server', action: () => sdContextAction({
-        tauriCommand: 'restart_sidecar',
-        endpoint: '/launcher/ai-server/restart',  // fallback when not in Tauri
-        label: 'AI server restart',
-        successTitle: 'AI server restarting',
-        successBody: '~5–10s; the bot stays up',
-      })});
-      items.push({ label: '⟳ Restart SearXNG', action: () => sdContextAction({
-        endpoint: '/launcher/searxng/restart', label: 'SearXNG restart',
-      })});
-      items.push({ label: '▸ Restart whole stack', action: () => sdContextAction({
-        endpoint: '/system/launch-all', label: 'Stack restart',
-        successTitle: 'Stack relaunched',
-        successBody: 'SearXNG → AI server → bot, in order',
-      })});
-
-      // MODELS + CONFIG
-      items.push('-');
-      items.push({ label: '⤓ Flush model cache', action: () => sdContextAction({
-        endpoint: '/unload', body: { force: true }, label: 'Flush',
-        successTitle: 'Models unloaded',
-        successBody: 'Next request reloads from disk cache',
-      })});
-      items.push({ label: '⟳ Reload .env', action: () => sdContextAction({
-        endpoint: '/config/reload', label: 'Reload .env',
-        successTitle: 'Reloaded .env',
-        successBody: 'In-memory config refreshed',
-      })});
-
-      // DIAGNOSTICS
-      items.push('-');
-      items.push({ label: '⟳ Smoke test', action: () => sdContextAction({
-        endpoint: '/system/smoke', label: 'Smoke',
-        successTitle: 'Smoke test ran',
-        successBody: 'See banner / Logs viewer for details',
-      })});
-      items.push({ label: '⚕ Doctor (preflight)', action: () => sdContextAction({
-        endpoint: '/system/doctor', label: 'Doctor',
-        successTitle: 'Doctor finished',
-        successBody: 'Open the wizard to see findings',
-      })});
-      items.push({ label: '⤴ Self-update from GitHub', action: () => sdContextAction({
-        endpoint: '/system/self-update', label: 'Self-update',
-        successTitle: 'Self-update started',
-        successBody: 'AI server will auto-restart when files land',
-        requireConfirm: {
-          title: 'Self-update from GitHub?',
-          body: 'Pulls latest local_ai_server.py + gui_endpoints.py + gui/ + scripts/ from main, writes them to the runtime dir, then auto-restarts the AI server.',
-          confirmLabel: 'Update',
-        },
-      })});
-
-      // DANGER — explicit confirm prompts on every entry here.
-      items.push('-');
-      items.push({ label: '↯ Kill all bot instances', danger: true, action: () => killAllBotInstances() });
-      items.push({ label: '↯ Force kill entire stack', danger: true, action: () => sdContextAction({
-        endpoint: '/system/kill-all', label: 'Force kill all',
-        successTitle: 'Stack killed',
-        successBody: 'bot + searxng force-killed · AI server kept (it\'s us)',
-        requireConfirm: {
-          title: 'Force-kill bot + SearXNG?',
-          body: 'Hard kill, no graceful shutdown. AI server is NOT killed (it would terminate this request). Use the tray icon to bounce the AI server.',
-          confirmLabel: 'Force kill',
-          destructive: true,
-        },
-      })});
+      // SERVICES / MODELS / DIAGNOSTICS / DANGER — sourced from the shared
+      // window.SeekDeepOps registry (the same list the Operations page renders),
+      // so the right-click menu and the page can never drift. A separator is
+      // inserted before each new group.
+      const ops = (window.SeekDeepOps && window.SeekDeepOps.actions) || [];
+      let lastOpGroup = null;
+      ops.forEach((op) => {
+        if (op.group !== lastOpGroup) items.push('-');
+        lastOpGroup = op.group;
+        items.push({
+          label: (op.icon ? op.icon + ' ' : '') + op.label,
+          danger: !!op.danger,
+          action: () => window.SeekDeepOps.run(op.id),
+        });
+      });
 
       build(items, e.clientX, e.clientY);
     }, true);
