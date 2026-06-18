@@ -308,13 +308,15 @@
         try { host = new URL(href, location.href).hostname.toLowerCase(); } catch (_) { return; }
         if (APP_HOSTS.has(host)) return; // same-origin / loopback — let the webview handle it
       }
+      // preventDefault stops the webview navigation; we deliberately DON'T
+      // stopPropagation, so other click handlers (menu-close, analytics, etc.)
+      // still see the click — suppressing navigation is all we need here.
       e.preventDefault();
-      e.stopPropagation();
       window.__TAURI__.core.invoke('open_external', { url: href }).catch(function (err) {
         console.warn('[SeekDeep] external link blocked/failed:', href, String(err));
-        try { window.SeekDeepNotify && window.SeekDeepNotify.toast && window.SeekDeepNotify.toast('Could not open link: ' + href, 'warn'); } catch (_) {}
+        try { window.SeekDeepNotify && window.SeekDeepNotify.toast && window.SeekDeepNotify.toast({ tone: 'warn', title: 'Could not open link', body: href }); } catch (_) {}
       });
-    }, true); // capture phase: beat in-page handlers + the webview navigation
+    }, true); // capture phase: see the click before the webview navigates
   })();
 
   // ===== Save a file to the user's Downloads ==================================
