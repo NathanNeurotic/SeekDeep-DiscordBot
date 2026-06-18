@@ -1368,8 +1368,12 @@
     // the OS pref). In-memory choice wins for the session; localStorage carries
     // a prior-session value when readable.
     let memoryStored = null;
+    // Read localStorage FIRST when it's available, so a toggle in another tab /
+    // window is reflected here (memoryStored is tab-scoped and would otherwise
+    // permanently shadow external updates → cross-tab desync). Fall back to the
+    // in-memory value only when storage throws (blocked / private window).
     const stored = () => {
-      try { return memoryStored !== null ? memoryStored : localStorage.getItem(KEY); }
+      try { return localStorage.getItem(KEY); }
       catch (_) { return memoryStored; }
     };
     // Effective lite state: an explicit user choice wins; otherwise follow the OS.
