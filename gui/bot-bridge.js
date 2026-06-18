@@ -296,6 +296,100 @@
     }
   }
 
+  // ----- Image queue (status + clear) ---------------------------------------
+  // queue.status returns {active, pendingCount, pending:[…], completed, failed};
+  // queue.clear drops the pending jobs (active keeps running) and returns
+  // {cleared, activeKept}.
+  function bbQueueJobLi(job, isActive) {
+    const li = document.createElement('li');
+    if (isActive) li.className = 'active';
+    const b = document.createElement('b');
+    b.textContent = (isActive ? '▶ ' : '') + (job.prompt || '(no prompt)');
+    const sub = document.createElement('span');
+    sub.className = 'sub';
+    const dims = (job.width && job.height) ? (job.width + '×' + job.height) : '';
+    sub.textContent = ' · ' + [job.source, dims, 'user ' + (job.userId || '?')].filter(Boolean).join(' · ');
+    li.appendChild(b);
+    li.appendChild(sub);
+    return li;
+  }
+
+  function renderQueue(result) {
+    const box = $('bb-queue');
+    if (!box) return;
+    box.textContent = '';
+    const r = result || {};
+    const pendingCount = r.pendingCount || 0;
+    const stat = document.createElement('div');
+    stat.className = 'bb-queue-stat';
+    const mk = (label, val, warn) => {
+      const s = document.createElement('div');
+      s.className = 's' + (warn ? ' warn' : '');
+      const b = document.createElement('b');
+      b.textContent = String(val);
+      s.appendChild(b);
+      s.appendChild(document.createTextNode(' ' + label));
+      return s;
+    };
+    stat.appendChild(mk('active', r.active ? 1 : 0));
+    stat.appendChild(mk('pending', pendingCount, pendingCount > 0));
+    stat.appendChild(mk('completed', r.completed || 0));
+    stat.appendChild(mk('failed', r.failed || 0));
+    box.appendChild(stat);
+
+    const list = document.createElement('ul');
+    list.className = 'bb-queue-list';
+    if (r.active) list.appendChild(bbQueueJobLi(r.active, true));
+    (r.pending || []).forEach((j) => list.appendChild(bbQueueJobLi(j, false)));
+    if (!r.active && !(r.pending || []).length) {
+      const li = document.createElement('li');
+      li.className = 'sub';
+      li.textContent = 'Queue is empty.';
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+  }
+
+  async function loadQueue() {
+    const btn = $('bb-queue-load');
+    if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+    setError('');
+    try {
+      const body = await command('queue.status');
+      renderQueue((body && body.result) || {});
+    } catch (err) {
+      setError('Could not load the image queue: ' + explain(err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+    }
+  }
+
+  async function clearQueue() {
+    const confirmFn = window.SeekDeepConfirm || window.confirm;
+    const ok = await confirmFn('Clear all pending image jobs?\nThe job currently generating keeps running; waiting jobs are dropped and their requesters get a cancelled notice.');
+    if (!ok) return;
+    const btn = $('bb-queue-clear');
+    if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+    setError('');
+    try {
+      const body = await command('queue.clear');
+      const res = (body && body.result) || {};
+      if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
+        window.SeekDeepNotify.toast({
+          tone: 'good',
+          title: 'Image queue cleared',
+          body: (res.cleared || 0) + ' pending job(s) dropped' + (res.activeKept ? ' · active job kept running' : ''),
+          ttl: 3500,
+        });
+      }
+      loadQueue();
+    } catch (err) {
+      setError('Could not clear the image queue: ' + explain(err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Clear pending'; }
+    }
+  }
+
   async function init() {
     // Feature gate — defensive: the nav hides the link, but the URL can be
     // opened directly. GET /config/features is open (no token).
@@ -323,6 +417,10 @@
     if (guilds) guilds.addEventListener('click', () => runAction('bb-guilds', 'guilds', renderGuilds));
     const bindLoad = $('bb-bind-load');
     if (bindLoad) bindLoad.addEventListener('click', loadBindings);
+    const queueLoad = $('bb-queue-load');
+    if (queueLoad) queueLoad.addEventListener('click', loadQueue);
+    const queueClear = $('bb-queue-clear');
+    if (queueClear) queueClear.addEventListener('click', clearQueue);
 
     refreshStatus();
   }

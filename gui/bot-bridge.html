@@ -52,6 +52,15 @@
   .bb-bind-field .lbl { color: var(--cyan-1); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
   .bb-bind-field select { background: rgba(6,18,31,0.7); color: var(--hull-2, #c7d6f0); border: 1px solid var(--stroke); border-radius: 6px; padding: 5px 8px; font-family: var(--font-mono); font-size: 12px; max-width: 240px; }
   .bb-bind-field select:disabled { opacity: 0.5; cursor: progress; }
+  .bb-queue-stat { display: flex; gap: 18px; flex-wrap: wrap; margin: 4px 0 2px; }
+  .bb-queue-stat .s { font-family: var(--font-mono); font-size: 12px; color: var(--hull-2, #c7d6f0); }
+  .bb-queue-stat .s b { color: var(--hull); font-size: 15px; }
+  .bb-queue-stat .s.warn b { color: var(--warn, #ffb84d); }
+  .bb-queue-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .bb-queue-list li { font-family: var(--font-mono); font-size: 12px; color: var(--hull-2, #c7d6f0); border: 1px solid var(--stroke); border-radius: 8px; padding: 8px 12px; background: rgba(6,18,31,0.55); }
+  .bb-queue-list li.active { border-color: rgba(45,212,255,0.45); }
+  .bb-queue-list li b { color: var(--hull); }
+  .bb-queue-list .sub { color: var(--hull-3, #8aa0c0); }
 </style>
 </head>
 <body class="has-topnav">
@@ -89,8 +98,9 @@
     </div>
     <p class="bb-lead">
       Send whitelisted commands straight to the running Discord bot over the local bridge — no
-      Discord needed. Read-only: <code>ping</code>, <code>status</code>, and <code>guilds</code>
-      only. Needs <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> and the bot connected.
+      Discord needed: <code>ping</code>, <code>status</code>, <code>guilds</code>, per-server
+      Discord bindings, and image-queue status/clear. Needs
+      <code>SEEKDEEP_FEATURE_BOT_BRIDGE=on</code> and the bot connected.
     </p>
 
     <div id="bb-disabled" class="bb-msg info bb-hidden">
@@ -126,6 +136,20 @@
           <button id="bb-bind-load" class="bb-btn ghost" type="button">Load bindings</button>
         </div>
         <div id="bb-bindings"></div>
+      </div>
+
+      <div class="bb-card">
+        <div class="bb-bind-head">
+          <div>
+            <div class="bb-bind-title">Image queue</div>
+            <div class="sub">Live image-generation queue depth. <code>Clear pending</code> drops the waiting jobs (their Discord callers get a cancelled notice); the job that's actively generating keeps running.</div>
+          </div>
+          <div class="bb-row">
+            <button id="bb-queue-load" class="bb-btn ghost" type="button">Refresh</button>
+            <button id="bb-queue-clear" class="bb-btn ghost" type="button">Clear pending</button>
+          </div>
+        </div>
+        <div id="bb-queue"></div>
       </div>
     </div>
   </div>
