@@ -1661,11 +1661,24 @@ const SEEKDEEP_BASE = (function() {
 
     genBtn.addEventListener('click', () => generate(false));
     regenBtn.addEventListener('click', () => generate(true));
-    refs.download?.addEventListener('click', () => {
+    refs.download?.addEventListener('click', async () => {
       if (!lastImageUrl) return;
+      const fname = `seekdeep-${activeMode()}-${lastSeed || 'x'}.png`;
+      // <a download> is silently dropped by the Tauri WebView2 — save through the
+      // loopback server (writes to Downloads, returns the path), fall back to the
+      // anchor only in a plain browser where it works.
+      if (window.SeekDeepSaveFile) {
+        try {
+          const path = await window.SeekDeepSaveFile(fname, lastImageUrl);
+          window.SeekDeepNotify?.toast?.({ tone: 'good', title: '✓ Saved', body: '→ ' + path });
+        } catch (err) {
+          window.SeekDeepNotify?.toast?.({ tone: 'bad', title: 'Save failed', body: String(err && err.message || err) });
+        }
+        return;
+      }
       const a = document.createElement('a');
       a.href = lastImageUrl;
-      a.download = `seekdeep-${activeMode()}-${lastSeed || 'x'}.png`;
+      a.download = fname;
       a.click();
     });
 

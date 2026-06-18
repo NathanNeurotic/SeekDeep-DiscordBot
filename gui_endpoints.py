@@ -4394,6 +4394,44 @@ def register_gui_endpoints(
             headers={"Content-Disposition": f'attachment; filename="emoji-backup-{guild_id}.zip"'},
         )
 
+    # ----- generic "save a GUI-built file to Downloads" -----------------------
+    # The Tauri WebView2 silently drops blob/anchor downloads, so GUI "download/
+    # export/save" buttons (image studio, image A/B, memory + prompt JSON export)
+    # have to write through the loopback server, which runs on the SAME machine as
+    # the GUI. Token-gated; basename-only filename (no traversal); size-capped;
+    # confined to ~/Downloads (fallback ~). Mirrors the emoji backup save=1 pattern.
+    class SaveFileRequest(BaseModel):
+        filename: str = Field(..., description="desired file name (basename only)")
+        content_b64: str = Field(..., description="base64-encoded file bytes")
+
+    @app.post("/save-file", dependencies=[Depends(_require_gui_token)])
+    def save_file(req: SaveFileRequest):
+        import base64 as _b64, re as _re, time as _time
+        from pathlib import Path as _Path
+        safe = _re.sub(r"[^A-Za-z0-9._-]", "_", _Path(req.filename or "").name)[:120]
+        if not safe or safe in (".", ".."):
+            raise HTTPException(400, "invalid filename")
+        try:
+            data = _b64.b64decode(req.content_b64 or "", validate=False)
+        except Exception:
+            raise HTTPException(400, "invalid content_b64")
+        if not data:
+            raise HTTPException(400, "empty content")
+        if len(data) > 64 * 1024 * 1024:
+            raise HTTPException(413, "file too large (max 64 MB)")
+        home = _Path.home()
+        dest_dir = home / "Downloads"
+        if not dest_dir.is_dir():
+            dest_dir = home
+        p = _Path(safe)
+        dest = dest_dir / f"{p.stem}-{_time.strftime('%Y%m%d-%H%M%S')}{p.suffix}"
+        try:
+            dest.write_bytes(data)
+        except OSError as exc:
+            raise HTTPException(500, f"could not write file: {exc}")
+        _seekdeep_audit("save-file", name=dest.name, bytes=len(data))
+        return {"ok": True, "path": str(dest), "filename": dest.name, "bytes": len(data)}
+
     # ----- Emoji Vault writes (import + delete) · same gate as read-only -----
     # Mutating parity for the emoji vault: bulk-import a backup .zip as new guild
     # emojis, and delete individual emojis. Both need the GUI token AND the feature
