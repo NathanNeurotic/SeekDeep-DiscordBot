@@ -450,12 +450,19 @@ async function seekdeepDispatchBotCommand(action, args) {
         if (!ch || !(ch.type === 0 || ch.type === 5)) throw new Error('text channel not found in that guild');
       }
       const field = kind === 'digest' ? 'digestChannelId' : 'autoTranslateChannelId';
+      // Key the write with the canonical id from the Discord cache object (g.id),
+      // NOT the raw user-supplied gid. g.id is sourced from the client cache, not
+      // request input, so the property name can't be attacker-controlled — this
+      // clears CodeQL's remote-property-injection / prototype-pollution on a
+      // user-keyed write (the ^\d{5,25}$ check above already rejects __proto__/
+      // constructor, but g.id removes the tainted-key flow entirely).
+      const safeGid = g.id;
       seekdeepMutatePersonaOverrides((d) => {
         if (!d.guilds) d.guilds = {};
-        if (!d.guilds[gid]) d.guilds[gid] = {};
-        if (clear) delete d.guilds[gid][field]; else d.guilds[gid][field] = rawCh;
+        if (!d.guilds[safeGid]) d.guilds[safeGid] = {};
+        if (clear) delete d.guilds[safeGid][field]; else d.guilds[safeGid][field] = rawCh;
       });
-      return { guildId: gid, kind, channelId: clear ? '' : rawCh, cleared: clear };
+      return { guildId: safeGid, kind, channelId: clear ? '' : rawCh, cleared: clear };
     }
     default:
       throw new Error(`unknown action: ${action}`);
