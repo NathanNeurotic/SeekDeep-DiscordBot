@@ -2978,6 +2978,13 @@ def register_gui_endpoints(
         base_url = f"https://raw.githubusercontent.com/{REPO}/{ref}/"
         single_files = [
             "local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
+            # release_signing.py is imported by the self-update SIGNATURE GATE
+            # below (`import release_signing`). It MUST ship or self-update 500s
+            # with ModuleNotFoundError before it can ever commit — which is
+            # exactly how this install's self-update was silently dead (the
+            # module landed in the repo but was never added here, so it never
+            # reached the app dir). Keep it in this list.
+            "release_signing.py",
             "package.json", "requirements-local.txt", "requirements-ml.txt",
         ]
         event_bus.publish_sync({"type": "self-update.started",
