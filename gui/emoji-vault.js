@@ -124,31 +124,31 @@
     if (!guildId) return;
     const backup = $('ev-backup');
     const label = backup ? backup.textContent : '';
-    if (backup) { backup.disabled = true; backup.textContent = 'Building…'; }
+    if (backup) { backup.disabled = true; backup.textContent = 'Saving…'; }
     setError('');
+    const result = $('ev-importresult');
+    if (result) { result.className = 'ev-msg ev-hidden'; result.textContent = ''; }
     try {
-      const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/backup.zip');
-      if (!r.ok) {
-        let detail = 'HTTP ' + r.status;
-        try { const j = await r.json(); detail = j.detail || j.error || detail; } catch (_) {}
-        throw new Error(detail);
+      // save=1 -> the server writes the .zip to the user's Downloads folder and
+      // returns its path. A server-side save is the reliable download here: the
+      // Tauri WebView2 silently drops blob/anchor downloads, and the server runs
+      // on the same machine as the GUI (loopback), so the file lands locally.
+      const r = await fetch(BASE + '/emoji-vault/' + encodeURIComponent(guildId) + '/backup.zip?save=1', { headers: { 'Accept': 'application/json' } });
+      let body = null; try { body = await r.json(); } catch (_) {}
+      if (!r.ok || !body || body.ok === false) {
+        throw new Error((body && (body.detail || body.error)) || ('HTTP ' + r.status));
       }
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'emoji-backup-' + guildId + '.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      if (result) {
+        result.className = 'ev-msg info';
+        result.textContent = '✓ Backed up ' + (body.count != null ? body.count : '?') + ' emoji(s) → ' + (body.path || '(saved)');
+      }
     } catch (err) {
       setError('Backup failed: ' + err.message);
     } finally {
       // Only restore THIS guild's button; if the user switched servers mid-build,
       // loadEmojis() already set the correct disabled state for the new one.
       if (backup) {
-        backup.textContent = label || 'Download backup (.zip)';
+        backup.textContent = label || 'Save backup (.zip)';
         if (currentGuild === guildId) backup.disabled = false;
       }
     }

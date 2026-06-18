@@ -4357,7 +4357,7 @@ def register_gui_endpoints(
         return buf.getvalue()
 
     @app.get("/emoji-vault/{guild_id}/backup.zip", dependencies=[Depends(_require_gui_token)])
-    async def emoji_vault_backup(guild_id: str):
+    async def emoji_vault_backup(guild_id: str, save: int = 0):
         token = _emoji_vault_token()
         if not _EMOJI_GUILD_ID_RE.match(guild_id or ""):
             raise HTTPException(400, "invalid guild id")
@@ -4366,6 +4366,28 @@ def register_gui_endpoints(
             raise HTTPException(404, "This server has no custom emojis to back up.")
         data = await asyncio.to_thread(_build_emoji_zip_sync, items)
         _seekdeep_audit("emoji-vault-backup", guild=guild_id, count=len(items))
+        if save:
+            # save=1: write the zip server-side to the user's Downloads folder and
+            # return its path, instead of streaming it for a browser download. The
+            # GUI runs on the SAME machine as this loopback server (Tauri app AND
+            # the loopback browser), so a server-side write is the reliable
+            # cross-surface "download": the Tauri WebView2 silently drops blob/anchor
+            # downloads (no download handler in the Rust shell) and a Rust fix can't
+            # ship via self-update. Timestamped so repeat backups don't overwrite.
+            from pathlib import Path as _Path
+            import time as _time
+            home = _Path.home()
+            dest_dir = home / "Downloads"
+            if not dest_dir.is_dir():
+                dest_dir = home
+            fname = f"emoji-backup-{guild_id}-{_time.strftime('%Y%m%d-%H%M%S')}.zip"
+            dest = dest_dir / fname
+            try:
+                dest.write_bytes(data)
+            except OSError as exc:
+                raise HTTPException(500, f"could not write backup to disk: {exc}")
+            return {"ok": True, "path": str(dest), "filename": fname,
+                    "bytes": len(data), "count": len(items)}
         return StreamingResponse(
             io.BytesIO(data),
             media_type="application/zip",
