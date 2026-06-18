@@ -2332,9 +2332,10 @@ last_loaded_at = 0.0
 
 def unload_chat_model() -> None:
     """Unload only the chat model, preserving any vision/image state."""
-    global chat_model, chat_tokenizer, loaded_chat_role, loaded_chat_model_id
+    global chat_model, chat_tokenizer, loaded_chat_role, loaded_chat_model_id, loaded_task
     if chat_model is None and chat_tokenizer is None and loaded_chat_role is None:
         return
+    role, model_id = loaded_chat_role, loaded_chat_model_id
     if loaded_chat_role or loaded_chat_model_id:
         print(
             f"[SeekDeep Local AI] unloading chat role={loaded_chat_role} model={loaded_chat_model_id}",
@@ -2345,8 +2346,53 @@ def unload_chat_model() -> None:
     chat_tokenizer = None
     loaded_chat_role = None
     loaded_chat_model_id = None
+    if loaded_task == "chat":
+        loaded_task = None
     cleanup_cuda()
     _log_vram("after chat unload")
+    _emit_event("model.evicted", {"task": "chat", "role": role or "chat",
+                                  "model": model_id or "", "reason": "explicit-unload"})
+
+
+def unload_vision_model() -> None:
+    """Unload only the vision model, preserving any chat/image state."""
+    global vision_model, vision_processor, vision_tokenizer, loaded_task
+    if vision_model is None and vision_processor is None and vision_tokenizer is None:
+        return
+    print("[SeekDeep Local AI] unloading vision model", flush=True)
+    _log_vram("before vision unload")
+    vision_model = None
+    vision_processor = None
+    vision_tokenizer = None
+    if loaded_task == "vision":
+        loaded_task = None
+    cleanup_cuda()
+    _log_vram("after vision unload")
+    _emit_event("model.evicted", {"task": "vision", "role": "vision",
+                                  "model": VISION_MODEL_ID or "", "reason": "explicit-unload"})
+
+
+def unload_image_model() -> None:
+    """Unload only the image-generation pipeline plus the pix2pix / clipseg
+    image-editing auxiliaries, preserving any chat/vision state."""
+    global image_pipe, instruct_pix2pix_pipe, clipseg_model, clipseg_processor, loaded_task
+    if (image_pipe is None and instruct_pix2pix_pipe is None
+            and clipseg_model is None and clipseg_processor is None):
+        return
+    print("[SeekDeep Local AI] unloading image pipeline", flush=True)
+    _log_vram("before image unload")
+    had_pipe = image_pipe is not None
+    image_pipe = None
+    instruct_pix2pix_pipe = None
+    clipseg_model = None
+    clipseg_processor = None
+    if loaded_task == "image":
+        loaded_task = None
+    cleanup_cuda()
+    _log_vram("after image unload")
+    if had_pipe:
+        _emit_event("model.evicted", {"task": "image", "role": "image",
+                                      "model": IMAGE_MODEL_ID or "", "reason": "explicit-unload"})
 
 
 def unload_all(force: bool = False) -> None:
@@ -3312,10 +3358,20 @@ def vram_budget_endpoint():
 
 
 @app.post("/unload", dependencies=[Depends(require_gui_token)])
-def unload_endpoint():
-    # Explicit user request ignores keep-resident pins.
+def unload_endpoint(kind: str = "all"):
+    # Explicit user request ignores keep-resident pins. `kind` selects what to
+    # evict: all (default, back-compat with the GUI "Unload all" button) |
+    # chat | vision | image — so the Models pane can free one role's VRAM
+    # without dropping the others (parity with per-role keep-resident pins).
+    k = (kind or "all").strip().lower()
+    per_role = {"chat": unload_chat_model, "vision": unload_vision_model, "image": unload_image_model}
+    if k in per_role:
+        per_role[k]()
+        return {"ok": True, "status": "unloaded", "kind": k}
+    if k != "all":
+        raise HTTPException(400, f"unknown unload kind {kind!r} (use all|chat|vision|image)")
     unload_all(force=True)
-    return {"ok": True, "status": "unloaded"}
+    return {"ok": True, "status": "unloaded", "kind": "all"}
 
 
 def warm_chat_role(role: str = "default_chat") -> dict:
