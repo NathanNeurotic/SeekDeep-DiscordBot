@@ -410,6 +410,8 @@ def main() -> int:
     try:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+        from unittest import mock
+        import gui_endpoints as _ge
         from gui_endpoints import (
             register_gui_endpoints,
             _TOKEN_HEADER,
@@ -545,17 +547,24 @@ def main() -> int:
     check("POST /launcher/bot/kill-all without token -> 401",
           r.status_code == 401, f"got {r.status_code}")
     if token:
-        r = c.post("/launcher/bot/kill-all", headers={_TOKEN_HEADER: token})
+        # Hermetic + non-destructive: the live route does REAL psutil kills of
+        # bot processes scoped to the repo, so running smoke must not kill the
+        # operator's bot, and the result must not depend on live process state.
+        # Patch _find_bot_processes -> [] so it exercises auth + response shape
+        # with found=0 (deterministic ok=True), killing nothing. (Live process
+        # cleanup belongs in an integration job that owns the processes, not smoke.)
+        with mock.patch.object(_ge, "_find_bot_processes", return_value=[]):
+            r = c.post("/launcher/bot/kill-all", headers={_TOKEN_HEADER: token})
         check("POST /launcher/bot/kill-all with token -> 200",
               r.status_code == 200, f"got {r.status_code}")
         body = r.json() if r.status_code == 200 else {}
-        check("  ...returns {ok, service:'bot', scope, found, killed:[], failed:[]}",
+        check("  ...returns {ok:true, service:'bot', found:0, killed:[], failed:[]}",
               body.get("ok") is True
               and body.get("service") == "bot"
               and isinstance(body.get("scope"), str)
-              and isinstance(body.get("found"), int)
-              and isinstance(body.get("killed"), list)
-              and isinstance(body.get("failed"), list),
+              and body.get("found") == 0
+              and body.get("killed") == []
+              and body.get("failed") == [],
               f"body keys={sorted(body.keys()) if isinstance(body, dict) else type(body)}")
 
     # ---- Auth: Emoji Vault (read-only GUI) GETs without token -> 401 -------
