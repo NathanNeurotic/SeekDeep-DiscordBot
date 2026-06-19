@@ -1543,7 +1543,13 @@ pub fn start_livez_watchdog(app: AppHandle) {
             emit_status(&app, "SERVER_WEDGED_KILLED");
             if let Ok(mut guard) = state.child.lock() {
                 if let Some(child) = guard.as_mut() {
-                    let _ = child.kill();
+                    // Log a kill failure: usually benign (the process exited on
+                    // its own in the gap since the alive-check above), but a real
+                    // failure (e.g. permissions) leaves the server wedged, so it
+                    // must be visible rather than silently swallowed.
+                    if let Err(e) = child.kill() {
+                        eprintln!("[SeekDeep] livez watchdog: child.kill() failed (may have already exited): {}", e);
+                    }
                 }
             }
             return; // retire; the respawn starts a fresh watchdog pair
