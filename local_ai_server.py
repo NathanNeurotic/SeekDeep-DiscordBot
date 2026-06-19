@@ -2870,9 +2870,14 @@ async def health():
     # socket would block the event loop and make /health time out while the
     # process is still alive (the "alive but not serving" wedge). Mirrors /gpu.
     import asyncio as _asyncio_h
-    _ollama_up = await _asyncio_h.to_thread(ollama_available)
+    # Run the two independent probes CONCURRENTLY so /health latency is the max of
+    # the two, not the sum — a slow nvidia-smi and a slow Ollama probe don't stack.
+    _ollama_up, _gpu = await _asyncio_h.gather(
+        _asyncio_h.to_thread(ollama_available),
+        _asyncio_h.to_thread(gpu_stats),
+    )
+    # installed_tags depends on _ollama_up, so it follows (still off the loop).
     _ollama_tags = (await _asyncio_h.to_thread(ollama_list_tags)) if _ollama_up else []
-    _gpu = await _asyncio_h.to_thread(gpu_stats)
     _chat_backends = {role: _resolve_chat_backend(role) for role in chat_role_map().keys()}
     # Surface remote-chat endpoints WITHOUT leaking API keys. The GUI uses
     # this to badge external roles with a "prompts leave the box" warning.
@@ -6885,9 +6890,15 @@ if __name__ == "__main__":
     # timeout_keep_alive: drop idle keep-alive sockets faster so a flood of
     # half-open connections can't pile up. limit_concurrency: a generous backstop
     # so a saturated sync threadpool sheds (503) instead of queueing unboundedly
-    # and looking "alive but not serving". Both env-tunable.
+    # and looking "alive but not serving". Both env-tunable; a malformed/empty
+    # value falls back to the default rather than crashing the server at startup.
+    def _env_int(key: str, default: int) -> int:
+        try:
+            return int((os.environ.get(key) or "").strip() or default)
+        except (TypeError, ValueError):
+            return default
     uvicorn.run(
         app, host="127.0.0.1", port=7865,
-        timeout_keep_alive=int(os.environ.get("SEEKDEEP_UVICORN_KEEPALIVE_S", "30")),
-        limit_concurrency=int(os.environ.get("SEEKDEEP_UVICORN_MAX_CONCURRENCY", "128")),
+        timeout_keep_alive=_env_int("SEEKDEEP_UVICORN_KEEPALIVE_S", 30),
+        limit_concurrency=_env_int("SEEKDEEP_UVICORN_MAX_CONCURRENCY", 128),
     )
