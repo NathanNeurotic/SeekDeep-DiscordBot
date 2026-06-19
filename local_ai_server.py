@@ -6510,12 +6510,31 @@ def chart(req: ChartRequest):
     if len(buckets) > 400:
         return JSONResponse(status_code=400, content={"error": "too many day_buckets (max 400)"})
 
+    # Validate defensively: a malformed token-holder payload (a non-date key, or
+    # a non-object row) must not escape as an unhandled 500. Drop invalid entries
+    # and 400 if nothing usable remains; numeric fields are coerced + floored.
+    def _bucket_num(row, key):
+        try:
+            return max(0, int(row.get(key, 0) or 0))
+        except (TypeError, ValueError, AttributeError):
+            return 0
+    valid_dates = []
+    for k in buckets:
+        if not isinstance(buckets[k], dict):
+            continue
+        try:
+            datetime.strptime(str(k), "%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue
+        valid_dates.append(str(k))
+    if not valid_dates:
+        return JSONResponse(status_code=400, content={"error": "day_buckets needs 'YYYY-MM-DD' keys with object rows"})
     # Sort dates and fill gaps with zeros so the chart is contiguous.
-    sorted_dates = sorted(buckets.keys())
+    sorted_dates = sorted(valid_dates)
     date_objs = [datetime.strptime(d, "%Y-%m-%d") for d in sorted_dates]
-    images = [buckets[d].get("images", 0) for d in sorted_dates]
-    chats  = [buckets[d].get("chats", 0) for d in sorted_dates]
-    vision = [buckets[d].get("vision", 0) for d in sorted_dates]
+    images = [_bucket_num(buckets[d], "images") for d in sorted_dates]
+    chats  = [_bucket_num(buckets[d], "chats")  for d in sorted_dates]
+    vision = [_bucket_num(buckets[d], "vision") for d in sorted_dates]
 
     fig, ax = plt.subplots(figsize=(10, 4), dpi=120)
     fig.patch.set_facecolor("#2b2d31")  # Discord dark theme background
