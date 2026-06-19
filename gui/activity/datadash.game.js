@@ -118,6 +118,12 @@
         // replay history, firewalls, bots, bombs, and bullets. Horizontal coords
         // (x / vx / column width) are unaffected by a height change.
         const rs = H / game._lastH;
+        // Rescale the listed numeric props on an entity by the height ratio,
+        // skipping absent/non-number fields so a partial entity can't get NaN'd.
+        const rescaleProps = (e, props) => {
+          if (!e) return;
+          for (const p of props) if (typeof e[p] === 'number') e[p] *= rs;
+        };
         game.py *= rs;
         game.vy *= rs;
         const rescaleCol = (c) => {
@@ -127,8 +133,8 @@
         };
         if (game.cols) for (const c of game.cols) rescaleCol(c);
         if (game.colHistory) for (const c of game.colHistory) rescaleCol(c);   // reverse-mystery replays these later
-        if (game.bars) for (const bar of game.bars) { bar.gapY *= rs; bar.gapH *= rs; }   // firewall gap must track the channel
-        const rescaleY = (e) => { if (!e) return; if (typeof e.y === 'number') e.y *= rs; if (typeof e.vy === 'number') e.vy *= rs; };
+        if (game.bars) for (const bar of game.bars) rescaleProps(bar, ['gapY', 'gapH']);   // firewall gap must track the channel
+        const rescaleY = (e) => rescaleProps(e, ['y', 'vy']);
         if (game.bots) for (const b of game.bots) rescaleY(b);
         if (game.bombs) for (const b of game.bombs) rescaleY(b);
         if (game.bullets) for (const b of game.bullets) rescaleY(b);
@@ -137,12 +143,7 @@
         // Boss daemons store absolute vertical state too (y / homeY / ty home+target,
         // orbR orbit radius = H*frac, crashVy) — rescale so a resize mid-boss-fight
         // doesn't warp them or desync the body hitbox once invuln expires.
-        const rescaleBoss = (b) => {
-          if (!b) return;
-          for (const k of ['y', 'homeY', 'ty', 'orbR', 'crashVy']) {
-            if (typeof b[k] === 'number') b[k] *= rs;
-          }
-        };
+        const rescaleBoss = (b) => rescaleProps(b, ['y', 'homeY', 'ty', 'orbR', 'crashVy']);
         rescaleBoss(game.boss);
         rescaleBoss(game.boss2);
         // i-frame net for the instant after a resize, as a backstop for anything
