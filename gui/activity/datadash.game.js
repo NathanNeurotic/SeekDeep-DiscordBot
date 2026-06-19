@@ -75,9 +75,9 @@
   // Vertical-coordinate field lists for the resize rescale — hoisted to module
   // scope so the resize handler (which can fire many times/sec during a drag)
   // doesn't re-allocate them per call/per entity.
-  const RESCALE_BAR_PROPS = ['gapY', 'gapH'];
-  const RESCALE_Y_PROPS = ['y', 'vy'];
-  const RESCALE_BOSS_PROPS = ['y', 'homeY', 'ty', 'orbR', 'crashVy'];
+  const RESCALE_BAR_PROPS = Object.freeze(['gapY', 'gapH']);
+  const RESCALE_Y_PROPS = Object.freeze(['y', 'vy']);
+  const RESCALE_BOSS_PROPS = Object.freeze(['y', 'homeY', 'ty', 'orbR', 'crashVy']);
 
   function resize() {
     const r = canvas.getBoundingClientRect();
