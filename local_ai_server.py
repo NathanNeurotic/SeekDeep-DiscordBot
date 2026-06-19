@@ -6518,20 +6518,20 @@ def chart(req: ChartRequest):
             return max(0, int(row.get(key, 0) or 0))
         except (TypeError, ValueError, AttributeError):
             return 0
-    valid_dates = []
+    valid = []  # (date_str, parsed datetime) — parse each key ONCE here, reused below
     for k in buckets:
         if not isinstance(buckets[k], dict):
             continue
         try:
-            datetime.strptime(str(k), "%Y-%m-%d")
+            valid.append((str(k), datetime.strptime(str(k), "%Y-%m-%d")))
         except (ValueError, TypeError):
             continue
-        valid_dates.append(str(k))
-    if not valid_dates:
+    if not valid:
         return JSONResponse(status_code=400, content={"error": "day_buckets needs 'YYYY-MM-DD' keys with object rows"})
-    # Sort dates and fill gaps with zeros so the chart is contiguous.
-    sorted_dates = sorted(valid_dates)
-    date_objs = [datetime.strptime(d, "%Y-%m-%d") for d in sorted_dates]
+    # Sort by date string and fill gaps with zeros so the chart is contiguous.
+    valid.sort(key=lambda kv: kv[0])
+    sorted_dates = [k for k, _ in valid]
+    date_objs = [d for _, d in valid]
     images = [_bucket_num(buckets[d], "images") for d in sorted_dates]
     chats  = [_bucket_num(buckets[d], "chats")  for d in sorted_dates]
     vision = [_bucket_num(buckets[d], "vision") for d in sorted_dates]
