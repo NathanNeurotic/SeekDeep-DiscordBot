@@ -1,6 +1,6 @@
 {
   "name": "seekdeep-discordbot",
-  "version": "10.38.164",
+  "version": "10.38.165",
   "type": "module",
   "description": "SeekDeep local Discord bot with local chat, vision, image generation, and SearXNG web search.",
   "main": "index.js",
@@ -39,6 +39,9 @@
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2.0.0"
+  },
+  "overrides": {
+    "undici": "^6.27.0"
   },
   "engines": {
     "node": ">=22.12.0"
