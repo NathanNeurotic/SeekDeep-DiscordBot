@@ -318,6 +318,38 @@ pub fn server_identity() -> Option<String> {
     Some(after_quote[..quote_end].to_string())
 }
 
+/// Probe `GET /livez` and return true iff the server answers HTTP 200 within the
+/// timeout. `/livez` is the server's dependency-free liveness endpoint (no
+/// model/gpu/ollama/subprocess work), so a failure here means the asyncio event
+/// loop itself is stuck — the "alive but not serving" wedge — rather than a busy
+/// GPU or a slow Ollama probe. Raw socket, no reqwest; mirrors server_identity().
+pub fn livez_ok() -> bool {
+    use std::io::{Read, Write};
+    let addr = match "127.0.0.1:7865".parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let req = "GET /livez HTTP/1.1\r\nHost: 127.0.0.1:7865\r\nConnection: close\r\n\r\n";
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    // The status line is in the first packet — read one chunk and check it.
+    let mut buf = [0u8; 256];
+    match stream.read(&mut buf) {
+        Ok(0) | Err(_) => false,
+        Ok(n) => {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+        }
+    }
+}
+
 /// Kill whatever process is bound to 127.0.0.1:7865. Used when we detect a
 /// stale SeekDeep server (version mismatch with the freshly-installed app)
 /// before we spawn the new one. Best-effort — if the kill fails the
@@ -1425,6 +1457,91 @@ const MAX_RESPAWN_ATTEMPTS: u32 = 5;
 const POLL_INTERVAL_SEC: u64 = 3;
 const HEALTHY_RESET_SEC: u64 = 120;
 
+// /livez health-watchdog cadence. Conservative on purpose: the crash-watchdog
+// catches a process that EXITS; this catches one that stays ALIVE but stops
+// serving. We only force-kill after LIVEZ_FAIL_THRESHOLD consecutive failures
+// (~75s of confirmed unresponsiveness) so a legitimate model load that briefly
+// blocks the event loop can't trip a false kill.
+const LIVEZ_POLL_SEC: u64 = 15;
+const LIVEZ_FAIL_THRESHOLD: u32 = 5;
+
+/// Health-based wedge recovery. The crash-watchdog only sees a process that
+/// EXITS (`try_wait`); the recurring SeekDeep wedge is a server that stays
+/// ALIVE but stops answering (`/health` hangs, GUI goes UNKNOWN, the bot's
+/// circuit breaker opens) and nothing recovers it. This thread probes `/livez`
+/// every LIVEZ_POLL_SEC and, after LIVEZ_FAIL_THRESHOLD consecutive failures
+/// while the child is alive (and we're not mid-boot / mid-intentional-kill),
+/// force-kills the listener so the EXISTING crash-watchdog's exit-driven respawn
+/// fires (which also charges the respawn budget). We only KILL here — never
+/// respawn — to avoid double-watch. Retires on a generation bump like the
+/// crash-watchdog, so each spawn gets a fresh pair.
+pub fn start_livez_watchdog(app: AppHandle) {
+    let my_generation = {
+        let state = app.state::<SidecarState>();
+        state.watchdog_generation.load(Ordering::SeqCst)
+    };
+    std::thread::spawn(move || {
+        let mut consecutive_fail: u32 = 0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(LIVEZ_POLL_SEC));
+
+            let state = app.state::<SidecarState>();
+            if state.quit_requested.lock().map(|g| *g).unwrap_or(false) {
+                return;
+            }
+            // Stale generation → a newer spawn started a newer pair; retire.
+            if state.watchdog_generation.load(Ordering::SeqCst) != my_generation {
+                return;
+            }
+            // Don't probe during boot/bring-up — that window is owned by the
+            // loading page and the loop may legitimately be slow.
+            if state.boot_in_progress.load(Ordering::SeqCst) {
+                consecutive_fail = 0;
+                continue;
+            }
+            // A pending intentional kill (tray restart / self-update) means a
+            // restart is already happening — stand down.
+            if state.intentional_kill.lock().map(|g| *g).unwrap_or(false) {
+                consecutive_fail = 0;
+                continue;
+            }
+            // Only act while the child is actually ALIVE. If it already exited,
+            // the crash-watchdog owns the respawn — nothing for us to do.
+            let alive = match state.child.lock() {
+                Ok(mut g) => match g.as_mut() {
+                    Some(c) => matches!(c.try_wait(), Ok(None)),
+                    None => false,
+                },
+                Err(_) => return,
+            };
+            if !alive {
+                consecutive_fail = 0;
+                continue;
+            }
+
+            if livez_ok() {
+                consecutive_fail = 0;
+                continue;
+            }
+            consecutive_fail += 1;
+            if consecutive_fail < LIVEZ_FAIL_THRESHOLD {
+                continue;
+            }
+
+            // Confirmed wedge: alive but /livez unreachable for ~75s. Force-kill
+            // the listener; the crash-watchdog detects the exit and respawns via
+            // the normal path. Do NOT set intentional_kill — we WANT the respawn.
+            eprintln!(
+                "[SeekDeep] livez watchdog: server alive but /livez unreachable {}x (~{}s) — force-killing to trigger respawn",
+                LIVEZ_FAIL_THRESHOLD, LIVEZ_FAIL_THRESHOLD as u64 * LIVEZ_POLL_SEC
+            );
+            emit_status(&app, "SERVER_WEDGED_KILLED");
+            kill_listener_on_7865();
+            return; // retire; the respawn starts a fresh watchdog pair
+        }
+    });
+}
+
 pub fn start_crash_watchdog(app: AppHandle) {
     // Snapshot the generation we're watching at start. If boot_sequence
     // bumps the generation later (a fresh child was spawned), this watchdog
@@ -1774,6 +1891,7 @@ pub fn boot_sequence(app: AppHandle) {
             state.watchdog_generation.fetch_add(1, Ordering::SeqCst);
             emit_status(&app, "SPAWNING");
             start_crash_watchdog(app.clone());
+            start_livez_watchdog(app.clone()); // alive-but-not-serving recovery
         }
         Err(_e) => {
             emit_status(&app, "SPAWN_FAILED");
