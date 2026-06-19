@@ -195,6 +195,18 @@ window.DATADASH = {
    */
   TUNING: {
     worldScale:        1.5,    // camera zoom-out: >1 reveals more of the course (smaller ball, more room)
+    // ---- RESOLUTION-INDEPENDENT DIFFICULTY ----
+    // The world fills the viewport (full-bleed), but difficulty must NOT change
+    // with window size / zoom / device. We do that by scaling every gameplay
+    // quantity relative to a fixed reference play-field: horizontal things by
+    // SX = W/refW, vertical things by SY = H/refH, radial/diagonal by the
+    // geometric mean. At a play-field of exactly refW×refH the scales are 1 and
+    // behaviour is unchanged. THESE ARE THE GLOBAL DIFFICULTY BASELINE — set
+    // them to the world size your "good" desktop produces (CSS px × worldScale);
+    // every other screen then matches it. Scoring stays tied to the *unscaled*
+    // scroll speed, so leaderboards are device-independent.
+    refW:              1760,   // reference play-field width  (world units = CSS px × worldScale)
+    refH:              1170,   // reference play-field height
     startLives:        2,
     invulnTime:        0.9,    // seconds of blink + damage-immunity after a hit (still solid)
     bumpBounce:        70,     // gentle, consistent rebound speed off any wall (px/s)

@@ -63,6 +63,15 @@
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
   let W = 0, H = 0, DPR = 1;
+  // ---- resolution-independent difficulty scales (see TUNING.refW/refH) -------
+  // The world fills the viewport, so W/H grow with the window; left alone, a
+  // smaller canvas means less reaction time and a player huge relative to the
+  // (H-relative) gaps — the "mobile feels impossible" bug. We cancel that by
+  // scaling gameplay to a fixed reference field: SX horizontal, SY vertical,
+  // SG (geometric mean) for radial/diagonal motion. COLW is the SX-scaled
+  // terrain column so the visible column count + undulation rate stay constant.
+  const RW = Number(T.refW) || 1760, RH = Number(T.refH) || 1170;
+  let SX = 1, SY = 1, SG = 1, COLW = T.colW;
 
   function resize() {
     const r = canvas.getBoundingClientRect();
@@ -76,6 +85,13 @@
     canvas.height = Math.round(r.height * DPR);
     W = Math.round(r.width * Z);
     H = Math.round(r.height * Z);
+    // difficulty scales — recomputed on every resize so they track the live field
+    SX = W / RW;
+    SY = H / RH;
+    SG = Math.sqrt(SX * SY);
+    COLW = T.colW * SX;
+    HBX = PW * 0.62 * SY;            // collision box tracks the (SY-scaled) player
+    HBY = PH * 0.62 * SY;
     const s = DPR / Z;
     ctx.setTransform(s, 0, 0, s, 0, 0);
     if (game) {
@@ -319,7 +335,7 @@
   function pickFeature() {
     const em = T.edgeMargin;
     const openHalf = T.maxGapFrac / 2;
-    const slopeFrac = T.wallSlopePx / H;
+    const slopeFrac = T.wallSlopePx / RH;   // fraction of the REFERENCE field → constant channel drift per column across screens
     const diff = Math.min(1, game.bytes / T.corridorRampBytes);
     const sh = curShape();
     const twMin = sh.towerMin != null ? sh.towerMin : T.towerMin;
@@ -375,7 +391,7 @@
       return { ceil: Math.max(0, H * 0.5 - h), floor: Math.max(0, H - (H * 0.5 + h)), blocks: [] };
     }
     const em = T.edgeMargin, mg = T.minGapFrac, openHalf = T.maxGapFrac / 2;
-    const slopeFrac = T.wallSlopePx / H;
+    const slopeFrac = T.wallSlopePx / RH;   // fraction of the REFERENCE field → constant channel drift per column across screens
     const fast = game.scrollFx && game.scrollFx.kind === "fast";
     const sh = curShape();
 
@@ -479,7 +495,7 @@
     game.holdCols = 0; game.obsCooldown = 8; game.reversing = false;
     game.cTop = 0.5 - openHalf; game.cBot = 0.5 + openHalf;
     game.cols = [];
-    const n = Math.ceil(W / T.colW) + 4;
+    const n = Math.ceil(W / COLW) + 4;
     for (let i = 0; i < n; i++) game.cols.push({ ceil: game.cTop * H, floor: H - game.cBot * H, blocks: [] });
   }
 
@@ -487,8 +503,8 @@
   let scrollAcc = 0;
   function advanceTerrain(dx) {
     scrollAcc += dx;
-    while (scrollAcc >= T.colW) {
-      scrollAcc -= T.colW;
+    while (scrollAcc >= COLW) {
+      scrollAcc -= COLW;
       // coming out of a rewind: re-sync the forward generator to the current
       // right edge so the first new column continues from it — otherwise the
       // generator is still ahead of the rewound edge and the corridor jumps
@@ -506,7 +522,7 @@
     // channel continuous and passable the way the player came in, and freezes
     // the generator so forward play resumes cleanly.
     while (scrollAcc < 0) {
-      scrollAcc += T.colW;
+      scrollAcc += COLW;
       game.reversing = true;
       game.cols.pop();
       // REPLAY the actual terrain the player flew through (passability + continuity
@@ -772,8 +788,10 @@
 
   // ---- player size ---------------------------------------------------------
   const PW = SPRITES.player.w, PH = SPRITES.player.h;
-  // collision box a bit tighter than sprite
-  const HBX = PW * 0.62, HBY = PH * 0.62;
+  // collision box a bit tighter than sprite — SY-scaled in resize() so the
+  // player-to-gap ratio stays constant across screen sizes (declared let; the
+  // seed below is overwritten on the first resize()).
+  let HBX = PW * 0.62, HBY = PH * 0.62;
 
   function playerHitbox() {
     return { x: game.px - HBX / 2, y: game.py - HBY / 2, w: HBX, h: HBY };
@@ -891,10 +909,10 @@
       if (col.ceil > topLimit) topLimit = col.ceil;
       const ft = H - col.floor;
       if (ft < botLimit) botLimit = ft;
-      const bx = i * T.colW - scrollAcc;
+      const bx = i * COLW - scrollAcc;
       for (const b of col.blocks) {
         if (b.smashed) continue;
-        const bw = T.colW * (b.span || 1);
+        const bw = COLW * (b.span || 1);
         if (hb.x < bx + bw && hb.x + hb.w > bx) {
           const top = b.from === "top";
           const bTop = top ? col.ceil : (H - col.floor) - b.h;
@@ -917,13 +935,13 @@
     // ceiling — stop upward motion and apply a small, consistent rebound
     if (game.py - HBY / 2 < topLimit) {
       game.py = topLimit + HBY / 2;
-      game.vy = T.bumpBounce;
+      game.vy = T.bumpBounce * SY;
       touched = true;
     }
     // floor — stop downward motion and apply the same small rebound
     if (game.py + HBY / 2 > botLimit) {
       game.py = botLimit - HBY / 2;
-      game.vy = -T.bumpBounce;
+      game.vy = -T.bumpBounce * SY;
       touched = true;
     }
     return touched;
@@ -984,7 +1002,7 @@
   }
 
   function colIndexAt(x) {
-    return Math.floor((x + scrollAcc) / T.colW);
+    return Math.floor((x + scrollAcc) / COLW);
   }
   function colAtPlayer() {
     const i = colIndexAt(game.px);
@@ -1032,8 +1050,9 @@
       else if (game.scrollFx.kind === "reverse") { base *= T.mysteryReverseMult; game.revertGrace = T.revertGrace || 0; }
     }
     game.scroll = base;
-    const dx = game.scroll * dt;
-    game.dist += dx;
+    const dx = game.scroll * dt;          // UNSCALED: drives score/economy (bytes/streamed/gross) — device-independent
+    const sdx = dx * SX;                  // SX-scaled world scroll: terrain + parallax move with the field so lead-time stays constant
+    game.dist += sdx;
     // streamed = total bytes ever streamed (monotonic) — drives spawn cadence so
     // features stay persistent forever even when you spend DATA on shooting.
     game.streamed += Math.max(0, dx) * T.bytesPerPx;
@@ -1043,26 +1062,26 @@
     if (game.invincible > 0) { game.invincible -= dt; if (game.invincible <= 0) { if (game._invSfx) { try { game._invSfx.src.stop(); } catch (e) {} game._invSfx = null; } } }
     if (game.flashT > 0) game.flashT = Math.max(0, game.flashT - dt * 2.5);
 
-    advanceTerrain(dx);
+    advanceTerrain(sdx);
     if (!game.boss && !game.boss2 && !game.event && !game.bossPending) game.bossClock += dt;  // count boss-free survival time
 
     // player physics — DRIFT (no gravity): thrusters add momentum, damping bleeds it off
     let ay = 0;
-    if (keys.up) ay -= T.driftThrust;
-    if (keys.down) ay += T.driftThrust;
+    if (keys.up) ay -= T.driftThrust * SY;
+    if (keys.down) ay += T.driftThrust * SY;
     game.vy += ay * dt;
     game.vy *= Math.pow(T.driftDamp, dt * 60);
-    game.vy = Math.max(-T.vMax, Math.min(T.vMax, game.vy));
+    game.vy = Math.max(-T.vMax * SY, Math.min(T.vMax * SY, game.vy));
     game.py += game.vy * dt;
 
     // horizontal: left/right thrusters with a spring back to the anchor lane
     const anchor = W * T.playerX;
     let ax = (anchor - game.px) * T.hSpring;
-    if (keys.left) ax -= T.hThrust;
-    if (keys.right) ax += T.hThrust;
+    if (keys.left) ax -= T.hThrust * SX;
+    if (keys.right) ax += T.hThrust * SX;
     game.vx += ax * dt;
     game.vx *= Math.pow(T.hDamp, dt * 60);
-    game.vx = Math.max(-T.hMax, Math.min(T.hMax, game.vx));
+    game.vx = Math.max(-T.hMax * SX, Math.min(T.hMax * SX, game.vx));
     game.px += game.vx * dt;
     // trailing data-streamers off the bot so he feels alive (not during rewind)
     const rewinding = game.scrollFx && game.scrollFx.kind === "reverse";
@@ -1117,7 +1136,7 @@
     if (!game.freeAmmo) game.bytes = Math.max(0, game.bytes - T.chargeCost);
     const tx = aimSet ? aimX : game.px + 200, ty = aimSet ? aimY : game.py;
     const ang = Math.atan2(ty - game.py, tx - game.px);
-    const sp = T.playerBulletSpeed * 0.8;
+    const sp = (T.playerBulletSpeed * SG) * 0.8;
     game.playerBullets.push({ x: game.px + Math.cos(ang) * PW * 0.6, y: game.py + Math.sin(ang) * PW * 0.6,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, big: true });
     spawnParticles(game.px, game.py, "#ffffff", 20, 300);
@@ -1133,7 +1152,7 @@
     const tx = aimSet ? aimX : game.px + 200;
     const ty = aimSet ? aimY : game.py;
     const ang = Math.atan2(ty - game.py, tx - game.px);
-    const sp = T.playerBulletSpeed;
+    const sp = (T.playerBulletSpeed * SG);
     const mx = game.px + Math.cos(ang) * PW * 0.5, my = game.py + Math.sin(ang) * PW * 0.5;
     game.playerBullets.push({ x: mx, y: my, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp });
     SFX("shot");
@@ -1171,10 +1190,10 @@
           let hit = pb.big && (pb.y < col.ceil || pb.y > (H - col.floor));
           let smashedNow = false;
           if (!hit) {
-            const bx2 = ci * T.colW - scrollAcc;
+            const bx2 = ci * COLW - scrollAcc;
             for (const bl of col.blocks) {
               if (bl.smashed) continue;
-              const bw2 = T.colW * (bl.span || 1);
+              const bw2 = COLW * (bl.span || 1);
               if (pb.x >= bx2 && pb.x <= bx2 + bw2) {
                 const top = bl.from === "top";
                 const bTop = top ? col.ceil : (H - col.floor) - bl.h;
@@ -1352,14 +1371,14 @@
         kind = fbPool[(Math.random() * fbPool.length) | 0];
       } else { spawnDoubleBoss(); return; }
     }
-    const spacing = kind === "database" ? T.colW * T.dbSpacingCols
-                  : kind === "ddos" ? T.colW * T.ddosSpacingCols
-                  : T.colW * T.pepeGridCols;
+    const spacing = kind === "database" ? COLW * T.dbSpacingCols
+                  : kind === "ddos" ? COLW * T.ddosSpacingCols
+                  : COLW * T.pepeGridCols;
     // SAFE ENTRY: anchor the DDoS gap to the player's current lane so the first rows
     // arrive with their opening where the player already is (gapV starts flat, then drifts).
     const evTop = (0.5 - T.eventGap / 2) * H, evSpan = T.eventGap * H;
     const pSlot = Math.max(1, Math.min(T.ddosSlots - 3, Math.round(((game.py - evTop) / evSpan) * T.ddosSlots - 0.5)));
-    game.event = { kind, dist: 0, length: T.eventCols * T.colW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: pSlot, gapV: 0 };
+    game.event = { kind, dist: 0, length: T.eventCols * COLW, spawnAcc: spacing, step: 0, spot: 0, spacing, gapY: pSlot, gapV: 0 };
     const meta = {
       database: ["🗄  DATA BASE FOUND", "ride the stream — bank the bits", C.accentSoft],
       ddos:     ["🌐  DDoS ATTACK", "punch or weave through the swarm", C.danger],
@@ -1384,7 +1403,7 @@
     // player (run-in ≈ the player's screen position), and stop one screen-width before the
     // end (run-out) so trailing content scrolls clear before normal terrain + towers resume.
     // Kills the "dead unavoidable damage at a DDoS boundary" cases.
-    const runIn = W * T.playerX, runOut = W + 2 * T.colW;
+    const runIn = W * T.playerX, runOut = W + 2 * COLW;
     if (ev.dist < runIn || ev.dist > ev.length - runOut) return;
     const top = (0.5 - T.eventGap / 2) * H, bot = (0.5 + T.eventGap / 2) * H, span = bot - top;
     const x = W + 40;
@@ -1426,10 +1445,10 @@
     const col = game.cols[i];
     if (!col) return [0, H];
     let top = col.ceil, bot = H - col.floor;
-    const bx = i * T.colW - scrollAcc;
+    const bx = i * COLW - scrollAcc;
     for (const b of col.blocks) {
       if (b.smashed) continue;
-      const bw = T.colW * (b.span || 1);
+      const bw = COLW * (b.span || 1);
       if (px >= bx && px <= bx + bw) {
         if (b.from === "top") top = Math.max(top, col.ceil + b.h);
         else bot = Math.min(bot, (H - col.floor) - b.h);
@@ -1461,8 +1480,8 @@
       if (p.kind !== "upgrade" && p.kind !== "dataloss" && p.kind !== "lifecell") {
         const dxp = game.px - p.x, dyp = game.py - p.y;
         const d = Math.hypot(dxp, dyp);
-        if (d < T.pickupPull && d > 0.001) {
-          const f = (1 - d / T.pickupPull) * T.pickupPullForce * dt;
+        if (d < T.pickupPull * SG && d > 0.001) {
+          const f = (1 - d / (T.pickupPull * SG)) * T.pickupPullForce * SG * dt;
           p.x += (dxp / d) * f;
           p.y += (dyp / d) * f;
         }
@@ -1475,7 +1494,7 @@
       const halfW = psz / 2 + 4;
       const need = psz / 2 + 9;            // 5px bob + ~4px visible gap
       let spanTop = 0, spanBot = H;
-      for (let sx = p.x - halfW; ; sx += T.colW) {
+      for (let sx = p.x - halfW; ; sx += COLW) {
         const q = Math.min(sx, p.x + halfW);
         const sp = freeSpanAt(q);
         if (sp[0] > spanTop) spanTop = sp[0];
@@ -1643,8 +1662,8 @@
       } else {
         // chase the player (tails you) until shot down or it expires
         const dx = game.px - b.x, dy = game.py - b.y, d = Math.hypot(dx, dy) || 1;
-        b.x += (dx / d) * T.botSpeed * dt;
-        b.y += (dy / d) * T.botSpeed * dt;
+        b.x += (dx / d) * (T.botSpeed * SG) * dt;
+        b.y += (dy / d) * (T.botSpeed * SG) * dt;
         // self-crash after tailing you for botCrashKB of distance
         if (game.streamed - b.spawnStreamed > T.botCrashKB) { b.dead = true; spawnParticles(b.x, b.y, C.warn, 26, 320); continue; }
       }
@@ -1652,10 +1671,10 @@
       for (const pb of game.playerBullets) {
         if (b.dead || b.dying) break;   // already destroyed/dying this frame — don't re-hit the corpse
         if (pb.dead) continue;
-        if (Math.hypot(pb.x - b.x, pb.y - b.y) < T.botSize / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; b.hitFlash = 0.12; spawnParticles(pb.x, pb.y, C.warn, 8, 240); if (b.hp <= 0) { b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 360); } }
+        if (Math.hypot(pb.x - b.x, pb.y - b.y) < (T.botSize * SG) / 2 + (pb.big ? 18 : 6)) { if (!pb.big) pb.dead = true; b.hp -= pb.big ? 5 : 1; b.hitFlash = 0.12; spawnParticles(pb.x, pb.y, C.warn, 8, 240); if (b.hp <= 0) { b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 360); } }
       }
       // body contact costs a kernel
-      if (!b.dead && !b.dying && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < T.botSize / 2 + HBX / 2) {
+      if (!b.dead && !b.dying && game.invuln <= 0 && Math.hypot(game.px - b.x, game.py - b.y) < (T.botSize * SG) / 2 + HBX / 2) {
         b.dying = true; b.deathT = 0; SFX("malwareDie"); spawnParticles(b.x, b.y, b.tint || C.danger, 22, 320); loseLife("bot");
       }
     }
@@ -1690,9 +1709,9 @@
           // stray orb shrapnel flung in all directions
           for (let k = 0; k < T.bombShrapnel; k++) {
             const a = (k / T.bombShrapnel) * Math.PI * 2 + Math.random() * 0.2;
-            game.bullets.push({ x: bm.x, y: bm.y, vx: Math.cos(a) * T.bulletSpeed * 0.9, vy: Math.sin(a) * T.bulletSpeed * 0.9 });
+            game.bullets.push({ x: bm.x, y: bm.y, vx: Math.cos(a) * (T.bulletSpeed * SG) * 0.9, vy: Math.sin(a) * (T.bulletSpeed * SG) * 0.9 });
           }
-          if (game.invuln <= 0 && Math.hypot(game.px - bm.x, game.py - bm.y) < T.bombRadius + HBX / 2) loseLife("bomb");
+          if (game.invuln <= 0 && Math.hypot(game.px - bm.x, game.py - bm.y) < (T.bombRadius * SG) + HBX / 2) loseLife("bomb");
         }
       }
     }
@@ -1837,7 +1856,7 @@
       // one big bomb toward the end of the life bar — blinks, then splash-detonates
       if (!b.bombFired && b.timer < T.bossDuration * 0.4) {
         b.bombFired = true;
-        game.bombs.push({ x: b.x, y: b.y, vx: -T.bombSpeed, vy: 0, fuse: T.bombFuse, exploded: false, t: 0 });
+        game.bombs.push({ x: b.x, y: b.y, vx: -(T.bombSpeed * SG), vy: 0, fuse: T.bombFuse, exploded: false, t: 0 });
         SFX("bossBomb");
       }
 
@@ -1877,7 +1896,7 @@
   function bossFire(b, dt) {
     if (b.fireT > 0) return;
     const toPlayer = Math.atan2(game.py - b.y, game.px - b.x);
-    const s = T.bulletSpeed;
+    const s = (T.bulletSpeed * SG);
     const fr = b.fireRate;
     // muzzle flash for activity
     spawnParticles(b.x, b.y, b.arch ? b.arch.c1 : C.danger, 6, 260);
@@ -1917,12 +1936,12 @@
             const d = Math.abs(bar.x - newX);
             if (d < nd) { nd = d; nearest = bar; }
           }
-          if (nearest && T.barSpeed > 0) {   // guard /0 if firewalls are configured stationary
-            const reach = T.vMax * (nd / T.barSpeed) * 0.6;
+          if (nearest && (T.barSpeed * SG) > 0) {   // guard /0 if firewalls are configured stationary
+            const reach = T.vMax * SY * (nd / (T.barSpeed * SG)) * 0.6;
             gy = Math.max(nearest.gapY - reach, Math.min(nearest.gapY + reach, gy));
             gy = Math.max(gapH / 2 + 24, Math.min(H - gapH / 2 - 24, gy));
           }
-          game.bars.push({ x: newX, vx: -T.barSpeed, w: T.barThickness, gapY: gy, gapH: gapH, life: 0, warn: T.barWarn }); }
+          game.bars.push({ x: newX, vx: -(T.barSpeed * SG), w: T.barThickness * SG, gapY: gy, gapH: gapH, life: 0, warn: T.barWarn }); }
         break;
     }
   }
@@ -2282,15 +2301,15 @@
   function drawWallCircuits() {
     if (!game || !wallTile) return;
     ctx.save();
-    ctx.beginPath(); ctx.moveTo(-T.colW, 0);
-    for (let i = 0; i < game.cols.length; i++) ctx.lineTo(i * T.colW - scrollAcc, game.cols[i].ceil);
-    ctx.lineTo(W + T.colW, 0); ctx.closePath(); ctx.clip();
+    ctx.beginPath(); ctx.moveTo(-COLW, 0);
+    for (let i = 0; i < game.cols.length; i++) ctx.lineTo(i * COLW - scrollAcc, game.cols[i].ceil);
+    ctx.lineTo(W + COLW, 0); ctx.closePath(); ctx.clip();
     blitTile(wallTile, 1.0);
     ctx.restore();
     ctx.save();
-    ctx.beginPath(); ctx.moveTo(-T.colW, H);
-    for (let i = 0; i < game.cols.length; i++) ctx.lineTo(i * T.colW - scrollAcc, H - game.cols[i].floor);
-    ctx.lineTo(W + T.colW, H); ctx.closePath(); ctx.clip();
+    ctx.beginPath(); ctx.moveTo(-COLW, H);
+    for (let i = 0; i < game.cols.length; i++) ctx.lineTo(i * COLW - scrollAcc, H - game.cols[i].floor);
+    ctx.lineTo(W + COLW, H); ctx.closePath(); ctx.clip();
     blitTile(wallTile, 1.0);
     ctx.restore();
   }
@@ -2398,12 +2417,12 @@
     // ceiling fill
     ctx.fillStyle = C.terrain;
     ctx.beginPath();
-    ctx.moveTo(-T.colW, 0);
+    ctx.moveTo(-COLW, 0);
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       ctx.lineTo(x, game.cols[i].ceil);
     }
-    ctx.lineTo(W + T.colW, 0);
+    ctx.lineTo(W + COLW, 0);
     ctx.closePath();
     ctx.fill();
     // ceiling edge
@@ -2413,7 +2432,7 @@
     ctx.shadowBlur = 12;
     ctx.beginPath();
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       i === 0 ? ctx.moveTo(x, game.cols[i].ceil) : ctx.lineTo(x, game.cols[i].ceil);
     }
     ctx.stroke();
@@ -2422,12 +2441,12 @@
     ctx.shadowBlur = 0;
     ctx.fillStyle = C.terrain;
     ctx.beginPath();
-    ctx.moveTo(-T.colW, H);
+    ctx.moveTo(-COLW, H);
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       ctx.lineTo(x, H - game.cols[i].floor);
     }
-    ctx.lineTo(W + T.colW, H);
+    ctx.lineTo(W + COLW, H);
     ctx.closePath();
     ctx.fill();
     // floor edge
@@ -2437,7 +2456,7 @@
     ctx.shadowBlur = 12;
     ctx.beginPath();
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       i === 0 ? ctx.moveTo(x, H - game.cols[i].floor) : ctx.lineTo(x, H - game.cols[i].floor);
     }
     ctx.stroke();
@@ -2447,18 +2466,18 @@
 
     ctx.fillStyle = "rgba(109,240,255,0.22)";
     for (let i = 0; i < game.cols.length; i += 4) {
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       const cyl = game.cols[i].ceil, fyl = H - game.cols[i].floor;
       // perpendicular trace stub + solder pad + IC tab (motherboard texture)
       ctx.fillRect(x - 1, cyl, 2, 11); ctx.fillRect(x - 3, cyl + 11, 6, 3);
       ctx.fillRect(x - 1, fyl - 11, 2, 11); ctx.fillRect(x - 3, fyl - 14, 6, 3);
       if (i % 8 === 0) {
         // horizontal trace run between pads + a little IC block
-        ctx.fillRect(x, cyl + 13, T.colW * 4, 2);
-        ctx.fillRect(x, fyl - 15, T.colW * 4, 2);
+        ctx.fillRect(x, cyl + 13, COLW * 4, 2);
+        ctx.fillRect(x, fyl - 15, COLW * 4, 2);
         ctx.strokeStyle = "rgba(120,222,255,0.3)"; ctx.lineWidth = 1;
-        ctx.strokeRect(x + T.colW * 1.4, cyl + 16, 22, 12);
-        ctx.strokeRect(x + T.colW * 1.4, fyl - 28, 22, 12);
+        ctx.strokeRect(x + COLW * 1.4, cyl + 16, 22, 12);
+        ctx.strokeRect(x + COLW * 1.4, fyl - 28, 22, 12);
         ctx.fillStyle = "rgba(109,240,255,0.22)";
       }
     }
@@ -2469,13 +2488,13 @@
     ctx.lineWidth = 1.4;
     ctx.beginPath();
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc, y = game.cols[i].ceil + inset;
+      const x = i * COLW - scrollAcc, y = game.cols[i].ceil + inset;
       i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
     ctx.stroke();
     ctx.beginPath();
     for (let i = 0; i < game.cols.length; i++) {
-      const x = i * T.colW - scrollAcc, y = H - game.cols[i].floor - inset;
+      const x = i * COLW - scrollAcc, y = H - game.cols[i].floor - inset;
       i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -2486,12 +2505,12 @@
       // ceiling packets flow one way, floor the other
       const pc = ((k / NP) + game.t * 0.16) % 1;
       const ci = Math.min(ncols - 1, Math.max(0, Math.floor(pc * (ncols - 1))));
-      const cx = ci * T.colW - scrollAcc, cyy = game.cols[ci].ceil + inset;
+      const cx = ci * COLW - scrollAcc, cyy = game.cols[ci].ceil + inset;
       ctx.fillStyle = "#bfefff"; ctx.shadowColor = C.accentSoft; ctx.shadowBlur = 12;
       ctx.beginPath(); ctx.arc(cx, cyy, 2.4, 0, Math.PI * 2); ctx.fill();
       const pf = ((k / NP) - game.t * 0.13 + 1) % 1;
       const fi = Math.min(ncols - 1, Math.max(0, Math.floor(pf * (ncols - 1))));
-      const fx = fi * T.colW - scrollAcc, fyy = H - game.cols[fi].floor - inset;
+      const fx = fi * COLW - scrollAcc, fyy = H - game.cols[fi].floor - inset;
       ctx.beginPath(); ctx.arc(fx, fyy, 2.4, 0, Math.PI * 2); ctx.fill();
     }
     ctx.shadowBlur = 0;
@@ -2546,10 +2565,10 @@
     for (let i = 0; i < game.cols.length; i++) {
       const col = game.cols[i];
       if (!col.blocks.length) continue;
-      const x = i * T.colW - scrollAcc;
+      const x = i * COLW - scrollAcc;
       for (const blk of col.blocks) {
         if (blk.smashed) continue;
-        const bw = T.colW * (blk.span || 1);
+        const bw = COLW * (blk.span || 1);
         const top = blk.from === "top";
         const OV = top ? col.ceil : col.floor;   // bury all the way to the screen edge → never floats, even when the wall ramps down across the chip's span
         // base derives from THIS column's wall → chip is ALWAYS grounded
@@ -2624,13 +2643,13 @@
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
         // blast-radius telegraph ring
         ctx.strokeStyle = hexA(C.danger, 0.3 + 0.3 * blink); ctx.lineWidth = 2; ctx.setLineDash([10, 10]);
-        ctx.beginPath(); ctx.arc(bm.x, bm.y, T.bombRadius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(bm.x, bm.y, (T.bombRadius * SG), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
       } else {
         const k = Math.min(1, bm.t / 0.4);
         ctx.globalAlpha = 1 - k;
         ctx.fillStyle = hexA("#ffffff", 0.8);
         ctx.shadowColor = C.danger; ctx.shadowBlur = 40;
-        ctx.beginPath(); ctx.arc(bm.x, bm.y, T.bombRadius * (0.3 + k), 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bm.x, bm.y, (T.bombRadius * SG) * (0.3 + k), 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
       }
     }
@@ -2638,7 +2657,7 @@
 
   function drawBots() {
     for (const b of game.bots) {
-      const r = T.botSize / 2, p = 0.5 + 0.5 * Math.sin(b.pulse * 8);
+      const r = (T.botSize * SG) / 2, p = 0.5 + 0.5 * Math.sin(b.pulse * 8);
       const tint = b.tint || C.danger;
       const flash = b.hitFlash > 0;
       const dsc = b.dying ? Math.max(0, 1 - (b.deathT || 0) / 0.35) : 1;   // shrink out on death
@@ -3249,6 +3268,7 @@
     const blink = game.invuln > 0 && Math.floor(game.t * 18) % 2 === 0;
     ctx.save();
     ctx.translate(game.px, game.py);
+    ctx.scale(SY, SY);   // scale the whole craft (sprite + auras + flames) to match the SY-scaled hitbox → player/gap ratio is screen-independent
     const od = game.freeAmmo;
     const rew = game.scrollFx && game.scrollFx.kind === "reverse";
 
