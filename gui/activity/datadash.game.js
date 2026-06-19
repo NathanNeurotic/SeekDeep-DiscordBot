@@ -103,7 +103,28 @@
       // mid-game — it only seeds the uninitialized 0. Lives in resize() so EVERY
       // call site (newGame recovery, frame-loop self-heal, window-resize listener)
       // gets it.
-      if (!game.py) game.py = H * 0.5;
+      if (!game.py) {
+        game.py = H * 0.5;
+      } else if (game._lastH && game._lastH !== H) {
+        // Viewport HEIGHT changed mid-life (window resize / device rotation /
+        // the mobile address-bar showing-hiding). Columns store ABSOLUTE
+        // ceil/floor frozen at creation H and are NOT rebuilt here, but
+        // resolveTerrain() mixes the live H with those frozen floors
+        // (botLimit = H - col.floor) — so a shrinking H drops the floor under
+        // the player and instantly costs a "wall" life. Rescale the player AND
+        // the live terrain by the same ratio so the channel stays aligned
+        // (restores ceil≈cTop·H, floor≈H·(1-cBot)); plus brief i-frames as a
+        // safety net for entities (firewall/bullet/bot) that aren't rescaled.
+        const rs = H / game._lastH;
+        game.py *= rs;
+        game.vy *= rs;
+        if (game.cols) for (const c of game.cols) {
+          c.ceil *= rs; c.floor *= rs;
+          if (c.blocks) for (const b of c.blocks) b.h *= rs;
+        }
+        if (state === STATE.PLAY) game.invuln = Math.max(game.invuln || 0, 0.5);
+      }
+      game._lastH = H;
     }
     buildTiles();
   }
