@@ -111,17 +111,31 @@
         // ceil/floor frozen at creation H and are NOT rebuilt here, but
         // resolveTerrain() mixes the live H with those frozen floors
         // (botLimit = H - col.floor) — so a shrinking H drops the floor under
-        // the player and instantly costs a "wall" life. Rescale the player AND
-        // the live terrain by the same ratio so the channel stays aligned
-        // (restores ceil≈cTop·H, floor≈H·(1-cBot)); plus brief i-frames as a
-        // safety net for entities (firewall/bullet/bot) that aren't rescaled.
+        // the player and instantly costs a "wall" life. Rescale EVERY absolute
+        // vertical coordinate by the same ratio so nothing desyncs from the
+        // resized channel once the brief i-frame net below expires: the player,
+        // live terrain (restores ceil≈cTop·H, floor≈H·(1-cBot)), the reverse-
+        // replay history, firewalls, bots, bombs, and bullets. Horizontal coords
+        // (x / vx / column width) are unaffected by a height change.
         const rs = H / game._lastH;
         game.py *= rs;
         game.vy *= rs;
-        if (game.cols) for (const c of game.cols) {
+        const rescaleCol = (c) => {
+          if (!c) return;
           c.ceil *= rs; c.floor *= rs;
           if (c.blocks) for (const b of c.blocks) b.h *= rs;
-        }
+        };
+        if (game.cols) for (const c of game.cols) rescaleCol(c);
+        if (game.colHistory) for (const c of game.colHistory) rescaleCol(c);   // reverse-mystery replays these later
+        if (game.bars) for (const bar of game.bars) { bar.gapY *= rs; bar.gapH *= rs; }   // firewall gap must track the channel
+        const rescaleY = (e) => { if (!e) return; if (typeof e.y === 'number') e.y *= rs; if (typeof e.vy === 'number') e.vy *= rs; };
+        if (game.bots) for (const b of game.bots) rescaleY(b);
+        if (game.bombs) for (const b of game.bombs) rescaleY(b);
+        if (game.bullets) for (const b of game.bullets) rescaleY(b);
+        if (game.playerBullets) for (const b of game.playerBullets) rescaleY(b);
+        if (game.pickups) for (const p of game.pickups) rescaleY(p);
+        // i-frame net for the instant after a resize (covers anything not rescaled
+        // above, e.g. a boss entity) — the rescales make this rarely matter now.
         if (state === STATE.PLAY) game.invuln = Math.max(game.invuln || 0, 0.5);
       }
       game._lastH = H;
