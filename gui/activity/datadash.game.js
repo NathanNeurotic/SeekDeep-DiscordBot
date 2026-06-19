@@ -134,8 +134,19 @@
         if (game.bullets) for (const b of game.bullets) rescaleY(b);
         if (game.playerBullets) for (const b of game.playerBullets) rescaleY(b);
         if (game.pickups) for (const p of game.pickups) rescaleY(p);
-        // i-frame net for the instant after a resize (covers anything not rescaled
-        // above, e.g. a boss entity) — the rescales make this rarely matter now.
+        // Boss daemons store absolute vertical state too (y / homeY / ty home+target,
+        // orbR orbit radius = H*frac, crashVy) — rescale so a resize mid-boss-fight
+        // doesn't warp them or desync the body hitbox once invuln expires.
+        const rescaleBoss = (b) => {
+          if (!b) return;
+          for (const k of ['y', 'homeY', 'ty', 'orbR', 'crashVy']) {
+            if (typeof b[k] === 'number') b[k] *= rs;
+          }
+        };
+        rescaleBoss(game.boss);
+        rescaleBoss(game.boss2);
+        // i-frame net for the instant after a resize, as a backstop for anything
+        // not rescaled above — the rescales make this rarely matter now.
         if (state === STATE.PLAY) game.invuln = Math.max(game.invuln || 0, 0.5);
       }
       game._lastH = H;
