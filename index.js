@@ -3435,11 +3435,54 @@ const SEEKDEEP_PENDING_IMAGE_PROMPTS = globalThis.__seekdeepPendingImagePrompts 
 globalThis.__seekdeepPendingImagePrompts = SEEKDEEP_PENDING_IMAGE_PROMPTS;
 const SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS = Number(process.env.SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS || 15 * 60 * 1000);
 
+// Persist the pending image-prompt choices to disk so the Original/Refined/Both
+// buttons survive a bot restart. Deploys kill+respawn the bot, which wiped this
+// in-memory Map — a click on a pre-restart button then hit the "expired" path
+// (or, mid-reconnect, "This interaction failed"). The state is plain,
+// JSON-serializable, and self-contained (everything the handler needs to
+// regenerate lives in it), with a 15-min TTL. Best-effort: a persist failure
+// only loses restart-survivability, never the live in-memory flow.
+const SEEKDEEP_PENDING_IMAGE_PROMPTS_PATH = path.join(__dirname, 'data', 'pending-image-prompts.json');
+
+function seekdeepPersistPendingImagePrompts() {
+  try {
+    const now = Date.now();
+    const obj = {};
+    for (const [id, state] of SEEKDEEP_PENDING_IMAGE_PROMPTS.entries()) {
+      if (state && Number(state.expiresAt || 0) > now) obj[id] = state;
+    }
+    writeJsonAtomic(SEEKDEEP_PENDING_IMAGE_PROMPTS_PATH, obj);
+  } catch (err) {
+    console.warn('Persist pending image prompts failed:', err?.message || err);
+  }
+}
+
+function seekdeepLoadPendingImagePrompts() {
+  try {
+    const obj = readJsonSafe(SEEKDEEP_PENDING_IMAGE_PROMPTS_PATH, {});
+    if (!obj || typeof obj !== 'object') return;
+    const now = Date.now();
+    let restored = 0;
+    for (const [id, state] of Object.entries(obj)) {
+      if (state && typeof state === 'object' && Number(state.expiresAt || 0) > now) {
+        SEEKDEEP_PENDING_IMAGE_PROMPTS.set(id, state);
+        restored += 1;
+      }
+    }
+    if (restored) console.log(`[SeekDeep] restored ${restored} pending image-prompt choice(s) from disk.`);
+  } catch (err) {
+    console.warn('Load pending image prompts failed:', err?.message || err);
+  }
+}
+seekdeepLoadPendingImagePrompts();
+
 function seekdeepSweepPendingImagePrompts() {
   const now = Date.now();
+  let changed = false;
   for (const [id, state] of SEEKDEEP_PENDING_IMAGE_PROMPTS.entries()) {
-    if (!state || Number(state.expiresAt || 0) <= now) SEEKDEEP_PENDING_IMAGE_PROMPTS.delete(id);
+    if (!state || Number(state.expiresAt || 0) <= now) { SEEKDEEP_PENDING_IMAGE_PROMPTS.delete(id); changed = true; }
   }
+  if (changed) seekdeepPersistPendingImagePrompts();
 }
 
 function seekdeepNewPendingImagePromptId() {
@@ -3591,6 +3634,7 @@ function seekdeepRememberPendingImagePrompt(state) {
     createdAt: Date.now(),
     expiresAt: Date.now() + SEEKDEEP_PENDING_IMAGE_PROMPT_TTL_MS,
   });
+  seekdeepPersistPendingImagePrompts();   // survive a bot restart
 
   return id;
 }
@@ -24723,6 +24767,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
   if (allQueued) {
     try { pendingMap.delete(id); } catch {}
   }
+  seekdeepPersistPendingImagePrompts();   // persist the queued-version flags / removal across restarts
 
   const selectionSummary = [
     needsOriginal && needsRefined ? 'Queued both:' : needsOriginal ? 'Queued original.' : 'Queued refined.',

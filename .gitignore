@@ -104,6 +104,7 @@ data/custom-personas.json
 data/auto-reactions.json
 data/bot-status.json
 data/system-state.json
+data/pending-image-prompts.json
 !data/.gitkeep
 
 # Playwright (audit §12) — local browser-driven Control Center smoke.
