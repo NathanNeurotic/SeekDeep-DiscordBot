@@ -350,6 +350,30 @@ fn check_for_update() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Resolve the Docker CLI to a trusted ABSOLUTE path when Docker Desktop is
+/// installed in its standard location, else fall back to a bare `docker` (PATH).
+/// Audit L-4 follow-up to the TAU-9 note: prefer the absolute binary so a
+/// polluted PATH (or a repo-/runtime-local `docker.exe`) isn't run on the common
+/// Docker-Desktop install. The PATH fallback is deliberately kept so a
+/// non-standard install still detects — worst case it degrades to the existing
+/// "not_installed" result, never the hijack of a known-good absolute binary.
+#[cfg(windows)]
+fn resolve_docker_cli() -> std::ffi::OsString {
+    for c in [
+        r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+        r"C:\Program Files\Docker\Docker\resources\docker.exe",
+    ] {
+        if std::path::Path::new(c).is_file() {
+            return std::ffi::OsString::from(c);
+        }
+    }
+    std::ffi::OsString::from("docker")
+}
+#[cfg(not(windows))]
+fn resolve_docker_cli() -> std::ffi::OsString {
+    std::ffi::OsString::from("docker")
+}
+
 /// Try to start Docker Desktop. Returns one of:
 ///   { ok: true,  state: "running"        }  — `docker info` already works, no action needed.
 ///   { ok: true,  state: "launched"       }  — Docker was installed but not running; we launched it.
@@ -362,12 +386,13 @@ fn check_for_update() -> Result<serde_json::Value, String> {
 /// docker.com.
 #[tauri::command]
 fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
-    // TAU-9 note: `docker` is intentionally NOT pinned to an absolute path the way
-    // the System32 tools are. Docker Desktop installs to a user/version-dependent
-    // Program Files path (not a fixed system location), so there is no stable
-    // absolute target to pin to — it must resolve via PATH like any third-party CLI.
+    // Docker CLI resolution is pinned-where-possible by resolve_docker_cli()
+    // (audit L-4): the absolute Docker Desktop path on a standard install, with a
+    // bare `docker` (PATH) fallback for non-standard installs. Step 3 below
+    // launches Docker Desktop.exe from fixed absolute paths via the pinned cmd.
+    let docker_cli = resolve_docker_cli();
     // 1. Probe: is Docker already running?
-    let info = std::process::Command::new("docker")
+    let info = std::process::Command::new(&docker_cli)
         .arg("info")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -376,7 +401,7 @@ fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!({ "ok": true, "state": "running" }));
     }
     // 2. Probe: is Docker installed at all?
-    let ver = std::process::Command::new("docker")
+    let ver = std::process::Command::new(&docker_cli)
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
