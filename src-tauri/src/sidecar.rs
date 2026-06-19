@@ -1528,15 +1528,24 @@ pub fn start_livez_watchdog(app: AppHandle) {
                 continue;
             }
 
-            // Confirmed wedge: alive but /livez unreachable for ~75s. Force-kill
-            // the listener; the crash-watchdog detects the exit and respawns via
-            // the normal path. Do NOT set intentional_kill — we WANT the respawn.
+            // Confirmed wedge: alive but /livez unreachable for ~75s. Kill OUR
+            // child directly via its handle — not kill_listener_on_7865(), which
+            // kills whatever holds :7865 (racy: if our process just exited and an
+            // unrelated one grabbed the port, we'd nuke it) and shells out to
+            // netstat/taskkill/lsof (slow, perm-fragile). child.kill() targets
+            // exactly our spawned process, is fast + cross-platform. The
+            // crash-watchdog then sees the exit and respawns via the normal path.
+            // Do NOT set intentional_kill — we WANT the respawn.
             eprintln!(
-                "[SeekDeep] livez watchdog: server alive but /livez unreachable {}x (~{}s) — force-killing to trigger respawn",
+                "[SeekDeep] livez watchdog: server alive but /livez unreachable {}x (~{}s) — force-killing child to trigger respawn",
                 LIVEZ_FAIL_THRESHOLD, LIVEZ_FAIL_THRESHOLD as u64 * LIVEZ_POLL_SEC
             );
             emit_status(&app, "SERVER_WEDGED_KILLED");
-            kill_listener_on_7865();
+            if let Ok(mut guard) = state.child.lock() {
+                if let Some(child) = guard.as_mut() {
+                    let _ = child.kill();
+                }
+            }
             return; // retire; the respawn starts a fresh watchdog pair
         }
     });

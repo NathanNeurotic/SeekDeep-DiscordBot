@@ -1296,25 +1296,34 @@ def _find_bot_processes(bot_cwd: Path) -> list[dict]:
                     pcwd = (p.info.get("cwd") or p.cwd() or "")
                 except Exception:
                     pcwd = ""
-                # Resolve the index.js arg and require it to BE <bot_cwd>/index.js.
-                # An absolute arg is cwd-independent; a bare "index.js" is resolved
-                # against the process's own cwd (and skipped if that's unknown, so
-                # we never guess). This rejects e.g. .../server-pdf/dist/index.js
-                # even when it shares our cwd.
-                script_arg = next((a for a in cmdline[1:] if a.lower().endswith("index.js")), None)
-                if not script_arg:
-                    continue
-                try:
-                    sp = Path(script_arg)
-                    if sp.is_absolute():
-                        resolved = sp.resolve()
-                    elif pcwd:
-                        resolved = (Path(pcwd) / sp).resolve()
-                    else:
+                # Require the process to be running OUR <bot_cwd>/index.js — not
+                # just any index.js that shares our cwd. Scan EVERY arg (not just
+                # the first ending in "index.js": an earlier --require=foo-index.js
+                # would mis-select and false-negative the real bot) and match only
+                # a real script arg: exactly "index.js" or ending in /index.js or
+                # \index.js (so "some-index.js" / "--opt=index.js" don't match).
+                # An absolute arg resolves cwd-independently; a bare "index.js"
+                # resolves against the process's own cwd (skipped if unknown — we
+                # never guess). Rejects e.g. .../server-pdf/dist/index.js.
+                matched = False
+                for arg in cmdline[1:]:
+                    arg_lc = arg.lower()
+                    if not (arg_lc == "index.js" or arg_lc.endswith("/index.js") or arg_lc.endswith("\\index.js")):
                         continue
-                except Exception:
-                    continue
-                if str(resolved).lower() != bot_index_str:
+                    try:
+                        sp = Path(arg)
+                        if sp.is_absolute():
+                            resolved = sp.resolve()
+                        elif pcwd:
+                            resolved = (Path(pcwd) / sp).resolve()
+                        else:
+                            continue
+                    except Exception:
+                        continue
+                    if str(resolved).lower() == bot_index_str:
+                        matched = True
+                        break
+                if not matched:
                     continue
                 found.append({"pid": pid, "cmdline": " ".join(cmdline)[:400],
                               "cwd": pcwd.lower(), "source": "psutil"})
