@@ -2851,13 +2851,28 @@ async def _seekdeep_unhandled_handler(request, exc):
     })
 
 
+@app.get("/livez")
+async def livez():
+    # Liveness ONLY — touches NO model / GPU / Ollama / subprocess state, so it
+    # cannot be blocked by a busy GPU, a slow Ollama probe, or a held model lock.
+    # External watchdogs probe THIS (not /health) to decide whether the server is
+    # genuinely wedged: a /livez that times out means the event loop itself is
+    # stuck, which is the only true "alive but not serving" signal.
+    return {"ok": True}
+
+
 @app.get("/health")
 async def health():
     # async def so /health runs on the asyncio event loop instead of the sync
-    # thread pool. When /image is mid-generation it holds the CUDA pipeline +
-    # GIL; sync /health would queue behind it. async /health stays responsive.
-    # Ollama probe is cached (see ollama_available) so we don't pay 2s per call.
-    _ollama_up = ollama_available()
+    # thread pool. The external probes below are BLOCKING (Ollama urllib +
+    # nvidia-smi subprocess), so they're pushed to a worker thread via to_thread
+    # — otherwise a hung nvidia-smi (GPU busy mid-/image) or a half-open Ollama
+    # socket would block the event loop and make /health time out while the
+    # process is still alive (the "alive but not serving" wedge). Mirrors /gpu.
+    import asyncio as _asyncio_h
+    _ollama_up = await _asyncio_h.to_thread(ollama_available)
+    _ollama_tags = (await _asyncio_h.to_thread(ollama_list_tags)) if _ollama_up else []
+    _gpu = await _asyncio_h.to_thread(gpu_stats)
     _chat_backends = {role: _resolve_chat_backend(role) for role in chat_role_map().keys()}
     # Surface remote-chat endpoints WITHOUT leaking API keys. The GUI uses
     # this to badge external roles with a "prompts leave the box" warning.
@@ -2891,7 +2906,7 @@ async def health():
         "ollama": {
             "available": _ollama_up,
             "base_url": OLLAMA_BASE_URL,
-            "installed_tags": ollama_list_tags() if _ollama_up else [],
+            "installed_tags": _ollama_tags,
         },
         "chat_quant_mode": _normalized_chat_quant_mode(),
         "chat_quant_full_roles": sorted(LOCAL_CHAT_QUANT_FULL_ROLES),
@@ -2901,7 +2916,7 @@ async def health():
             "vision": KEEP_RESIDENT_VISION,
             "image": KEEP_RESIDENT_IMAGE,
         },
-        "gpu": gpu_stats(),
+        "gpu": _gpu,
         "models": {
             "chat": CHAT_MODEL_ID,
             "vision": VISION_MODEL_ID,
@@ -6867,4 +6882,12 @@ if __name__ == "__main__":
             ).start()
         except Exception as _wd_exc:
             print(f"[SeekDeep] loop watchdog failed to start: {_wd_exc}", flush=True)
-    uvicorn.run(app, host="127.0.0.1", port=7865)
+    # timeout_keep_alive: drop idle keep-alive sockets faster so a flood of
+    # half-open connections can't pile up. limit_concurrency: a generous backstop
+    # so a saturated sync threadpool sheds (503) instead of queueing unboundedly
+    # and looking "alive but not serving". Both env-tunable.
+    uvicorn.run(
+        app, host="127.0.0.1", port=7865,
+        timeout_keep_alive=int(os.environ.get("SEEKDEEP_UVICORN_KEEPALIVE_S", "30")),
+        limit_concurrency=int(os.environ.get("SEEKDEEP_UVICORN_MAX_CONCURRENCY", "128")),
+    )
