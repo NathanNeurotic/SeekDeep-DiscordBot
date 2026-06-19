@@ -369,8 +369,21 @@ fn resolve_docker_cli() -> std::ffi::OsString {
     }
     std::ffi::OsString::from("docker")
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn resolve_docker_cli() -> std::ffi::OsString {
+    // Same L-4 hardening as Windows: prefer Docker Desktop's standard absolute
+    // binary so a polluted PATH can't shadow it. PATH fallback kept for
+    // non-standard installs (Homebrew, Colima, rootless).
+    let p = "/Applications/Docker.app/Contents/Resources/bin/docker";
+    if std::path::Path::new(p).is_file() {
+        return std::ffi::OsString::from(p);
+    }
+    std::ffi::OsString::from("docker")
+}
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn resolve_docker_cli() -> std::ffi::OsString {
+    // Linux/BSD: PATH resolution. CLI install paths vary by distro/runtime
+    // (apt, snap, rootless) with no single canonical absolute path to pin.
     std::ffi::OsString::from("docker")
 }
 
