@@ -72,6 +72,12 @@
   // terrain column so the visible column count + undulation rate stay constant.
   const RW = Number(T.refW) || 1760, RH = Number(T.refH) || 1170;
   let SX = 1, SY = 1, SG = 1, COLW = T.colW;
+  // Vertical-coordinate field lists for the resize rescale — hoisted to module
+  // scope so the resize handler (which can fire many times/sec during a drag)
+  // doesn't re-allocate them per call/per entity.
+  const RESCALE_BAR_PROPS = ['gapY', 'gapH'];
+  const RESCALE_Y_PROPS = ['y', 'vy'];
+  const RESCALE_BOSS_PROPS = ['y', 'homeY', 'ty', 'orbR', 'crashVy'];
 
   function resize() {
     const r = canvas.getBoundingClientRect();
@@ -133,8 +139,8 @@
         };
         if (game.cols) for (const c of game.cols) rescaleCol(c);
         if (game.colHistory) for (const c of game.colHistory) rescaleCol(c);   // reverse-mystery replays these later
-        if (game.bars) for (const bar of game.bars) rescaleProps(bar, ['gapY', 'gapH']);   // firewall gap must track the channel
-        const rescaleY = (e) => rescaleProps(e, ['y', 'vy']);
+        if (game.bars) for (const bar of game.bars) rescaleProps(bar, RESCALE_BAR_PROPS);   // firewall gap must track the channel
+        const rescaleY = (e) => rescaleProps(e, RESCALE_Y_PROPS);
         if (game.bots) for (const b of game.bots) rescaleY(b);
         if (game.bombs) for (const b of game.bombs) rescaleY(b);
         if (game.bullets) for (const b of game.bullets) rescaleY(b);
@@ -143,7 +149,7 @@
         // Boss daemons store absolute vertical state too (y / homeY / ty home+target,
         // orbR orbit radius = H*frac, crashVy) — rescale so a resize mid-boss-fight
         // doesn't warp them or desync the body hitbox once invuln expires.
-        const rescaleBoss = (b) => rescaleProps(b, ['y', 'homeY', 'ty', 'orbR', 'crashVy']);
+        const rescaleBoss = (b) => rescaleProps(b, RESCALE_BOSS_PROPS);
         rescaleBoss(game.boss);
         rescaleBoss(game.boss2);
         // i-frame net for the instant after a resize, as a backstop for anything
