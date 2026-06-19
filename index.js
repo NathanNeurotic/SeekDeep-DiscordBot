@@ -1042,7 +1042,7 @@ function seekdeepElapsedSeconds(startedAt) {
   return (elapsedMs / 1000).toFixed(2);
 }
 
-function seekdeepResponseFooter({ startedAt = null, modelUsed = null } = {}) {
+function seekdeepResponseFooter({ startedAt = null, modelUsed = null, timeLabel = 'Time to Generate' } = {}) {
   const model = modelUsed || SEEKDEEP_NO_MODEL_USED_LABEL;
   const elapsedRaw = seekdeepElapsedSeconds(startedAt);
   const elapsedNum = Number(elapsedRaw);
@@ -1051,9 +1051,11 @@ function seekdeepResponseFooter({ startedAt = null, modelUsed = null } = {}) {
   const lines = [];
   // Hide "Time to Generate: 0.00 seconds" for local commands — it's noise. Keep
   // the line whenever the actual generation took meaningful time (>= 0.1 s) or
-  // when a real AI model was used.
+  // when a real AI model was used. timeLabel lets pre-generation messages (the
+  // prompt-choice card, where nothing has been rendered yet) say "Time to
+  // Prepare" instead of mislabeling the refine time as generation time.
   if (!(isLocalCommand && (!Number.isFinite(elapsedNum) || elapsedNum < 0.1))) {
-    lines.push(`Time to Generate: ${elapsedRaw} seconds`);
+    lines.push(`${timeLabel}: ${elapsedRaw} seconds`);
   }
   lines.push(`Model Used: ${model}`);
 
@@ -3664,6 +3666,9 @@ async function seekdeepSendImagePromptChoice(target, prompt, width = 1024, heigh
       content: seekdeepAppendResponseFooter(seekdeepPromptChoiceContent(choice, requesterId), {
         startedAt,
         modelUsed: choice.dynamicRefinement ? seekdeepChatModelLabel() : seekdeepNoModelLabel(),
+        // Nothing is generated yet on the choice card — this elapsed time is the
+        // prompt prep/refine, not image generation. Relabel so it isn't misread.
+        timeLabel: 'Time to Prepare',
       }),
       components: [seekdeepPendingPromptChoiceRow(id)],
       // Do NOT specify files here — omitting it preserves the loading GIF
@@ -24746,6 +24751,7 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
     components: choiceRow,
   });
 
+  const genErrors = [];
   const runQueuedSelection = async (messageProxy, selectionPrompt, selectionOptions, routeName) => {
     try {
       if (typeof seekdeepLogRoute === 'function') {
@@ -24762,6 +24768,9 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
       );
     } catch (err) {
       console.warn(`Emergency prompt-choice generation failed (${routeName}):`, err?.stack || err?.message || err);
+      // Don't swallow it: collect so the user gets told instead of staring at a
+      // stale "Queued…" message with the loading GIF and no result.
+      genErrors.push(`${routeName.replace('image-choice-', '')}: ${err?.message || 'generation failed'}`);
     }
   };
 
@@ -24821,10 +24830,14 @@ if (interaction?.id && SEEKDEEP_PROMPT_CHOICE_EMERGENCY_SEEN.has(interaction.id)
     ));
   }
 
-  // Clear loading GIF once all emergency generations finish.
-  if (emergencyGenPromises.length && SEEKDEEP_LOADING_GIF_BUFFER) {
+  // Once all selected generations settle: clear the loading GIF, and if any
+  // failed, surface it (ephemeral) instead of leaving a silent stale "Queued".
+  if (emergencyGenPromises.length) {
     void Promise.allSettled(emergencyGenPromises).then(() => {
-      editChoiceMessage({ files: [] }).catch(() => {});
+      if (SEEKDEEP_LOADING_GIF_BUFFER) editChoiceMessage({ files: [] }).catch(() => {});
+      if (genErrors.length) {
+        privateNotice(`⚠️ Image generation failed (${genErrors.join('; ')}). The local AI server may be down or busy — try again, or check the server.`).catch(() => {});
+      }
     });
   }
 

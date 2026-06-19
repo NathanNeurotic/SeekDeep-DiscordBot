@@ -701,7 +701,13 @@ def chat_role_map() -> dict[str, str]:
     quality_id = _env_str("LOCAL_CHAT_QUALITY_MODEL_ID") or fallback_id or default_id
     reasoning_id = _env_str("LOCAL_CHAT_REASONING_MODEL_ID") or quality_id or fallback_id or default_id
     lightweight_id = _env_str("LOCAL_CHAT_LIGHTWEIGHT_MODEL_ID")
-    refine_id = _env_str("LOCAL_CHAT_REFINE_MODEL_ID") or lightweight_id or default_id
+    # refine_chat needs a CAUSAL text LM. Do NOT fall back to lightweight_id: the
+    # stock lightweight model (gemma-3n-E4B-it) is MULTIMODAL and can't load as a
+    # causal LM, so every refine would load-fail and auto-fall-through to
+    # fallback_chat anyway (reason: multimodal-not-causal-lm) — wasting seconds per
+    # request. Fall back to the text fallback model directly. An explicit
+    # LOCAL_CHAT_REFINE_MODEL_ID still wins if you point it at a real text LM.
+    refine_id = _env_str("LOCAL_CHAT_REFINE_MODEL_ID") or fallback_id or default_id
     mapping = {
         "default_chat": default_id,
         "fallback_chat": fallback_id,
