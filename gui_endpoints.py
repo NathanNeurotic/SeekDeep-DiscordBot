@@ -1264,10 +1264,14 @@ def _status_service(service: str, log_dir: Path) -> dict:
 
 
 def _find_bot_processes(bot_cwd: Path) -> list[dict]:
-    # Enumerate all node processes running index.js whose cwd OR command line
-    # points at bot_cwd. Returning [{pid,cmdline,cwd,source}] — scoped to this
-    # repo so we never kill an unrelated Node project the user is running.
+    # Enumerate node processes running OUR <bot_cwd>/index.js. Returning
+    # [{pid,cmdline,cwd,source}] — matched on the resolved index.js path, not a
+    # loose "index.js + shared cwd" test, so we never reap an unrelated Node
+    # process: MCP servers Claude Code spawns inherit this cwd and run their own
+    # .../index.js, and Adobe ships a node too. (Callers include the periodic
+    # bot watchdog reaper — a false match there silently kills those processes.)
     bot_cwd_str = str(bot_cwd.resolve()).lower()
+    bot_index_str = str((bot_cwd / "index.js").resolve()).lower()
     found: list[dict] = []
     seen_pids: set[int] = set()
     # 1) psutil — cleanest. Installed via accelerate on systems with ML deps,
@@ -1287,17 +1291,33 @@ def _find_bot_processes(bot_cwd: Path) -> list[dict]:
                 joined = " ".join(cmdline).lower()
                 if "index.js" not in joined:
                     continue
-                # Match by cwd or by cmdline-contains-bot_cwd. Either signal
-                # is enough; both is best.
                 pcwd = ""
                 try:
-                    pcwd = (p.info.get("cwd") or p.cwd() or "").lower()
+                    pcwd = (p.info.get("cwd") or p.cwd() or "")
                 except Exception:
                     pcwd = ""
-                if bot_cwd_str not in pcwd and bot_cwd_str not in joined:
+                # Resolve the index.js arg and require it to BE <bot_cwd>/index.js.
+                # An absolute arg is cwd-independent; a bare "index.js" is resolved
+                # against the process's own cwd (and skipped if that's unknown, so
+                # we never guess). This rejects e.g. .../server-pdf/dist/index.js
+                # even when it shares our cwd.
+                script_arg = next((a for a in cmdline[1:] if a.lower().endswith("index.js")), None)
+                if not script_arg:
+                    continue
+                try:
+                    sp = Path(script_arg)
+                    if sp.is_absolute():
+                        resolved = sp.resolve()
+                    elif pcwd:
+                        resolved = (Path(pcwd) / sp).resolve()
+                    else:
+                        continue
+                except Exception:
+                    continue
+                if str(resolved).lower() != bot_index_str:
                     continue
                 found.append({"pid": pid, "cmdline": " ".join(cmdline)[:400],
-                              "cwd": pcwd, "source": "psutil"})
+                              "cwd": pcwd.lower(), "source": "psutil"})
                 seen_pids.add(pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 # Process vanished mid-iteration or we lack rights to inspect
