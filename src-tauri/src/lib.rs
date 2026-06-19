@@ -371,12 +371,24 @@ fn resolve_docker_cli() -> std::ffi::OsString {
 }
 #[cfg(target_os = "macos")]
 fn resolve_docker_cli() -> std::ffi::OsString {
-    // Same L-4 hardening as Windows: prefer Docker Desktop's standard absolute
-    // binary so a polluted PATH can't shadow it. PATH fallback kept for
-    // non-standard installs (Homebrew, Colima, rootless).
-    let p = "/Applications/Docker.app/Contents/Resources/bin/docker";
-    if std::path::Path::new(p).is_file() {
-        return std::ffi::OsString::from(p);
+    // Same L-4 hardening as Windows: prefer a standard absolute binary so a
+    // polluted PATH (or a cwd-local `docker`) can't shadow it. `is_file()`
+    // follows symlinks, so the Homebrew/Docker-Desktop symlinks resolve.
+    //   1. Docker Desktop's bundled binary (installer-owned — highest trust).
+    //   2. /usr/local/bin/docker — the symlink Docker Desktop installs, and
+    //      the Intel-Homebrew prefix.
+    //   3. /opt/homebrew/bin/docker — the Apple-Silicon Homebrew prefix.
+    // The Homebrew prefixes are user-writable so they're not a hard trust
+    // boundary, but pinning them still beats PATH-order shadowing and is never
+    // worse than the bare-`docker` fallback below.
+    for p in [
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+    ] {
+        if std::path::Path::new(p).is_file() {
+            return std::ffi::OsString::from(p);
+        }
     }
     std::ffi::OsString::from("docker")
 }
