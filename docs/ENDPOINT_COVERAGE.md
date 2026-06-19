@@ -100,7 +100,7 @@
 | POST | `/system/warmup` | token | installer.page5.js | no |
 | GET | `/token` | open | nav.js | yes |
 
-## local_ai_server.py (27 routes)
+## local_ai_server.py (28 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -113,6 +113,7 @@
 | POST | `/inpaint` | token | api.page.js | yes |
 | POST | `/inpaint_mask_preview` | token | image-ab.page.js | yes |
 | POST | `/instruct-pix2pix` | token | api.page.js | yes |
+| GET | `/livez` | open | — | no |
 | GET | `/ml_deps` | open | ml-deps.js | yes |
 | POST | `/model/install` | token | add-model.page.js | yes |
 | POST | `/model/uninstall` | token | app.page4.js | yes |
@@ -134,7 +135,7 @@
 
 ## Summary
 
-- Total routes: **110**
-- Open (no token): **29**
-- Not referenced by any test suite: **29**
+- Total routes: **111**
+- Open (no token): **30**
+- Not referenced by any test suite: **30**
 
