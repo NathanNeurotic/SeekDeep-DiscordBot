@@ -4834,9 +4834,9 @@ def register_gui_endpoints(
         # other — offloaded to a thread so the blocking lock + sync file I/O don't
         # stall the asyncio event loop.
         def _save_force_react():
-            # Plain exceptions only — the coroutine below maps any failure (lock,
-            # read, or write) to a 500. Keeping HTTPException out of the thread
-            # avoids coupling worker-thread logic to the web framework.
+            # The lock now raises HTTPException(503) on a busy timeout (audit
+            # M-2); the coroutine re-raises that as-is so the caller gets a
+            # retryable 503, and maps any OTHER failure (read/write) to a 500.
             with _seekdeep_file_lock(_force_react_config_file):
                 all_cfg = _force_react_read_all()
                 all_cfg.setdefault("guilds", {})[str(guild_id)] = {
@@ -4845,6 +4845,8 @@ def register_gui_endpoints(
                 _atomic_write_json(_force_react_config_file, all_cfg)   # fsync-durable write
         try:
             await asyncio.to_thread(_save_force_react)
+        except HTTPException:
+            raise  # lock-busy 503 etc. — pass through, don't mask as 500
         except Exception as exc:
             raise HTTPException(500, f"could not save config: {str(exc)[:200]}")
         _seekdeep_audit("force-react-config-write", guild=guild_id, cap=cap, allowed=len(allowed))
@@ -4906,6 +4908,8 @@ def register_gui_endpoints(
                 _atomic_write_json(_vision_mode_config_file, {"mode": mode})
         try:
             await asyncio.to_thread(_save_vision_mode)
+        except HTTPException:
+            raise  # lock-busy 503 etc. — pass through, don't mask as 500
         except Exception as exc:
             raise HTTPException(500, f"could not save vision mode: {str(exc)[:200]}")
         _seekdeep_audit("vision-mode-write", mode=mode)
@@ -4964,6 +4968,8 @@ def register_gui_endpoints(
                 _atomic_write_json(_web_search_config_file, {"mode": mode})
         try:
             await asyncio.to_thread(_save_web_search)
+        except HTTPException:
+            raise  # lock-busy 503 etc. — pass through, don't mask as 500
         except Exception as exc:
             raise HTTPException(500, f"could not save web-search mode: {str(exc)[:200]}")
         _seekdeep_audit("web-search-write", mode=mode)
@@ -6349,8 +6355,11 @@ def register_gui_endpoints(
         seekdeepWithFileLock. Uses the SAME `<path>.lock` sentinel on the SAME
         absolute data-file paths, so this server and the Node bot coordinate their
         read-modify-write of the shared data/*.json files. Steals a stale lock
-        (crashed holder) after SEEKDEEP_FILE_LOCK_STALE_MS and FAILS OPEN after
-        SEEKDEEP_FILE_LOCK_TIMEOUT_MS — a rare lost update beats a hung request.
+        (crashed holder) after SEEKDEEP_FILE_LOCK_STALE_MS and FAILS CLOSED
+        (raises HTTPException 503) after SEEKDEEP_FILE_LOCK_TIMEOUT_MS — audit M-2:
+        a GUI mutation never silently loses a concurrent update by proceeding
+        without the lock. (The Node bot's twin stays fail-open — no HTTP caller to
+        retry, and forward progress matters there.)
 
         FUTURE (async upgrade): mirror index.js — swap the time.sleep wait for an
         await-based one in an async sibling; call sites stay `with`-scoped here."""
@@ -6384,13 +6393,16 @@ def register_gui_endpoints(
                     except OSError:
                         continue
                     if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
-                        # Fail-open is intentional: forward progress beats a hang.
-                        # JSON corruption is prevented regardless by atomic
-                        # temp-file+rename writes; this lock only avoids the rare
-                        # lost-update when bot+server mutate the same file at once
-                        # (DeepSeek audit M-5).
-                        print(f"[SeekDeep] file lock timeout on {os.path.basename(self._lock_path)}; proceeding without it (fail-open).", flush=True)
-                        break
+                        # Fail CLOSED (audit M-2): the GUI write paths are a
+                        # read-modify-write, so proceeding WITHOUT the lock could
+                        # silently clobber the other process's update (atomic
+                        # writes stop torn JSON, not a lost logical merge). A
+                        # timeout is rare — writes are sub-ms; this only trips
+                        # under genuine contention or a crashed holder not yet
+                        # aged to the stale threshold — so surface a retryable 503
+                        # rather than lose data. (Node's twin lock stays fail-open.)
+                        print(f"[SeekDeep] file lock timeout on {os.path.basename(self._lock_path)}; failing closed (503).", flush=True)
+                        raise HTTPException(503, "config store is busy; retry in a moment")
                     time.sleep(0.025)
                 except OSError as exc:
                     print(f"[SeekDeep] file lock error on {os.path.basename(self._lock_path)}: {exc}; proceeding.", flush=True)
