@@ -2341,6 +2341,29 @@ def register_gui_endpoints(
             },
             "blocking": False,
         })
+        # 4b. HF_TOKEN — the default chat model (Llama-3.1) is GATED on Hugging
+        # Face, so a fresh install can't download it without a token + accepted
+        # license. Non-blocking: users who skip it fall back to the ungated
+        # Granite model, which works. HF tokens are `hf_` + ~34 alphanumerics.
+        hf_tok = (env.get("HF_TOKEN") or env.get("HUGGINGFACE_TOKEN") or "").strip()
+        checks.append({
+            "id": "hf_token",
+            "label": "HF_TOKEN set (for gated models like the default Llama-3.1)",
+            "ok": bool(hf_tok),
+            "fix": "Paste a Hugging Face access token to download gated models — the default Llama-3.1 needs one (and license acceptance at huggingface.co/meta-llama). Skip to use the ungated Granite fallback instead. Create a token at huggingface.co/settings/tokens.",
+            "fix_action": {
+                "endpoint": "/config", "method": "POST", "label": "Save token",
+                "body_template": {"updates": {}},
+                "prompt_for": [{
+                    "key": "HF_TOKEN", "label": "Hugging Face token",
+                    "placeholder": "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                    "secret": True,
+                    "validate_regex": r"^hf_[A-Za-z0-9]{16,}$",
+                    "validate_error": "HF tokens start with `hf_` followed by ~34 alphanumeric characters. Copy it from huggingface.co/settings/tokens.",
+                }],
+            },
+            "blocking": False,
+        })
         # 5. ML deps installed (best-effort; full check is /ml_deps which lives on local_ai_server)
         ml_ok = False
         for mod in ("torch", "transformers", "diffusers"):
@@ -2564,7 +2587,11 @@ def register_gui_endpoints(
                 "navigate": "app.html#open-model-catalog",
                 "label": "▸ Pick model",
             },
-            "blocking": False,
+            # Hard gate: a fresh install with no chat model can't do its core
+            # job (chat/refine/routing), so block first-run completion until a
+            # model is installed + configured. The picker offers one-click
+            # curated starters, so this is always resolvable in-app.
+            "blocking": True,
         })
 
         blocking_failed = [c for c in checks if c["blocking"] and not c["ok"]]
