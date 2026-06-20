@@ -2521,12 +2521,12 @@ def register_gui_endpoints(
 
         home_hf = Path(os.path.expanduser("~/.cache/huggingface"))
         _hf_candidates = [
-            os.getenv("LOCAL_MODEL_CACHE_DIR"),                  # process env (force-set by local_ai_server) — PRIMARY
-            os.getenv("HF_HUB_CACHE"),                           # == cache dir
-            _resolve_env_dir(env.get("LOCAL_MODEL_CACHE_DIR")),  # explicit .env override
-            root / "models" / "huggingface",                    # repo-local default, no env reliance
-            home_hf / "hub",                                     # stock HF location
-            home_hf,                                             # stock HF root (some layouts)
+            _resolve_env_dir(os.getenv("LOCAL_MODEL_CACHE_DIR")),  # process env (force-set by local_ai_server) — PRIMARY
+            _resolve_env_dir(os.getenv("HF_HUB_CACHE")),           # == cache dir
+            _resolve_env_dir(env.get("LOCAL_MODEL_CACHE_DIR")),    # explicit .env override
+            root / "models" / "huggingface",                       # repo-local default, no env reliance
+            home_hf / "hub",                                       # stock HF location
+            home_hf,                                               # stock HF root (some layouts)
         ]
         # HF_HOME points at the cache *root*; the models--* dirs live in its
         # hub/ or huggingface/ subdir (process env first, then .env override).
@@ -2674,9 +2674,26 @@ def register_gui_endpoints(
         chat_id = (env.get("LOCAL_CHAT_MODEL_ID") or "").strip()
         chat_backend = (env.get("LOCAL_CHAT_BACKEND") or "hf").strip().lower()
         _no_model_copy = "No chat model is configured yet. Open the model picker — curated starter models are one click to install."
+        # A LOCAL FILESYSTEM PATH model (Windows 'C:\\models\\my-model' has no '/';
+        # a unix '/path/to/model' has '/') loads straight from disk — no daemon,
+        # no HF download. Without this guard the no-slash path mis-routes to the
+        # Ollama branch (demands ollama_up) and the slashed path to the HF branch
+        # (where _hf_repo_cached builds a bogus 'models--...' that never matches)
+        # — both HARD-LOCK an offline local-path model on this blocking gate.
+        # Resolve repo-relative against root and require a real DIR (a model is a
+        # directory, never a single file → no CWD/file false-positive on an HF id
+        # or Ollama tag, which never resolve to an existing dir).
+        try:
+            _local_model = _resolve_env_dir(chat_id)
+            is_local_path = _local_model is not None and _local_model.is_dir()
+        except Exception:
+            is_local_path = False
         if chat_backend in ("openai-compat", "anthropic", "gemini"):
             chat_ready = bool(chat_id)
             fix_copy = "" if chat_id else _no_model_copy
+        elif is_local_path:
+            chat_ready = True
+            fix_copy = ""
         elif chat_backend == "ollama" or "/" not in chat_id:
             chat_ready = bool(chat_id) and ollama_up
             if not chat_id:
