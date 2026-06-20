@@ -100,7 +100,7 @@
 | POST | `/system/warmup` | token | installer.page5.js | no |
 | GET | `/token` | open | nav.js | yes |
 
-## local_ai_server.py (28 routes)
+## local_ai_server.py (30 routes)
 
 | Method | Path | Auth | First GUI caller | Tested |
 |---|---|---|---|---|
@@ -127,6 +127,8 @@
 | POST | `/tts/voices/download` | token | tts.js | no |
 | POST | `/unload` | token | api.page.js | yes |
 | POST | `/upscale` | token | api.page.js | yes |
+| POST | `/upscale/realesrgan/download` | token | upscale.page.js | no |
+| GET | `/upscale/realesrgan/status` | open | upscale.page.js | no |
 | POST | `/vision` | token | api.page.js | yes |
 | GET | `/vram` | open | — | no |
 | POST | `/warmup/chat` | token | — | yes |
@@ -135,7 +137,7 @@
 
 ## Summary
 
-- Total routes: **111**
-- Open (no token): **30**
-- Not referenced by any test suite: **30**
+- Total routes: **113**
+- Open (no token): **31**
+- Not referenced by any test suite: **32**
 

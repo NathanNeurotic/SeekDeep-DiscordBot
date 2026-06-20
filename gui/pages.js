@@ -44,6 +44,7 @@
     { id: 'prompts',      title: 'Prompt Templates',path: 'prompts.html',      group: 'create', glyph: '◩', meta: 'local template library + #prompts share', live: true, navigable: true, gateFlag: null, palette: true, more: true },
     { id: 'personas',     title: 'Personas',        path: 'personas.html',     group: 'create', glyph: '☺', meta: 'custom personas · list/create/assign', live: true, navigable: true, gateFlag: null, palette: true, more: true },
     { id: 'tts',          title: 'TTS Voice',       path: 'tts.html',          group: 'create', glyph: '♫', meta: 'install Piper + download voices + Speak', live: true, navigable: true, gateFlag: null, palette: false, more: true },
+    { id: 'upscale',      title: 'Upscale Model',   path: 'upscale.html',      group: 'create', glyph: '⤢', meta: 'enable Real-ESRGAN + download weights', live: true, navigable: true, gateFlag: null, palette: false, more: true },
     { id: 'add_model',    title: 'Add a Model',     path: 'add-model.html',    group: 'create', glyph: '+', meta: 'wizard · POST /model/install', live: true, navigable: true, gateFlag: null, palette: true, more: true },
     { id: 'activity',     title: 'DATA DASH!',      path: 'activity/index.html', group: 'create', glyph: '◆', meta: 'the DataDash Discord Activity game', live: true, navigable: true, gateFlag: null, palette: false, more: true },
 
