@@ -599,17 +599,78 @@ const SEEKDEEP_BASE = (function() {
       });
     }
   })();
-  // SearXNG row "Start" button — same /docker/start-searxng endpoint used by
-  // the standalone SearXNG step pane, but inline on the System Check row so
-  // users don't have to scroll back up to the Docker row to fix the failure.
+  // SearXNG row "Start" button.
+  //
+  // In the desktop app we prefer the atomic `start_searxng_stack` Tauri
+  // command: it launches Docker Desktop (if needed), WAITS for the daemon,
+  // then starts the SearXNG container — a true one-click cold start, and it
+  // works even if the Python AI server is wedged (the shell is the
+  // always-available layer). It streams `searxng-stack:status` progress
+  // events through the (up to ~2 min) Docker-daemon wait.
+  //
+  // In a plain browser (no Tauri) we fall back to the POST /docker/start-searxng
+  // endpoint, which only runs the container and so needs Docker already up.
   (function wireSearxngTryStart() {
     const btn = document.getElementById('searxngTryStartBtn');
     if (!btn) return;
-    btn.addEventListener('click', async () => {
+    const isTauri = (!!(window.__TAURI__) || (window.location.hostname || '') === 'tauri.localhost')
+      && !!window.__TAURI__?.core;
+
+    // Friendly button captions for each progress stage the Rust command emits.
+    const STAGE_LABEL = {
+      checking_docker: '… checking Docker',
+      launching_docker: '… launching Docker',
+      waiting_daemon: '… waiting for Docker',
+      starting_searxng: '… starting SearXNG',
+    };
+
+    async function startViaTauri() {
       const sdn = window.SeekDeepNotify;
-      const orig = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = '… starting';
+      let unlisten = null;
+      try {
+        unlisten = await window.__TAURI__.event.listen('searxng-stack:status', (ev) => {
+          const stage = ev?.payload?.stage;
+          if (stage && STAGE_LABEL[stage]) btn.textContent = STAGE_LABEL[stage];
+          if (stage === 'waiting_daemon' && sdn) {
+            sdn.toast({ tone: 'info', title: 'Waiting for Docker…', body: 'Docker Desktop is starting (up to ~2 min). Hang tight.', ttl: 7000 });
+          }
+        });
+        const result = await window.__TAURI__.core.invoke('start_searxng_stack');
+        const st = result?.state;
+        if (st === 'already_up') {
+          btn.textContent = '✓ ALREADY RUNNING';
+          btn.style.background = 'var(--good)';
+          if (sdn) sdn.toast({ tone: 'good', title: 'SearXNG is already running', ttl: 4000 });
+          setTimeout(runAllChecks, 1500);
+        } else if (st === 'started') {
+          btn.textContent = '✓ STARTED · WAIT 5-15s';
+          btn.style.background = 'var(--good)';
+          if (sdn) sdn.toast({ tone: 'good', title: 'SearXNG launching…', body: 'Container starting — re-probing in 8 seconds.', ttl: 6000 });
+          setTimeout(runAllChecks, 8000);
+        } else if (st === 'docker_not_installed') {
+          btn.textContent = '✕ NEED DOCKER';
+          btn.style.background = 'var(--bad)';
+          if (sdn) sdn.toast({ tone: 'info', title: 'Docker isn’t installed', body: 'Install Docker first from the Docker row above, then start SearXNG.', ttl: 8000 });
+        } else {
+          // docker_launch_failed | daemon_timeout | searxng_failed
+          btn.textContent = '✕ FAILED';
+          btn.style.background = 'var(--bad)';
+          const detail = (result?.detail || '').slice(0, 200);
+          if (sdn) sdn.toast({ tone: 'bad', title: 'SearXNG start failed', body: detail || 'See logs. Make sure Docker is running.', ttl: 9000 });
+          console.warn('[SeekDeep installer] start_searxng_stack:', result);
+        }
+      } catch (err) {
+        btn.textContent = '✕ ERROR';
+        btn.style.background = 'var(--bad)';
+        if (sdn) sdn.toast({ tone: 'bad', title: 'start_searxng_stack failed', body: String(err).slice(0, 200), ttl: 8000 });
+        console.warn('[SeekDeep installer] start_searxng_stack error:', err);
+      } finally {
+        if (typeof unlisten === 'function') unlisten();
+      }
+    }
+
+    async function startViaEndpoint() {
+      const sdn = window.SeekDeepNotify;
       try {
         const r = await fetch(SEEKDEEP_BASE + '/docker/start-searxng', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -633,6 +694,16 @@ const SEEKDEEP_BASE = (function() {
         btn.style.background = 'var(--bad)';
         if (sdn) sdn.toast({ tone: 'bad', title: 'SearXNG start error', body: String(err).slice(0, 200), ttl: 8000 });
         console.warn('[SeekDeep installer] /docker/start-searxng error:', err);
+      }
+    }
+
+    btn.addEventListener('click', async () => {
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '… starting';
+      try {
+        if (isTauri) await startViaTauri();
+        else await startViaEndpoint();
       } finally {
         setTimeout(() => {
           btn.disabled = false;
