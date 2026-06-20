@@ -82,7 +82,7 @@
 | GET | `/system/docker` | open | installer.page7.js | yes |
 | POST | `/system/doctor` | token | installer.page1.js | no |
 | GET | `/system/firstrun` | open | app.page2.js | yes |
-| POST | `/system/install-docker` | token | — | yes |
+| POST | `/system/install-docker` | token | installer.page7.js | yes |
 | POST | `/system/install-ollama` | token | — | no |
 | POST | `/system/install-python` | token | — | yes |
 | POST | `/system/kill-all` | token | launcher.js | no |
