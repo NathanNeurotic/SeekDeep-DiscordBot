@@ -24902,11 +24902,14 @@ client.on('interactionCreate', async (interaction) => {
     }
     console.error('Emergency prompt-choice listener failed:', err);
     try {
+      // Don't echo raw err.message to the (possibly public) channel — it can
+      // leak local paths / library internals. The detail is console.error'd
+      // just above for server-side diagnosis. (AUD L-4)
       if (interaction?.deferred || interaction?.replied) {
-        await interaction.editReply(`Image button failed.\n\nError:\n${err?.message || err}`);
+        await interaction.editReply('Image button failed — please try again. (Details logged server-side.)');
       } else {
         await interaction.reply(seekdeepEphemeralPayload({
-          content: `Image button failed.\n\nError:\n${err?.message || err}`,
+          content: 'Image button failed — please try again. (Details logged server-side.)',
         }));
       }
     } catch {}
@@ -25356,11 +25359,14 @@ client.on('interactionCreate', async (interaction) => {
     }
     console.error('Emergency generated-image button listener failed:', err);
     try {
+      // Don't echo raw err.message to the (possibly public) channel — it can
+      // leak local paths / library internals. The detail is console.error'd
+      // just above for server-side diagnosis. (AUD L-4)
       if (interaction?.deferred || interaction?.replied) {
-        await interaction.editReply(`Image button failed.\n\nError:\n${err?.message || err}`);
+        await interaction.editReply('Image button failed — please try again. (Details logged server-side.)');
       } else {
         await interaction.reply(seekdeepEphemeralPayload({
-          content: `Image button failed.\n\nError:\n${err?.message || err}`,
+          content: 'Image button failed — please try again. (Details logged server-side.)',
         }));
       }
     } catch {}
