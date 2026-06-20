@@ -1772,7 +1772,7 @@ def _seekdeep_provider_urlopen(req, timeout, max_redirects: int = 5):
     changes. Returns the final response object (a context manager, like urlopen),
     so callers keep `with _seekdeep_provider_urlopen(req, t) as resp:`. Non-3xx
     HTTPErrors (4xx/5xx) propagate exactly as urlopen's did."""
-    cur = req
+    cur = _seekdeep_urllib_req.Request(req) if isinstance(req, str) else req  # match urlopen's str-or-Request contract
     origin_host = (_seekdeep_urlparse(cur.full_url).hostname or "").lower()
     for _hop in range(max_redirects + 1):
         try:
@@ -1784,15 +1784,23 @@ def _seekdeep_provider_urlopen(req, timeout, max_redirects: int = 5):
             nxt = _seekdeep_urljoin(cur.full_url, loc)
             _seekdeep_assert_provider_url_safe(nxt)   # re-screen the redirect target
             cross_host = (_seekdeep_urlparse(nxt).hostname or "").lower() != origin_host
-            # 303 (and, per common practice, the body-bearing 301/302) -> GET.
-            if e.code == 303:
+            # Match CPython's HTTPRedirectHandler: 301/302/303 all convert a POST
+            # -> GET and drop the body. When the body is dropped, the original
+            # POST's Content-Type/Content-Length now describe a body that no
+            # longer exists; forwarding them yields a malformed bodyless GET that
+            # strict servers/CDNs/WAFs reject — so strip them on those hops.
+            if e.code in (301, 302, 303):
                 method, data = "GET", None
             else:
                 method, data = cur.get_method(), cur.data
             nreq = _seekdeep_urllib_req.Request(nxt, data=data, method=method)
+            _drop_body_headers = data is None
             for hk, hv in cur.header_items():
-                if cross_host and hk.lower() in _SEEKDEEP_SENSITIVE_HEADERS:
+                hk_l = hk.lower()
+                if cross_host and hk_l in _SEEKDEEP_SENSITIVE_HEADERS:
                     continue  # don't leak the provider key to a redirected host
+                if _drop_body_headers and hk_l in ("content-type", "content-length"):
+                    continue  # stale framing for the now-dropped POST body
                 nreq.add_header(hk, hv)
             try:
                 e.close()
