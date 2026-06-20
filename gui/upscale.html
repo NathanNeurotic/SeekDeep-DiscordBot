@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SeekDeep — Upscale Model</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .app-wrap { min-height: 100vh; padding: 24px; display: grid; place-items: start center; overflow-y: auto; }
+  .panel { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
+  .panel h1 { font-size: 22px; margin: 0; }
+  .panel .sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; color: var(--hull-3); text-transform: uppercase; }
+  .card { border: 1px solid var(--stroke); border-radius: var(--r-md); background: linear-gradient(180deg, rgba(13,33,82,0.32), rgba(5,11,28,0.6)); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .card .sub { padding-bottom: 8px; border-bottom: 1px solid var(--stroke); }
+  .banner { padding: 10px 14px; border-radius: var(--r-md); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; line-height: 1.55; border: 1px dashed var(--stroke); color: var(--hull-2); }
+  .banner[data-state="ready"] { border-color: rgba(80,250,160,0.40); color: var(--good); background: rgba(80,250,160,0.06); }
+  .banner[data-state="off"]   { border-color: rgba(255,184,77,0.40); color: var(--warn); background: rgba(255,184,77,0.07); }
+  .banner[data-state="bad"]   { border-color: rgba(255,90,90,0.40);  color: var(--bad);  background: rgba(255,90,90,0.07); }
+  .wt { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--stroke); border-radius: var(--r-sm); }
+  .wt .label { font-size: 13px; color: var(--hull); }
+  .wt .meta { font-family: var(--font-mono); font-size: 10px; color: var(--hull-3); letter-spacing: 0.10em; margin-top: 3px; }
+  .wt .meta.got { color: var(--good); }
+  .how { font-size: 12px; color: var(--hull-2); line-height: 1.7; }
+  .how code, .how .mono { font-family: var(--font-mono); color: var(--cyan-1); }
+  #esrganDepsBox { display: none; }
+</style>
+</head>
+<body class="has-topnav">
+<div class="abyss"></div>
+<div class="rays"></div>
+
+<nav class="topnav">
+  <div class="lockup"><img src="assets/seekdeep-mark.webp" alt="SeekDeep" /><span class="wm">SEEK<em>DEEP</em></span></div>
+  <div class="links">
+    <a href="index.html">About</a>
+    <a href="app.html">Control Center</a>
+    <a href="chat.html">Chat</a>
+    <a href="image-ab.html">Image A/B</a>
+    <a href="installer.html">Installer</a>
+    <a href="docs.html">Docs</a>
+  </div>
+  <div class="row"><span class="pill" data-version><span class="dot"></span><span data-version>v—</span> · LOCAL</span></div>
+</nav>
+
+<div class="app-wrap">
+  <div class="panel">
+    <div>
+      <h1>Upscale Model · Real-ESRGAN</h1>
+      <div class="sub" style="margin-top:4px;">▸ AI super-resolution for the <code>@SeekDeep upscale</code> / right-click “Upscale” path</div>
+    </div>
+
+    <div class="banner" id="esrganStatus" data-state="checking">● Real-ESRGAN · checking…</div>
+
+    <div class="card" id="esrganDepsBox">
+      <div style="font-size:13px;color:var(--warn);">ML libraries required</div>
+      <div class="how">Real-ESRGAN needs the ML libraries (<code>spandrel</code> + torch). Open <a href="app.html">Control Center</a> → <strong style="color:var(--cyan-1)">Install ML libraries</strong>, then come back and download a weight below. (Until then, upscale uses the Lanczos resize.)</div>
+    </div>
+
+    <div class="card">
+      <div class="sub">Weights · click to download</div>
+      <div id="esrganGrid" style="display:flex;flex-direction:column;gap:8px;">
+        <div class="how">Loading…</div>
+      </div>
+      <div class="how" style="margin-top:2px;">
+        Downloading also writes <code>SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on</code> to your <code>.env</code> so it survives a restart. Weights land in <span id="esrganDir" class="mono"></span>.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sub">How it works</div>
+      <ol class="how" style="margin:0;padding-left:18px;">
+        <li>Make sure the ML libraries are installed — the banner turns green when Real-ESRGAN is ready.</li>
+        <li>Pick a weight and hit <strong style="color:var(--cyan-1)">Download</strong> (~64&nbsp;MB). <strong>x4</strong> is the general-purpose pick.</li>
+        <li>It activates immediately — the next <code>@SeekDeep upscale</code> uses Real-ESRGAN instead of Lanczos. <strong>Restart the bot once</strong> for Discord to pick up the flag.</li>
+        <li>No model or deps? Upscale silently falls back to the Lanczos resize, so it always works.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<script src="upscale.page.js" defer></script>
+<script src="pages.js" defer></script>
+<script src="nav.js" defer></script>
+</body>
+</html>

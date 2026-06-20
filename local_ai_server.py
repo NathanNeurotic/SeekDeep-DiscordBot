@@ -5785,10 +5785,12 @@ def check_realesrgan_available() -> tuple[bool, str]:
         return False, "Real-ESRGAN feature flag (SEEKDEEP_FEATURE_UPSCALE_REALESRGAN) is not 'on'."
     try:
         import torch  # noqa: F401
-        from basicsr.archs.rrdbnet_arch import RRDBNet  # noqa: F401
-        from realesrgan import RealESRGANer  # noqa: F401
+        from spandrel import ImageModelDescriptor, ModelLoader  # noqa: F401
     except ImportError as e:
-        return False, f"Missing Python dependency for Real-ESRGAN: {e}"
+        # spandrel loads ESRGAN/RealESRGAN .pth on modern torch/torchvision —
+        # the legacy basicsr/realesrgan stack imports torchvision.transforms.
+        # functional_tensor, removed in torchvision>=0.17, so it can't be used here.
+        return False, f"Missing Python dependency for Real-ESRGAN (pip install spandrel): {e}"
 
     weights = _resolve_realesrgan_weights()
     if weights is None:
@@ -6005,8 +6007,8 @@ def upscale(req: UpscaleRequest):
             return finish_pil_upscale(f"Real-ESRGAN unavailable, used Lanczos: {err_msg}")
         try:
             import numpy as np
-            from basicsr.archs.rrdbnet_arch import RRDBNet
-            from realesrgan import RealESRGANer
+            import torch
+            from spandrel import ImageModelDescriptor, ModelLoader
 
             # Weights: explicit SEEKDEEP_REALESRGAN_MODEL_PATH first, else a
             # *.pth in <cache>/realesrgan. check_realesrgan_available() already
@@ -6015,34 +6017,16 @@ def upscale(req: UpscaleRequest):
             if model_path is None:
                 raise RuntimeError("Real-ESRGAN weights vanished between check and load")
 
-            # Optional arch override (e.g. RealESRGAN_x4plus / *_anime_6B). When
-            # unset we infer the arch from the weights filename, matching the
-            # legacy behavior.
-            model_name = (os.getenv("SEEKDEEP_REALESRGAN_MODEL_NAME") or "").strip()
-            name_hint = (model_name or model_path.name).lower()
-
-            num_block = 6 if ("anime" in name_hint or "6b" in name_hint) else 23
-
-            model_scale = 4
-            if "x2" in name_hint:
-                model_scale = 2
-            elif "x3" in name_hint:
-                model_scale = 3
-            elif "x4" in name_hint:
-                model_scale = 4
-
-            model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=num_block, num_grow_ch=32, scale=model_scale)
+            # spandrel auto-detects the architecture (RRDBNet / RealESRGAN /
+            # ESRGAN variants) straight from the .pth, so we no longer hand-build
+            # RRDBNet or guess num_block/scale from the filename. This is what lets
+            # the path run on modern torch/torchvision — basicsr+realesrgan import
+            # torchvision.transforms.functional_tensor (removed in tv>=0.17).
             device = "cuda" if cuda_available() else "cpu"
-            upsampler = RealESRGANer(
-                scale=model_scale,
-                model_path=str(model_path),
-                model=model,
-                tile=0,
-                tile_pad=10,
-                pre_pad=0,
-                half=(device == "cuda"),
-                device=device
-            )
+            descriptor = ModelLoader().load_from_file(str(model_path))
+            if not isinstance(descriptor, ImageModelDescriptor):
+                raise RuntimeError(f"{model_path.name} is not a single-image upscaler model")
+            descriptor.to(device).eval()
 
             img_for_upscale = source_img
             max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
@@ -6061,14 +6045,33 @@ def upscale(req: UpscaleRequest):
                     f"cap={upscale_clamp_meta['max_output_pixels']}"
                 )
 
-            img_np = np.array(img_for_upscale)
-            if img_for_upscale.mode == "RGBA":
-                img_np = img_np[:, :, :3]
-            img_np = img_np[:, :, ::-1] # RGB to BGR
+            # PIL RGB -> float tensor (1,3,H,W) in [0,1]; spandrel models take RGB.
+            rgb = img_for_upscale.convert("RGB")
+            arr = np.asarray(rgb, dtype="float32") / 255.0
+            in_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
+            try:
+                with torch.no_grad():
+                    out_t = descriptor(in_t)
+                out_np = (out_t.squeeze(0).permute(1, 2, 0)
+                          .clamp(0.0, 1.0).float().cpu().numpy())
+            finally:
+                # Free the upscaler immediately — it's not tracked by the model
+                # router's VRAM budget, so don't leave it resident after the call.
+                del descriptor, in_t
+                if device == "cuda":
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+            up_img = Image.fromarray((out_np * 255.0).round().astype("uint8"), mode="RGB")
 
-            out_img, _ = upsampler.enhance(img_np, outscale=scale)
-            out_img = out_img[:, :, ::-1] # BGR to RGB
-            img = Image.fromarray(out_img)
+            # The model upsamples at its OWN native scale (e.g. x4); resize to the
+            # user's requested scale with Lanczos so 2x/3x requests aren't forced up.
+            target_w = int(round(img_for_upscale.width * scale))
+            target_h = int(round(img_for_upscale.height * scale))
+            if (up_img.width, up_img.height) != (target_w, target_h):
+                up_img = up_img.resize((target_w, target_h), lanczos_filter)
+            img = up_img
 
             # Apply sharpening if requested
             sharpened = bool(req.sharpen and int(req.sharpen_percent) > 0)
@@ -6812,6 +6815,125 @@ def _tts_voices_state() -> list:
             "active": downloaded and str(onnx).replace("\\", "/").lower() == cur,
         })
     return out
+
+
+# ---- Real-ESRGAN self-service (mirrors the TTS voice download flow) ----
+# Curated upscaler weights, downloaded on demand into <cache>/realesrgan and
+# loaded by spandrel (architecture auto-detected from the .pth). x4 is the
+# general-purpose default. Weights are NOT bundled — until one is downloaded
+# (or SEEKDEEP_REALESRGAN_MODEL_PATH is set) /upscale stays on Lanczos.
+_REALESRGAN_REPO = "ai-forever/Real-ESRGAN"
+_REALESRGAN_CATALOG = [
+    {"key": "x4", "file": "RealESRGAN_x4.pth", "label": "RealESRGAN x4 — general purpose (recommended)", "native_scale": 4, "approx_mb": 64},
+    {"key": "x2", "file": "RealESRGAN_x2.pth", "label": "RealESRGAN x2 — lighter, 2× native", "native_scale": 2, "approx_mb": 64},
+    {"key": "x8", "file": "RealESRGAN_x8.pth", "label": "RealESRGAN x8 — maximum enlargement", "native_scale": 8, "approx_mb": 64},
+]
+_REALESRGAN_DOWNLOAD_LOCK = threading.Lock()
+
+
+def _realesrgan_dir() -> Path:
+    return MODEL_CACHE_DIR / "realesrgan"
+
+
+def _realesrgan_installed_files() -> "list[str]":
+    d = _realesrgan_dir()
+    if not d.exists():
+        return []
+    return sorted(p.name for p in d.glob("*.pth"))
+
+
+@app.get("/upscale/realesrgan/status")
+def realesrgan_status():
+    """Real-ESRGAN readiness for the GUI consent card. Open (read-only) like
+    /tts/voices so the page renders before any token use. Reports the feature
+    flag, whether spandrel (ML dep) is importable, which weights are cached, and
+    the resolved ready/reason from check_realesrgan_available()."""
+    enabled = os.getenv("SEEKDEEP_FEATURE_UPSCALE_REALESRGAN") == "on"
+    try:
+        import spandrel  # noqa: F401
+        deps_ok, deps_err = True, ""
+    except Exception as exc:  # noqa: BLE001
+        deps_ok, deps_err = False, str(exc)[:200]
+    installed = _realesrgan_installed_files()
+    weights = _resolve_realesrgan_weights()
+    ready, reason = check_realesrgan_available()
+    catalog = [{**c, "downloaded": c["file"] in installed} for c in _REALESRGAN_CATALOG]
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "deps_installed": deps_ok,
+        "deps_error": deps_err,
+        "weights_dir": str(_realesrgan_dir()),
+        "installed": installed,
+        "active_weights": (str(weights).replace("\\", "/") if weights else ""),
+        "ready": ready,
+        "reason": reason,
+        "catalog": catalog,
+    }
+
+
+class RealesrganDownloadRequest(BaseModel):
+    key: str = Field("x4", description="catalog key: x2 / x4 / x8")
+
+
+@app.post("/upscale/realesrgan/download", dependencies=[Depends(require_gui_token)])
+def realesrgan_download(req: RealesrganDownloadRequest):
+    """Download a curated Real-ESRGAN weight into <cache>/realesrgan and flip the
+    feature ON live (in-process). Persisting SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on
+    to .env (restart-survival) is the GUI's job via POST /config afterward. The
+    weights are usable only once spandrel is installed (ML deps); status still
+    reports deps_installed so the card can prompt an ML-deps install first."""
+    entry = next((c for c in _REALESRGAN_CATALOG if c["key"] == req.key), None)
+    if entry is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": f"unknown weight key {req.key!r}"})
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return JSONResponse(status_code=501, content={"ok": False, "error": "huggingface_hub not installed."})
+    target_dir = _realesrgan_dir()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    out_path = None
+    # Same offline-state dance as /tts/voices/download: the server runs HF offline
+    # by default; lift it JUST for this fetch under the lock (a sync route runs in
+    # a threadpool, so overlapping downloads would race the global offline state),
+    # then restore — a lost restore could leave the server permanently online.
+    with _REALESRGAN_DOWNLOAD_LOCK:
+        import huggingface_hub.constants as _hfc
+        saved_const = getattr(_hfc, "HF_HUB_OFFLINE", False)
+        saved_env = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")}
+        try:
+            try: _hfc.HF_HUB_OFFLINE = False
+            except Exception: pass
+            for k in saved_env: os.environ.pop(k, None)
+            kw = {"repo_id": _REALESRGAN_REPO, "local_dir": str(target_dir), "local_files_only": False}
+            if os.getenv("HF_TOKEN"): kw["token"] = os.getenv("HF_TOKEN")
+            out_path = hf_hub_download(filename=entry["file"], **kw)
+        except Exception as exc:  # noqa: BLE001 — surface a trimmed message to the GUI
+            print(f"[SeekDeep Local AI] /upscale/realesrgan/download error: {exc}")
+            traceback.print_exc()
+            return JSONResponse(status_code=502, content={"ok": False, "error": f"download failed: {str(exc)[:300]}"})
+        finally:
+            try: _hfc.HF_HUB_OFFLINE = saved_const
+            except Exception: pass
+            for k, val in saved_env.items():
+                if val is not None:
+                    os.environ[k] = val
+    # Enable the feature live (in-process); GUI persists the flag to .env next.
+    os.environ["SEEKDEEP_FEATURE_UPSCALE_REALESRGAN"] = "on"
+    ready, reason = check_realesrgan_available()
+    print(f"[SeekDeep Local AI] Real-ESRGAN weight downloaded: {out_path} (ready={ready})", flush=True)
+    return {
+        "ok": True,
+        "key": req.key,
+        "file": entry["file"],
+        "path": str(out_path).replace("\\", "/"),
+        "enabled": True,
+        "ready": ready,
+        "reason": reason,
+    }
 
 
 @app.get("/tts/voices")

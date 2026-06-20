@@ -82,6 +82,14 @@ open-clip-torch>=3.3.0
 qwen-vl-utils>=0.0.14
 imageio>=2.36.0
 imageio-ffmpeg>=0.5.1
+# spandrel — loads ESRGAN / Real-ESRGAN .pth upscaler weights with the
+# architecture auto-detected, and (unlike basicsr+realesrgan) runs on modern
+# torch/torchvision: basicsr imports torchvision.transforms.functional_tensor,
+# removed in torchvision>=0.17, so the legacy stack is unusable on the pinned
+# torch 2.11 / torchvision 0.26 above. Powers the right-click "Upscale" path's
+# Real-ESRGAN mode (gated behind SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on; weights
+# pulled on demand from the Upscale Model page). Light — just torch + safetensors.
+spandrel>=0.4.1
 # Piper TTS engine — powers /tts (the Discord `tts say` command + the GUI's
 # TTS Voice page). Provides the `piper` module (PiperVoice + SynthesisConfig)
 # and pulls a CPU onnxruntime (~14 MB; Piper is tiny/fast on CPU, no GPU needed).
