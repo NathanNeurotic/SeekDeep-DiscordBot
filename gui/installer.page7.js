@@ -517,6 +517,8 @@ const SEEKDEEP_BASE = (function() {
   (function wireDockerTryStart() {
     const tryBtn = document.getElementById('dockerTryStartBtn');
     const installLink = document.getElementById('dockerInstallLink');
+    const installBtn = document.getElementById('dockerInstallBtn');
+    const isWindows = /win/i.test((navigator.userAgent || navigator.platform || ''));
     if (!tryBtn) return;
     const isTauri = !!(window.__TAURI__) || (window.location.hostname || '') === 'tauri.localhost';
     if (!isTauri || !window.__TAURI__?.core) {
@@ -536,8 +538,15 @@ const SEEKDEEP_BASE = (function() {
         } else if (result?.state === 'launched') {
           if (sdn) sdn.toast({ tone: 'good', title: 'Docker Desktop launching…', body: 'Give it ~20-30 s to start up, then re-run System Check.', ttl: 6000 });
         } else if (result?.state === 'not_installed') {
-          if (sdn) sdn.toast({ tone: 'info', title: 'Docker not installed', body: 'Opening docker.com/products/docker-desktop in your browser.', ttl: 5000 });
-          if (installLink) installLink.click();
+          if (isWindows && installBtn) {
+            // Windows: offer a one-click winget install (keep the manual link as a fallback).
+            installBtn.style.display = '';
+            if (installLink) installLink.style.display = '';
+            if (sdn) sdn.toast({ tone: 'info', title: 'Docker not installed', body: 'Click "Install (winget)" for a one-click install, or use the docker.com link.', ttl: 7000 });
+          } else {
+            if (sdn) sdn.toast({ tone: 'info', title: 'Docker not installed', body: 'Opening docker.com/products/docker-desktop in your browser.', ttl: 5000 });
+            if (installLink) installLink.click();
+          }
         } else {
           if (sdn) sdn.toast({ tone: 'bad', title: 'Docker launch failed', body: result?.detail || 'unknown error; launch Docker Desktop manually', ttl: 7000 });
         }
@@ -550,6 +559,45 @@ const SEEKDEEP_BASE = (function() {
         tryBtn.disabled = false;
       }
     });
+    // One-click winget install of Docker Desktop (Windows). POST is token-gated;
+    // nav.js's fetch interceptor auto-attaches X-SeekDeep-Token. The install can
+    // take several minutes (multi-GB download), so the timeout matches the
+    // server's 900s budget and we toast progress rather than block silently.
+    if (installBtn) {
+      installBtn.addEventListener('click', async () => {
+        const sdn = window.SeekDeepNotify;
+        const orig = installBtn.textContent;
+        installBtn.disabled = true;
+        installBtn.textContent = 'Installing… (several min)';
+        if (sdn) sdn.toast({ tone: 'info', title: 'Installing Docker Desktop via winget', body: 'Downloads a few GB — can take several minutes. Leave this open.', ttl: 9000 });
+        try {
+          const r = await fetch(SEEKDEEP_BASE + '/system/install-docker', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: '{}', signal: AbortSignal.timeout(900_000),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok !== false) {
+            installBtn.textContent = '✓ Installed';
+            installBtn.style.background = 'var(--good)';
+            if (sdn) sdn.toast({ tone: 'good', title: 'Docker Desktop installed', body: 'Launch it once so the daemon starts, then re-run System Check.', ttl: 9000 });
+            setTimeout(runAllChecks, 3000);
+          } else {
+            installBtn.textContent = '✕ Failed';
+            installBtn.style.background = 'var(--bad)';
+            const detail = (data.error || data.detail || '').slice(0, 200);
+            if (sdn) sdn.toast({ tone: 'bad', title: 'Docker install failed', body: detail || 'Install manually from docker.com.', ttl: 9000 });
+            if (installLink) installLink.style.display = ''; // fall back to the manual link
+          }
+        } catch (err) {
+          installBtn.textContent = '✕ Error';
+          installBtn.style.background = 'var(--bad)';
+          if (sdn) sdn.toast({ tone: 'bad', title: 'Docker install error', body: String(err).slice(0, 200), ttl: 9000 });
+          if (installLink) installLink.style.display = '';
+        } finally {
+          setTimeout(() => { installBtn.disabled = false; installBtn.textContent = orig; installBtn.style.background = ''; }, 6000);
+        }
+      });
+    }
   })();
   // SearXNG row "Start" button — same /docker/start-searxng endpoint used by
   // the standalone SearXNG step pane, but inline on the System Check row so
