@@ -2345,7 +2345,11 @@ def register_gui_endpoints(
         # Face, so a fresh install can't download it without a token + accepted
         # license. Non-blocking: users who skip it fall back to the ungated
         # Granite model, which works. HF tokens are `hf_` + ~34 alphanumerics.
-        hf_tok = (env.get("HF_TOKEN") or env.get("HUGGINGFACE_TOKEN") or "").strip()
+        # Also honour a globally-exported token (Docker/CI/user profile) via
+        # os.getenv, not just .env — local_ai_server reads it the same way, so
+        # .env-only here would false-warn when the token is in the process env.
+        hf_tok = (env.get("HF_TOKEN") or env.get("HUGGINGFACE_TOKEN")
+                  or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or "").strip()
         checks.append({
             "id": "hf_token",
             "label": "HF_TOKEN set (for gated models like the default Llama-3.1)",
@@ -2450,8 +2454,57 @@ def register_gui_endpoints(
         # 8. At least one chat model can be loaded — HF cache or Ollama tag.
         # Best-effort: check HF cache dir + ollama daemon. Skipping the full
         # cache scan here to keep this endpoint snappy (<200ms typical).
-        hf_cache = Path(env.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface"))
-        has_hf_cache = hf_cache.is_dir() and any(hf_cache.iterdir()) if hf_cache.exists() else False
+        #
+        # Hard-lock fix: the `env` dict's HF_HOME is usually blank, so the old
+        # check fell back to ~/.cache/huggingface — empty in the repo-local
+        # default — reading has_hf_cache=False and (now that chat_model is a
+        # blocking gate) trapping first-run even though models live in
+        # <repo>/models/huggingface. local_ai_server force-sets
+        # LOCAL_MODEL_CACHE_DIR / HF_HUB_CACHE / HF_HOME in os.environ, so read
+        # the PROCESS env (os.getenv) and the env-independent repo default —
+        # not just `env`. Gate each candidate on a models--*/datasets--*/spaces--*
+        # child (mirrors the scan helper + warmup) instead of directory-non-
+        # emptiness: <repo>/models ships a committed .gitkeep and the cache dir
+        # gets a CACHEDIR.TAG/.locks at boot, so a bare non-empty check would
+        # false-positive on a model-less install and silently defeat the gate.
+        def _hf_cache_has_repo(d) -> bool:
+            try:
+                p = Path(d)
+                if not p.is_dir():
+                    return False
+                for child in p.iterdir():
+                    n = child.name
+                    if n.startswith("models--") or n.startswith("datasets--") or n.startswith("spaces--"):
+                        return True
+            except (OSError, ValueError):
+                pass
+            return False
+
+        def _resolve_env_dir(val):
+            if not val:
+                return None
+            val = str(val).strip()
+            if not val:
+                return None
+            rp = Path(val)
+            return rp if rp.is_absolute() else (root / rp)
+
+        home_hf = Path(os.path.expanduser("~/.cache/huggingface"))
+        _hf_candidates = [
+            os.getenv("LOCAL_MODEL_CACHE_DIR"),                  # process env (force-set by local_ai_server) — PRIMARY
+            os.getenv("HF_HUB_CACHE"),                           # == cache dir
+            _resolve_env_dir(env.get("LOCAL_MODEL_CACHE_DIR")),  # explicit .env override
+            root / "models" / "huggingface",                    # repo-local default, no env reliance
+            home_hf / "hub",                                     # stock HF location
+            home_hf,                                             # stock HF root (some layouts)
+        ]
+        # HF_HOME points at the cache *root*; the models--* dirs live in its
+        # hub/ or huggingface/ subdir (process env first, then .env override).
+        for _hf_home in (os.getenv("HF_HOME"), env.get("HF_HOME")):
+            _hh = _resolve_env_dir(_hf_home)
+            if _hh is not None:
+                _hf_candidates += [_hh, _hh / "hub", _hh / "huggingface"]
+        has_hf_cache = any(_hf_cache_has_repo(d) for d in _hf_candidates if d is not None)
         try:
             with socket.create_connection(("127.0.0.1", 11434), timeout=1):
                 ollama_up = True
