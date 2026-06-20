@@ -2691,7 +2691,11 @@ def register_gui_endpoints(
         if chat_backend in ("openai-compat", "anthropic", "gemini"):
             chat_ready = bool(chat_id)
             fix_copy = "" if chat_id else _no_model_copy
-        elif is_local_path:
+        elif is_local_path and chat_backend != "ollama":
+            # A local model DIR loads from disk — but only honour it when the
+            # backend isn't explicitly Ollama. If the user picked ollama, respect
+            # that and require the daemon below even if a dir happens to share the
+            # model id's name (don't let a coincidental dir bypass the gate).
             chat_ready = True
             fix_copy = ""
         elif chat_backend == "ollama" or "/" not in chat_id:
