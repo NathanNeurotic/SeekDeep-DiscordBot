@@ -1799,8 +1799,8 @@ def _seekdeep_provider_urlopen(req, timeout, max_redirects: int = 5):
                 hk_l = hk.lower()
                 if cross_host and hk_l in _SEEKDEEP_SENSITIVE_HEADERS:
                     continue  # don't leak the provider key to a redirected host
-                if _drop_body_headers and hk_l in ("content-type", "content-length"):
-                    continue  # stale framing for the now-dropped POST body
+                if _drop_body_headers and hk_l.startswith("content-"):
+                    continue  # every content-* header is stale once the body is dropped
                 nreq.add_header(hk, hv)
             try:
                 e.close()
