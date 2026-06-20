@@ -37,7 +37,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.0",
     "@tauri-apps/cli": "^2.0.0"
   },
   "overrides": {
