@@ -570,6 +570,7 @@ const SEEKDEEP_BASE = (function() {
         installBtn.disabled = true;
         installBtn.textContent = 'Installing… (several min)';
         if (sdn) sdn.toast({ tone: 'info', title: 'Installing Docker Desktop via winget', body: 'Downloads a few GB — can take several minutes. Leave this open.', ttl: 9000 });
+        let success = false;
         try {
           const r = await fetch(SEEKDEEP_BASE + '/system/install-docker', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -577,10 +578,19 @@ const SEEKDEEP_BASE = (function() {
           });
           const data = await r.json().catch(() => ({}));
           if (r.ok && data.ok !== false) {
+            success = true;
             installBtn.textContent = '✓ Installed';
             installBtn.style.background = 'var(--good)';
             if (sdn) sdn.toast({ tone: 'good', title: 'Docker Desktop installed', body: 'Launch it once so the daemon starts, then re-run System Check.', ttl: 9000 });
-            setTimeout(runAllChecks, 3000);
+            // Install is a one-shot terminal action: keep the ✓ result sticky,
+            // then hide the install controls so a 6s-later reset can't invite a
+            // redundant multi-GB re-install. Re-probe in the SAME timer (don't
+            // also schedule a second runAllChecks).
+            setTimeout(() => {
+              installBtn.style.display = 'none';
+              if (installLink) installLink.style.display = 'none';
+              runAllChecks();
+            }, 3000);
           } else {
             installBtn.textContent = '✕ Failed';
             installBtn.style.background = 'var(--bad)';
@@ -594,7 +604,12 @@ const SEEKDEEP_BASE = (function() {
           if (sdn) sdn.toast({ tone: 'bad', title: 'Docker install error', body: String(err).slice(0, 200), ttl: 9000 });
           if (installLink) installLink.style.display = '';
         } finally {
-          setTimeout(() => { installBtn.disabled = false; installBtn.textContent = orig; installBtn.style.background = ''; }, 6000);
+          // Only reset+re-enable for retry on failure/error. On success the
+          // button stays ✓ then hides above — never reverts to a clickable
+          // "Install (winget)" that would re-trigger the install.
+          if (!success) {
+            setTimeout(() => { installBtn.disabled = false; installBtn.textContent = orig; installBtn.style.background = ''; }, 6000);
+          }
         }
       });
     }
