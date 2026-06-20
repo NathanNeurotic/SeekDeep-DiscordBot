@@ -6029,8 +6029,6 @@ def upscale(req: UpscaleRequest):
             descriptor = ModelLoader().load_from_file(str(model_path))
             if not isinstance(descriptor, ImageModelDescriptor):
                 raise RuntimeError(f"{model_path.name} is not a single-image upscaler model")
-            descriptor.to(device).eval()
-
             img_for_upscale = source_img
             max_pixels = int(os.getenv("SEEKDEEP_UPSCALE_MAX_OUTPUT_PIXELS", "20000000"))
             if source_img.width * source_img.height * scale * scale > int(max_pixels):
@@ -6048,22 +6046,30 @@ def upscale(req: UpscaleRequest):
                     f"cap={upscale_clamp_meta['max_output_pixels']}"
                 )
 
-            # PIL RGB -> float tensor (1,3,H,W) in [0,1]; spandrel models take RGB.
-            rgb = img_for_upscale.convert("RGB")
-            arr = np.asarray(rgb, dtype="float32") / 255.0
-            in_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
+            # EVERYTHING that touches the GPU — moving the model on, the input
+            # tensor, the inference — lives inside this try so the finally ALWAYS
+            # frees the upscaler + tensors, even if descriptor.to(device) or the
+            # input move OOMs before inference (descriptor is bound on CPU above).
+            # None are tracked by the model router's VRAM budget, so leaving them
+            # resident through the CPU-bound encode/save/b64 (or the Lanczos
+            # fallback) would strand VRAM. PIL RGB -> float tensor (1,3,H,W) in
+            # [0,1]; spandrel models take RGB. out_np is a CPU copy, so once it's
+            # extracted empty_cache() can reclaim the GPU side.
+            in_t = None
             out_t = None
             try:
+                descriptor.to(device).eval()
+                rgb = img_for_upscale.convert("RGB")
+                arr = np.asarray(rgb, dtype="float32") / 255.0
+                in_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
                 with torch.no_grad():
                     out_t = descriptor(in_t)
                 out_np = (out_t.squeeze(0).permute(1, 2, 0)
                           .clamp(0.0, 1.0).float().cpu().numpy())
             finally:
-                # Free the upscaler AND the GPU output tensor immediately — neither
-                # is tracked by the model router's VRAM budget, so don't leave them
-                # resident through the CPU-bound encode/save/b64 that follows
-                # (out_np is already a CPU copy, so empty_cache can then reclaim).
-                del descriptor, in_t
+                del descriptor
+                if in_t is not None:
+                    del in_t
                 if out_t is not None:
                     del out_t
                 if device == "cuda":
