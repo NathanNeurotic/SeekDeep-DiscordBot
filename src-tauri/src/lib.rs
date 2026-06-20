@@ -435,49 +435,269 @@ fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!({ "ok": false, "state": "not_installed" }));
     }
     // 3. Docker is installed but not running. Try to launch Docker Desktop.
-    #[cfg(windows)]
-    {
-        // The standard install path. If the user has it elsewhere, the spawn
-        // will fail and we surface "launch_failed" so they can launch
-        // manually.
-        let candidates = [
-            r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
-            r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
-        ];
-        for path in &candidates {
-            if std::path::Path::new(path).exists() {
-                // TAU-9: pin cmd to %SystemRoot%\System32\cmd.exe (PATH-hijack).
-                let spawn = std::process::Command::new(sidecar::resolve_system_tool("cmd"))
-                    .args(["/C", "start", "", path])
-                    .spawn();
-                if spawn.is_ok() {
-                    return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
-                }
+    match launch_docker_desktop() {
+        Ok(()) => Ok(serde_json::json!({ "ok": true, "state": "launched" })),
+        Err(detail) => Ok(serde_json::json!({ "ok": false, "state": "launch_failed", "detail": detail })),
+    }
+}
+
+/// Launch Docker Desktop (or the platform daemon). Shared by
+/// `try_start_docker_desktop` and the SearXNG-stack command below so there's
+/// one launch implementation. Ok(()) = spawn succeeded (the daemon still
+/// needs ~20-30s to come up); Err(detail) = couldn't find/launch it.
+#[cfg(windows)]
+fn launch_docker_desktop() -> Result<(), String> {
+    // Standard install paths. If the user has it elsewhere, every spawn fails
+    // and we surface a "launch manually" detail.
+    let candidates = [
+        r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
+        r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            // TAU-9: pin cmd to %SystemRoot%\System32\cmd.exe (PATH-hijack).
+            if std::process::Command::new(sidecar::resolve_system_tool("cmd"))
+                .args(["/C", "start", "", path])
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
             }
         }
-        return Ok(serde_json::json!({
-            "ok": false,
-            "state": "launch_failed",
-            "detail": "couldn't find Docker Desktop.exe in the default install paths; launch it manually from the Start menu.",
-        }));
     }
-    #[cfg(target_os = "macos")]
-    {
-        let spawn = std::process::Command::new("open").args(["-a", "Docker"]).spawn();
-        if spawn.is_ok() {
-            return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
+    Err("couldn't find Docker Desktop.exe in the default install paths; launch it manually from the Start menu.".to_string())
+}
+#[cfg(target_os = "macos")]
+fn launch_docker_desktop() -> Result<(), String> {
+    std::process::Command::new("open")
+        .args(["-a", "Docker"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "open -a Docker failed".to_string())
+}
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn launch_docker_desktop() -> Result<(), String> {
+    // Linux: Docker is usually a systemd service. Try systemctl start.
+    let st = std::process::Command::new("systemctl")
+        .args(["--user", "start", "docker"])
+        .status();
+    if matches!(st, Ok(s) if s.success()) {
+        Ok(())
+    } else {
+        Err("systemctl --user start docker failed; try `sudo systemctl start docker`".to_string())
+    }
+}
+
+/// Run a command with a wall-clock timeout, capturing stdout/stderr.
+/// `std::process` has no built-in timeout, so we spawn, drain both pipes on
+/// threads (a full pipe buffer would otherwise deadlock the child), and poll
+/// `try_wait` until the deadline — killing the child if it overruns. Returns
+/// (exited-zero, stdout, stderr, timed_out). Used for every `docker` call in
+/// the SearXNG stack so a half-started daemon or a slow image pull can't wedge
+/// the wait loop forever.
+fn run_capture_within(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> (bool, String, String, bool) {
+    use std::io::Read;
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (false, String::new(), format!("spawn failed: {e}"), false),
+    };
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_handle = thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(ref mut p) = out_pipe {
+            let _ = p.read_to_string(&mut s);
         }
-        return Ok(serde_json::json!({ "ok": false, "state": "launch_failed", "detail": "open -a Docker failed" }));
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        // Linux: Docker is usually a systemd service. Try systemctl start.
-        let spawn = std::process::Command::new("systemctl").args(["--user", "start", "docker"]).status();
-        if matches!(spawn, Ok(s) if s.success()) {
-            return Ok(serde_json::json!({ "ok": true, "state": "launched" }));
+        s
+    });
+    let err_handle = thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(ref mut p) = err_pipe {
+            let _ = p.read_to_string(&mut s);
         }
-        return Ok(serde_json::json!({ "ok": false, "state": "launch_failed", "detail": "systemctl --user start docker failed; try `sudo systemctl start docker`" }));
+        s
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let (success, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status.success(), false),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break (false, true);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+            Err(_) => break (false, false),
+        }
+    };
+    let stdout = out_handle.join().unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or_default();
+    (success, stdout, stderr, timed_out)
+}
+
+/// Is the Docker daemon answering? Mirrors gui_endpoints.py
+/// `_seekdeep_docker_daemon_up` (bounded `docker info`).
+fn docker_daemon_up(docker_cli: &std::ffi::OsStr) -> bool {
+    let mut c = std::process::Command::new(docker_cli);
+    c.args(["info", "--format", "{{.ServerVersion}}"]);
+    run_capture_within(c, Duration::from_secs(12)).0
+}
+
+/// Is SearXNG answering on loopback :8080? Mirrors gui_endpoints.py
+/// `_seekdeep_searxng_reachable` — both the Python boot path and the firstrun
+/// check hardcode 8080 for the container, so we match exactly.
+fn searxng_reachable() -> bool {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+    TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).is_ok()
+}
+
+/// How long to wait for the Docker daemon after launching Docker Desktop
+/// (poll every 4s). Matches the Python boot autostart budget.
+const SEARXNG_DAEMON_WAIT_S: u64 = 120;
+
+/// Gap 3 — one-click "bring up web search" for onboarding.
+///
+/// Atomically: probe SearXNG → ensure the Docker daemon is up (launching
+/// Docker Desktop and waiting up to ~2 min if needed) → start the SearXNG
+/// container. Uses the SAME container name, port (8080), and config volume
+/// (`<runtime>/searxng`) as the Python boot path
+/// (gui_endpoints.py `_seekdeep_ensure_searxng_stack`), so whichever layer
+/// starts SearXNG the other sees it — no divergence.
+///
+/// Lives in the desktop shell (not the Python server) so it can recover web
+/// search even when the AI server is wedged/down — the shell is the
+/// always-available layer. Emits `searxng-stack:status` events
+/// ({stage, detail}) so the GUI can show live progress through the long wait.
+///
+/// Result `state`:
+///   already_up            — SearXNG already answering (ok).
+///   started               — container launched, answers in ~5-15s (ok).
+///   docker_not_installed  — no docker CLI; route to the Install step.
+///   docker_launch_failed  — found nothing to launch / spawn failed.
+///   daemon_timeout        — launched Docker but the daemon didn't answer in time.
+///   searxng_failed        — `docker run` failed (detail carries the reason).
+#[tauri::command]
+async fn start_searxng_stack(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let app_inner = app.clone();
+    // async + spawn_blocking: the daemon wait can take up to ~2 min and the
+    // image pull longer; the Tauri main thread must stay responsive.
+    tauri::async_runtime::spawn_blocking(move || ensure_searxng_stack_blocking(&app_inner))
+        .await
+        .map_err(|e| format!("searxng task join: {e}"))?
+}
+
+fn ensure_searxng_stack_blocking(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let emit = |stage: &str, detail: &str| {
+        let _ = app.emit(
+            "searxng-stack:status",
+            serde_json::json!({ "stage": stage, "detail": detail }),
+        );
+    };
+
+    // 0. Already up? Nothing to do.
+    if searxng_reachable() {
+        emit("already_up", "SearXNG is already answering on :8080.");
+        return Ok(serde_json::json!({ "ok": true, "state": "already_up" }));
     }
+
+    let docker_cli = resolve_docker_cli();
+
+    // 1. Ensure the Docker daemon is up.
+    if !docker_daemon_up(&docker_cli) {
+        emit("checking_docker", "Docker daemon is down — checking for Docker Desktop…");
+        // Installed at all?
+        let mut ver = std::process::Command::new(&docker_cli);
+        ver.arg("--version");
+        let installed = run_capture_within(ver, Duration::from_secs(10)).0;
+        if !installed {
+            emit("docker_not_installed", "Docker isn't installed.");
+            return Ok(serde_json::json!({ "ok": false, "state": "docker_not_installed" }));
+        }
+        // 2. Launch Docker Desktop.
+        emit("launching_docker", "Launching Docker Desktop…");
+        if let Err(detail) = launch_docker_desktop() {
+            emit("docker_launch_failed", &detail);
+            return Ok(serde_json::json!({ "ok": false, "state": "docker_launch_failed", "detail": detail }));
+        }
+        // 3. Wait for the daemon (poll every 4s up to the budget).
+        emit("waiting_daemon", "Waiting for the Docker daemon (up to 2 min)…");
+        let deadline = std::time::Instant::now() + Duration::from_secs(SEARXNG_DAEMON_WAIT_S);
+        loop {
+            thread::sleep(Duration::from_secs(4));
+            if docker_daemon_up(&docker_cli) {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let detail = format!(
+                    "Docker daemon didn't answer within {SEARXNG_DAEMON_WAIT_S}s; it may still be starting — retry shortly."
+                );
+                emit("daemon_timeout", &detail);
+                return Ok(serde_json::json!({ "ok": false, "state": "daemon_timeout", "detail": detail }));
+            }
+        }
+    }
+
+    // 4. Daemon is up — SearXNG may have come back with it (restart=unless-stopped).
+    if searxng_reachable() {
+        emit("already_up", "SearXNG is already answering on :8080.");
+        return Ok(serde_json::json!({ "ok": true, "state": "already_up" }));
+    }
+
+    // 5. Start the container — same name/port/volume as the Python boot path.
+    emit("starting_searxng", "Starting the SearXNG container…");
+    let runtime = sidecar::app_runtime_dir(app)?;
+    let searxng_dir = runtime.join("searxng");
+    std::fs::create_dir_all(&searxng_dir).map_err(|e| format!("create searxng config dir: {e}"))?;
+    let vol = format!("{}:/etc/searxng:rw", searxng_dir.display());
+    let image = std::env::var("SEEKDEEP_SEARXNG_IMAGE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "searxng/searxng:latest".to_string());
+
+    // Idempotent: drop any stale container so the flags below take effect
+    // (matches the Python path / seekdeep_launcher.bat).
+    let mut rm = std::process::Command::new(&docker_cli);
+    rm.args(["rm", "-f", "seekdeep-searxng"]);
+    let _ = run_capture_within(rm, Duration::from_secs(15));
+
+    let mut run = std::process::Command::new(&docker_cli);
+    run.args([
+        "run", "-d", "--name", "seekdeep-searxng",
+        "--restart", "unless-stopped", "-p", "8080:8080",
+        "-e", "BASE_URL=http://localhost:8080/",
+        "-e", "INSTANCE_NAME=SeekDeep",
+        "-v", &vol, &image,
+    ]);
+    // First run pulls the image (~hundreds of MB) — bound generously.
+    let (ok, out, err, timed_out) = run_capture_within(run, Duration::from_secs(180));
+    if timed_out {
+        let detail = "docker run timed out — the first run pulls the SearXNG image; retry once the pull finishes.".to_string();
+        emit("searxng_failed", &detail);
+        return Ok(serde_json::json!({ "ok": false, "state": "searxng_failed", "detail": detail }));
+    }
+    if !ok {
+        let mut detail = if !err.trim().is_empty() { err.trim().to_string() } else { out.trim().to_string() };
+        if detail.is_empty() {
+            detail = "docker run failed".to_string();
+        }
+        if detail.len() > 300 {
+            detail.truncate(300);
+        }
+        emit("searxng_failed", &detail);
+        return Ok(serde_json::json!({ "ok": false, "state": "searxng_failed", "detail": detail }));
+    }
+    let container_id: String = out.trim().chars().take(12).collect();
+    emit("started", "SearXNG started — it answers in ~5-15s.");
+    Ok(serde_json::json!({ "ok": true, "state": "started", "container_id": container_id }))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -495,6 +715,7 @@ pub fn run() {
             check_for_update,
             view_logs,
             try_start_docker_desktop,
+            start_searxng_stack,
         ])
         .setup(|app| {
             // TAU-N1: honour SEEKDEEP_* knobs set in <runtime>/.env. The shell
