@@ -5786,11 +5786,14 @@ def check_realesrgan_available() -> tuple[bool, str]:
     try:
         import torch  # noqa: F401
         from spandrel import ImageModelDescriptor, ModelLoader  # noqa: F401
-    except ImportError as e:
+    except ImportError:
         # spandrel loads ESRGAN/RealESRGAN .pth on modern torch/torchvision —
         # the legacy basicsr/realesrgan stack imports torchvision.transforms.
         # functional_tensor, removed in torchvision>=0.17, so it can't be used here.
-        return False, f"Missing Python dependency for Real-ESRGAN (pip install spandrel): {e}"
+        # Generic message (no exception text): this `reason` is surfaced by the
+        # OPEN /upscale/realesrgan/status endpoint, so don't flow the import
+        # exception into the response (CodeQL info-exposure-through-exception).
+        return False, "Real-ESRGAN needs the ML libraries (spandrel) installed — run the ML-deps install, then retry."
 
     weights = _resolve_realesrgan_weights()
     if weights is None:
@@ -6049,15 +6052,20 @@ def upscale(req: UpscaleRequest):
             rgb = img_for_upscale.convert("RGB")
             arr = np.asarray(rgb, dtype="float32") / 255.0
             in_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
+            out_t = None
             try:
                 with torch.no_grad():
                     out_t = descriptor(in_t)
                 out_np = (out_t.squeeze(0).permute(1, 2, 0)
                           .clamp(0.0, 1.0).float().cpu().numpy())
             finally:
-                # Free the upscaler immediately — it's not tracked by the model
-                # router's VRAM budget, so don't leave it resident after the call.
+                # Free the upscaler AND the GPU output tensor immediately — neither
+                # is tracked by the model router's VRAM budget, so don't leave them
+                # resident through the CPU-bound encode/save/b64 that follows
+                # (out_np is already a CPU copy, so empty_cache can then reclaim).
                 del descriptor, in_t
+                if out_t is not None:
+                    del out_t
                 if device == "cuda":
                     try:
                         torch.cuda.empty_cache()
@@ -6837,7 +6845,7 @@ def _realesrgan_dir() -> Path:
 
 def _realesrgan_installed_files() -> "list[str]":
     d = _realesrgan_dir()
-    if not d.exists():
+    if not d.is_dir():  # is_dir (not exists): a stray FILE at this path would make .glob raise
         return []
     return sorted(p.name for p in d.glob("*.pth"))
 
@@ -6852,8 +6860,10 @@ def realesrgan_status():
     try:
         import spandrel  # noqa: F401
         deps_ok, deps_err = True, ""
-    except Exception as exc:  # noqa: BLE001
-        deps_ok, deps_err = False, str(exc)[:200]
+    except Exception:  # noqa: BLE001
+        # Generic (no exception text): this endpoint is OPEN, so don't flow the
+        # ImportError/stack into the JSON response (CodeQL info-exposure).
+        deps_ok, deps_err = False, "spandrel (ML libraries) not installed"
     installed = _realesrgan_installed_files()
     weights = _resolve_realesrgan_weights()
     ready, reason = check_realesrgan_available()
