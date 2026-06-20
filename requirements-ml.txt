@@ -59,7 +59,7 @@ torchvision>=0.21,<0.27 ; platform_system != "Windows"
 # the audit's suggested transformers<5 / diffusers<0.40 would have
 # force-downgraded the working install, so cap at the next major instead.
 accelerate>=1.13.0,<2
-bitsandbytes>=0.45.0,<1.0
+bitsandbytes>=0.49.2,<1.0
 transformers>=4.51.0,<6
 diffusers>=0.33.0,<1.0
 safetensors>=0.5.0,<1.0
