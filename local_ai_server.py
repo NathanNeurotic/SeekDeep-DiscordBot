@@ -127,10 +127,18 @@ def _seekdeep_install_file_logging() -> None:
     _re_token = re.compile(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}")
     _re_bearer = re.compile(r"(authorization\s*[:=]\s*['\"]?bearer\s+)[^'\"\s]+", re.IGNORECASE)
     _re_apikey = re.compile(r"\b(hf_|sk-|nvapi-)[A-Za-z0-9_-]{16,}\b")
+    # The GUI token is secrets.token_urlsafe(32) — a flat, DOT-LESS string, so the
+    # JWT-shaped _re_token above never matches it. EventSource/WebSocket auth pass
+    # it as `?token=` (headers aren't possible there), and uvicorn access logging
+    # is on, so the request line "GET /logs/stream?token=<gui-token>" would land in
+    # the log unredacted. Scrub any token/api_key/key=… query value too.
+    _re_query_secret = re.compile(
+        r"([?&](?:token|api[_-]?key|access[_-]?token|key)=)[^&\s'\"]+", re.IGNORECASE)
     def _redact(s: str) -> str:
         s = _re_token.sub("[redacted-token]", s)
         s = _re_bearer.sub(r"\1[redacted]", s)
         s = _re_apikey.sub(r"\1[redacted]", s)
+        s = _re_query_secret.sub(r"\1[redacted]", s)
         return s
     _re_py_warning = re.compile(r":\s*\d+:\s*\w+Warning\b")  # 'file.py:765: DeprecationWarning'
     # tqdm-style progress lines look like 'Loading weights: 100%|██…| 5/5'.
@@ -1623,7 +1631,7 @@ import urllib.request as _seekdeep_urllib_req
 import urllib.error as _seekdeep_urllib_err
 import ipaddress as _seekdeep_ipaddr
 import socket as _seekdeep_socket
-from urllib.parse import urlparse as _seekdeep_urlparse
+from urllib.parse import urlparse as _seekdeep_urlparse, urljoin as _seekdeep_urljoin
 
 # AUD-SSRF: cloud-instance metadata endpoints — ALWAYS blocked for outbound provider
 # URLs (IAM-credential theft is the worst case). localhost / LAN are intentionally
@@ -1737,6 +1745,63 @@ def _seekdeep_read_capped(resp, max_bytes: int | None = None) -> str:
     return buf.decode("utf-8", errors="replace")
 
 
+# AUD-SSRF (redirect parity with the Node fetch policy): the stdlib opener
+# auto-follows 3xx with NO per-hop revalidation, so the initial-URL guard
+# (_seekdeep_assert_provider_url_safe) is defeated by a provider that answers
+# `302 Location: http://169.254.169.254/...`. This opener refuses to auto-follow;
+# _seekdeep_provider_urlopen re-screens every Location through the guard and
+# strips auth headers on a cross-host hop (CPython keeps Authorization / api-key
+# headers across hosts by default, so a redirect would otherwise leak the key).
+# Residual (info-level, accepted — see the audit): the per-hop guard resolves the
+# host but does not pin the IP, so a DNS-rebind between check and connect could
+# still reach a private IP — but only ranges the guard already denies at check
+# time, and a desktop has no instance-metadata service to steal from.
+class _SeekdeepNoRedirect(_seekdeep_urllib_req.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # noqa: D401
+        return None  # surface 3xx as HTTPError instead of silently following
+
+_SEEKDEEP_NOREDIRECT_OPENER = _seekdeep_urllib_req.build_opener(_SeekdeepNoRedirect)
+_SEEKDEEP_SENSITIVE_HEADERS = frozenset({
+    "authorization", "x-api-key", "x-goog-api-key", "api-key", "x-api-token",
+})
+
+
+def _seekdeep_provider_urlopen(req, timeout, max_redirects: int = 5):
+    """urlopen for provider/probe calls that revalidates EVERY redirect hop via
+    _seekdeep_assert_provider_url_safe and strips auth headers when the host
+    changes. Returns the final response object (a context manager, like urlopen),
+    so callers keep `with _seekdeep_provider_urlopen(req, t) as resp:`. Non-3xx
+    HTTPErrors (4xx/5xx) propagate exactly as urlopen's did."""
+    cur = req
+    origin_host = (_seekdeep_urlparse(cur.full_url).hostname or "").lower()
+    for _hop in range(max_redirects + 1):
+        try:
+            return _SEEKDEEP_NOREDIRECT_OPENER.open(cur, timeout=timeout)
+        except _seekdeep_urllib_err.HTTPError as e:
+            loc = e.headers.get("Location") if (300 <= e.code < 400) else None
+            if not loc:
+                raise  # genuine 4xx/5xx (or 3xx without Location) — same as before
+            nxt = _seekdeep_urljoin(cur.full_url, loc)
+            _seekdeep_assert_provider_url_safe(nxt)   # re-screen the redirect target
+            cross_host = (_seekdeep_urlparse(nxt).hostname or "").lower() != origin_host
+            # 303 (and, per common practice, the body-bearing 301/302) -> GET.
+            if e.code == 303:
+                method, data = "GET", None
+            else:
+                method, data = cur.get_method(), cur.data
+            nreq = _seekdeep_urllib_req.Request(nxt, data=data, method=method)
+            for hk, hv in cur.header_items():
+                if cross_host and hk.lower() in _SEEKDEEP_SENSITIVE_HEADERS:
+                    continue  # don't leak the provider key to a redirected host
+                nreq.add_header(hk, hv)
+            try:
+                e.close()
+            except Exception:
+                pass
+            cur = nreq
+    raise RuntimeError(f"provider URL exceeded {max_redirects} redirects")
+
+
 def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
                      timeout: float | None = None) -> dict:
     """Bare-metal Ollama HTTP call using stdlib urllib (no extra runtime dep).
@@ -1751,7 +1816,7 @@ def _ollama_request(path: str, body: dict | None = None, method: str = "POST",
     if OLLAMA_API_KEY:
         req.add_header("Authorization", f"Bearer {OLLAMA_API_KEY}")
     t = timeout if timeout is not None else OLLAMA_TIMEOUT_SECS
-    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+    with _seekdeep_provider_urlopen(req, t) as resp:
         raw = _seekdeep_read_capped(resp)
         if not raw:
             return {}
@@ -1956,7 +2021,7 @@ def _openai_compat_request(base_url: str, api_key: str, path: str,
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
     t = timeout if timeout is not None else OPENAI_COMPAT_TIMEOUT_SECS
-    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+    with _seekdeep_provider_urlopen(req, t) as resp:
         raw = _seekdeep_read_capped(resp)
         if not raw:
             return {}
@@ -2061,7 +2126,7 @@ def _anthropic_request(base_url: str, api_key: str, version: str,
         req.add_header("x-api-key", api_key)
     req.add_header("anthropic-version", version or ANTHROPIC_VERSION_DEFAULT)
     t = timeout if timeout is not None else ANTHROPIC_TIMEOUT_SECS
-    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+    with _seekdeep_provider_urlopen(req, t) as resp:
         raw = _seekdeep_read_capped(resp)
         return json.loads(raw) if raw else {}
 
@@ -2170,7 +2235,7 @@ def _gemini_request(base_url: str, api_key: str, path: str,
     if api_key:
         req.add_header("x-goog-api-key", api_key)
     t = timeout if timeout is not None else GEMINI_TIMEOUT_SECS
-    with _seekdeep_urllib_req.urlopen(req, timeout=t) as resp:
+    with _seekdeep_provider_urlopen(req, t) as resp:
         raw = _seekdeep_read_capped(resp)
         return json.loads(raw) if raw else {}
 

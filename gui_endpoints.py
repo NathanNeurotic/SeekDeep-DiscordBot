@@ -598,7 +598,50 @@ _CONFIG_PROTECTED_KEYS = frozenset({
     "SEEKDEEP_SELF_UPDATE_MAX_FILE_BYTES",
     "SEEKDEEP_SELF_UPDATE_MAX_API_BYTES",
     "SEEKDEEP_SELF_UPDATE_MAX_TREE_ENTRIES",
+    # The SearXNG image name flows into `docker run <image>` (the start_searxng_stack
+    # Tauri command + the Python /docker/start-searxng path). A /config patch must
+    # not be able to repoint it at an arbitrary (attacker-chosen) container image —
+    # that would be token-to-container-RCE. Pin via env at install time only.
+    "SEEKDEEP_SEARXNG_IMAGE",
 })
+
+# AUD L-2 (PATH-hijack parity with the Rust shell's resolve_system_tool /
+# resolve_docker_cli): these subprocess calls run with the server's cwd (= repo
+# root) and, on Windows, CreateProcess searches the application/current directory,
+# so a planted cwd-/PATH-local `docker.exe` / `taskkill.exe` could shadow the real
+# tool. Pin the well-known absolute locations; fall back to the bare name (PATH)
+# when not found — never worse than today, and a no-op on non-Windows.
+def _seekdeep_resolve_tool(name: str) -> str:
+    if os.name != "nt":
+        return name
+    system32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    if name.lower() in ("powershell", "powershell.exe"):
+        ps = os.path.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe")
+        return ps if os.path.isfile(ps) else name
+    exe = name if name.lower().endswith(".exe") else name + ".exe"
+    cand = os.path.join(system32, exe)
+    return cand if os.path.isfile(cand) else name
+
+def _seekdeep_resolve_docker() -> str:
+    if os.name == "nt":
+        for c in (r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+                  r"C:\Program Files\Docker\Docker\resources\docker.exe"):
+            if os.path.isfile(c):
+                return c
+    elif sys.platform == "darwin":
+        for c in ("/Applications/Docker.app/Contents/Resources/bin/docker",
+                  "/usr/local/bin/docker", "/opt/homebrew/bin/docker"):
+            if os.path.isfile(c):
+                return c
+    return "docker"
+
+# Resolved once at import (cheap isfile probes); bare-name fallback keeps these
+# working on any layout. Mirror of the Rust shell's pinned tool set.
+_TOOL_TASKKILL = _seekdeep_resolve_tool("taskkill")
+_TOOL_POWERSHELL = _seekdeep_resolve_tool("powershell")
+_TOOL_WHERE = _seekdeep_resolve_tool("where")
+_TOOL_NVIDIA_SMI = _seekdeep_resolve_tool("nvidia-smi")
+_DOCKER_CLI = _seekdeep_resolve_docker()
 
 # Cap on concurrent /events WebSocket subscribers so a token-holder can't exhaust
 # connections (token-gated DoS). Hardcoded (no env read → no env-coverage entry needed).
@@ -1197,21 +1240,24 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
             pass
 
     try:
-        out_f = out_log.open("ab")
-        err_f = err_log.open("ab")
-        # OR in CREATE_NO_WINDOW with CREATE_NEW_PROCESS_GROUP so the spawned
-        # bot daemon doesn't pop its own console window on Windows.
-        _flags = 0
-        if os.name == "nt":
-            _flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen(
-            cmd, cwd=str(cwd), env=child_env,
-            stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
-            creationflags=_flags,
-        )
-        _PROCESSES[service] = proc
-        return {"ok": True, "service": service, "state": "starting",
-                "pid": proc.pid, "log": str(out_log.name), "cwd": str(cwd)}
+        # with-scope the handles so the PARENT releases its copies after spawn
+        # (the child inherits its own fds at Popen time). Previously these were
+        # opened and never closed, pinning each rotated log file for the life of
+        # this long-running server process. (AUD L-5)
+        with out_log.open("ab") as out_f, err_log.open("ab") as err_f:
+            # OR in CREATE_NO_WINDOW with CREATE_NEW_PROCESS_GROUP so the spawned
+            # bot daemon doesn't pop its own console window on Windows.
+            _flags = 0
+            if os.name == "nt":
+                _flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            proc = subprocess.Popen(
+                cmd, cwd=str(cwd), env=child_env,
+                stdout=out_f, stderr=err_f, stdin=subprocess.DEVNULL,
+                creationflags=_flags,
+            )
+            _PROCESSES[service] = proc
+            return {"ok": True, "service": service, "state": "starting",
+                    "pid": proc.pid, "log": str(out_log.name), "cwd": str(cwd)}
     except FileNotFoundError as e:
         raise HTTPException(500,
             f"failed to start {service}: {e} · is `{cmd[0]}` on PATH? "
@@ -1238,7 +1284,7 @@ def _stop_service(service: str, log_dir: Path) -> dict:
     if pid is not None and _pid_alive(pid):
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                subprocess.run([_TOOL_TASKKILL, "/PID", str(pid), "/T", "/F"],
                                check=False, capture_output=True)
             else:
                 os.kill(pid, 15)  # SIGTERM
@@ -1348,7 +1394,7 @@ def _find_bot_processes(bot_cwd: Path) -> list[dict]:
                 "| ConvertTo-Json -Compress"
             )
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                [_TOOL_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
                 capture_output=True, text=True, timeout=15,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -1457,7 +1503,7 @@ def _find_ai_server_processes(project_root: Path) -> list[dict]:
                 "| ConvertTo-Json -Compress"
             )
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                [_TOOL_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
                 capture_output=True, text=True, timeout=15,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -1518,7 +1564,7 @@ def _kill_pid(pid: int, timeout_s: float = 2.0) -> tuple[bool, str | None]:
     try:
         if os.name == "nt":
             subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                [_TOOL_TASKKILL, "/PID", str(pid), "/T", "/F"],
                 check=False, capture_output=True, timeout=10,
             )
         else:
@@ -2419,7 +2465,7 @@ def register_gui_endpoints(
             })
         # 6. nvidia-smi reachable (GPU detected)
         try:
-            r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=2)
+            r = subprocess.run([_TOOL_NVIDIA_SMI, "-L"], capture_output=True, text=True, timeout=2)
             gpu_present = r.returncode == 0 and bool((r.stdout or "").strip())
         except Exception:
             gpu_present = False
@@ -2451,35 +2497,19 @@ def register_gui_endpoints(
             "fix_action": {"endpoint": "/docker/start-searxng", "method": "POST", "label": "Start SearXNG"},
             "blocking": False,
         })
-        # 8. At least one chat model can be loaded — HF cache or Ollama tag.
-        # Best-effort: check HF cache dir + ollama daemon. Skipping the full
-        # cache scan here to keep this endpoint snappy (<200ms typical).
-        #
-        # Hard-lock fix: the `env` dict's HF_HOME is usually blank, so the old
-        # check fell back to ~/.cache/huggingface — empty in the repo-local
-        # default — reading has_hf_cache=False and (now that chat_model is a
-        # blocking gate) trapping first-run even though models live in
-        # <repo>/models/huggingface. local_ai_server force-sets
-        # LOCAL_MODEL_CACHE_DIR / HF_HUB_CACHE / HF_HOME in os.environ, so read
-        # the PROCESS env (os.getenv) and the env-independent repo default —
-        # not just `env`. Gate each candidate on a models--*/datasets--*/spaces--*
-        # child (mirrors the scan helper + warmup) instead of directory-non-
-        # emptiness: <repo>/models ships a committed .gitkeep and the cache dir
-        # gets a CACHEDIR.TAG/.locks at boot, so a bare non-empty check would
-        # false-positive on a model-less install and silently defeat the gate.
-        def _hf_cache_has_repo(d) -> bool:
-            try:
-                p = Path(d)
-                if not p.is_dir():
-                    return False
-                for child in p.iterdir():
-                    n = child.name
-                    if n.startswith("models--") or n.startswith("datasets--") or n.startswith("spaces--"):
-                        return True
-            except (OSError, ValueError):
-                pass
-            return False
-
+        # 8. The CONFIGURED chat model is loadable for its backend. Best-effort,
+        # <200ms (no full cache scan). Guards two traps around the now-BLOCKING
+        # chat_model gate below:
+        #  - Hard-lock false-negative: the `env` dict's HF_HOME is usually blank,
+        #    so an old "~/.cache/huggingface" check read empty for the repo-local
+        #    default (<repo>/models/huggingface) and trapped first-run even with
+        #    models present. local_ai_server force-sets LOCAL_MODEL_CACHE_DIR /
+        #    HF_HUB_CACHE / HF_HOME in os.environ, so resolve cache dirs from the
+        #    PROCESS env (os.getenv) + the env-independent repo default, not `env`.
+        #  - False-positive: a bare "any models--* dir exists" passed the gate
+        #    whenever an UNRELATED repo was cached, so the configured model's
+        #    multi-GB download still fired on first /chat. Check the SPECIFIC
+        #    configured repo (models--org--name) instead — see _hf_repo_cached.
         def _resolve_env_dir(val):
             if not val:
                 return None
@@ -2504,7 +2534,23 @@ def register_gui_endpoints(
             _hh = _resolve_env_dir(_hf_home)
             if _hh is not None:
                 _hf_candidates += [_hh, _hh / "hub", _hh / "huggingface"]
-        has_hf_cache = any(_hf_cache_has_repo(d) for d in _hf_candidates if d is not None)
+
+        def _hf_repo_cached(repo_id: str) -> bool:
+            """Is this SPECIFIC HF repo (e.g. 'meta-llama/Llama-3.1-8B-Instruct')
+            present in any candidate cache as its models--org--name dir? Returns
+            False for a bare tag (no '/') — that's an Ollama id, handled below."""
+            if not repo_id or "/" not in repo_id:
+                return False
+            safe = "models--" + repo_id.replace("/", "--")
+            for d in _hf_candidates:
+                if d is None:
+                    continue
+                try:
+                    if (Path(d) / safe).is_dir():
+                        return True
+                except (OSError, ValueError):
+                    pass
+            return False
         try:
             with socket.create_connection(("127.0.0.1", 11434), timeout=1):
                 ollama_up = True
@@ -2570,7 +2616,7 @@ def register_gui_endpoints(
                 break
         if not ollama_exe_found:
             try:
-                r = subprocess.run(["where", "ollama"], capture_output=True, text=True, timeout=3)
+                r = subprocess.run([_TOOL_WHERE, "ollama"], capture_output=True, text=True, timeout=3)
                 if r.returncode == 0 and r.stdout.strip():
                     ollama_exe_found = True
                     ollama_paths.append(r.stdout.strip().splitlines()[0])
@@ -2613,19 +2659,41 @@ def register_gui_endpoints(
                 "blocking": False,
             })
 
-        # Check that LOCAL_CHAT_MODEL_ID is set AND its model is actually
-        # cached. Either condition failing is a real fresh-user blocker: a
-        # blank var fails the new no-model-configured guard at /chat time,
-        # and a configured-but-not-cached model triggers a 5-30 GB download
-        # mid-conversation. Surface both as the same fixable check.
+        # Check that LOCAL_CHAT_MODEL_ID is set AND the CONFIGURED model is
+        # available for its backend. A blank var fails the no-model-configured
+        # guard at /chat time; a configured-but-absent model triggers a 5-30 GB
+        # download mid-conversation. Resolve per backend so this BLOCKING gate
+        # is both correct (no false-pass on an unrelated cache) and safe (no
+        # hard-lock for remote-backend or repo-cached setups):
+        #   remote (openai-compat/anthropic/gemini) -> chat runs via the API, no
+        #     local model needed; just require an id.
+        #   ollama / bare tag -> daemon reachable (exact-tag check needs a daemon
+        #     call we skip for the <200ms budget).
+        #   hf repo -> the SPECIFIC repo must be cached (or an Ollama daemon up
+        #     as the explicit alternative).
         chat_id = (env.get("LOCAL_CHAT_MODEL_ID") or "").strip()
-        chat_ready = bool(chat_id) and (has_hf_cache or ollama_up)
-        if not chat_id:
-            fix_copy = "No chat model is configured yet. Open the model picker — curated starter models are one click to install."
-        elif not (has_hf_cache or ollama_up):
-            fix_copy = f"LOCAL_CHAT_MODEL_ID is `{chat_id}` but no HF cache or Ollama daemon is reachable. Install it from the picker."
+        chat_backend = (env.get("LOCAL_CHAT_BACKEND") or "hf").strip().lower()
+        _no_model_copy = "No chat model is configured yet. Open the model picker — curated starter models are one click to install."
+        if chat_backend in ("openai-compat", "anthropic", "gemini"):
+            chat_ready = bool(chat_id)
+            fix_copy = "" if chat_id else _no_model_copy
+        elif chat_backend == "ollama" or "/" not in chat_id:
+            chat_ready = bool(chat_id) and ollama_up
+            if not chat_id:
+                fix_copy = _no_model_copy
+            elif not ollama_up:
+                fix_copy = f"LOCAL_CHAT_MODEL_ID is `{chat_id}` (Ollama) but the Ollama daemon isn't reachable. Start it, or install an HF model from the picker."
+            else:
+                fix_copy = ""
         else:
-            fix_copy = ""
+            _configured_cached = _hf_repo_cached(chat_id)
+            chat_ready = bool(chat_id) and (_configured_cached or ollama_up)
+            if not chat_id:
+                fix_copy = _no_model_copy
+            elif not (_configured_cached or ollama_up):
+                fix_copy = f"LOCAL_CHAT_MODEL_ID is `{chat_id}` but that model isn't in the HF cache (and no Ollama daemon is up). Install it from the picker so the first chat doesn't trigger a multi-GB download."
+            else:
+                fix_copy = ""
         checks.append({
             "id": "chat_model",
             "label": "Chat model installed and configured",
@@ -2803,7 +2871,7 @@ def register_gui_endpoints(
         # asleep.
         try:
             r = subprocess.run(
-                ["docker", "info", "--format", "{{.ServerVersion}}"],
+                [_DOCKER_CLI, "info", "--format", "{{.ServerVersion}}"],
                 capture_output=True, text=True, timeout=12,
             )
         except FileNotFoundError:
@@ -2822,7 +2890,7 @@ def register_gui_endpoints(
         # daemon stopped" from "Docker not installed at all".
         try:
             r2 = subprocess.run(
-                ["docker", "--version"], capture_output=True, text=True, timeout=2,
+                [_DOCKER_CLI, "--version"], capture_output=True, text=True, timeout=2,
             )
         except Exception:
             return {"ok": True, "state": "not_installed",
@@ -2859,7 +2927,7 @@ def register_gui_endpoints(
 
     def _seekdeep_docker_daemon_up() -> bool:
         try:
-            r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"],
+            r = subprocess.run([_DOCKER_CLI, "info", "--format", "{{.ServerVersion}}"],
                                capture_output=True, text=True, timeout=12)
             return r.returncode == 0
         except Exception:
@@ -2901,7 +2969,7 @@ def register_gui_endpoints(
         # Same command as POST /docker/start-searxng — duplicated deliberately
         # so the boot path can never break the working "Start SearXNG" endpoint.
         try:
-            subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+            subprocess.run([_DOCKER_CLI, "rm", "-f", "seekdeep-searxng"],
                            capture_output=True, text=True, timeout=10)
         except Exception:
             pass
@@ -2910,7 +2978,7 @@ def register_gui_endpoints(
             searxng_dir.mkdir(parents=True, exist_ok=True)
             vol = f"{searxng_dir}:/etc/searxng:rw"
             r = subprocess.run([
-                "docker", "run", "-d", "--name", "seekdeep-searxng",
+                _DOCKER_CLI, "run", "-d", "--name", "seekdeep-searxng",
                 "--restart", "unless-stopped", "-p", "8080:8080",
                 "-e", "BASE_URL=http://localhost:8080/",
                 "-e", "INSTANCE_NAME=SeekDeep",
@@ -2986,7 +3054,7 @@ def register_gui_endpoints(
     def post_docker_start_searxng():
         try:
             # Best-effort cleanup of any prior container with the same name.
-            subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+            subprocess.run([_DOCKER_CLI, "rm", "-f", "seekdeep-searxng"],
                            capture_output=True, text=True, timeout=10)
         except Exception:
             pass
@@ -2997,7 +3065,7 @@ def register_gui_endpoints(
             vol = f"{searxng_dir}:/etc/searxng:rw"
             r = subprocess.run(
                 [
-                    "docker", "run", "-d",
+                    _DOCKER_CLI, "run", "-d",
                     "--name", "seekdeep-searxng",
                     "--restart", "unless-stopped",
                     "-p", "8080:8080",
@@ -3731,10 +3799,10 @@ def register_gui_endpoints(
                 searxng_dir.mkdir(parents=True, exist_ok=True)
                 vol = f"{searxng_dir}:/etc/searxng:rw"
                 # Remove any prior container
-                subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+                subprocess.run([_DOCKER_CLI, "rm", "-f", "seekdeep-searxng"],
                                capture_output=True, text=True, timeout=10)
                 r = subprocess.run([
-                    "docker", "run", "-d", "--name", "seekdeep-searxng",
+                    _DOCKER_CLI, "run", "-d", "--name", "seekdeep-searxng",
                     "--restart", "unless-stopped", "-p", "8080:8080",
                     "-e", "BASE_URL=http://localhost:8080/",
                     "-e", "INSTANCE_NAME=SeekDeep",
@@ -4215,7 +4283,7 @@ def register_gui_endpoints(
         exe = None
         candidates = []
         try:
-            r = subprocess.run(["where", "ollama"], capture_output=True, text=True, timeout=3)
+            r = subprocess.run([_TOOL_WHERE, "ollama"], capture_output=True, text=True, timeout=3)
             if r.returncode == 0 and r.stdout.strip():
                 candidates.extend([line.strip() for line in r.stdout.strip().splitlines() if line.strip()])
         except Exception:
@@ -7131,7 +7199,7 @@ def register_gui_endpoints(
             _end_transition("bot")
         # 2. SearXNG — docker rm -f
         try:
-            r = subprocess.run(["docker", "rm", "-f", "seekdeep-searxng"],
+            r = subprocess.run([_DOCKER_CLI, "rm", "-f", "seekdeep-searxng"],
                                capture_output=True, text=True, timeout=15)
             results["searxng"] = {"ok": r.returncode == 0,
                                   "removed": "seekdeep-searxng" if r.returncode == 0 else None,
@@ -7648,11 +7716,11 @@ def register_gui_endpoints(
 
         # 3. SeekDeep-managed Docker containers (only if docker is up).
         try:
-            r = subprocess.run(["docker", "version"], capture_output=True, text=True, timeout=3)
+            r = subprocess.run([_DOCKER_CLI, "version"], capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
                 removed = []
                 for container in ("seekdeep-searxng", "seekdeep-nim-chat", "seekdeep-nim-visual"):
-                    rr = subprocess.run(["docker", "rm", "-f", container],
+                    rr = subprocess.run([_DOCKER_CLI, "rm", "-f", container],
                                         capture_output=True, text=True, timeout=10)
                     if rr.returncode == 0 and (rr.stdout or "").strip():
                         removed.append(container)
@@ -7694,7 +7762,7 @@ def register_gui_endpoints(
                 vol = f"{searxng_dir}:/etc/searxng:rw"
                 print("[SeekDeep] fresh-boot autostart: starting searxng container")
                 rr = subprocess.run([
-                    "docker", "run", "-d", "--name", "seekdeep-searxng",
+                    _DOCKER_CLI, "run", "-d", "--name", "seekdeep-searxng",
                     "--restart", "unless-stopped", "-p", "8080:8080",
                     "-e", "BASE_URL=http://localhost:8080/",
                     "-e", "INSTANCE_NAME=SeekDeep",

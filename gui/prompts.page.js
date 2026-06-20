@@ -244,9 +244,15 @@ The user wants information density, not company.`,
     host.querySelectorAll('.tpl').forEach(el => el.addEventListener('click', () => select(el.dataset.id)));
   }
   function highlightVars(body, vars) {
+    // Body is escaped first, so the search pattern must use the ESCAPED var name
+    // too (else a name with HTML metachars wouldn't match), and the replacement
+    // embeds the escaped name — safe-by-construction even if a future refactor
+    // changes how `body` is escaped. (Var names come from imported #prompts
+    // templates, so treat them as untrusted.)
     let s = escapeHtml(body);
     vars.forEach(v => {
-      s = s.replaceAll(`{{${v}}}`, `<span class="placeholder">{{${v}}}</span>`);
+      const ev = escapeHtml(v);
+      s = s.replaceAll(`{{${ev}}}`, `<span class="placeholder">{{${ev}}}</span>`);
     });
     return s;
   }
