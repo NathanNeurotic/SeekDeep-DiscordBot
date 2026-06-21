@@ -318,8 +318,11 @@ async function seekdeepFetchGuiTokenOnce() {
 // requiring a full bot restart.
 function _seekdeepReReadTokenFromEnvFile() {
   try {
-    const fs = require('node:fs');
-    const path = require('node:path');
+    // NB: this is a native ESM module ("type":"module") — `require` is
+    // undefined here, so the previous `require('node:fs')` threw ReferenceError
+    // on every call, was swallowed by the catch, and made this function ALWAYS
+    // return null — silently killing the 401 token self-heal that postLocal and
+    // seekdeepEmitGuiEvent depend on. Use the top-level fs/path imports instead.
     const envPath = path.join(__dirname, '.env');
     if (!fs.existsSync(envPath)) return null;
     const text = fs.readFileSync(envPath, 'utf8');
@@ -2648,7 +2651,15 @@ let _seekdeepAiFailStreak = 0;
 let _seekdeepAiCircuitOpenUntil = 0;
 let _seekdeepAiCircuitWarnedAt = 0;
 function seekdeepAiCircuitIsOpen() {
-  return Date.now() < _seekdeepAiCircuitOpenUntil;
+  if (_seekdeepAiCircuitOpenUntil === 0) return false;
+  if (Date.now() < _seekdeepAiCircuitOpenUntil) return true;
+  // Cooldown elapsed: clear the stale marker so the breaker can RE-ARM on the
+  // next failing half-open probe. Previously this stayed a non-zero past value,
+  // so noteFailure's `=== 0` re-open guard never fired again — the circuit
+  // opened exactly once ever, then let every queued message hit a still-down
+  // server and spam 'request failed' replies (the incident it exists to stop).
+  _seekdeepAiCircuitOpenUntil = 0;
+  return false;
 }
 function seekdeepAiCircuitNoteSuccess() {
   if (_seekdeepAiFailStreak > 0 || _seekdeepAiCircuitOpenUntil > 0) {
@@ -2659,7 +2670,10 @@ function seekdeepAiCircuitNoteSuccess() {
 }
 function seekdeepAiCircuitNoteFailure(err) {
   _seekdeepAiFailStreak += 1;
-  if (_seekdeepAiFailStreak >= SEEKDEEP_CIRCUIT_THRESHOLD && _seekdeepAiCircuitOpenUntil === 0) {
+  // Re-arm whenever the breaker isn't currently open (isOpen() also clears an
+  // expired marker), so a still-down server re-opens it after each cooldown
+  // instead of only on the very first trip.
+  if (_seekdeepAiFailStreak >= SEEKDEEP_CIRCUIT_THRESHOLD && !seekdeepAiCircuitIsOpen()) {
     _seekdeepAiCircuitOpenUntil = Date.now() + SEEKDEEP_CIRCUIT_COOLDOWN_MS;
     _seekdeepAiCircuitWarnedAt = Date.now();
     console.warn(`[SeekDeep] AI server unreachable after ${_seekdeepAiFailStreak} fails — circuit open for ${SEEKDEEP_CIRCUIT_COOLDOWN_MS}ms. Last error: ${String(err?.message || err).slice(0, 200)}`);
@@ -4727,7 +4741,12 @@ function seekdeepGetLastTempImageState() {
     let newestMeta = null;
     let newestTime = 0;
     for (const file of files) {
-      if (file.endsWith('.meta.json')) {
+      // Meta files are written as `${id}.json` (seekdeepImageCacheMetaPath),
+      // NOT `.meta.json` — the old suffix never matched, so this disk fallback
+      // always returned null after a restart (empty in-memory index), making
+      // callers report "no recent image" despite valid cached metadata on disk.
+      // Match the canonical reader (seekdeepReadTempImageCacheMetadata: `.json`).
+      if (file.endsWith('.json')) {
         const fullPath = path.join(dir, file);
         try {
           const content = fs.readFileSync(fullPath, 'utf8');
