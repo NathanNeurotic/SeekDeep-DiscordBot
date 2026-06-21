@@ -604,6 +604,51 @@ async fn start_searxng_stack(app: tauri::AppHandle) -> Result<serde_json::Value,
         .map_err(|e| format!("searxng task join: {e}"))?
 }
 
+/// Ensure SearXNG's settings.yml enables the JSON output format before we
+/// (re)create the container. The bot's web search calls /search?format=json, but
+/// SearXNG's default settings.yml lists ONLY `- html` under search.formats — so
+/// without this every web-search request 403s and augmentation silently returns
+/// nothing. Mirrors gui_endpoints._seekdeep_ensure_searxng_json_format (the two
+/// paths share the same config dir, so whichever runs first wins). Best-effort.
+fn ensure_searxng_json_format(searxng_dir: &std::path::Path) {
+    let sp = searxng_dir.join("settings.yml");
+    match std::fs::read_to_string(&sp) {
+        Ok(text) => {
+            if text.lines().any(|l| l.trim() == "- json") {
+                return; // already enabled
+            }
+            // Insert `- json` right after the formats block's `- html` entry
+            // (same indentation), leaving the rest of the file untouched.
+            let mut out = String::with_capacity(text.len() + 16);
+            let mut inserted = false;
+            let mut in_formats = false;
+            for line in text.lines() {
+                out.push_str(line);
+                out.push('\n');
+                let t = line.trim();
+                if t == "formats:" {
+                    in_formats = true;
+                }
+                if !inserted && in_formats && t == "- html" {
+                    let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+                    out.push_str(&indent);
+                    out.push_str("- json\n");
+                    inserted = true;
+                }
+            }
+            if inserted {
+                let _ = std::fs::write(&sp, out);
+            }
+        }
+        Err(_) => {
+            // No settings.yml yet — seed a minimal override that inherits every
+            // SearXNG default (incl. its secret_key handling) and adds json.
+            let seed = "use_default_settings: true\nsearch:\n  formats:\n    - html\n    - json\n";
+            let _ = std::fs::write(&sp, seed);
+        }
+    }
+}
+
 fn ensure_searxng_stack_blocking(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     let emit = |stage: &str, detail: &str| {
         let _ = app.emit(
@@ -666,6 +711,7 @@ fn ensure_searxng_stack_blocking(app: &tauri::AppHandle) -> Result<serde_json::V
     let runtime = sidecar::app_runtime_dir(app)?;
     let searxng_dir = runtime.join("searxng");
     std::fs::create_dir_all(&searxng_dir).map_err(|e| format!("create searxng config dir: {e}"))?;
+    ensure_searxng_json_format(&searxng_dir);   // web search needs format=json (SearXNG default is html-only -> 403)
     let vol = format!("{}:/etc/searxng:rw", searxng_dir.display());
     let image = std::env::var("SEEKDEEP_SEARXNG_IMAGE")
         .ok()

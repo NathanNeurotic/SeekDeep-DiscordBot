@@ -582,6 +582,56 @@ def _seekdeep_searxng_image() -> str:
     return os.environ.get("SEEKDEEP_SEARXNG_IMAGE", "").strip() or "searxng/searxng:latest"
 
 
+def _seekdeep_ensure_searxng_json_format(searxng_dir) -> None:
+    """Make sure SearXNG's settings.yml enables the JSON output format BEFORE we
+    (re)create the container. The bot's web search calls /search?format=json, but
+    SearXNG's auto-generated default settings.yml lists ONLY `- html` under
+    search.formats — so without this every web-search request gets 403 Forbidden
+    and augmentation silently returns nothing (the model then answers from stale
+    training knowledge, which reads as "search doesn't work / inference is bad").
+
+    Idempotent + best-effort (never raises into the caller):
+      • no settings.yml yet      -> seed a minimal `use_default_settings: true`
+        override (inherits ALL SearXNG defaults; just adds json + a secret_key).
+      • settings.yml exists, has  -> nothing to do.
+        a `- json` formats entry
+      • settings.yml exists, no   -> insert `- json` right after the formats
+        json                         block's `- html` entry, leaving the rest of
+                                     the (auto-generated) file untouched.
+    """
+    try:
+        sp = Path(searxng_dir) / "settings.yml"
+        if not sp.is_file():
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(
+                "use_default_settings: true\n"
+                "server:\n"
+                f'  secret_key: "{secrets.token_hex(32)}"\n'
+                "search:\n"
+                "  formats:\n"
+                "    - html\n"
+                "    - json\n",
+                encoding="utf-8",
+            )
+            return
+        text = sp.read_text(encoding="utf-8")
+        if re.search(r"(?m)^\s*-\s*json\s*$", text):
+            return  # already enabled
+        # Anchor to the search.formats block, then insert `- json` after its
+        # `- html` list item (matching indentation) so nothing else is disturbed.
+        fm = re.search(r"(?m)^\s*formats:\s*$", text)
+        if fm:
+            hm = re.search(r"(?m)^(\s*)-\s*html\s*$", text[fm.end():])
+            if hm:
+                at = fm.end() + hm.end()
+                sp.write_text(text[:at] + f"\n{hm.group(1)}- json" + text[at:], encoding="utf-8")
+                return
+        print("[SeekDeep] searxng: couldn't locate a formats block to add json; "
+              "web search may 403 until settings.yml enables format=json.", flush=True)
+    except Exception as exc:
+        print(f"[SeekDeep] searxng json-format ensure failed: {exc!r}", flush=True)
+
+
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 # Keys that must NOT be writable through the user-facing POST /config path — they
@@ -3072,6 +3122,7 @@ def register_gui_endpoints(
         try:
             searxng_dir = (root / "searxng").resolve()
             searxng_dir.mkdir(parents=True, exist_ok=True)
+            _seekdeep_ensure_searxng_json_format(searxng_dir)  # web search needs format=json (default is html-only)
             vol = f"{searxng_dir}:/etc/searxng:rw"
             r = subprocess.run([
                 _DOCKER_CLI, "run", "-d", "--name", "seekdeep-searxng",
@@ -3158,6 +3209,7 @@ def register_gui_endpoints(
             # Mirror the .bat's startSearxngQuiet flags exactly.
             searxng_dir = (root / "searxng").resolve()
             searxng_dir.mkdir(parents=True, exist_ok=True)
+            _seekdeep_ensure_searxng_json_format(searxng_dir)  # web search needs format=json (default is html-only)
             vol = f"{searxng_dir}:/etc/searxng:rw"
             r = subprocess.run(
                 [
@@ -3893,6 +3945,7 @@ def register_gui_endpoints(
             try:
                 searxng_dir = (root / "searxng").resolve()
                 searxng_dir.mkdir(parents=True, exist_ok=True)
+                _seekdeep_ensure_searxng_json_format(searxng_dir)  # web search needs format=json (default is html-only)
                 vol = f"{searxng_dir}:/etc/searxng:rw"
                 # Remove any prior container
                 subprocess.run([_DOCKER_CLI, "rm", "-f", "seekdeep-searxng"],
@@ -7868,6 +7921,7 @@ def register_gui_endpoints(
             else:
                 searxng_dir = (root / "searxng").resolve()
                 searxng_dir.mkdir(parents=True, exist_ok=True)
+                _seekdeep_ensure_searxng_json_format(searxng_dir)  # web search needs format=json (default is html-only)
                 vol = f"{searxng_dir}:/etc/searxng:rw"
                 print("[SeekDeep] fresh-boot autostart: starting searxng container")
                 rr = subprocess.run([
