@@ -225,13 +225,31 @@
   // Dedup cursor: /logs/tail returns the last N lines on EVERY poll, so without
   // a cursor the same lines re-append every ~3s (the common idle case flooded
   // the viewer with ~100 dupes/min and pushed real history out of the 500-line
-  // ring). We track a signature of the last line we already showed and append
-  // only the suffix after it. (Lines may be plain strings or {level,src,msg,ts}
-  // objects — ts is usually undefined, so the signature can't rely on it.)
-  let _lastLogSig = null;
+  // ring). /logs/tail is a sliding window, so on each poll it advances by `d`
+  // new lines and prev.slice(d) lines up with the head of the new batch. We
+  // track the WHOLE previous batch's signatures and find that alignment, then
+  // append only the lines after the overlap. Matching the overlapping SEQUENCE
+  // (not just the last-line signature) is what makes consecutive identical
+  // lines — repeated warnings / heartbeats / idle — dedupe correctly instead of
+  // silently dropping a genuinely-new repeat. (Lines may be plain strings or
+  // {level,src,msg,ts} objects — ts is usually undefined, so sigs ignore it.)
+  let _prevLogSigs = null;
   function logLineSig(ln) {
     if (ln && typeof ln === 'object') return `${ln.ts || ''}|${ln.level || ''}|${ln.src || ''}|${ln.msg || ''}`;
     return String(ln);
+  }
+  function newLinesStart(prevSigs, newSigs) {
+    if (!prevSigs || !prevSigs.length) return 0;          // first poll → show all
+    for (let d = 0; d <= prevSigs.length; d++) {          // smallest d = largest overlap first
+      const overlap = prevSigs.length - d;
+      if (overlap > newSigs.length) continue;
+      let ok = true;
+      for (let i = 0; i < overlap; i++) {
+        if (prevSigs[d + i] !== newSigs[i]) { ok = false; break; }
+      }
+      if (ok) return overlap;                             // new lines begin after the aligned overlap
+    }
+    return 0;                                             // no overlap (big burst) → re-show window once
   }
   async function pollOnce() {
     if (liveMode || paused || (typeof document !== 'undefined' && document.hidden)) return null;
@@ -241,19 +259,12 @@
       if (!r.ok) return false;
       const data = await r.json().catch(() => null);
       const lines = Array.isArray(data?.lines) ? data.lines : [];
-      // Append only lines after the last one we've already shown. If the cursor
-      // line has scrolled out of the window (a burst > 20 lines/poll), start=0
-      // and we re-show the whole window once — better a one-off than a flood.
-      let start = 0;
-      if (_lastLogSig != null) {
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (logLineSig(lines[i]) === _lastLogSig) { start = i + 1; break; }
-        }
-      }
+      const sigs = lines.map(logLineSig);
+      const start = newLinesStart(_prevLogSigs, sigs);
       for (const ln of lines.slice(start)) {
         appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
       }
-      if (lines.length) _lastLogSig = logLineSig(lines[lines.length - 1]);
+      _prevLogSigs = sigs;
       return true;
     } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); return false; }
   }

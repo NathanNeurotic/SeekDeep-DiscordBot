@@ -2174,8 +2174,14 @@ def register_gui_endpoints(
             # (await is legal in an async finally) — running it inline here would
             # re-block /health, the 5s status poll, and the /events WS right after
             # a kill storm (the chronic event-loop-wedge class fixed elsewhere).
-            _bot_state = await asyncio.to_thread(_service_state, "bot", _log_dir)
-            _emit_state_change_if_any("bot", _bot_state)
+            # Guarded: a raise here (psutil/WMI/COM hiccup) would propagate OUT of
+            # the finally and SUPPRESS any primary exception from the try body,
+            # hiding the real kill-all failure.
+            try:
+                _bot_state = await asyncio.to_thread(_service_state, "bot", _log_dir)
+                _emit_state_change_if_any("bot", _bot_state)
+            except Exception as _state_err:
+                print(f"[SeekDeep] kill-all: bot state recompute failed: {_state_err}", flush=True)
 
     # ----- POST /launcher/{service}/{action} -----
     @app.post("/launcher/{service}/{action}", dependencies=[Depends(_require_gui_token)])
@@ -2225,8 +2231,14 @@ def register_gui_endpoints(
             # inline it would re-block /health, the 5s status poll, and /events
             # right after the action (the read twin get_launchers_status is
             # offloaded for exactly this reason).
-            _settled_state = await asyncio.to_thread(_service_state, service, _log_dir)
-            _emit_state_change_if_any(service, _settled_state)
+            # Guarded: a raise here would propagate OUT of the finally and
+            # SUPPRESS any primary exception from the try body, masking the real
+            # start/stop/restart failure and making it hard to diagnose.
+            try:
+                _settled_state = await asyncio.to_thread(_service_state, service, _log_dir)
+                _emit_state_change_if_any(service, _settled_state)
+            except Exception as _state_err:
+                print(f"[SeekDeep] launcher {service}: state recompute failed: {_state_err}", flush=True)
 
     # ----- GET /launchers/status -----
     # Per-service status snapshot for the Control Center launcher cards.

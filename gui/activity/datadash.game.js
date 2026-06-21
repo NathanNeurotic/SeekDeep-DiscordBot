@@ -233,10 +233,15 @@
   const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead", CONTINUE: "continue" };
   const SFX = function (k, o) { if (window.DDAudio) window.DDAudio.play(k, o); };
   let state = STATE.MENU;
-  // Trailing `|| 0` guards a corrupted/non-numeric localStorage value: without
-  // it `best` could be NaN, and since the high-score test is `bytes > best`
-  // (always false vs NaN) the best score would then never update or save again.
-  let best = +(localStorage.getItem("datadash.best") || 0) || 0;
+  // try/catch: DataDash runs inside a Discord Activity iframe, where touching
+  // localStorage can throw SecurityError/DOMException if storage is blocked —
+  // and this runs at top level, so an uncaught throw would stop the ENTIRE game
+  // from loading. Fall back to 0. The trailing `|| 0` also guards a corrupted/
+  // non-numeric stored value: without it `best` could be NaN, and since the
+  // high-score test is `bytes > best` (always false vs NaN) the best score would
+  // then never update or save again.
+  let best = 0;
+  try { best = +(localStorage.getItem("datadash.best") || 0) || 0; } catch (e) {}
 
   // ---- DEBUG (testing aid) -------------------------------------------------
   // OFF by default → zero gameplay effect. The Debug menu (#debug-modal in
@@ -1011,7 +1016,7 @@
   let scores = loadScores();
   let lastScoreEntry = null;
   function loadScores() { try { const a = JSON.parse(localStorage.getItem(SCORE_KEY)); if (Array.isArray(a)) return a; } catch (e) {} return []; }
-  function saveScores() { localStorage.setItem(SCORE_KEY, JSON.stringify(scores)); }
+  function saveScores() { try { localStorage.setItem(SCORE_KEY, JSON.stringify(scores)); } catch (e) {} }
   function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function recordScore(bytes) {
     lastScoreEntry = { name: "—", bytes: Math.floor(bytes), ts: Date.now() };
@@ -1041,7 +1046,7 @@
     game.flashT = Math.max(game.flashT || 0, 0.9);
     game.shake = Math.max(game.shake || 0, 26);
     const beat = game.bytes > best;
-    if (beat) { best = Math.floor(game.bytes); localStorage.setItem("datadash.best", best); }
+    if (beat) { best = Math.floor(game.bytes); try { localStorage.setItem("datadash.best", best); } catch (e) {} }
     recordScore(game.bytes);
     hud.ovTitle.textContent = TEXT.gameOver;
     hud.ovSub.textContent = TEXT.gameOverSub.replace("{n}", formatBytes(game.bytes));
