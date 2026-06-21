@@ -2257,6 +2257,17 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf classify: ::1%eth0 loopback w/ zone id', blockedIp('::1%eth0'));
   check('ssrf classify: fe80::1%eth0 link-local w/ zone id', blockedIp('fe80::1%eth0'));
   check('ssrf classify: 0:0:0:0:0:ffff:127.0.0.1%eth0 mapped loopback w/ zone id', blockedIp('0:0:0:0:0:ffff:127.0.0.1%eth0'));
+  // NAT64 (64:ff9b::/96) — embedded IPv4 is the last 32 bits. On an IPv6-only /
+  // NAT64 network these translate to that v4, so private/metadata embeds must block.
+  check('ssrf classify: 64:ff9b::7f00:1 NAT64 loopback (127.0.0.1)', blockedIp('64:ff9b::7f00:1'));
+  check('ssrf classify: 64:ff9b::a9fe:a9fe NAT64 metadata (169.254.169.254)', blockedIp('64:ff9b::a9fe:a9fe'));
+  check('ssrf classify: 64:ff9b::a00:1 NAT64 private (10.0.0.1)', blockedIp('64:ff9b::a00:1'));
+  check('ssrf classify: 64:ff9b:0:0:0:0:a9fe:a9fe non-canon NAT64 metadata', blockedIp('64:ff9b:0:0:0:0:a9fe:a9fe'));
+  check('ssrf classify: 64:ff9b::808:808 NAT64 8.8.8.8 PUBLIC', !blockedIp('64:ff9b::808:808'));
+  // 6to4 (2002::/16) — embedded IPv4 is the 32 bits after 2002:.
+  check('ssrf classify: 2002:7f00:1::1 6to4 loopback (127.0.0.1)', blockedIp('2002:7f00:1::1'));
+  check('ssrf classify: 2002:a9fe:a9fe::1 6to4 metadata (169.254.169.254)', blockedIp('2002:a9fe:a9fe::1'));
+  check('ssrf classify: 2002:808:808::1 6to4 8.8.8.8 PUBLIC', !blockedIp('2002:808:808::1'));
 
   // -- async validator: reject + accept --
   const blocked = async (url, opts) => {
