@@ -155,8 +155,13 @@
   async function sendChat(prompt) {
     if (!prompt) return;
     renderMessage({ who: 'you', html: escapeHtml(prompt) });
-    history.push({ role: 'user', content: prompt });
-    if (history.length > MAX_HISTORY_TURNS) history.splice(0, history.length - MAX_HISTORY_TURNS);
+    // NB: the current turn is NOT pushed to `history` here. We send `messages:
+    // history` (PRIOR turns only) plus `prompt` (this turn), and the server
+    // appends `prompt` as the final user turn — pushing it here too would send
+    // the same user turn TWICE (two identical consecutive user turns, which
+    // corrupts context and breaks chat templates that forbid back-to-back
+    // same-role turns). The user+assistant pair is committed on success below,
+    // so an error/offline turn also can't leave an orphan user turn behind.
     updateHelperRoute('default_chat', '', 'awaiting reply');
 
     const typing = renderTyping();
@@ -243,7 +248,12 @@
       }
       const text = String((r.body && r.body.text) || '').trim() || '(empty response)';
       typing.text.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+      // Commit the full turn (user + assistant) only now that it succeeded, so
+      // history stays balanced — the error (above) and offline (catch) paths
+      // leave it untouched instead of stranding a lone user turn.
+      history.push({ role: 'user', content: prompt });
       history.push({ role: 'assistant', content: text });
+      if (history.length > MAX_HISTORY_TURNS) history.splice(0, history.length - MAX_HISTORY_TURNS);
       updateHelperRoute((r.body && r.body.model_role) || 'default_chat', (r.body && r.body.model_id) || '');
     } catch (err) {
       typing.text.innerHTML = '<span class="err">offline</span> · ' + escapeHtml(String(err.message || err));

@@ -87,7 +87,12 @@
       : 'http://127.0.0.1:7865';
   }
   function fmtAgo(ts) {
-    const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+    // ts may be epoch-ms (a fact's .at) OR an ISO string (row.updatedAt =
+    // server _now_iso()). `Date.now() - "<iso>"` is NaN, which rendered as
+    // "updated NaNd ago" in the header against a live server. Normalize first.
+    const t = (typeof ts === 'number') ? ts : Date.parse(ts);
+    if (!isFinite(t)) return '—';
+    const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
     if (s < 60)   return s + 's ago';
     if (s < 3600) return Math.floor(s/60) + 'm ago';
     if (s < 86400)return Math.floor(s/3600) + 'h ago';

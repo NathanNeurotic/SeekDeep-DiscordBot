@@ -121,6 +121,17 @@
   // to UNKNOWN after 3 misses instead of leaving them in PROBING forever
   // (which would be a quiet lie when the AI server is genuinely down).
   let _launchStatusMisses = 0;
+
+  // True when a safety-net HTTP poll should be SKIPPED: in Safe mode (the FX
+  // toggle's deepest tier pauses the WS bus by design, so these intervals would
+  // be the ONLY background work left — defeating the whole zero-background tier)
+  // or when the tab is hidden. Guards only the HTTP-fetch path; the WS
+  // externalData path still renders so live ticks aren't affected.
+  function _skipBackgroundPoll() {
+    return (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
+        || (typeof document !== 'undefined' && document.hidden);
+  }
+
   async function pumpStatus(externalData) {
     // Live-event path: when called with a payload (from launchers.tick
     // subscription), skip the HTTP fetch and process the payload directly.
@@ -130,6 +141,7 @@
       _launchStatusMisses = 0;
       return _renderLaunchersPayload(externalData);
     }
+    if (_skipBackgroundPoll()) return;
     let data;
     try {
       const r = await pollFetch(BASE + '/launchers/status', { timeout: 3000, attempts: 2 });
@@ -349,6 +361,7 @@
     if (!badge) return;
     let g = externalData;
     if (!g) {
+      if (_skipBackgroundPoll()) return;
       try {
         const r = await pollFetch(BASE + '/gpu', { timeout: 3000, attempts: 2 });
         if (!r.ok) return;
@@ -382,6 +395,7 @@
       // WS stats.tick path — server already computed the snapshot for us.
       snap = externalData;
     } else {
+      if (_skipBackgroundPoll()) return;
       try {
         const r = await pollFetch(BASE + '/stats/snapshot', { timeout: 5000, attempts: 2 });
         if (!r.ok) return;
