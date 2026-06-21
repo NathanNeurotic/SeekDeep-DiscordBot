@@ -2264,6 +2264,11 @@ if (typeof T.seekdeepClassifyBlockedIp === 'function' && typeof T.seekdeepValida
   check('ssrf classify: 64:ff9b::a00:1 NAT64 private (10.0.0.1)', blockedIp('64:ff9b::a00:1'));
   check('ssrf classify: 64:ff9b:0:0:0:0:a9fe:a9fe non-canon NAT64 metadata', blockedIp('64:ff9b:0:0:0:0:a9fe:a9fe'));
   check('ssrf classify: 64:ff9b::808:808 NAT64 8.8.8.8 PUBLIC', !blockedIp('64:ff9b::808:808'));
+  // Strict /96 only (RFC 6052): a non-/96 64:ff9b:* prefix (e.g. RFC 8215
+  // local-use 64:ff9b:1::/48, g[2]!=0) must NOT be NAT64-decoded from the last
+  // 32 bits — the embedded v4 lives elsewhere, so we treat it as opaque public.
+  check('ssrf classify: 64:ff9b:1::7f00:1 non-/96 NAT64 NOT extracted -> PUBLIC', !blockedIp('64:ff9b:1::7f00:1'));
+  check('ssrf classify: 64:ff9b:0:0:0:0:7f00:1 explicit /96 form still loopback', blockedIp('64:ff9b:0:0:0:0:7f00:1'));
   // 6to4 (2002::/16) — embedded IPv4 is the 32 bits after 2002:.
   check('ssrf classify: 2002:7f00:1::1 6to4 loopback (127.0.0.1)', blockedIp('2002:7f00:1::1'));
   check('ssrf classify: 2002:a9fe:a9fe::1 6to4 metadata (169.254.169.254)', blockedIp('2002:a9fe:a9fe::1'));

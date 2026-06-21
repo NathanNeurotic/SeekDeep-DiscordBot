@@ -253,7 +253,12 @@
       // leave it untouched instead of stranding a lone user turn.
       history.push({ role: 'user', content: prompt });
       history.push({ role: 'assistant', content: text });
-      if (history.length > MAX_HISTORY_TURNS) history.splice(0, history.length - MAX_HISTORY_TURNS);
+      // Trim from the front in whole user+assistant PAIRS — round the remove
+      // count up to even so we can never leave history starting with a lone
+      // assistant turn (which corrupts the chat template), even if
+      // MAX_HISTORY_TURNS is ever set to an odd number.
+      const removeCount = history.length - MAX_HISTORY_TURNS;
+      if (removeCount > 0) history.splice(0, removeCount % 2 === 0 ? removeCount : removeCount + 1);
       updateHelperRoute((r.body && r.body.model_role) || 'default_chat', (r.body && r.body.model_id) || '');
     } catch (err) {
       typing.text.innerHTML = '<span class="err">offline</span> · ' + escapeHtml(String(err.message || err));

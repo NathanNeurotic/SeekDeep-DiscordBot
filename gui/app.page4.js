@@ -12,9 +12,14 @@
   const backBtn   = $('#wizBack2');
 
   let step = 1;
+  // True once an install succeeded — the next Next/Done click closes + reloads.
+  // Routed through advance() (NOT a swapped onclick / removed listener) so a
+  // reopen after a non-reloading close (Cancel / backdrop) still works.
+  let installDone = false;
   const state = { backend: null, model_id: '', api_url: '', api_key: '', api_version: '2023-06-01', role: '' };
 
   function open() {
+    installDone = false;   // fresh wizard on every open
     wiz.classList.add('open');
     wizBack.classList.add('open');
     go(1);
@@ -118,13 +123,13 @@
         r.style.whiteSpace = 'pre-wrap';
         nextBtn.textContent = 'Done · close';
         // Re-enable (the disable at the top of submit() was only for the
-        // in-flight request) AND remove the stale `advance` click listener so
-        // this button now ONLY closes — otherwise a click fires both onclick
-        // (close+reload) and advance() (a re-submit). Without the re-enable the
-        // user was stranded on the success screen, unable to click 'Done'.
-        nextBtn.removeEventListener('click', advance);
+        // in-flight request) and flag the install complete — advance() now
+        // routes the next click to close+reload. We deliberately DON'T remove
+        // the advance listener or swap nextBtn.onclick: doing so permanently
+        // broke the button if the user closed via Cancel/backdrop (no reload)
+        // and reopened the wizard (open() never re-binds advance).
         nextBtn.disabled = false;
-        nextBtn.onclick = () => { close(); location.reload(); };
+        installDone = true;
       } else {
         r.style.color = 'var(--bad)';
         r.style.background = 'rgba(255,107,107,0.06)';
@@ -142,6 +147,7 @@
   }
 
   function advance() {
+    if (installDone) { close(); location.reload(); return; }   // terminal "Done · close"
     if (step === 1) {
       if (!state.backend) return;
       return go(2);
