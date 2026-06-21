@@ -833,6 +833,12 @@ function seekdeepShuffleStatusOrder() {
 
 function seekdeepApplyNextStatus() {
   if (!client?.user) return;
+  // Don't let the 5-min rotation timer stomp an in-progress activity status
+  // (e.g. "Generating an image…"). seekdeepSetActivityStatus bumps this counter
+  // for the duration of a real task; the rotation should resume only once it's
+  // back to 0. (seekdeepClearActivityStatus calls us with count already 0, so
+  // the post-task revert still fires.)
+  if (seekdeepActivityOverrideCount > 0) return;
   if (seekdeepStatusIndex >= seekdeepStatusOrder.length) seekdeepShuffleStatusOrder();
   const [type, name] = SEEKDEEP_STATUS_BANK[seekdeepStatusOrder[seekdeepStatusIndex++]];
   try {
@@ -12255,8 +12261,9 @@ function isNaturalImagePrompt(prompt) {
   }
 
   return false;
-
-  if (seekdeepLooksLikeVisualRequest(prompt)) return true;
+  // (Removed an unreachable `if (seekdeepLooksLikeVisualRequest(prompt)) return true;`
+  // that sat after this return — a refactor leftover; the same check already runs
+  // reachably near the top of this function.)
 }
 
 async function fetchRepliedMessage(message) {
@@ -14351,8 +14358,13 @@ async function seekdeepSearchConversationHistory(channel, botId, query, maxPages
           });
         }
 
-        // Match user messages addressed to the bot that contain all query words
-        if (authorId !== botId && content.includes(botId.slice(-4)) || (authorId !== botId && words.every((w) => content.includes(w)))) {
+        // Match user messages addressed to the bot that contain all query words.
+        // (Dropped a `content.includes(botId.slice(-4))` prefilter clause: with
+        // `&&` binding tighter than `||` it parsed as (A && B) || (A && C), and
+        // the inner gate below already requires mentionsBot && words.every, so
+        // the 4-digit-snowflake heuristic only ever admitted rows the inner gate
+        // then rejected — behavior is identical without it.)
+        if (authorId !== botId && words.every((w) => content.includes(w))) {
           const mentionsBot = msg.mentions?.users?.has?.(botId) || seekdeepTextAddressesBot(content);
           if (mentionsBot && words.every((w) => content.includes(w))) {
             matches.push({
@@ -15427,7 +15439,11 @@ function seekdeepPromptsShareAgeDays(ref) {
 }
 
 function seekdeepIncrementTemplateUse(guildId, userId, name) {
-  const safeName = String(name || '').trim().toLowerCase();
+  // Key with the SAME sanitizer the save/delete/share helpers use — templates
+  // are stored under seekdeepTemplateNameSanitize(name) (which also maps
+  // disallowed chars to '-' and caps length), so a plain trim+lowercase here
+  // missed any name with special chars and silently never bumped its usedCount.
+  const safeName = seekdeepTemplateNameSanitize(name);
   seekdeepMutatePromptTemplates((d) => {              // d = fresh under lock
     const tmpl = d?.guilds?.[guildId]?.[userId]?.[safeName];
     if (!tmpl) return;
@@ -19115,6 +19131,13 @@ async function seekdeepHandleReactionShortcut(reaction, user) {
     if (!botId || msg.author?.id !== botId) return;
 
     const emoji = reaction.emoji?.name || '';
+
+    // Per-event dedupe: Discord can redeliver a reaction (gateway resume /
+    // partial refetch), and the archive branch below has a side effect (posts +
+    // increments the count), so without this a single 📥 could double-archive.
+    // Mirrors the messageCreate (message:) + interaction (interaction:) guards.
+    if (typeof seekdeepClaimEventOnce === 'function'
+        && !seekdeepClaimEventOnce(`reaction:${msg.id}:${user.id}:${emoji}`)) return;
 
     // Channel allowlist applies here too.
     if (typeof seekdeepIsChannelAllowed === 'function' && !seekdeepIsChannelAllowed(msg.channel?.id)) return;
