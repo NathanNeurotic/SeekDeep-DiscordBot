@@ -1489,7 +1489,7 @@
         window.SeekDeepEvents.on('_close', () => setLiveState('probing'));
         // Safe mode pauses the bus → show PAUSED (grey), not OFFLINE/PROBING.
         window.SeekDeepEvents.on('_paused', () => setLiveState('paused'));
-        const _safe = !!(window.SeekDeepSafeMode && window.SeekDeepSafeMode());
+        const _safe = !!(typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode());
         setLiveState(_safe ? 'paused' : (window.SeekDeepEvents.connected ? 'live' : 'probing'));
         return true;
       } catch {}

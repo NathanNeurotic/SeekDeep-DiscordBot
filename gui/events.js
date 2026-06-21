@@ -98,7 +98,7 @@
   // for the brief window before nav.js has run.
   function safeModeOn() {
     try {
-      if (window.SeekDeepSafeMode && window.SeekDeepSafeMode()) return true;
+      if (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode()) return true;
       return localStorage.getItem('seekdeep.safeMode') === '1';
     } catch (_) { return false; }
   }
@@ -200,7 +200,16 @@
     if (safeModeOn()) {
       manualClose = true;
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      if (ws) {
+        // Detach handlers BEFORE close(): ws.close() is async, so the discarded
+        // socket's onclose would fire next tick and emit _close — which the live
+        // pill turns into PROBING, clobbering the PAUSED we set just below.
+        // (manualClose suppresses the reconnect, but _close still fires.)
+        ws.onclose = null;
+        ws.onerror = null;
+        try { ws.close(); } catch (_) {}
+        ws = null;
+      }
       emit('_paused', { reason: 'safe-mode' });
     } else {
       connect();
