@@ -742,26 +742,38 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
 # read → no env-coverage entry needed, like _MAX_WS_SUBSCRIBERS).
 _STATS_HF_TTL_S = 300.0
 _STATS_HF_SCAN_CACHE: dict = {"at": 0.0, "size": None, "repos": None, "err": None}
+_STATS_HF_LOCK = threading.Lock()
 
 
 def _cached_hf_scan_for_stats():
     """TTL-cached (hf_size_bytes, hf_repo_count, scan_error) for the stats tick.
-    The first (cold) call still scans; subsequent calls within the TTL are instant."""
+    The first (cold) call still scans; subsequent calls within the TTL are instant.
+
+    Double-checked locking: callers run in WORKER THREADS (the stats tick via
+    asyncio.to_thread + concurrent GET /stats/snapshot requests), so without the
+    lock a cold/expired cache would let several threads run the tens-of-seconds
+    scan AT ONCE — a stampede that spikes CPU/IO and starves the thread pool. The
+    lock serializes the scan to one thread; the others re-check inside the lock
+    and reuse the freshly-cached result instead of re-scanning."""
     now = time.time()
     c = _STATS_HF_SCAN_CACHE
-    if c["at"] and (now - c["at"]) < _STATS_HF_TTL_S:
+    if c["at"] and (now - c["at"]) < _STATS_HF_TTL_S:  # fast path, no lock on a warm hit
         return c["size"], c["repos"], c["err"]
-    size = repos = err = None
-    try:
-        info, scan_err = _safe_scan_hf_cache()
-        if info is not None:
-            size = int(getattr(info, "size_on_disk", 0) or 0)
-            repos = len(getattr(info, "repos", []) or [])
-        err = scan_err
-    except Exception as exc:  # noqa: BLE001
-        err = f"{type(exc).__name__}: {exc}"[:200]
-    c.update({"at": now, "size": size, "repos": repos, "err": err})
-    return size, repos, err
+    with _STATS_HF_LOCK:
+        now = time.time()
+        if c["at"] and (now - c["at"]) < _STATS_HF_TTL_S:  # another thread just refreshed it
+            return c["size"], c["repos"], c["err"]
+        size = repos = err = None
+        try:
+            info, scan_err = _safe_scan_hf_cache()
+            if info is not None:
+                size = int(getattr(info, "size_on_disk", 0) or 0)
+                repos = len(getattr(info, "repos", []) or [])
+            err = scan_err
+        except Exception as exc:  # noqa: BLE001
+            err = f"{type(exc).__name__}: {exc}"[:200]
+        c.update({"at": now, "size": size, "repos": repos, "err": err})
+        return size, repos, err
 
 
 def _safe_scan_hf_cache(cache_dir: str | None = None):
