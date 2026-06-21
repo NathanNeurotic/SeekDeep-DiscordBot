@@ -19479,18 +19479,15 @@ async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
     if (!guildId || !thread) return { threadName: archiveInfo?.threadName || thread?.name || '', count: Math.max(0, Number(archiveInfo?.count || 0) || 0) };
 
     const profile = seekdeepSharedArchiveGetProfile(guildId);
-    const fallbackCount = seekdeepSharedArchiveTrustedCount(profile) + 1;
-    let count = fallbackCount;
-    let scanStats = null;
-
-    if (typeof seekdeepScanThreadArchiveEntryStats === 'function') {
-      scanStats = await seekdeepScanThreadArchiveEntryStats(thread, 'SeekDeep Shared Archive Entry');
-      if (scanStats.ok && Number(scanStats.count || 0) > 0) {
-        count = Math.max(0, Number(scanStats.count || 0));
-      } else if (!scanStats.ok) {
-        console.warn('[SeekDeep] shared archive count scan failed; keeping fallback count:', scanStats.error || 'unknown scan failure');
-      }
-    }
+    // FAST count from the persisted profile — NOT a thread scan. The old code
+    // ran seekdeepScanThreadArchiveEntryStats here on EVERY archive post (up to
+    // ~10 pages × 100 Discord messages of REST fetches): on a busy thread that
+    // took 77-637s and blew the Discord interaction-token deadline (error
+    // 50027), so the archive button itself just failed. The expensive
+    // reconcile scan still runs on the explicit "archive status" path; the live
+    // increment uses the trusted profile count + 1 (mirrors the V4 manual
+    // path's seekdeepSharedArchiveFastNextCountV6).
+    const count = seekdeepSharedArchiveTrustedCount(profile) + 1;
 
     const nextName = seekdeepSharedArchiveThreadBuildName(count);
     const success = seekdeepSharedArchiveSaveProfile(guildId, {
@@ -19499,20 +19496,20 @@ async function seekdeepRecordSharedArchivePost(archiveInfo, target) {
       count,
       countSource: SEEKDEEP_SHARED_ARCHIVE_COUNT_SOURCE,
       lastArchivedAt: new Date().toISOString(),
-      lastCountScanAt: new Date().toISOString(),
-      lastCountScanMessages: Number(scanStats?.scannedMessages || 0) || 0,
-      lastCountScanEntries: Number(scanStats?.count || 0) || 0,
+      // lastCountScan* intentionally NOT updated here — no scan ran, and
+      // saveProfile merges, so the previous reconcile's telemetry is preserved
+      // instead of being clobbered with a fake "scanned now / 0 entries".
     });
-    
+
     if (success) {
       if (typeof seekdeepMaybeRenameArchiveThread === 'function') await seekdeepMaybeRenameArchiveThread(thread, nextName);
       else if (thread.name !== nextName) await thread.setName(nextName, 'SeekDeep shared archive count update').catch(() => null);
-      console.log(`[SeekDeep] archive count incremented scope=shared guildId=${guildId} userId=shared previousCount=${fallbackCount - 1} newCount=${count} threadId=${thread.id} success=true`);
+      console.log(`[SeekDeep] archive count incremented scope=shared guildId=${guildId} userId=shared previousCount=${count - 1} newCount=${count} threadId=${thread.id} success=true`);
     } else {
-      console.error(`[SeekDeep] archive count increment FAILED scope=shared guildId=${guildId} userId=shared previousCount=${fallbackCount - 1} newCount=${count} threadId=${thread.id} success=false`);
+      console.error(`[SeekDeep] archive count increment FAILED scope=shared guildId=${guildId} userId=shared previousCount=${count - 1} newCount=${count} threadId=${thread.id} success=false`);
     }
-    
-    return { threadName: nextName, count, scanStats };
+
+    return { threadName: nextName, count, scanStats: null };
   });
 }
 
