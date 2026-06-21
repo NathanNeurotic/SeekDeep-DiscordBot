@@ -243,7 +243,12 @@
     };
 
     const offComplete = window.SeekDeepEvents.on(completeType, (data) => finish(true,  data?.note  || data?.detail, data));
-    const offFailed   = window.SeekDeepEvents.on(failedType,   (data) => finish(false, data?.error || data?.exit_code ? `exit ${data.exit_code}` : 'install failed', data));
+    // NB parens: `||` binds tighter than `?:`, so the old
+    // `data?.error || data?.exit_code ? \`exit ${data.exit_code}\` : 'install failed'`
+    // parsed as `(error || exit_code) ? 'exit <code>' : ...` — when the server
+    // sent a real `error` string (the common case) the message became
+    // "exit undefined", throwing away the actual error. Prefer the message.
+    const offFailed   = window.SeekDeepEvents.on(failedType,   (data) => finish(false, data?.error || (data?.exit_code != null ? `exit ${data.exit_code}` : 'install failed'), data));
 
     // Hard timeout: 15 min covers the worst-case PyTorch download on a
     // slow connection. If no terminal event arrives by then, surface

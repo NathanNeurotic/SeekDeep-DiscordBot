@@ -472,7 +472,16 @@
         bodyEl.remove();
       }
 
+      let escHandler = null;
+      let _settled = false;
       function finish(verdict) {
+        if (_settled) return;   // idempotent — a button AND Escape could both fire
+        _settled = true;
+        // Always detach the document-level Escape listener. It was previously
+        // removed only when Escape ITSELF closed the modal, so closing via a
+        // button or the backdrop (the common case) leaked one keydown listener
+        // on document per modal/confirm (~50 call sites) for the page's life.
+        if (escHandler) document.removeEventListener('keydown', escHandler);
         back.remove();
         m.remove();
         resolve(verdict);
@@ -504,12 +513,9 @@
 
       if (opts.dismissible !== false) {
         back.addEventListener('click', () => finish('dismiss'));
-        document.addEventListener('keydown', function escHandler(e) {
-          if (e.key === 'Escape') {
-            document.removeEventListener('keydown', escHandler);
-            finish('dismiss');
-          }
-        });
+        // finish() detaches this on every close path (not just Escape).
+        escHandler = function (e) { if (e.key === 'Escape') finish('dismiss'); };
+        document.addEventListener('keydown', escHandler);
       }
 
       document.body.appendChild(back);

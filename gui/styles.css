@@ -9,6 +9,11 @@
   --abyss-4: #14306b;
   --ink:     #000a1f;
   --hull:    #f4f8ff;
+  /* --hull-1 was referenced ~30 times (text/input colors across several pages)
+     but never defined, so every `color: var(--hull-1)` declaration was invalid
+     and silently fell back to the inherited color. Alias it to the hull white
+     it was clearly meant to be, resolving all sites at once. */
+  --hull-1:  var(--hull);
   --hull-2:  #c7d6f0;
   --hull-3:  #7d92b8;
   --cyan-0:  #6df0ff;
@@ -225,6 +230,17 @@ body.sd-lite,  body.sd-lite *,  body.sd-lite *::before,  body.sd-lite *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
+/* Stop the always-on decorative animations under Lite / no-motion too: the
+   block above only killed the (display:none'd) background layers + backdrop
+   blur, leaving traceFlow (the edge-trace on every panel/card ::after — dozens
+   of opacity-churning layers per frame, the idle-compositor cost we keep
+   fighting), the blink carets, and the livePulse dots looping. These are the
+   only non-background decorative animations, and none are functional spinners/
+   progress, so an explicit (not blanket) stop is safe. */
+:is(body.no-motion, body.sd-lite) :is(.panel, .panel-flat, .card-mini, .launcher-card, .svc-card, .chart-wrap, .cp-panel, .cfg-section, .tile, .value, .persona-card, .card, .bot-card, .caret, .eyebrow, h1.live, h2.live)::after,
+:is(body.no-motion, body.sd-lite) :is(.cur, .live-dot) {
+  animation: none !important;
+}
 
 /* Safe mode — the FX toggle's deepest tier (nav.js adds .sd-safe AND .sd-lite,
    so the visual cuts above already apply). Safe mode also pauses the live event
@@ -251,6 +267,12 @@ body.sd-safe::after {
   *, *::before, *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
+  }
+  /* Honor the OS reduce-motion request for the always-on decorative animations
+     too (the block above only hid the background layers + blur). */
+  :is(.panel, .panel-flat, .card-mini, .launcher-card, .svc-card, .chart-wrap, .cp-panel, .cfg-section, .tile, .value, .persona-card, .card, .bot-card, .caret, .eyebrow, h1.live, h2.live)::after,
+  .cur, .live-dot {
+    animation: none !important;
   }
 }
 .bubbles span.cube.big { width: 22px; height: 22px; }

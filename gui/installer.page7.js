@@ -1123,8 +1123,17 @@ const SEEKDEEP_BASE = (function() {
       if (state.admin)               updates.SEEKDEEP_ADMIN_IDS    = state.admin;
       if (state.hf)                  updates.HF_TOKEN              = state.hf;
       if (state.selections?.chat)    updates.LOCAL_CHAT_MODEL_ID   = state.selections.chat;
-      if (state.selections?.vision)  updates.LOCAL_VISION_MODEL_ID = state.selections.vision;
-      if (state.selections?.image)   updates.LOCAL_IMAGE_MODEL_ID  = state.selections.image;
+      // The "Skip / none" card sets the selection to the literal string 'none'.
+      // Never write that (or a blank) for vision/image: the server resolves
+      // LOCAL_{VISION,IMAGE}_MODEL_ID via os.getenv(..., default) and then calls
+      // from_pretrained() on it, so 'none'/'' makes the role RAISE the moment
+      // it's first used — the opposite of disabling it. There's no clean
+      // server-side per-role disable, so treat Skip as "leave the configured/
+      // default model unchanged" (only write a real repo id).
+      const _visSel = state.selections?.vision;
+      if (_visSel && _visSel !== 'none')  updates.LOCAL_VISION_MODEL_ID = _visSel;
+      const _imgSel = state.selections?.image;
+      if (_imgSel && _imgSel !== 'none')  updates.LOCAL_IMAGE_MODEL_ID  = _imgSel;
       // Flags + defaults always sent (idempotent).
       updates.LOCAL_CHAT_QUANT     = state.flags?.quant_4bit ? '4bit' : 'none';
       updates.MODEL_AUTO_FALLBACK  = 'true';
