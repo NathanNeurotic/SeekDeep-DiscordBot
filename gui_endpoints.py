@@ -443,6 +443,12 @@ def _self_update_ref_is_allowed(ref: str) -> tuple[bool, str]:
 # `service.state.changed` events. Keyed by service name; value is the
 # previous dict returned by _service_state() (sans transitioning flag).
 _LAST_SERVICE_STATE: dict[str, dict] = {}
+# Guards _LAST_SERVICE_STATE. It's read-then-written by _emit_state_change_if_any
+# and popped by _end_transition — now reachable from a WORKER THREAD too (the
+# launchers tick runs _build_launchers_tick_payload via asyncio.to_thread), so the
+# get→set and the pop need a lock to avoid a torn read-modify-write or a pop
+# racing a write across threads.
+_LAST_SERVICE_STATE_LOCK = threading.Lock()
 
 # Loopback IPs that may fetch GET /token. Anything else gets 403.
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -727,6 +733,36 @@ def _merge_env(env_path: Path, updates: dict[str, Any]) -> dict[str, Any]:
 # backup mount, Dev Drive, etc). One bad symlink would crash the entire
 # scan and 500 the endpoint. This wrapper catches per-repo errors and
 # returns whatever scan completed plus a list of bad repos.
+
+# TTL cache for the stats tick's HF scan. scan_cache_dir on a multi-GB cache
+# takes tens of seconds; the stats tick ran it EVERY cycle, which both drained
+# CPU/IO at idle AND made the stats provider slow enough to delay the faster
+# gpu/health ticks (the tick loop awaits each provider sequentially). Cache the
+# derived (size, repos, error) — cache size changes slowly. Hardcoded TTL (no env
+# read → no env-coverage entry needed, like _MAX_WS_SUBSCRIBERS).
+_STATS_HF_TTL_S = 300.0
+_STATS_HF_SCAN_CACHE: dict = {"at": 0.0, "size": None, "repos": None, "err": None}
+
+
+def _cached_hf_scan_for_stats():
+    """TTL-cached (hf_size_bytes, hf_repo_count, scan_error) for the stats tick.
+    The first (cold) call still scans; subsequent calls within the TTL are instant."""
+    now = time.time()
+    c = _STATS_HF_SCAN_CACHE
+    if c["at"] and (now - c["at"]) < _STATS_HF_TTL_S:
+        return c["size"], c["repos"], c["err"]
+    size = repos = err = None
+    try:
+        info, scan_err = _safe_scan_hf_cache()
+        if info is not None:
+            size = int(getattr(info, "size_on_disk", 0) or 0)
+            repos = len(getattr(info, "repos", []) or [])
+        err = scan_err
+    except Exception as exc:  # noqa: BLE001
+        err = f"{type(exc).__name__}: {exc}"[:200]
+    c.update({"at": now, "size": size, "repos": repos, "err": err})
+    return size, repos, err
+
 
 def _safe_scan_hf_cache(cache_dir: str | None = None):
     """Returns (info_or_None, error_str_or_None). info exposes size_on_disk
@@ -1071,13 +1107,16 @@ def _emit_state_change_if_any(service: str, current: dict) -> None:
     `service.state.changed` event on the bus and update the cache. Status
     pills + launcher cards subscribe to this so they update on the WS bus
     immediately instead of waiting for the next 5s poll to notice."""
-    prev = _LAST_SERVICE_STATE.get(service)
     # Compare on the fields that actually drive UI rendering. The `source`
     # field is diagnostic — don't fire events when only `source` changes.
     keys = ("state", "pid", "count", "transitioning")
-    if prev is not None and all(prev.get(k) == current.get(k) for k in keys):
-        return
-    _LAST_SERVICE_STATE[service] = {k: current.get(k) for k in keys}
+    with _LAST_SERVICE_STATE_LOCK:
+        prev = _LAST_SERVICE_STATE.get(service)
+        if prev is not None and all(prev.get(k) == current.get(k) for k in keys):
+            return
+        _LAST_SERVICE_STATE[service] = {k: current.get(k) for k in keys}
+    # Publish OUTSIDE the lock (publish_sync may schedule onto the event loop;
+    # don't hold the state lock across it). `prev` was captured above.
     try:
         event_bus.publish_sync({
             "type": "service.state.changed",
@@ -1116,7 +1155,8 @@ def _end_transition(service: str) -> None:
     # Force-emit current state after the lock clears so UI re-paints
     # immediately on the now-settled state.
     # _LAST_SERVICE_STATE may still hold "transitioning" — invalidate.
-    _LAST_SERVICE_STATE.pop(service, None)
+    with _LAST_SERVICE_STATE_LOCK:
+        _LAST_SERVICE_STATE.pop(service, None)
 
 
 def _resolve_bot_cwd(default_cwd: Path) -> Path:
@@ -6036,17 +6076,14 @@ def register_gui_endpoints(
             "vision_30d_pct":   _pct_change(_sum_window("vision", 0, 30), _sum_window("vision", 30, 60)),
         }
 
-        # Cache: HF scan + Ollama tags
+        # Cache: HF scan (TTL-cached so this tick provider stays fast — see
+        # _cached_hf_scan_for_stats) + Ollama tags.
         cache: dict = {"hf_size_bytes": None, "hf_repo_count": None, "ollama_tag_count": None}
-        try:
-            info, scan_err = _safe_scan_hf_cache()
-            if info is not None:
-                cache["hf_size_bytes"] = int(getattr(info, "size_on_disk", 0) or 0)
-                cache["hf_repo_count"] = len(getattr(info, "repos", []) or [])
-            if scan_err:
-                cache["scan_error"] = scan_err
-        except Exception as exc:
-            cache["scan_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        _hf_size, _hf_repos, _hf_err = _cached_hf_scan_for_stats()
+        cache["hf_size_bytes"] = _hf_size
+        cache["hf_repo_count"] = _hf_repos
+        if _hf_err:
+            cache["scan_error"] = _hf_err
         # Ollama tag count (best-effort; daemon may be down)
         try:
             import local_ai_server as _lai
