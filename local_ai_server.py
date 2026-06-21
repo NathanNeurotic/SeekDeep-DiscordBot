@@ -796,11 +796,23 @@ def _ensure_tokenizer_deps_synchronously() -> None:
     try:
         import subprocess as _sub
         _nw = getattr(_sub, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        rc = _sub.call(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir",
-             "--disable-pip-version-check", *pkgs],
-            creationflags=_nw,
-        )
+        # Bound the install. A hung pip (network stall, pip-cache lock
+        # contention, AV interception on Windows) would otherwise block this
+        # import forever and port 7865 would never open — and the loop watchdog
+        # can't help because the event loop hasn't started yet. On timeout,
+        # continue boot (chat 503s until fixed) rather than hanging the server.
+        try:
+            rc = _sub.run(
+                [sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                 "--disable-pip-version-check", *pkgs],
+                creationflags=_nw,
+                timeout=600,
+            ).returncode
+        except _sub.TimeoutExpired:
+            print("[SeekDeep] BOOT: tokenizer pip install timed out (>600s) - "
+                  "continuing startup; chat will 503 until manually fixed via "
+                  "the INSTALL TOKENIZER DEPS button.", flush=True)
+            return
         if rc != 0:
             print(f"[SeekDeep] BOOT: tokenizer pip install exited rc={rc} - "
                   f"chat will 503 until manually fixed via INSTALL TOKENIZER "

@@ -2168,9 +2168,14 @@ def register_gui_endpoints(
             }
         finally:
             _end_transition("bot")
-            # Force a state recomputation + event publish so UI pills
-            # update immediately on the now-settled state.
-            _emit_state_change_if_any("bot", _service_state("bot", _log_dir))
+            # Force a state recomputation + event publish so UI pills update
+            # immediately on the now-settled state. _service_state('bot', ...)
+            # runs the psutil/WMI process scan, so compute it OFF the event loop
+            # (await is legal in an async finally) — running it inline here would
+            # re-block /health, the 5s status poll, and the /events WS right after
+            # a kill storm (the chronic event-loop-wedge class fixed elsewhere).
+            _bot_state = await asyncio.to_thread(_service_state, "bot", _log_dir)
+            _emit_state_change_if_any("bot", _bot_state)
 
     # ----- POST /launcher/{service}/{action} -----
     @app.post("/launcher/{service}/{action}", dependencies=[Depends(_require_gui_token)])
@@ -2213,9 +2218,15 @@ def register_gui_endpoints(
                 return await asyncio.to_thread(_restart_sync)
         finally:
             _end_transition(service)
-            # Force a state recomputation + event publish so UI pills
-            # update immediately on the now-settled state.
-            _emit_state_change_if_any(service, _service_state(service, _log_dir))
+            # Force a state recomputation + event publish so UI pills update
+            # immediately on the now-settled state. _service_state can run the
+            # psutil/WMI scan (bot) or a blocking socket connect (searxng), so
+            # compute it OFF the loop (await is legal in an async finally) —
+            # inline it would re-block /health, the 5s status poll, and /events
+            # right after the action (the read twin get_launchers_status is
+            # offloaded for exactly this reason).
+            _settled_state = await asyncio.to_thread(_service_state, service, _log_dir)
+            _emit_state_change_if_any(service, _settled_state)
 
     # ----- GET /launchers/status -----
     # Per-service status snapshot for the Control Center launcher cards.
@@ -7683,7 +7694,14 @@ def register_gui_endpoints(
                 # — the GUI doesn't have to be open for this auto-recovery.
                 if now >= next_watchdog:
                     next_watchdog = now + 5.0
-                    _bot_discord_watchdog_check()
+                    # Offload: the watchdog runs a psutil/WMI process scan plus,
+                    # on the restart path, _kill_pid + _stop/_start_service
+                    # subprocess spawns and a time.sleep(0.8) — all blocking. Run
+                    # it inline and it stalls the loop every 5s (and ~1s+ on a
+                    # restart), the same wedge class as the providers below and
+                    # _write_system_state right after. Drop-in: it's fully
+                    # exception-guarded and self-contained.
+                    await asyncio.to_thread(_bot_discord_watchdog_check)
                 # Canonical status file (§8): written every 1s regardless of
                 # subscribers — the tray + bot read it even with no GUI open.
                 # The compute is cheap (one bot-status.json read + a 0.4s
