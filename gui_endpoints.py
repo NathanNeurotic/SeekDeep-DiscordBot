@@ -7644,11 +7644,20 @@ def register_gui_endpoints(
                     await asyncio.to_thread(_write_system_state)
                 if event_bus.subscriber_count <= 0:
                     continue
+                # WEDGE FIX: every tick PROVIDER runs blocking work — gpu shells
+                # out to nvidia-smi, health probes ollama+gpu, and stats scans the
+                # whole HF cache (tens of seconds on a large model cache) + probes
+                # ollama. Calling them directly on the event loop stalled it past
+                # the 30s loop-watchdog threshold (the watchdog then force-exits ->
+                # respawn loop -> "stuck probing"). Offload each to a worker thread
+                # via asyncio.to_thread (twin of the _write_system_state offload
+                # above + the /health, /gpu endpoint fixes) so a slow probe/scan
+                # can never block the loop.
                 if now >= next_due["gpu"]:
                     next_due["gpu"] = now + TICK_CADENCE_SEC["gpu"]
                     if tick_providers and tick_providers.get("gpu"):
                         try:
-                            data = tick_providers["gpu"]() or {}
+                            data = await asyncio.to_thread(tick_providers["gpu"]) or {}
                             await event_bus.publish({"type": "gpu.tick", "data": data})
                         except Exception:
                             pass
@@ -7656,22 +7665,22 @@ def register_gui_endpoints(
                     next_due["health"] = now + TICK_CADENCE_SEC["health"]
                     if tick_providers and tick_providers.get("health"):
                         try:
-                            data = tick_providers["health"]() or {}
+                            data = await asyncio.to_thread(tick_providers["health"]) or {}
                             await event_bus.publish({"type": "health.tick", "data": data})
                         except Exception:
                             pass
                 if now >= next_due["launchers"]:
                     next_due["launchers"] = now + TICK_CADENCE_SEC["launchers"]
                     try:
-                        await event_bus.publish({"type": "launchers.tick",
-                                                  "data": _build_launchers_tick_payload()})
+                        data = await asyncio.to_thread(_build_launchers_tick_payload)
+                        await event_bus.publish({"type": "launchers.tick", "data": data})
                     except Exception:
                         pass
                 if now >= next_due["stats"]:
                     next_due["stats"] = now + TICK_CADENCE_SEC["stats"]
                     if tick_providers and tick_providers.get("stats"):
                         try:
-                            data = tick_providers["stats"]() or {}
+                            data = await asyncio.to_thread(tick_providers["stats"]) or {}
                             await event_bus.publish({"type": "stats.tick", "data": data})
                         except Exception:
                             pass
