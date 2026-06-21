@@ -1485,7 +1485,15 @@
       const nav = document.querySelector('.topnav');
       if (!nav) return;
       const h = Math.ceil(nav.getBoundingClientRect().height);
-      document.documentElement.style.setProperty('--topnav-h', h + 'px');
+      // Guard: a 0/implausibly-small measurement (nav not laid out yet, or
+      // measuring mid-build of the dynamic verb-grouped nav) must NOT clobber
+      // the var — that collapses --topnav-h toward 0 and drops fixed overlays
+      // (the update banner: position:fixed; top:var(--topnav-h)) onto the
+      // sticky topnav, jumbling the header. Keep the last good value (CSS
+      // default 80px) until a real height lands.
+      if (h >= 48) {
+        document.documentElement.style.setProperty('--topnav-h', h + 'px');
+      }
     }
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', update, { once: true });

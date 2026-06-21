@@ -38,6 +38,9 @@
     tauri.core.invoke('open_external', { url }).catch(() => window.open(url, '_blank'));
   }
 
+  // HTML-escape version strings before they land in the html:true banner body.
+  const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
   async function probe() {
     // Honor "remind me later" cooldown
     const remindAt = parseInt(localStorage.getItem(REMIND_KEY) || '0', 10);
@@ -64,7 +67,11 @@
       id: 'sd-updater-banner',
       tone: 'info',
       title: 'New SeekDeep release available',
-      body: 'You\'re on <code>v' + result.current + '</code>. Latest is <code>v' + result.latest + '</code>.',
+      // html:true so the <code> tags render (without it the banner escapes the
+      // body and shows raw "<code>…</code>" markup); versions are esc()'d since
+      // we now own escaping. Plain version strings, but escape defensively.
+      body: 'You\'re on <code>v' + esc(result.current) + '</code>. Latest is <code>v' + esc(result.latest) + '</code>.',
+      html: true,
       primary: {
         label: 'View release ↗',
         onClick: ({ close }) => { openExternalUrl(result.release_url); close(); },
