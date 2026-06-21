@@ -158,7 +158,11 @@
       }
       game._lastH = H;
     }
-    buildTiles();
+    // The zone tiles only depend on H (tileW is fixed at 1500), so skip the
+    // heavy rebuild (6 levels × 2 offscreen 1500×H circuit canvases) when only
+    // the width changed — the resize listener fires repeatedly during a window
+    // drag, and rebuilding all 12 canvases each event janks.
+    if (!zoneTiles.length || H !== _tilesBuiltH) buildTiles();
   }
   window.addEventListener("resize", resize);
 
@@ -229,7 +233,10 @@
   const STATE = { MENU: "menu", PLAY: "play", DEAD: "dead", CONTINUE: "continue" };
   const SFX = function (k, o) { if (window.DDAudio) window.DDAudio.play(k, o); };
   let state = STATE.MENU;
-  let best = +(localStorage.getItem("datadash.best") || 0);
+  // Trailing `|| 0` guards a corrupted/non-numeric localStorage value: without
+  // it `best` could be NaN, and since the high-score test is `bytes > best`
+  // (always false vs NaN) the best score would then never update or save again.
+  let best = +(localStorage.getItem("datadash.best") || 0) || 0;
 
   // ---- DEBUG (testing aid) -------------------------------------------------
   // OFF by default → zero gameplay effect. The Debug menu (#debug-modal in
@@ -287,7 +294,6 @@
       bytes: 0,
       streamed: 0,             // monotonic bytes-ever-streamed → drives spawns
       gross: 0,                // total gross accumulation (distance + collected) → Pepe
-      nextPepe: 0,
       nextPepeT: (T.pepeEverySec + Math.random() * T.pepeRandSec) * ddFreq("pepe"),   // first Pepe window (seconds)
       nextElementalT: 42,      // first DATA LOSS / RECOVERY event window (seconds); then ≥ elementalEvery apart
       invincible: 0,           // Pepe invincibility timer
@@ -1345,7 +1351,9 @@
     // BOSS AMMO RELIEF — while fighting a boss with low reserves (< 1 MB), feed
     // spaced-out but consistent kb packet strips so the player can always refuel
     // and keep firing. Outside bosses, packets stay scarce so saving up matters.
-    if (game.boss && (game.boss.phase === "fight" || game.boss.phase === "enter") &&
+    const _bossFighting = (game.boss && (game.boss.phase === "fight" || game.boss.phase === "enter"))
+                       || (game.boss2 && (game.boss2.phase === "fight" || game.boss2.phase === "enter"));  // either boss → keep ammo flowing
+    if (_bossFighting &&
         game.bytes < T.bossPacketLowKB && S >= game.nextBossPacket && pickupLaneClear()) {
       game.nextBossPacket = S + T.bossPacketEvery;
       const gap = (game.cBot - game.cTop) * H;
@@ -1661,13 +1669,14 @@
     const room = T.botMax - game.bots.length;
     const n = Math.min(T.botBatch, room);
     const S = game.streamed;
+    const inBossArena = game.boss || game.boss2;   // either boss → open arena (no terrain channel)
     for (let i = 0; i < n; i++) {
       // varied entry edge: right common, top/bottom medium, left rare (never pop in on top of the player)
       const er = Math.random();
-      const edge = game.boss ? "right" : er < 0.50 ? "right" : er < 0.72 ? "top" : er < 0.94 ? "bottom" : "left";
+      const edge = inBossArena ? "right" : er < 0.50 ? "right" : er < 0.72 ? "top" : er < 0.94 ? "bottom" : "left";
       let x, y;
       if (edge === "right") {
-        if (game.boss) { x = W + 60 + i * 74; y = H * (0.18 + Math.random() * 0.64); }   // boss arena is open
+        if (inBossArena) { x = W + 60 + i * 74; y = H * (0.18 + Math.random() * 0.64); }   // boss arena is open
         else { const col = colAtSpawn(); x = W + 60 + i * 40; y = col ? (col.ceil + (H - col.floor)) / 2 + (Math.random() - 0.5) * 90 : H * 0.5; }
       } else if (edge === "top") { x = W * (0.35 + Math.random() * 0.6); y = -60 - i * 30; }
       else if (edge === "bottom") { x = W * (0.35 + Math.random() * 0.6); y = H + 60 + i * 30; }
@@ -1904,7 +1913,14 @@
       // CHAOS: fire a second overlapping pattern on its own cadence
       if (b.fire2T <= 0 && b.pattern2 != null) {
         b.fire2T = (0.9 + Math.random() * 0.6) * rage;
-        const save = b.pattern; b.pattern = b.pattern2; b.fireT = 0; bossFire(b, dt); b.pattern = save;
+        // Save/restore BOTH pattern and fireT: bossFire() sets b.fireT to the
+        // pattern it just fired. Restoring only b.pattern left b.fireT holding
+        // pattern2's (often much faster) cooldown, so the PRIMARY pattern then
+        // re-fired at the secondary's cadence — inflating bullet density beyond
+        // design. The primary keeps its own cooldown (set by the bossFire above).
+        const saveP = b.pattern, saveFT = b.fireT;
+        b.pattern = b.pattern2; b.fireT = 0; bossFire(b, dt);
+        b.pattern = saveP; b.fireT = saveFT;
       }
       // one big bomb toward the end of the life bar — blinks, then splash-detonates
       if (!b.bombFired && b.timer < T.bossDuration * 0.4) {
@@ -2329,8 +2345,10 @@
   // level-up via applyZoneTiles(). Rebuilding 2 big offscreen canvases per transition
   // was the "lag when the environment changes" hitch.
   let zoneTiles = [];
+  let _tilesBuiltH = 0;
   function buildTiles() {
     tileW = 1500;
+    _tilesBuiltH = H;
     zoneTiles = LEVELS.map((lv) => {
       const acc = lv.palette.accent, accS = lv.palette.accentSoft;
       return {
