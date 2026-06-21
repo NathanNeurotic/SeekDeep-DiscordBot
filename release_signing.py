@@ -209,7 +209,17 @@ def sha256_hex(data: bytes) -> str:
 def list_manifest_files(root: Path) -> list[str]:
     """Repo-relative paths the manifest should cover: the single files plus the
     TOP-LEVEL files in gui/ and scripts/ (mirrors what the self-updater fetches —
-    it lists each subdir non-recursively and fetches type==file entries)."""
+    it lists each subdir non-recursively and fetches type==file entries).
+
+    NESTED files (e.g. gui/activity/datadash.game.js) are INTENTIONALLY out of
+    scope here. The self-updater also walks these subdirs non-recursively, so
+    nested files are never delivered over the self-update channel — they ship
+    ONLY in the installer bundle. Their integrity therefore rides the installer
+    (tracked separately as the release-signing-by-default / signed-installer
+    milestone), not this self-update manifest. Keeping both sides non-recursive
+    is what makes the completeness check pass; if nested files ever become
+    self-updatable, make BOTH the updater's walk and this function recursive
+    together so the manifest can't fall out of sync with what's fetched."""
     root = Path(root)
     rels: list[str] = []
     for f in MANIFEST_SINGLE_FILES:
