@@ -1303,6 +1303,11 @@
       color: var(--warn, #ffb84d);
       border-color: color-mix(in oklab, var(--warn, #ffb84d) 45%, transparent);
     }
+    .sd-live-pill[data-state="paused"] {
+      color: var(--hull-3, #7d92b8);
+      border-color: color-mix(in oklab, var(--hull-3, #7d92b8) 40%, transparent);
+    }
+    .sd-live-pill[data-state="paused"] .sd-live-dot { animation: none; opacity: 0.6; }
     @keyframes sdLivePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.85); } }
   `;
   const pillStyle = document.createElement('style');
@@ -1315,6 +1320,7 @@
       p.querySelector('.sd-live-label').textContent =
         state === 'live'    ? 'LIVE' :
         state === 'offline' ? 'OFFLINE' :
+        state === 'paused'  ? 'PAUSED' :
                               'PROBING';
     });
   }
@@ -1378,17 +1384,35 @@
     };
     // Effective lite state: an explicit user choice wins; otherwise follow the OS.
     const liteNow = () => { const s = stored(); return s === '1' ? true : s === '0' ? false : !!(mql && mql.matches); };
+    // Safe mode — a 3rd, deeper tier than Lite. It applies Lite's visual cuts AND
+    // pauses the live event bus + the heaviest pollers, so the GUI does almost no
+    // background work and (with no WS subscriber) the SERVER's tick loop idles too
+    // — near-zero idle CPU/GPU/IO. Everything still works on demand; live panes
+    // just don't auto-tick. Persisted separately; safe implies lite visuals.
+    const SAFE_KEY = 'seekdeep.safeMode';
+    let memorySafe = null;
+    const safeNow = () => { try { return localStorage.getItem(SAFE_KEY) === '1'; } catch (_) { return memorySafe === '1'; } };
+    // Exposed so events.js (bus gate) + pollers can check it without importing nav.
+    window.SeekDeepSafeMode = safeNow;
     function apply() {
-      if (document.body) document.body.classList.toggle('sd-lite', liteNow());
+      const safe = safeNow();
+      const lite = safe || liteNow();   // safe implies the lite visual cuts
+      if (document.body) {
+        document.body.classList.toggle('sd-lite', lite);
+        document.body.classList.toggle('sd-safe', safe);
+      }
       const pill = document.getElementById('sdFxToggle');
       if (pill) {
-        const lite = !!(document.body && document.body.classList.contains('sd-lite'));
+        const mode = safe ? 'safe' : lite ? 'lite' : 'full';
+        pill.dataset.mode = mode;
         pill.dataset.lite = lite ? '1' : '0';
         const label = pill.querySelector('.sd-fx-label');
-        if (label) label.textContent = lite ? 'FX: Lite' : 'FX: On';
-        pill.title = lite
-          ? 'GUI effects reduced (lighter on CPU/GPU). Click to restore full effects.'
-          : 'Full GUI effects. Click for Lite mode — removes the animated background + blur to cut CPU/GPU load.';
+        if (label) label.textContent = mode === 'safe' ? 'FX: Safe' : mode === 'lite' ? 'FX: Lite' : 'FX: On';
+        pill.title = mode === 'safe'
+          ? 'Safe mode — Lite visuals + live updates paused for near-zero background load. Live panes refresh on demand. Click to restore full effects.'
+          : mode === 'lite'
+            ? 'Lite mode — animated background + blur off to cut CPU/GPU. Click for Safe mode (also pauses live polling).'
+            : 'Full GUI effects. Click for Lite mode, then Safe mode.';
       }
     }
     // Apply ASAP (nav.js is deferred, so document.body already exists) to avoid
@@ -1402,19 +1426,33 @@
     // toggle (localStorage[KEY] changed), so every window re-applies instantly
     // instead of waiting for its next navigation. Fires only on a real change —
     // no polling. (The originating window already re-applied in toggle().)
-    try { window.addEventListener('storage', (e) => { if (e && e.key === KEY) apply(); }); } catch (_) {}
+    try { window.addEventListener('storage', (e) => { if (e && (e.key === KEY || e.key === SAFE_KEY)) apply(); }); } catch (_) {}
     function toggle() {
-      const lite = !(document.body && document.body.classList.contains('sd-lite'));
-      const val = lite ? '1' : '0';
-      memoryStored = val; // keep working this session even if persistence fails
-      try { localStorage.setItem(KEY, val); } catch (_) {}
+      // Cycle through three tiers: Full -> Lite -> Safe -> Full.
+      const safe = safeNow();
+      const lite = !!(document.body && document.body.classList.contains('sd-lite'));
+      const mode = safe ? 'safe' : lite ? 'lite' : 'full';
+      let nextLite, nextSafe;
+      if (mode === 'full')      { nextLite = '1'; nextSafe = false; }  // -> Lite
+      else if (mode === 'lite') { nextLite = '1'; nextSafe = true;  }  // -> Safe
+      else                      { nextLite = '0'; nextSafe = false; }  // Safe -> Full
+      memoryStored = nextLite;
+      memorySafe = nextSafe ? '1' : null;
+      try { localStorage.setItem(KEY, nextLite); } catch (_) {}
+      try { if (nextSafe) localStorage.setItem(SAFE_KEY, '1'); else localStorage.removeItem(SAFE_KEY); } catch (_) {}
       apply();
+      // Same-window listeners (events.js gates the bus on this); OTHER windows
+      // react via the 'storage' event on SAFE_KEY above.
+      const newMode = nextSafe ? 'safe' : nextLite === '1' ? 'lite' : 'full';
+      try { window.dispatchEvent(new CustomEvent('seekdeep:fxmode', { detail: { mode: newMode, safe: !!nextSafe } })); } catch (_) {}
       if (window.SeekDeepNotify && window.SeekDeepNotify.toast) {
         window.SeekDeepNotify.toast({
           tone: 'neutral',
-          title: lite ? 'Lite mode on' : 'Full effects on',
-          body: lite ? 'Animated background + blur disabled to reduce CPU/GPU load.' : 'Full GUI effects restored.',
-          ttl: 2600,
+          title: newMode === 'safe' ? 'Safe mode on' : newMode === 'lite' ? 'Lite mode on' : 'Full effects on',
+          body: newMode === 'safe' ? 'Live updates paused + effects off — near-zero background load. Live panes refresh on demand; Discord is unaffected.'
+              : newMode === 'lite' ? 'Animated background + blur disabled to reduce CPU/GPU load.'
+              : 'Full GUI effects + live updates restored.',
+          ttl: 3200,
         });
       }
     }
@@ -1449,7 +1487,10 @@
         // pill OFFLINE for up to 30s.
         window.SeekDeepEvents.on('_probing', () => setLiveState('probing'));
         window.SeekDeepEvents.on('_close', () => setLiveState('probing'));
-        setLiveState(window.SeekDeepEvents.connected ? 'live' : 'probing');
+        // Safe mode pauses the bus → show PAUSED (grey), not OFFLINE/PROBING.
+        window.SeekDeepEvents.on('_paused', () => setLiveState('paused'));
+        const _safe = !!(window.SeekDeepSafeMode && window.SeekDeepSafeMode());
+        setLiveState(_safe ? 'paused' : (window.SeekDeepEvents.connected ? 'live' : 'probing'));
         return true;
       } catch {}
     }

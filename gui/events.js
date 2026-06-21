@@ -93,9 +93,20 @@
     return '';
   }
 
+  // Safe mode (the FX toggle's deepest tier) pauses the live bus so the server's
+  // tick loop idles. Read the global nav.js exposes, with a localStorage fallback
+  // for the brief window before nav.js has run.
+  function safeModeOn() {
+    try {
+      if (window.SeekDeepSafeMode && window.SeekDeepSafeMode()) return true;
+      return localStorage.getItem('seekdeep.safeMode') === '1';
+    } catch (_) { return false; }
+  }
+
   async function connect() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (safeModeOn()) { emit('_paused', { reason: 'safe-mode' }); return; }  // don't open the bus in Safe mode
     manualClose = false;
     // On every reconnect, FORCE-REFRESH the token. The previous one may be
     // stale (server restart rotated it, or token expired in some future
@@ -182,6 +193,22 @@
     },
   };
 
-  // Open on load; defer slightly so SeekDeepAuth is set up first.
+  // React to Safe-mode flips: pause (close + stop reconnecting) when it turns on,
+  // resume (connect) when it turns off. Same-window via the custom event nav.js
+  // dispatches; cross-window via the 'storage' event on the safe-mode key.
+  function applyMode() {
+    if (safeModeOn()) {
+      manualClose = true;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      emit('_paused', { reason: 'safe-mode' });
+    } else {
+      connect();
+    }
+  }
+  try { window.addEventListener('seekdeep:fxmode', applyMode); } catch (_) {}
+  try { window.addEventListener('storage', (e) => { if (e && e.key === 'seekdeep.safeMode') applyMode(); }); } catch (_) {}
+
+  // Open on load (a no-op while Safe mode is on); defer so SeekDeepAuth is ready.
   setTimeout(connect, 50);
 })();
