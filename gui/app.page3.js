@@ -52,8 +52,13 @@ function applyAppTweaks(t) {
     root.style.setProperty('--panel', 'color-mix(in oklab, var(--abyss-2) 70%, transparent)');
     root.style.setProperty('--stroke', 'color-mix(in oklab, var(--cyan-1) 22%, transparent)');
   }
-  // motion
-  document.querySelectorAll('.bubbles, .abyss::before').forEach(el => {
+  // motion. NB: a pseudo-element ('.abyss::before') in a querySelectorAll
+  // selector is a SyntaxError in Chromium/WebView2 — it threw here and aborted
+  // the whole function before the no-motion / persona / panel-blur lines below
+  // ever ran. Pseudo-elements aren't reachable from JS anyway; the .abyss layer
+  // is paused via the body.no-motion class (CSS display:none) toggled just
+  // below, so we only inline-toggle the real .bubbles element here.
+  document.querySelectorAll('.bubbles, .abyss').forEach(el => {
     el.style.animationPlayState = t.ambientMotion ? 'running' : 'paused';
   });
   if (!t.ambientMotion) {

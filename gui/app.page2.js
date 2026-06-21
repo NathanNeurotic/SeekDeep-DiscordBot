@@ -1574,20 +1574,24 @@ const SEEKDEEP_BASE = (function() {
         if (ct.startsWith('image/')) {
           const blob = await r.blob();
           url = URL.createObjectURL(blob);
+          lastSeed = seed;  // binary response carries no seed; use the requested one
         } else {
           const data = await r.json();
           if (data.image_b64) url = `data:image/png;base64,${data.image_b64}`;
           else if (data.url)  url = data.url;
           else throw new Error('no image payload');
-          if (data.seed != null) lastSeed = data.seed;
+          // Prefer the seed the SERVER actually used — it may pick/clamp its own
+          // when the client sends a random/blank seed — so Copy-seed and Regen-
+          // same-seed reproduce THIS image. (The old unconditional `lastSeed =
+          // seed` discarded it.) Falls back to the requested seed.
+          lastSeed = (data.seed != null) ? data.seed : seed;
         }
-        lastSeed = seed;
         lastImageUrl = url;
         refs.image.src = url;
         refs.image.style.display = 'block';
         refs.placeholder.style.display = 'none';
         const ms = Math.round(performance.now() - t0);
-        setStatus(`DONE · ${label} · ${(ms/1000).toFixed(1)}s · SEED ${seed}`, 'on');
+        setStatus(`DONE · ${label} · ${(ms/1000).toFixed(1)}s · SEED ${lastSeed}`, 'on');
 
         // Append to history (tooltip shows refinement provenance when applicable)
         const thumb = document.createElement('div');
@@ -1595,11 +1599,25 @@ const SEEKDEEP_BASE = (function() {
         thumb.style.backgroundImage = `url(${url})`;
         thumb.style.backgroundSize = 'cover';
         thumb.style.backgroundPosition = 'center';
-        let thumbTitle = `${label} · seed ${seed}${body.steps ? ' · ' + body.steps + ' steps' : ''}`;
+        let thumbTitle = `${label} · seed ${lastSeed}${body.steps ? ' · ' + body.steps + ' steps' : ''}`;
         if (refineMeta) thumbTitle += `\nrefined: ${refineMeta.refined.slice(0, 200)}`;
         thumb.title = thumbTitle;
+        // Track blob: URLs on their thumb so we can revoke them on eviction —
+        // otherwise each generated PNG's object URL is pinned forever by the
+        // thumbnail's background-image and the WebView leaks unbounded memory
+        // across a session. (data:/http thumbs have no blobUrl → skipped.)
+        if (typeof url === 'string' && url.startsWith('blob:')) thumb.dataset.blobUrl = url;
         refs.history.prepend(thumb);
-        if (refs.history.children.length > 6) refs.history.lastChild.remove();
+        if (refs.history.children.length > 6) {
+          const evicted = refs.history.lastChild;
+          // By the time a thumb is the oldest of 7, the main preview and
+          // lastImageUrl point at a newer image, so nothing else references this
+          // blob — safe to revoke.
+          if (evicted && evicted.dataset && evicted.dataset.blobUrl) {
+            try { URL.revokeObjectURL(evicted.dataset.blobUrl); } catch {}
+          }
+          if (evicted) evicted.remove();
+        }
         // "both" mode: kick off a second pass with the RAW prompt (no
         // refinement) so the user can A/B compare. Skip the recursion
         // guard by passing useLastSeed=true so both pieces share a seed.
@@ -1883,7 +1901,11 @@ const SEEKDEEP_BASE = (function() {
         const txt = (line.textContent || '').toLowerCase();
         const okQ = !q || txt.includes(q);
         const okLvl = activeLevel === 'all' || lvl === activeLevel;
-        const okSrc = !activeSources.size || [...activeSources].some(s => src.includes(s));
+        // The 'file' source is the common file-log format (renderLine hardcodes
+        // src='file' for it), which carries no real bot/ai-server/searxng/image/
+        // vision token. Without this exemption, selecting ANY source chip set
+        // okSrc=false for every file-format line and the viewer went blank.
+        const okSrc = !activeSources.size || src === 'file' || [...activeSources].some(s => src.includes(s));
         line.style.display = (okQ && okLvl && okSrc) ? '' : 'none';
       });
     }
