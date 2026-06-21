@@ -2508,6 +2508,43 @@ if (typeof T.seekdeepSweepExpiredCooldowns === 'function') {
   check('BOT-4: small map left untouched (below sweep threshold)', small.size === 1);
 }
 
+// BOT: transient-server-down classifier — a socket-level failure ("fetch
+// failed", ECONNRESET/REFUSED, undici UND_ERR_*, our timeout wrapper) must be
+// treated as "server unreachable" (soft, friendly reply) while a genuine HTTP
+// 4xx/5xx-with-detail must NOT (keep its diagnostic message). Guards the fix for
+// the public "SeekDeep request failed / Error: / fetch failed" wall.
+if (typeof T.seekdeepIsServerUnreachableError === 'function') {
+  const isDown = T.seekdeepIsServerUnreachableError;
+  // The exact screenshot case: undici bare "fetch failed".
+  check('srv-down: bare "fetch failed"', isDown(new TypeError('fetch failed')) === true);
+  // undici carries the real socket errno on .cause.code.
+  check('srv-down: cause.code ECONNRESET', isDown(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })) === true);
+  check('srv-down: code ECONNREFUSED', isDown(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })) === true);
+  check('srv-down: undici UND_ERR_SOCKET', isDown(Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })) === true);
+  // postLocal's AbortController timeout wrapper.
+  check('srv-down: postLocal timeout wrapper', isDown(new Error('Local AI request timed out after 300.0 seconds.')) === true);
+  check('srv-down: raw AbortError', isDown(Object.assign(new Error('aborted'), { name: 'AbortError' })) === true);
+  check('srv-down: circuit-open error', isDown({ code: 'AI_CIRCUIT_OPEN' }) === true);
+  // A real HTTP error (status set) is NOT a transport failure — keep its detail.
+  check('srv-down: HTTP 500 NOT treated as unreachable', isDown(Object.assign(new Error('Request failed. HTTP 500: model failed to load'), { status: 500 })) === false);
+  check('srv-down: HTTP 400 NOT treated as unreachable', isDown(Object.assign(new Error('bad request'), { status: 400 })) === false);
+  // A plain content/logic error is not a transport failure.
+  check('srv-down: ordinary error NOT unreachable', isDown(new Error('something odd happened')) === false);
+  check('srv-down: null-safe', isDown(null) === false);
+}
+
+// BOT: failure replies must NOT carry a "Time to Generate / Model Used: local
+// command" footer — that read as if a local command had run when the request
+// actually failed.
+if (typeof T.seekdeepShouldHideCommandFooter === 'function') {
+  const hide = T.seekdeepShouldHideCommandFooter;
+  const noModel = { modelUsed: 'local command (no AI model)' };
+  check('footer-hide: "SeekDeep request failed" wall', hide('SeekDeep request failed.\n\nError:\nfetch failed', noModel) === true);
+  check('footer-hide: friendly server-down reply', hide('🔌 The local AI server dropped the connection — it may be restarting or reloading a model. Give it a few seconds and ask me again.', noModel) === true);
+  // A normal chat answer (real model) still keeps its footer.
+  check('footer-hide: real chat answer keeps footer', hide('Here is your answer.', { modelUsed: 'meta-llama/Llama-3.1-8B-Instruct' }) === false);
+}
+
 console.log('');
 console.log(`pass=${pass} fail=${fail}`);
 if (failures.length) {

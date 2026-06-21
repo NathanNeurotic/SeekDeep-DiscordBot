@@ -1127,7 +1127,12 @@ function seekdeepShouldHideCommandFooter(body = '', meta = {}) {
     /^Shared archive:/i.test(text) ||
     /^Your archive:/i.test(text) ||
     /^Archive for <@/i.test(text) ||
-    /^Download URL:/i.test(text)
+    /^Download URL:/i.test(text) ||
+    // A failed / server-unreachable AI request produced no model and no real
+    // generation time — never tack a "Time to Generate / Model Used: local
+    // command" footer onto the error reply (it read as if a local command ran).
+    /^SeekDeep request failed/i.test(text) ||
+    /dropped the connection — it may be restarting/i.test(text)
   );
 }
 
@@ -2660,6 +2665,45 @@ function seekdeepAiCircuitNoteFailure(err) {
     console.warn(`[SeekDeep] AI server unreachable after ${_seekdeepAiFailStreak} fails — circuit open for ${SEEKDEEP_CIRCUIT_COOLDOWN_MS}ms. Last error: ${String(err?.message || err).slice(0, 200)}`);
   }
 }
+
+// A transport-level failure means the AI server is UNREACHABLE — it crashed,
+// is mid-restart (self-update / crash-watchdog respawn), reset the socket
+// mid-response, or refused the connection — as opposed to a logic error (an
+// HTTP 4xx/5xx with a real JSON body). undici surfaces transport failures as a
+// bare `TypeError: fetch failed` whose `.cause.code` carries the socket errno;
+// postLocal also wraps an AbortController timeout into "Local AI request timed
+// out after N seconds." We treat ALL of these softly (a single friendly line,
+// no scary multi-line wall, no model footer) because they're transient and not
+// the user's fault. A genuine 500-with-detail still shows its real message so
+// real bugs stay diagnosable. (The screenshot that prompted this: a reply got
+// `SeekDeep request failed / Error: / fetch failed` when the server dropped the
+// socket ~70s into generating — below the 3-fail circuit threshold, so the wall
+// fired instead of the soft path.)
+const SEEKDEEP_SERVER_DOWN_CONN_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'EPIPE', 'ETIMEDOUT',
+  'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CLOSED', 'UND_ERR_DESTROYED',
+]);
+function seekdeepIsServerUnreachableError(err) {
+  if (!err) return false;
+  if (err.code === 'AI_CIRCUIT_OPEN') return true;       // circuit already open
+  if (err.name === 'AbortError') return true;            // raw abort/timeout
+  if (typeof err.status === 'number' && err.status >= 400) return false; // real HTTP error → keep its detail
+  const code = String(err.code || err.cause?.code || '');
+  if (code && SEEKDEEP_SERVER_DOWN_CONN_CODES.has(code)) return true;
+  const msg = String(err.message || err).toLowerCase();
+  return /\bfetch failed\b/.test(msg)
+    || /local ai request timed out/.test(msg)
+    || /\bsocket hang ?up\b/.test(msg)
+    || /econnrefused|econnreset|enotfound|und_err/.test(msg);
+}
+
+// Compact, friendly reply for a transient server-down/restart (in place of the
+// scary multi-line "request failed" wall). Recognized by the footer suppressor
+// so it never carries a bogus "Time to Generate / Model Used" line.
+const SEEKDEEP_SERVER_DOWN_REPLY =
+  '🔌 The local AI server dropped the connection — it may be restarting or reloading a model. Give it a few seconds and ask me again.';
 
 async function postLocal(pathname, body, options = {}) {
   // Circuit-breaker gate: bail fast when the server is known-down so we
@@ -21761,6 +21805,14 @@ async function seekdeepDispatchAddressedMessage(message, ctx) {
     // where dozens of fetch-failed messages flooded a public channel.)
     if (err && err.code === 'AI_CIRCUIT_OPEN') {
       try { await message.react('🔌'); } catch (_) {}
+    } else if (seekdeepIsServerUnreachableError(err)) {
+      // A one-off transient drop (server crashed/restarted mid-reply, socket
+      // reset, connection refused) — still below the 3-fail circuit threshold,
+      // so the scary wall would otherwise fire. Reply with a single friendly
+      // line (no raw "fetch failed", no misleading "local command" footer);
+      // fall back to the 🔌 reaction if even that reply can't be posted.
+      try { await sendLongMessageReply(message, SEEKDEEP_SERVER_DOWN_REPLY); }
+      catch (_) { try { await message.react('🔌'); } catch (_) {} }
     } else {
       await sendLongMessageReply(message, `SeekDeep request failed.\n\nError:\n${err.message}`);
     }
@@ -24318,17 +24370,22 @@ client.on('interactionCreate', async (interaction) => {
     }
     console.error(err);
     try {
-      const configuredChatModel = process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct';
       seekdeepSetResponseModel(interaction, seekdeepNoModelLabel());
-      await sendLongInteractionReply(interaction, [
-        'SeekDeep request failed.',
-        '',
-        'Configured chat provider: Local NVIDIA model server',
-        `Configured chat model: ${configuredChatModel}`,
-        '',
-        'Error:',
-        err?.message || String(err),
-      ].join('\n'));
+      if (seekdeepIsServerUnreachableError(err)) {
+        // Server down/restarting — a friendly one-liner, not the diagnostic wall.
+        await sendLongInteractionReply(interaction, SEEKDEEP_SERVER_DOWN_REPLY);
+      } else {
+        const configuredChatModel = process.env.LOCAL_CHAT_MODEL_ID || 'meta-llama/Llama-3.1-8B-Instruct';
+        await sendLongInteractionReply(interaction, [
+          'SeekDeep request failed.',
+          '',
+          'Configured chat provider: Local NVIDIA model server',
+          `Configured chat model: ${configuredChatModel}`,
+          '',
+          'Error:',
+          err?.message || String(err),
+        ].join('\n'));
+      }
     } catch (replyErr) {
       console.error('Slash command failure notice also failed:', replyErr?.message || replyErr);
     }
@@ -24360,6 +24417,9 @@ if (process.env.SEEKDEEP_TEST_MODE === '1') {
     splitDiscordText,
     seekdeepIsFrustrationPrompt,
     seekdeepCompileReactionPattern,
+    // Transient-server-down classifier (soft-fail vs. scary error wall)
+    seekdeepIsServerUnreachableError,
+    seekdeepShouldHideCommandFooter,
     // Canonical bot-name address detection (centralized alias source)
     seekdeepTextAddressesBot,
     stripBotMentions,
