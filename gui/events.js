@@ -201,12 +201,19 @@
       manualClose = true;
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       if (ws) {
-        // Detach handlers BEFORE close(): ws.close() is async, so the discarded
-        // socket's onclose would fire next tick and emit _close — which the live
-        // pill turns into PROBING, clobbering the PAUSED we set just below.
-        // (manualClose suppresses the reconnect, but _close still fires.)
+        // Detach ALL handlers BEFORE close(): ws.close() is async, so the
+        // orphaned socket can still fire callbacks on later ticks —
+        //   • onclose  → emit _close → pill goes PROBING, clobbering PAUSED;
+        //   • onopen   → emit _open  → pill goes LIVE (if it was still
+        //                CONNECTING when Safe mode flipped), also clobbering it;
+        //   • onmessage→ re-publishes heartbeat/vram/queue to every subscriber,
+        //                restarting the exact downstream pump work Safe mode
+        //                exists to silence.
+        // (manualClose suppresses the reconnect, but these still fire.)
         ws.onclose = null;
         ws.onerror = null;
+        ws.onmessage = null;
+        ws.onopen = null;
         try { ws.close(); } catch (_) {}
         ws = null;
       }
