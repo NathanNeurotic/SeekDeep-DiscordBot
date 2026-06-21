@@ -221,6 +221,18 @@
   // Returns true on a good poll, false on a failed fetch, null when skipped
   // (live bus active, paused, or tab hidden) — the scheduler backs off only on
   // real failures.
+  //
+  // Dedup cursor: /logs/tail returns the last N lines on EVERY poll, so without
+  // a cursor the same lines re-append every ~3s (the common idle case flooded
+  // the viewer with ~100 dupes/min and pushed real history out of the 500-line
+  // ring). We track a signature of the last line we already showed and append
+  // only the suffix after it. (Lines may be plain strings or {level,src,msg,ts}
+  // objects — ts is usually undefined, so the signature can't rely on it.)
+  let _lastLogSig = null;
+  function logLineSig(ln) {
+    if (ln && typeof ln === 'object') return `${ln.ts || ''}|${ln.level || ''}|${ln.src || ''}|${ln.msg || ''}`;
+    return String(ln);
+  }
   async function pollOnce() {
     if (liveMode || paused || (typeof document !== 'undefined' && document.hidden)) return null;
     try {
@@ -229,9 +241,19 @@
       if (!r.ok) return false;
       const data = await r.json().catch(() => null);
       const lines = Array.isArray(data?.lines) ? data.lines : [];
-      for (const ln of lines.slice(-5)) {
+      // Append only lines after the last one we've already shown. If the cursor
+      // line has scrolled out of the window (a burst > 20 lines/poll), start=0
+      // and we re-show the whole window once — better a one-off than a flood.
+      let start = 0;
+      if (_lastLogSig != null) {
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (logLineSig(lines[i]) === _lastLogSig) { start = i + 1; break; }
+        }
+      }
+      for (const ln of lines.slice(start)) {
         appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
       }
+      if (lines.length) _lastLogSig = logLineSig(lines[lines.length - 1]);
       return true;
     } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); return false; }
   }

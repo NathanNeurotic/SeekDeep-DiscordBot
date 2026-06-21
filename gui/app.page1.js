@@ -428,6 +428,13 @@
     if (!tabs || !grid) return;
 
     let snapshot = null;       // last loaded snapshot
+    // Flatten cache: flattenEntries() walks the whole (multi-MB) snapshot, and
+    // renderGrid runs on every search keystroke + sort change — re-walking the
+    // entire dataset per character caused visible input lag. Cache the flattened
+    // array keyed on the snapshot object's IDENTITY so it auto-invalidates the
+    // moment load() assigns a new snapshot (no need to clear it at each site).
+    let _flatCache = null;
+    let _flatCacheFor = null;
     let activeTab = '*';       // '*' = all entries; thread_id otherwise
     let searchQ = '';
     let sortKey = 'ts-desc';
@@ -462,9 +469,19 @@
       return out;
     }
 
+    // Memoized flatten — recomputes only when `snapshot` is a different object.
+    function getFlatEntries() {
+      if (!snapshot) return [];
+      if (_flatCacheFor !== snapshot) {
+        _flatCache = flattenEntries(snapshot);
+        _flatCacheFor = snapshot;
+      }
+      return _flatCache;
+    }
+
     function renderTabs() {
       if (!snapshot) { tabs.innerHTML = '<span class="chip active" data-thread="*">ALL · —</span>'; return; }
-      const all = flattenEntries(snapshot);
+      const all = getFlatEntries();
       const byThread = new Map();  // threadId → { name, kind, count }
       for (const item of all) {
         if (!byThread.has(item.threadId)) byThread.set(item.threadId, { name: item.threadName, kind: item.kind, count: 0 });
@@ -506,7 +523,8 @@
         grid.innerHTML = '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--hull-3); font-family: var(--font-mono); font-size: 12px;">▸ snapshot not loaded yet · click ⟳ Refresh</div>';
         return;
       }
-      let items = flattenEntries(snapshot);
+      // .slice() so the in-place sort below never mutates the shared cache.
+      let items = getFlatEntries().slice();
       // Tab filter
       if (activeTab !== '*') items = items.filter(it => it.threadId === activeTab);
       // Search filter (prompt + key + requester + model)
@@ -667,48 +685,13 @@
     }, 60_000);
   })();
 
-  // ===== Model row buttons · live wiring (POST /model/warm and /unload) =====
-  document.querySelectorAll('.model-row[data-role]').forEach(row => {
-    const role = row.dataset.role;
-    const actions = row.querySelectorAll('.actions .btn-mini');
-    actions.forEach(btn => {
-      const txt = btn.textContent.trim().toUpperCase();
-      btn.addEventListener('click', async () => {
-        const orig = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = '⋯ ' + orig.replace(/^[^A-Z]+/, '');
-        try {
-          let url, body;
-          if (txt.includes('WARM') || txt.includes('PIN')) {
-            url = SEEKDEEP_BASE + '/model/warm';
-            body = JSON.stringify({ role });
-          } else if (txt.includes('EVICT') || txt.includes('UNLOAD')) {
-            url = SEEKDEEP_BASE + '/unload';
-            body = JSON.stringify({ role });
-          } else {
-            // DEL or unknown — no backend wire for delete; fall through to flash only
-            setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 600);
-            return;
-          }
-          const r = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body, signal: AbortSignal.timeout(30000),
-          });
-          if (r.ok) {
-            btn.textContent = '✓ ' + orig;
-            // Trigger a /health refresh so the resident pill updates
-            if (typeof LIVE !== 'undefined' && LIVE.probe) LIVE.probe();
-          } else if (r.status === 404) {
-            btn.textContent = '✕ missing';
-          } else {
-            btn.textContent = '✕ ' + r.status;
-          }
-        } catch (e) {
-          btn.textContent = '✕ offline';
-        } finally {
-          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 1800);
-        }
-      });
-    });
-  });
+  // ===== Model row buttons =====
+  // (Removed: a duplicate text-content wiring of the model-row action buttons
+  // used to live here. Every button in app.html carries a data-act
+  // (warm/inspect/remove) and app.page4.js already wires all three via
+  // [data-act=...] — using the SeekDeepResolveBase loopback resolver and the
+  // row-state pill. This loop fired a SECOND listener on the same buttons, so
+  // one WARM click sent two concurrent /model/warm POSTs and the two handlers
+  // fought over the button label vs. the pill; its EVICT/UNLOAD branch was also
+  // dead (no button says EVICT/UNLOAD — they say REMOVE). page4 is the single
+  // owner now.)

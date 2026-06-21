@@ -60,7 +60,7 @@
 | DELETE | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
 | PATCH | `/memory/user/{user_id}/fact/{n}` | token | — | yes |
 | GET | `/memory/users` | token | api.page.js | yes |
-| POST | `/model/warm` | token | app.page1.js | yes |
+| POST | `/model/warm` | token | app.page4.js | yes |
 | GET | `/persona` | open | api.page.js | yes |
 | POST | `/persona` | token | api.page.js | yes |
 | GET | `/personas` | open | personas.page.js | yes |

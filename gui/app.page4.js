@@ -117,6 +117,13 @@
         r.textContent = `✓ ${body.backend} · ${body.model_id} installed${extra}`;
         r.style.whiteSpace = 'pre-wrap';
         nextBtn.textContent = 'Done · close';
+        // Re-enable (the disable at the top of submit() was only for the
+        // in-flight request) AND remove the stale `advance` click listener so
+        // this button now ONLY closes — otherwise a click fires both onclick
+        // (close+reload) and advance() (a re-submit). Without the re-enable the
+        // user was stranded on the success screen, unable to click 'Done'.
+        nextBtn.removeEventListener('click', advance);
+        nextBtn.disabled = false;
         nextBtn.onclick = () => { close(); location.reload(); };
       } else {
         r.style.color = 'var(--bad)';
