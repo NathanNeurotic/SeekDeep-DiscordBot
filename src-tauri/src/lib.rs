@@ -65,17 +65,20 @@ async fn install_ml_deps(app: tauri::AppHandle) -> Result<String, String> {
         // 2. Run pip install — streams ml-install:line events as it
         //    downloads so the GUI modal updates in real time.
         sidecar::pip_install_ml(&app_inner, &python, &runtime)
-    }).await.map_err(|e| format!("install task join: {e}"))?;
+    }).await;
 
-    // 3. Respawn the sidecar regardless of pip outcome — even if pip
-    //    failed, the user wants their previously-working server back.
+    // 3. Respawn the sidecar regardless of pip outcome — even if pip failed OR
+    //    the blocking task PANICKED. The sidecar was already killed above, so an
+    //    early `?` on a JoinError here (the old code) would leave the user with
+    //    no server and no recovery, violating the "respawn regardless" guarantee.
+    //    Spawn the respawn unconditionally, THEN propagate any join error.
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
         sidecar::boot_sequence(handle);
     });
 
-    result
+    result.map_err(|e| format!("install task join: {e}"))?
 }
 
 /// Reinstall torch + torchvision + torchaudio against a specific CUDA
@@ -100,19 +103,29 @@ async fn install_torch_variant(app: tauri::AppHandle, variant: String) -> Result
         std::thread::sleep(Duration::from_millis(800));
 
         sidecar::pip_install_torch_variant(&app_inner, &python, &runtime, &var)
-    }).await.map_err(|e| format!("install task join: {e}"))?;
+    }).await;
 
+    // Respawn regardless of pip outcome OR a panic in the blocking task — the
+    // sidecar was already killed above, so spawn the respawn unconditionally
+    // before propagating any join error (see install_ml_deps for the rationale).
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
         sidecar::boot_sequence(handle);
     });
 
-    result
+    result.map_err(|e| format!("install task join: {e}"))?
 }
 
 #[tauri::command]
 fn retry_spawn(app: tauri::AppHandle) -> Result<(), String> {
+    // The "try again" button after CRASH_GAVE_UP. Grant a fresh crash budget so
+    // the new watchdog doesn't inherit the saturated counter and immediately
+    // give up again. (retry_spawn bypasses kill_child, which resets it for the
+    // restart/install paths, so reset it explicitly here too.)
+    if let Ok(mut g) = app.state::<SidecarState>().respawn_attempts.lock() {
+        *g = 0;
+    }
     let handle = app.clone();
     thread::spawn(move || {
         sidecar::boot_sequence(handle);
@@ -416,22 +429,19 @@ fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
     // bare `docker` (PATH) fallback for non-standard installs. Step 3 below
     // launches Docker Desktop.exe from fixed absolute paths via the pinned cmd.
     let docker_cli = resolve_docker_cli();
-    // 1. Probe: is Docker already running?
-    let info = std::process::Command::new(&docker_cli)
-        .arg("info")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    if matches!(info, Ok(s) if s.success()) {
+    // 1. Probe: is Docker already running? Use the BOUNDED daemon check — a
+    //    half-started Docker Desktop / WSL2 backend can make `docker info` hang
+    //    for a long time or indefinitely, which is exactly the transient state
+    //    this "try to start Docker" path is invoked in. The old unbounded
+    //    `.status()` could spin the Installer button forever and tie up a Tauri
+    //    command worker. (Mirrors the start_searxng_stack path.)
+    if docker_daemon_up(&docker_cli) {
         return Ok(serde_json::json!({ "ok": true, "state": "running" }));
     }
-    // 2. Probe: is Docker installed at all?
-    let ver = std::process::Command::new(&docker_cli)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    if !matches!(ver, Ok(s) if s.success()) {
+    // 2. Probe: is Docker installed at all? (bounded `--version`.)
+    let mut ver = std::process::Command::new(&docker_cli);
+    ver.arg("--version");
+    if !run_capture_within(ver, Duration::from_secs(10)).0 {
         return Ok(serde_json::json!({ "ok": false, "state": "not_installed" }));
     }
     // 3. Docker is installed but not running. Try to launch Docker Desktop.

@@ -1432,6 +1432,17 @@ pub fn kill_child(state: &SidecarState) {
         if let Ok(mut g) = state.intentional_kill.lock() {
             *g = true;
         }
+        // A user-initiated kill (tray Restart / install / window-close) grants
+        // the next spawn a FRESH crash budget. Otherwise, once the crash
+        // watchdog gave up (respawn_attempts > MAX → CRASH_GAVE_UP), a manual
+        // restart inherited the saturated counter and the new watchdog emitted
+        // CRASH_GAVE_UP on the very first crash, denying the user's "try again".
+        // Only intentional kills reach here — the crash-respawn path clears the
+        // child handle directly and never calls kill_child — so this never
+        // resets a legitimately-accumulating crash-loop budget.
+        if let Ok(mut g) = state.respawn_attempts.lock() {
+            *g = 0;
+        }
 
         drop(guard);
         let _ = child.kill();
@@ -1898,6 +1909,19 @@ pub fn boot_sequence(app: AppHandle) {
         Ok(child) => {
             if let Ok(mut guard) = state.child.lock() {
                 *guard = Some(child);
+            }
+            // Clear any stale intentional_kill now that a fresh child is live.
+            // kill_child sets it true before a restart/install, but the OLD
+            // watchdog usually retires on the generation gate below (it polls
+            // every 3s; this spawn happens ~500ms after kill_child) WITHOUT ever
+            // consuming the flag — leaving it stuck true so the NEXT genuine
+            // crash of THIS new child is misread as intentional and never
+            // respawned, leaving a dead server. Clearing here (after the child
+            // is set, so the old watchdog still sees true during the child=None
+            // boot window and retires correctly) fixes that without the
+            // spurious-crash-count race that clearing at the top would cause.
+            if let Ok(mut g) = state.intentional_kill.lock() {
+                *g = false;
             }
             // Bump the generation BEFORE starting the new watchdog so the
             // old watchdog (if still polling) reads the new value and
