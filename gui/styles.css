@@ -226,6 +226,24 @@ body.sd-lite,  body.sd-lite *,  body.sd-lite *::before,  body.sd-lite *::after {
   -webkit-backdrop-filter: none !important;
 }
 
+/* Safe mode — the FX toggle's deepest tier (nav.js adds .sd-safe AND .sd-lite,
+   so the visual cuts above already apply). Safe mode also pauses the live event
+   bus + pollers (events.js), so the server tick loop idles → near-zero idle
+   load. This persistent corner badge makes the now-static live panes read as
+   intentional ("paused"), not broken. pointer-events:none so it never blocks. */
+body.sd-safe::after {
+  content: "\25CC SAFE MODE";
+  position: fixed;
+  bottom: 10px; right: 12px;
+  z-index: 9990;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.16em;
+  color: var(--hull-3, #7d92b8);
+  background: rgba(2, 6, 15, 0.85);
+  border: 1px solid color-mix(in oklab, var(--hull-3, #7d92b8) 30%, transparent);
+  padding: 4px 9px; border-radius: 999px;
+  pointer-events: none;
+}
+
 /* Pure-CSS fallback so the OS "reduce motion" setting still helps even if nav.js
    hasn't applied the class yet (no-JS / pre-paint). Mirrors the lite rule. */
 @media (prefers-reduced-motion: reduce) {
