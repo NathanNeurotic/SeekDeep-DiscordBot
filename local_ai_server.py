@@ -383,6 +383,7 @@ def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> Non
         pass
 
 
+_PRUNE_LOCK = threading.Lock()
 _LAST_PRUNE_AT = 0.0
 
 def _output_path(safe_name: str):
@@ -392,13 +393,22 @@ def _output_path(safe_name: str):
     BOTH dirs for EVERY image request (the hot path), which is pure overhead —
     the caps (200 files / 72h) move slowly, so once-a-minute reclaims orphans
     just as well without the back-to-back rescans.
+
+    Double-checked locking: this runs from sync endpoints in FastAPI's
+    threadpool, so concurrent callers could otherwise both read the stale
+    timestamp and prune at once (redundant iterdir()/stat() churn, possible
+    OSError on a file the other thread already unlinked). The lock-free fast
+    path stays the common case; only the once/60s prune takes the lock.
     """
     global _LAST_PRUNE_AT
     now = time.time()
     if now - _LAST_PRUNE_AT >= 60.0:
-        _LAST_PRUNE_AT = now
-        _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
-        _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+        with _PRUNE_LOCK:
+            now = time.time()
+            if now - _LAST_PRUNE_AT >= 60.0:   # another thread may have just pruned
+                _LAST_PRUNE_AT = now
+                _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+                _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
     return OUTPUT_DIR / safe_name
 
 CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct")
@@ -7115,7 +7125,14 @@ def tts_voice_download(req: TTSVoiceDownloadRequest):
     SEEKDEEP_TTS_PIPER_VOICE = voice_path
     os.environ["SEEKDEEP_TTS_ENGINE"] = "piper"
     os.environ["SEEKDEEP_TTS_PIPER_VOICE"] = voice_path
-    tts_engine = None
+    # Drop the cached engine UNDER the build lock: load_tts_engine()'s double-
+    # checked build assigns `tts_engine` while holding _TTS_ENGINE_LOCK, so an
+    # unlocked reset here could be clobbered by a concurrent first-call /tts that
+    # finishes building the OLD voice right after we null it (leaving a stale
+    # handle that doesn't match the env we just rewrote). Taking the lock orders
+    # this reset against any in-flight build so the next /tts rebuilds cleanly.
+    with _TTS_ENGINE_LOCK:
+        tts_engine = None
     print(f"[SeekDeep Local AI] TTS voice downloaded + activated: {voice_path}", flush=True)
     return {"ok": True, "key": req.key, "voice_path": voice_path, "engine": "piper"}
 

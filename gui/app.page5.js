@@ -258,8 +258,7 @@
     // would be the only thing still hitting /logs/tail — exactly the background
     // work Safe mode exists to eliminate), alongside live/paused/hidden.
     if (liveMode || paused
-        || (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
-        || (typeof document !== 'undefined' && document.hidden)) return null;
+        || (typeof window.seekdeepSkipBgPoll === 'function' && window.seekdeepSkipBgPoll())) return null;
     try {
       const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
       const r = await fetch(base + '/logs/tail?n=20', { signal: AbortSignal.timeout(3000), cache: 'no-store' });

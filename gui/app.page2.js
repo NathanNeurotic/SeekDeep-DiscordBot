@@ -9,9 +9,11 @@
   // setInterval pollers would otherwise be the ONLY thing left hitting the
   // server, defeating the zero-background tier) or when the tab is hidden.
   // Guards only the interval cadence; the initial load + manual refresh still run.
+  // Thin delegator to the shared nav.js global (single source of truth); falls
+  // back to false (= don't skip) if nav hasn't defined it yet, matching the
+  // graceful-absence convention used for window.SeekDeepSafeMode elsewhere.
   function seekdeepSkipBgPoll() {
-    return (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
-        || (typeof document !== 'undefined' && document.hidden);
+    return typeof window.seekdeepSkipBgPoll === 'function' && window.seekdeepSkipBgPoll();
   }
 
   function activate(mod) {

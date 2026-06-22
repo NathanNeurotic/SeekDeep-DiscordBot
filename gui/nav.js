@@ -1407,6 +1407,13 @@
     const safeNow = () => { try { return localStorage.getItem(SAFE_KEY) === '1'; } catch (_) { return memorySafe === '1'; } };
     // Exposed so events.js (bus gate) + pollers can check it without importing nav.
     window.SeekDeepSafeMode = safeNow;
+    // Single source of truth for "should a background poll skip this tick?" —
+    // true in Safe mode (WS bus paused → a standalone setInterval poll would be
+    // the only thing still hitting the server) or on a hidden tab. Pages call
+    // window.seekdeepSkipBgPoll() instead of each re-deriving the same condition.
+    window.seekdeepSkipBgPoll = function () {
+      return safeNow() || (typeof document !== 'undefined' && !!document.hidden);
+    };
     function apply() {
       const safe = safeNow();
       const lite = safe || liteNow();   // safe implies the lite visual cuts
@@ -2183,7 +2190,15 @@
           el.appendChild(k);
         }
         if (!it.disabled) {
-          el.addEventListener('click', () => { closeMenu(); try { it.action(); } catch (e) { try { (window.SeekDeepDebug && window.SeekDeepDebug.warn || console.warn)('ctx-menu action failed', e); } catch {} } });
+          el.addEventListener('click', () => {
+            closeMenu();
+            try {
+              it.action();
+            } catch (e) {
+              const logger = (typeof window.SeekDeepDebug?.warn === 'function') ? window.SeekDeepDebug.warn : console.warn;
+              try { logger('ctx-menu action failed', e); } catch {}
+            }
+          });
         }
         menu.appendChild(el);
       });
