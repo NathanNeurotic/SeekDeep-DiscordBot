@@ -1458,7 +1458,10 @@
   function updateEvent(dt) {
     const ev = game.event;
     if (!ev) return;
-    const dx = game.scroll * dt;
+    // Clamp to forward progress: a REVERSE mystery sets game.scroll negative,
+    // which would rewind ev.dist/spawnAcc and stall (or never complete) the event.
+    // Pause the event clock during a reverse rather than running it backward.
+    const dx = Math.max(0, game.scroll) * dt;
     ev.dist += dx; ev.spawnAcc += dx;
     while (ev.spawnAcc >= ev.spacing) { ev.spawnAcc -= ev.spacing; ev.step++; spawnEventColumn(ev); }
     if (ev.dist >= ev.length) { game.event = null; showBanner("STREAM CLEAR", "", C.accentSoft, 1.1); }
@@ -2259,7 +2262,6 @@
     ctx.restore();
   }
 
-  let bgScroll = 0;
   // speed streaks — fixed set, recycled, draw faster as speed ramps
   const STREAKS = [];
   for (let i = 0; i < 26; i++) {
@@ -2453,8 +2455,8 @@
     g.addColorStop(1, "transparent");
     ctx.fillStyle = g;
     ctx.fillRect(-40, -40, W + 80, H + 80);
-    // moving grid
-    if (game) bgScroll = (bgScroll + game.scroll * 0.4 * (1 / 60)) % 56;
+    // moving grid (driven directly by game.dist below; the old bgScroll accumulator
+    // was never read, so it was removed)
     ctx.strokeStyle = C.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -3807,7 +3809,10 @@
     const pauseResume = document.getElementById("pause-resume");
     if (pauseResume) pauseResume.addEventListener("click", togglePause);
     if (hud.scoreName) hud.scoreName.addEventListener("input", () => {
-      if (!lastScoreEntry) return;
+      // Also require the entry to still be ON the board: a sub-top-N run pushes
+      // lastScoreEntry then slices it back off, so without this, typing a name
+      // mutates + persists an entry that isn't in `scores`.
+      if (!lastScoreEntry || scores.indexOf(lastScoreEntry) < 0) return;
       lastScoreEntry.name = (hud.scoreName.value || "").replace(/[^A-Za-z0-9_.#]/g, "").slice(0, 24) || "—";
       saveScores(); renderScores();
     });

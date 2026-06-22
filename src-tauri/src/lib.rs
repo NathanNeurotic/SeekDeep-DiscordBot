@@ -655,7 +655,10 @@ fn ensure_searxng_json_format(searxng_dir: &std::path::Path) {
                 if t == "formats:" {
                     in_formats = true;
                 }
-                if !inserted && in_formats && t == "- html" {
+                // Whitespace-tolerant match (mirrors the Python regex
+                // ^(\s*)-\s*html\s*$): a `-  html` / `-html` variant should also
+                // anchor the insert, not just the exact "- html".
+                if !inserted && in_formats && t.strip_prefix('-').map(str::trim) == Some("html") {
                     let indent: String = line.chars().take_while(|c| *c == ' ').collect();
                     out.push_str(&indent);
                     out.push_str("- json\n");
@@ -664,6 +667,11 @@ fn ensure_searxng_json_format(searxng_dir: &std::path::Path) {
             }
             if inserted {
                 let _ = std::fs::write(&sp, out);
+            } else {
+                // No write happened — settings.yml had no `formats:` + `- html`
+                // anchor we could insert after. Don't fail silently: web search
+                // will keep 403-ing if json isn't already enabled some other way.
+                eprintln!("[SeekDeep] searxng: couldn't find a `formats:` block with `- html` in settings.yml; left unchanged. If web search 403s, add `- json` under search.formats manually.");
             }
         }
         Err(_) => {
@@ -835,9 +843,9 @@ pub fn run() {
             // exit (sets quit_requested → window close handler kills child).
             // Tray menu: flat list with separators for readability. Grouped
             // by purpose (window control · navigation · services · external
-            // links · quit). Every nav item emits a `tray:nav` event the
-            // webview listens for (gui/nav.js); fallback to w.eval for the
-            // case where main isn't loaded yet.
+            // links · quit). Nav items navigate the webview directly via w.eval
+            // (setting location / calling a window function); there is no
+            // event-listener side on the GUI.
             let show_item    = MenuItem::with_id(app, "show",       "Show SeekDeep",         true, None::<&str>)?;
             let hide_item    = MenuItem::with_id(app, "hide",       "Hide window",           true, None::<&str>)?;
             let sep1         = PredefinedMenuItem::separator(app)?;
@@ -893,10 +901,10 @@ pub fn run() {
                         });
                     }
                     // --- Navigation actions ---
-                    // Show window first (in case user has it hidden) then emit
-                    // a tray:nav event the webview listens for. nav.js routes
-                    // based on the `to` field. Fallback: w.eval if event
-                    // listener not yet attached on a freshly-shown window.
+                    // Show the window (in case it's hidden) then navigate via
+                    // w.eval below. (A `tray:nav` event used to be emitted here too,
+                    // but no GUI code ever listened for it — the w.eval IS the
+                    // navigation — so it was removed.)
                     "nav_cc" | "nav_chat" | "nav_models" | "nav_logs" | "nav_config" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus();
@@ -908,7 +916,6 @@ pub fn run() {
                                 "nav_config" => ("app.html", "#config"),
                                 _ => ("app.html", ""),
                             };
-                            let _ = app.emit("tray:nav", serde_json::json!({"page": page, "hash": hash}));
                             // For the model picker specifically, if we're already on app.html,
                             // call the window function directly so it opens even when the
                             // hash is unchanged from a previous tray click.
