@@ -20,6 +20,29 @@ import {
   SEEKDEEP_FETCH_ALLOW_PRIVATE,
   SEEKDEEP_FETCH_MAX_REDIRECTS,
 } from './lib/url-fetch-policy.js';
+// Pure leaf helpers extracted from this file (index.js monolith split). Each is
+// Discord-free + side-effect-free; imported back so callers + the __seekdeepTest
+// surface resolve unchanged. See scripts/preflight.mjs `js` targets.
+import { seekdeepPendingImageQueuePlan } from './lib/pending-image-queue-plan.js';
+import { seekdeepParseCleanDuration } from './lib/clean-duration-parse.js';
+import {
+  seekdeepImagePromptKeywordStem,
+  seekdeepImagePromptKeywords,
+  seekdeepDynamicImagePromptPreservesSubject,
+} from './lib/image-prompt-subject.js';
+import {
+  seekdeepImageMimeFromExtension,
+  seekdeepNormalizeImageMime,
+  seekdeepDetectImageMime,
+  seekdeepIsSupportedImageMime,
+} from './lib/image-mime.js';
+import {
+  SEEKDEEP_REACT_PATTERN_MAX,
+  SEEKDEEP_REACT_MATCH_MAX_CHARS,
+  seekdeepReactPatternRedosRisk,
+  seekdeepReactPatternRejectReason,
+  seekdeepCompileReactionPattern,
+} from './lib/react-pattern.js';
 import {
   ActionRowBuilder,
   ActivityType,
@@ -4075,57 +4098,9 @@ function seekdeepBuildDynamicImagePromptRefineRequest(originalPrompt = '', paren
   return parts.join('\n');
 }
 
-function seekdeepImagePromptKeywordStem(word = '') {
-  return String(word || '')
-    .toLowerCase()
-    .replace(/(?:ing|ers|er|ies|ied|ed|es|s)$/i, '')
-    .trim();
-}
-
-function seekdeepImagePromptKeywords(prompt = '') {
-  const stop = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'in', 'into', 'is', 'it', 'its', 'me', 'my', 'of', 'on', 'or', 'our', 'the', 'their', 'this', 'to', 'with',
-    'make', 'create', 'draw', 'generate', 'show', 'render', 'paint', 'sketch', 'illustrate', 'design', 'image', 'picture', 'photo', 'art', 'prompt'
-  ]);
-
-  const words = String(prompt || '').toLowerCase().match(/[a-z0-9]+/g) || [];
-  const out = [];
-
-  for (const word of words) {
-    if (word.length < 3 || stop.has(word)) continue;
-    const stem = seekdeepImagePromptKeywordStem(word);
-    if (stem.length < 3 || stop.has(stem)) continue;
-    if (!out.includes(stem)) out.push(stem);
-  }
-
-  return out.slice(0, 14);
-}
-
-function seekdeepDynamicImagePromptPreservesSubject(originalPrompt = '', candidatePrompt = '') {
-  const originalKeywords = seekdeepImagePromptKeywords(originalPrompt);
-  if (!originalKeywords.length) return true;
-
-  const candidate = ' ' + seekdeepImagePromptKeywords(candidatePrompt).join(' ') + ' ';
-  const lowerCandidate = String(candidatePrompt || '').toLowerCase();
-  const matched = originalKeywords.filter((word) => candidate.includes(' ' + word + ' ') || lowerCandidate.includes(word));
-
-  // v10.14: looser threshold. The previous 45%-of-keywords-required rule
-  // rejected good refinements that intelligently translated franchise
-  // references into visual style cues, because every dropped franchise
-  // reference word counted equally against subject preservation. Example:
-  //   "a vanilla colored ant from the movie antz similar to a bugs life"
-  //   -> 8 keywords -> 45% = 4 required.
-  // A great refinement that preserved (vanilla, colored, ant) but dropped
-  // (movie, antz, similar, bugs, life) only matched 3/8 and was rejected.
-  //
-  // New rule: at least 2 head nouns must survive, capped at 3 max — even
-  // long prompts. Anything obviously off-topic still fails (the bad-refine
-  // case is "a red car" -> "a banana in a forest" which preserves 0).
-  const required = originalKeywords.length <= 2
-    ? originalKeywords.length
-    : Math.max(2, Math.min(3, Math.ceil(originalKeywords.length * 0.25)));
-  return matched.length >= required;
-}
+// seekdeepImagePromptKeywordStem / seekdeepImagePromptKeywords /
+// seekdeepDynamicImagePromptPreservesSubject moved to ./lib/image-prompt-subject.js
+// (pure leaf; imported at the top of this file).
 
 function seekdeepDynamicImagePromptLooksGeneric(originalPrompt = '', candidatePrompt = '') {
   const original = normalizeUserText(originalPrompt).toLowerCase();
@@ -6772,20 +6747,7 @@ async function seekdeepFindUserArchiveThreadWithoutCreate(channel, target, user,
 // SEEKDEEP_ARCHIVE_COUNT_BACKFILL_V1_END
 
 // SEEKDEEP_ARCHIVE_CLEAN_START
-// Parse duration strings like "7d", "30 days", "2w", "1 month", "24h".
-function seekdeepParseCleanDuration(input = '') {
-  const t = String(input || '').toLowerCase().trim();
-  const m = t.match(/^(\d+)\s*(h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?|m(?:onths?)?)$/);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10);
-  if (!n || n <= 0) return 0;
-  const unit = m[2][0];
-  if (unit === 'h') return n * 3600000;
-  if (unit === 'd') return n * 86400000;
-  if (unit === 'w') return n * 7 * 86400000;
-  if (unit === 'm') return n * 30 * 86400000;
-  return 0;
-}
+// seekdeepParseCleanDuration moved to ./lib/clean-duration-parse.js (pure leaf).
 
 // Scan a user's archive thread and return entries older than `cutoffMs`.
 // Returns { entries: [{id, createdAt, snippet}], scanned, error? }.
@@ -9476,58 +9438,8 @@ async function seekdeepHandleMissingImageSubjectCommandV2(message, prompt = '', 
   return true;
 }
 
-// Pure decision helper: given a pending state and the user's reply prompt,
-// decide whether to queue Original, Refined, or both. Factored out so the
-// V2 follow-up handler can be unit-tested without Discord plumbing.
-function seekdeepPendingImageQueuePlan(pending = {}, prompt = '') {
-  const safePending = pending && typeof pending === 'object' ? pending : {};
-  const pendingWantsOriginal = safePending.wantsOriginal !== false;
-  const pendingWantsRefined = safePending.wantsRefined !== false;
-  const pendingWantsBoth = pendingWantsOriginal && pendingWantsRefined;
-
-  const p = String(prompt || '').toLowerCase().trim();
-  const explicitBothPhrase = /\b(?:do\s+both|make\s+both|queue\s+both|both\s+versions?|both\s+(?:original\s+and\s+refined|refined\s+and\s+original)|original\s+and\s+refined|refined\s+and\s+original|both\s+please|both\s+of\s+them|all\s+(?:of\s+)?them)\b/i.test(p)
-    || /^both\b/i.test(p);
-  const explicitOriginalOnly = /\b(?:just|only)\s+(?:the\s+)?original\b/i.test(p) || /\boriginal\s+only\b/i.test(p);
-  const explicitRefinedOnly = /\b(?:just|only)\s+(?:the\s+)?refined\b/i.test(p) || /\brefined\s+only\b/i.test(p);
-
-  let wantsOriginal;
-  let wantsRefined;
-
-  if (explicitBothPhrase) {
-    wantsOriginal = true;
-    wantsRefined = true;
-  } else if (explicitOriginalOnly) {
-    wantsOriginal = true;
-    wantsRefined = false;
-  } else if (explicitRefinedOnly) {
-    wantsOriginal = false;
-    wantsRefined = true;
-  } else if (pendingWantsBoth) {
-    // Pending state says "both", but the prompt did not ask for both explicitly.
-    // Pick the safe default: refined only, which matches how a single ad-hoc
-    // image request behaves elsewhere in the bot. Do not spam both.
-    wantsOriginal = false;
-    wantsRefined = true;
-  } else {
-    wantsOriginal = pendingWantsOriginal && !pendingWantsRefined;
-    wantsRefined = pendingWantsRefined;
-    if (!wantsOriginal && !wantsRefined) wantsRefined = true;
-  }
-
-  const wantsBoth = Boolean(wantsOriginal && wantsRefined);
-
-  let ackText;
-  if (wantsBoth) {
-    ackText = 'Queued both:\n- Original\n- Refined';
-  } else if (wantsRefined) {
-    ackText = 'Queued: refined';
-  } else {
-    ackText = 'Queued: original (no refinement)';
-  }
-
-  return { wantsOriginal, wantsRefined, wantsBoth, ackText };
-}
+// seekdeepPendingImageQueuePlan moved to ./lib/pending-image-queue-plan.js
+// (pure leaf; imported at the top of this file). Stays unit-testable.
 
 async function seekdeepHandlePendingImageSubjectReplyV2(message, prompt = '', key = '') {
   const pending = seekdeepConsumePendingImageSubjectRequestV2(message, prompt);
@@ -16163,39 +16075,9 @@ function seekdeepImageSourceFromAttachment(attachment, source = 'attachment') {
   };
 }
 
-function seekdeepImageMimeFromExtension(value = '') {
-  const text = String(value || '').toLowerCase().split(/[?#]/, 1)[0];
-  if (/\.png$/.test(text)) return 'image/png';
-  if (/\.jpe?g$/.test(text)) return 'image/jpeg';
-  if (/\.gif$/.test(text)) return 'image/gif';
-  if (/\.webp$/.test(text)) return 'image/webp';
-  if (/\.bmp$/.test(text)) return 'image/bmp';
-  if (/\.(tif|tiff)$/.test(text)) return 'image/tiff';
-  if (/\.avif$/.test(text)) return 'image/avif';
-  return '';
-}
-
-function seekdeepNormalizeImageMime(value = '') {
-  const mime = String(value || '').split(';', 1)[0].trim().toLowerCase();
-  if (mime === 'image/jpg') return 'image/jpeg';
-  return mime;
-}
-
-function seekdeepDetectImageMime(buffer) {
-  const b = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
-  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) return 'image/png';
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
-  if (b.length >= 6 && (b.slice(0, 6).toString('ascii') === 'GIF87a' || b.slice(0, 6).toString('ascii') === 'GIF89a')) return 'image/gif';
-  if (b.length >= 12 && b.slice(0, 4).toString('ascii') === 'RIFF' && b.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
-  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
-  if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0x00) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0x00 && b[3] === 0x2a))) return 'image/tiff';
-  if (b.length >= 12 && b.slice(4, 8).toString('ascii') === 'ftyp' && /^(?:avif|avis|mif1|heic|heix|hevc|hevx)$/.test(b.slice(8, 12).toString('ascii'))) return 'image/avif';
-  return '';
-}
-
-function seekdeepIsSupportedImageMime(mime = '') {
-  return new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff', 'image/avif']).has(seekdeepNormalizeImageMime(mime));
-}
+// seekdeepImageMimeFromExtension / seekdeepNormalizeImageMime /
+// seekdeepDetectImageMime / seekdeepIsSupportedImageMime moved to
+// ./lib/image-mime.js (pure leaf; imported at the top of this file).
 
 async function seekdeepResolveImageInput(input, options = {}) {
   const maxBytes = Math.max(1, Number(options.maxBytes || SEEKDEEP_FETCH_DEFAULT_MAX_BYTES));
@@ -17653,57 +17535,11 @@ async function seekdeepHandleReactToggleEmojiModal(interaction) {
 // freeze the whole single-threaded bot. We cap length, reject the exponential
 // nested-quantifier shapes, and FAIL CLOSED (a rejected/invalid non-empty pattern
 // matches nothing — see seekdeepRuleMatches).
-const SEEKDEEP_REACT_PATTERN_MAX = 200;
-// BOT-1: cap how much message text a user-supplied react pattern is tested
-// against. Bounds the worst case for any pattern the detector still allows
-// (e.g. polynomial `.*a.*a` shapes have no repeated group, so they pass the
-// detector but stay cheap on a bounded input). Discord messages are <=4000.
-const SEEKDEEP_REACT_MATCH_MAX_CHARS = Number(process.env.SEEKDEEP_REACT_MATCH_MAX_CHARS || 2000);
-function seekdeepReactPatternRedosRisk(src) {
-  // BOT-1: a quantifier that REPEATS a group — `(…)*`, `(…)+`, `(…){n[,m]}` — is
-  // the necessary ingredient for catastrophic (exponential) backtracking. The
-  // old detector only caught groups that ALSO had a quantifier inside, so
-  // alternation-overlap like `(a|a)*` (no inner quantifier) slipped through and
-  // could freeze the event loop for tens of seconds. Reject ALL repeated groups;
-  // a bounded optional group `(…)?` is safe and still allowed.
-  return /\)\s*[*+]/.test(src)                       // (…)*  (…)+
-      || /\)\s*\{/.test(src)                         // (…){n}  (…){n,}  (…){n,m}
-      || /\([^()]*[+*}][^()]*\)\s*[+*]/.test(src)    // (…+…)+  (…*…)*  (kept)
-      || /\([^()]*[+*}][^()]*\)\s*\{/.test(src)      // (…+…){n,}
-      || /[+*]\)\s*[+*]/.test(src);                  // …+)+   …*)*
-}
-// Returns a human-readable reason if the pattern is unusable/dangerous, else null
-// (null also = an intentionally-empty "match everything in scope" pattern).
-function seekdeepReactPatternRejectReason(pattern = '') {
-  const raw = String(pattern || '').trim();
-  if (!raw) return null;
-  const rx = raw.match(/^\/(.+)\/([a-z]*)$/i);
-  const src = rx ? rx[1] : raw;
-  if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return `pattern too long (max ${SEEKDEEP_REACT_PATTERN_MAX} chars)`;
-  if (rx) {
-    if (seekdeepReactPatternRedosRisk(src)) return 'pattern repeats a group (e.g. (…)+ / (…){n}) which can hang the bot — rejected';
-    try { new RegExp(src, rx[2].replace(/[^gimsuy]/g, '') || 'i'); }
-    catch (e) { return 'invalid regex: ' + (e?.message || e); }
-  }
-  return null;
-}
-function seekdeepCompileReactionPattern(pattern = '') {
-  const raw = String(pattern || '').trim();
-  if (!raw) return null;
-  // /regex/flags syntax for power users — hardened against ReDoS.
-  const rxMatch = raw.match(/^\/(.+)\/([a-z]*)$/i);
-  if (rxMatch) {
-    const src = rxMatch[1];
-    if (src.length > SEEKDEEP_REACT_PATTERN_MAX) return null;   // fail closed
-    if (seekdeepReactPatternRedosRisk(src)) return null;        // fail closed
-    try { return new RegExp(src, rxMatch[2].replace(/[^gimsuy]/g, '') || 'i'); }
-    catch { return null; }
-  }
-  // Otherwise plain substring, case-insensitive, with word boundaries when sensible.
-  if (raw.length > SEEKDEEP_REACT_PATTERN_MAX) return null;
-  const esc = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${esc}\\b`, 'i');
-}
+// SEEKDEEP_REACT_PATTERN_MAX, SEEKDEEP_REACT_MATCH_MAX_CHARS,
+// seekdeepReactPatternRedosRisk, seekdeepReactPatternRejectReason,
+// seekdeepCompileReactionPattern moved to ./lib/react-pattern.js (pure leaf;
+// imported at the top of this file — the two consts are imported back because
+// seekdeepRuleMatches below still uses them).
 
 function seekdeepRuleMatches(rule, message, content) {
   if (!rule || !rule.enabled) return false;
