@@ -395,36 +395,47 @@ const SEEKDEEP_BASE = (function() {
     },
     start() {
       this.probe();
-      // Live-event path: subscribe to gpu.tick / health.tick / route.changed
-      // on the WS event bus. The poll below stays as a safety net for when the
-      // WS is down (sidecar restarting, etc).
-      const ev = window.SeekDeepEvents;
-      const hasBus = ev && typeof ev.on === 'function';
-      if (hasBus) {
+      // Live-event path: subscribe to gpu.tick / health.tick / route.changed on
+      // the WS event bus. wireBus() is idempotent and RE-CHECKED on every tick:
+      // window.SeekDeepEvents is defined by DEFERRED nav.js, which runs AFTER
+      // this (non-deferred) script's top-level LIVE.start() — so the bus is not
+      // present yet at start, and a one-shot check here would wire nothing and
+      // leave the cadence pinned to the fast fallback forever. Re-checking each
+      // tick wires the listeners the moment the bus loads and lifts the backstop
+      // cadence to 30s.
+      let busWired = false;
+      const wireBus = () => {
+        if (busWired) return true;
+        const ev = window.SeekDeepEvents;
+        if (!ev || typeof ev.on !== 'function') return false;
         ev.on('gpu.tick',     (data) => { if (data) this.applyGpu(data); });
         ev.on('health.tick',  (data) => { if (data) this.applyHealth(data); });
         ev.on('route.changed', () => this.probe());
         ev.on('_open',         () => this.probe());
-      }
+        busWired = true;
+        return true;
+      };
+      wireBus();
       // Self-rescheduling safety-net poll with FAILURE BACKOFF. Base cadence is
-      // 30s when the WS bus is up (this is just a backstop) or 5s when there's
-      // no bus at all. `failures` was already tracked but never widened the
-      // timer, so an offline server got probed at the base rate forever (the 5s
-      // no-bus case = 12 dead /health fetches/min indefinitely in Full mode,
-      // where Safe mode isn't engaged). Now each consecutive miss doubles the
-      // delay up to 60s; the next success resets failures (in probe()) so the
-      // cadence snaps back to base. await-ing probe() also prevents overlap.
-      const base = hasBus ? 30000 : 5000;
+      // 30s once the WS bus is wired (the poll is then just a backstop) or 5s
+      // until it is. `failures` was already tracked but never widened the timer,
+      // so an offline server got probed at the base rate forever (the no-bus
+      // case = a dead /health fetch every 5s in Full mode, where Safe mode isn't
+      // engaged). Each consecutive miss now doubles the delay up to 60s; the
+      // next success resets failures (in probe()) so cadence snaps back to base.
+      // await-ing probe() also prevents overlap.
       const tick = async () => {
         if (!seekdeepSkipBgPoll()) {
           try { await this.probe(); } catch (_) {}
         }
+        wireBus();
+        const base = busWired ? 30000 : 5000;
         const delay = this.failures > 0
           ? Math.min(base * Math.pow(2, Math.min(this.failures, 4)), 60000)
           : base;
         this.timer = setTimeout(tick, delay);
       };
-      this.timer = setTimeout(tick, base);
+      this.timer = setTimeout(tick, busWired ? 30000 : 5000);
     }
   };
   LIVE.start();
