@@ -70,7 +70,7 @@
       // html:true so the <code> tags render (without it the banner escapes the
       // body and shows raw "<code>…</code>" markup); versions are esc()'d since
       // we now own escaping. Plain version strings, but escape defensively.
-      body: 'You\'re on <code>v' + esc(result.current) + '</code>. Latest is <code>v' + esc(result.latest) + '</code>.',
+      body: 'You\'re on <code>v' + esc(result.current) + '</code>. Latest is <code>v' + esc(result.latest) + '</code>. &nbsp;<a href="#" data-sd-skip-update style="color:var(--hull-3); text-decoration:underline;">Skip this version</a>',
       html: true,
       primary: {
         label: 'View release ↗',
@@ -86,26 +86,16 @@
       dismissible: true,
     });
 
-    // Provide a "skip this version forever" path via a follow-on toast.
-    // The user reads the banner, then if they dismiss with X they can opt
-    // into the harder skip via the toast.
-    setTimeout(() => {
-      if (!document.querySelector('[data-id="sd-updater-banner"]')) {
-        // banner already closed
-        sdn.toast({
-          tone: 'neutral',
-          title: 'Update reminder muted for 24h',
-          body: '<a href="#" data-sd-skip-update>Skip v' + String(result.latest).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])) + ' permanently</a>',
-          html: true,
-          ttl: 8000,
-        });
-      }
-    }, 200);
-
+    // "Skip this version" is a link IN the banner body above (banner() only
+    // supports primary/secondary actions, no tertiary). The old follow-on toast
+    // that carried it was gated on the banner being already-closed after just
+    // 200ms — which never happens (the banner has no auto-dismiss and a human
+    // can't close it that fast) — so the skip path was effectively dead.
     document.addEventListener('click', function skipHandler(ev) {
       if (ev.target && ev.target.matches && ev.target.matches('[data-sd-skip-update]')) {
         ev.preventDefault();
         localStorage.setItem(SKIP_KEY, result.latest);
+        document.querySelector('[data-id="sd-updater-banner"]')?.remove();
         document.removeEventListener('click', skipHandler);
       }
     });

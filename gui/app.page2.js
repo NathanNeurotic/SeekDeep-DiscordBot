@@ -1174,16 +1174,13 @@ const SEEKDEEP_BASE = (function() {
     }
   })();
 
-  // Launch all / Stop all
+  // Launch all / Stop all are wired (correctly, by label, POSTing an explicit
+  // start/stop per service) in launcher.js. The positional handlers that used to
+  // live here clicked each card's `.ctl button:last-child` / `:first-child` —
+  // but that last button is the STATE-DEPENDENT Stop/Start toggle, so "Stop all"
+  // STARTED any service that was already down. Removed; launcher.js owns these.
   const launcherPane = document.querySelector('[data-pane="launcher"]');
   if (launcherPane) {
-    const actBtns = launcherPane.querySelectorAll('.head-row .actions .btn');
-    if (actBtns[0]) actBtns[0].addEventListener('click', () => {
-      launcherPane.querySelectorAll('.launcher-card .ctl button:last-child').forEach(b => b.click());
-    });
-    if (actBtns[1]) actBtns[1].addEventListener('click', () => {
-      launcherPane.querySelectorAll('.launcher-card .ctl button:first-child').forEach(b => b.click());
-    });
     // First-run orientation hint — dismissible, remembered per browser so it
     // only nudges genuinely-new users and never nags after the first dismiss.
     const frHint = document.getElementById('firstRunHint');
@@ -1685,22 +1682,28 @@ const SEEKDEEP_BASE = (function() {
           }
           if (evicted) evicted.remove();
         }
-        // "both" mode: kick off a second pass with the RAW prompt (no
-        // refinement) so the user can A/B compare. Skip the recursion
-        // guard by passing useLastSeed=true so both pieces share a seed.
+        // "both" mode: queue a second pass with the RAW prompt (no refinement)
+        // so the user can A/B compare. It MUST run AFTER this request's finally
+        // clears inflightCtl — an inline `await generate(true)` here would hit the
+        // in-flight recursion guard (which keys off inflightCtl, NOT useLastSeed),
+        // abort the just-settled controller, and return without generating, so
+        // "both" silently behaved like "refined". setTimeout(0) defers the pass
+        // past the finally, when inflightCtl is null and the guard won't trip.
         if (refineMeta && refineMeta.mode === 'both') {
-          // Temporarily flip the active chip to "raw" so the recursive
-          // generate() call skips refinement, then restore.
           const allChips = document.querySelectorAll('#ipRefine .chip');
           const wasActive = document.querySelector('#ipRefine .chip.active');
-          allChips.forEach(c => c.classList.remove('active'));
-          const rawChip = document.querySelector('#ipRefine .chip[data-refine="raw"]');
-          if (rawChip) rawChip.classList.add('active');
-          // Use the SAME seed so the only variable is prompt-refinement effect.
-          await generate(true);
-          // Restore the "both" chip
-          allChips.forEach(c => c.classList.remove('active'));
-          if (wasActive) wasActive.classList.add('active');
+          setTimeout(() => {
+            // Flip the active chip to "raw" so the deferred generate() skips
+            // refinement; restore the original chip once it settles.
+            allChips.forEach(c => c.classList.remove('active'));
+            const rawChip = document.querySelector('#ipRefine .chip[data-refine="raw"]');
+            if (rawChip) rawChip.classList.add('active');
+            // Same seed (useLastSeed=true) so the only variable is refinement.
+            Promise.resolve(generate(true)).finally(() => {
+              allChips.forEach(c => c.classList.remove('active'));
+              if (wasActive) wasActive.classList.add('active');
+            });
+          }, 0);
         }
       } catch (e) {
         const ms = Math.round(performance.now() - t0);
