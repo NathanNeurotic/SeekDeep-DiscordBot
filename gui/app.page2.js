@@ -4,6 +4,16 @@
     image: "IMAGE PLAYGROUND", archive: "ARCHIVE BROWSER",
     reacts: "AUTO-REACT RULES", stats: "SERVER STATS"
   };
+  // Skip a background HTTP poll when Safe mode is on (the FX toggle's deepest
+  // tier pauses the WS bus so the server tick loop idles — these standalone
+  // setInterval pollers would otherwise be the ONLY thing left hitting the
+  // server, defeating the zero-background tier) or when the tab is hidden.
+  // Guards only the interval cadence; the initial load + manual refresh still run.
+  function seekdeepSkipBgPoll() {
+    return (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
+        || (typeof document !== 'undefined' && document.hidden);
+  }
+
   function activate(mod) {
     document.querySelectorAll('.sidebar a').forEach(a => a.classList.toggle('active', a.dataset.mod === mod));
     document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.dataset.pane === mod));
@@ -50,6 +60,7 @@
 
   // clock
   setInterval(() => {
+    if (document.hidden) return;   // no point repainting the clock on a hidden tab
     const d = new Date();
     const pad = n => String(n).padStart(2, '0');
     document.getElementById('clock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
@@ -376,9 +387,9 @@ const SEEKDEEP_BASE = (function() {
         ev.on('health.tick',  (data) => { if (data) this.applyHealth(data); });
         ev.on('route.changed', () => this.probe());
         ev.on('_open',         () => this.probe());
-        this.timer = setInterval(() => this.probe(), 30000);
+        this.timer = setInterval(() => { if (seekdeepSkipBgPoll()) return; this.probe(); }, 30000);
       } else {
-        this.timer = setInterval(() => this.probe(), 5000);
+        this.timer = setInterval(() => { if (seekdeepSkipBgPoll()) return; this.probe(); }, 5000);
       }
     }
   };
@@ -487,7 +498,7 @@ const SEEKDEEP_BASE = (function() {
       }
     }
     pull();
-    setInterval(pull, 15000);
+    setInterval(() => { if (seekdeepSkipBgPoll()) return; pull(); }, 15000);
   })();
 
   // ===== Clock — kick-start before the existing setInterval ticks =====
@@ -2105,7 +2116,7 @@ const SEEKDEEP_BASE = (function() {
     }
     load();
     // Re-check every 60s so resolved issues drop off without a manual reload.
-    setInterval(load, 60000);
+    setInterval(() => { if (seekdeepSkipBgPoll()) return; load(); }, 60000);
   })();
 
   // ===== Boot sequence panel (launcher pane) · last startup-related lines ====
@@ -2172,7 +2183,7 @@ const SEEKDEEP_BASE = (function() {
       a.addEventListener('click', () => setTimeout(onActive, 50))
     );
     onActive();  // initial
-    setInterval(onActive, 30000);
+    setInterval(() => { if (seekdeepSkipBgPoll()) return; onActive(); }, 30000);
   })();
 
   // ===== Chat playground · live wiring (POST /chat) =====
