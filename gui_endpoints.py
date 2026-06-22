@@ -1799,7 +1799,11 @@ def _normalize_auto_reactions(raw: Any) -> dict:
             if not isinstance(b, dict):
                 continue
             agg = builtins_out.setdefault(str(key), {
-                "enabled": False, "emoji": b.get("emoji") or "?",
+                # Seed "" (falsy), NOT the "?" placeholder: if the first-iterated
+                # guild for a builtin lacks an emoji, a "?" seed is truthy and the
+                # cross-guild adoption check below ("not agg.get('emoji')") could
+                # never fire, dropping a real emoji configured only in a later guild.
+                "enabled": False, "emoji": b.get("emoji") or "",
                 "threshold": b.get("threshold"), "guilds_on": [],
             })
             if b.get("enabled") is not False:
@@ -1809,6 +1813,10 @@ def _normalize_auto_reactions(raw: Any) -> dict:
                 agg["emoji"] = b["emoji"]
             if b.get("threshold") and not agg.get("threshold"):
                 agg["threshold"] = b["threshold"]
+    # Apply the display placeholder once, after all guilds are aggregated.
+    for _bo in builtins_out.values():
+        if not _bo.get("emoji"):
+            _bo["emoji"] = "?"
     return {"rules": rules_out, "builtins": builtins_out}
 
 

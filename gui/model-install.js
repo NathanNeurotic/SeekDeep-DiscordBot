@@ -318,7 +318,7 @@
         if (row && row.statusEl) row.statusEl.title = (data && (data.note || data.error)) || ('HTTP ' + r.status);
         return false;
       }
-      setRowStatus(m.role, 'DONE', 'var(--good, #6df0ff)');
+      setRowStatus(m.role, 'DONE', 'var(--good, #58e6a1)');
       return true;
     } catch (err) {
       setRowStatus(m.role, 'NETWORK ERROR', 'var(--bad, #ff6b6b)');
@@ -482,7 +482,7 @@
               return;
             }
             saveStatus.textContent = '✓ Backend + model_id saved. Restart server to load.';
-            saveStatus.style.color = 'var(--good, #6df0ff)';
+            saveStatus.style.color = 'var(--good, #58e6a1)';
             setTimeout(() => { closeSwapPopover(); probe(); }, 1500);
           } catch (err) {
             saveStatus.textContent = '⚠ ' + String(err);
@@ -500,9 +500,18 @@
   // --- Cross-tab event subscription ---------------------------------------
 
   let installBusWired = false;
+  let subscribeRetries = 0;
   function subscribeToInstallEvents() {
+    if (installBusWired) return;
     const bus = window.SeekDeepEvents;
-    if (!bus || installBusWired) return;
+    if (!bus) {
+      // Bus not loaded yet (slow first-page WS hookup). Keep re-trying for a
+      // bounded window (~10s) instead of giving up — openInstallModal only
+      // calls this twice (immediate + 1s), so a later bus would otherwise leave
+      // cross-tab install progress permanently unwired and rows stuck.
+      if (subscribeRetries < 20) { subscribeRetries++; setTimeout(subscribeToInstallEvents, 500); }
+      return;
+    }
     installBusWired = true;
 
     function matchRow(data) {
@@ -523,7 +532,7 @@
     });
     bus.on('model.install.complete', (data) => {
       const role = matchRow(data);
-      if (role) setRowStatus(role, 'DONE', 'var(--good, #6df0ff)');
+      if (role) setRowStatus(role, 'DONE', 'var(--good, #58e6a1)');
     });
     bus.on('model.install.failed', (data) => {
       const role = matchRow(data);

@@ -309,7 +309,17 @@ fn restart_sidecar(app: tauri::AppHandle) -> Result<(), String> {
 /// Called by the frontend on chat.html load. Surfaces a toast / banner
 /// (via notify.js) if a newer tag exists upstream.
 #[tauri::command]
-fn check_for_update() -> Result<serde_json::Value, String> {
+async fn check_for_update() -> Result<serde_json::Value, String> {
+    // async + spawn_blocking: this shells out to curl (--max-time 8 ≈ up to 8s)
+    // on chat.html load; a sync #[tauri::command] runs on the main thread and
+    // would freeze the WebView2 message pump for that whole window. Mirrors
+    // start_searxng_stack / install_ml_deps.
+    tauri::async_runtime::spawn_blocking(check_for_update_blocking)
+        .await
+        .map_err(|e| format!("update-check task join: {e}"))?
+}
+
+fn check_for_update_blocking() -> Result<serde_json::Value, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let url = "https://api.github.com/repos/NathanNeurotic/SeekDeep-DiscordBot/releases/latest";
     // TAU-9: pin curl to %SystemRoot%\System32\curl.exe on Windows (PATH-hijack).
@@ -423,7 +433,17 @@ fn resolve_docker_cli() -> std::ffi::OsString {
 /// installed but never launched the Desktop app from a useless trip to
 /// docker.com.
 #[tauri::command]
-fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
+async fn try_start_docker_desktop() -> Result<serde_json::Value, String> {
+    // async + spawn_blocking: docker_daemon_up (bounded ~12s) + `docker --version`
+    // (bounded ~10s) + the launch all block; a sync #[tauri::command] runs on the
+    // main thread and would freeze the WebView2 pump and spin the Installer
+    // button. Mirrors start_searxng_stack.
+    tauri::async_runtime::spawn_blocking(try_start_docker_desktop_blocking)
+        .await
+        .map_err(|e| format!("docker-start task join: {e}"))?
+}
+
+fn try_start_docker_desktop_blocking() -> Result<serde_json::Value, String> {
     // Docker CLI resolution is pinned-where-possible by resolve_docker_cli()
     // (audit L-4): the absolute Docker Desktop path on a standard install, with a
     // bare `docker` (PATH) fallback for non-standard installs. Step 3 below
@@ -463,11 +483,17 @@ fn launch_docker_desktop() -> Result<(), String> {
         r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
         r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
     ];
+    use std::os::windows::process::CommandExt;
     for path in &candidates {
         if std::path::Path::new(path).exists() {
             // TAU-9: pin cmd to %SystemRoot%\System32\cmd.exe (PATH-hijack).
+            // CREATE_NO_WINDOW (0x0800_0000): suppress cmd.exe's own console
+            // flash (the "extremely ugly UX" the sidecar quiet_command wrappers
+            // exist to avoid). `start ""` still launches Docker Desktop.exe (a
+            // GUI app) normally, so there's no behavior change.
             if std::process::Command::new(sidecar::resolve_system_tool("cmd"))
                 .args(["/C", "start", "", path])
+                .creation_flags(0x0800_0000)
                 .spawn()
                 .is_ok()
             {

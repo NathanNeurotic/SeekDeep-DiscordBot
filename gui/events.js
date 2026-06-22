@@ -180,9 +180,16 @@
     },
     // Force a reconnect (useful after a token rotation).
     reconnect() {
-      manualClose = true;
-      if (ws) { try { ws.close(); } catch {} }
-      manualClose = false;
+      // Detach ALL handlers before close() (same hazard as applyMode's Safe-mode
+      // path): close() is async, so the stale socket's onclose could fire AFTER
+      // the manualClose=false reset and run emit('_probing')+scheduleReconnect(),
+      // racing a second reconnect timer against the fresh connect() below (and
+      // flashing the pill to PROBING). connect() sets manualClose=false itself.
+      if (ws) {
+        ws.onclose = ws.onerror = ws.onmessage = ws.onopen = null;
+        try { ws.close(); } catch {}
+        ws = null;
+      }
       connect();
     },
     // Close and stop reconnecting (mostly for cleanup in tests).

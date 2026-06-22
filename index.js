@@ -3011,9 +3011,9 @@ function cleanLoopingReply(value) {
   return text;
 }
 
-function buildAntiLoopSystem(system, useWeb) {
+function buildAntiLoopSystem(system, useWeb, personaOverride = '') {
   return [
-    buildSystem(system, useWeb),
+    buildSystem(system, useWeb, personaOverride),
     '',
     'Anti-loop override:',
     '- Output only the final answer.',
@@ -3324,7 +3324,7 @@ async function askChat(prompt, { web = 'auto', system = '', maxNewTokens = Numbe
 
       answer = await runLocalChat(
         retryPrompt,
-        buildAntiLoopSystem(systemPrompt, useWeb),
+        buildAntiLoopSystem(systemPrompt, useWeb, personaOverride),
         context,
         Math.min(finalMaxTokens, 900),
         Number(process.env.CHAT_ANTI_LOOP_TEMPERATURE || 0.2),
@@ -4553,6 +4553,12 @@ async function makeImageResult(prompt, width = 1024, height = 1024, seed = null,
     seekdeepClearActivityStatus();
   }
 
+  if (typeof response?.image_b64 !== 'string' || !response.image_b64) {
+    // A malformed 200 (no image_b64) would otherwise make Buffer.from(undefined)
+    // throw a cryptic "string argument must be of type string". Match the
+    // guarded edit/retry + /chart paths and fail with a clear message instead.
+    throw new Error('Image server returned no image data.');
+  }
   const buffer = Buffer.from(response.image_b64, 'base64');
   const filename = response.filename || 'seekdeep_image.png';
 
@@ -5638,7 +5644,7 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   // Preserve telemetry: queue jobs distinguish slash vs message origin, and
   // the working-loop key prefix uses the same convention.
   const loopKeyPrefix = isInteraction ? 'slash-image' : 'image';
-  const targetId = isInteraction ? target?.id : target?.id;
+  const targetId = target?.id;  // identical either way — interaction + message both expose .id
   const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
     source: isInteraction ? 'slash' : 'message',
@@ -10259,18 +10265,10 @@ client.once('clientReady', async () => {
   // Start the background GPU logger.
   seekdeepStartGpuLogging();
 
-  // Heartbeat the bot-status file every 30s so /launchers/status can tell
-  // "ready N seconds ago" from "ready but the process is now wedged" — if
-  // the file mtime ages > ~90s while the process is alive, the bot is in
-  // a stuck state and the launcher pill flips to STALE.
-  setInterval(() => {
-    if (client.isReady && client.isReady()) {
-      seekdeepWriteBotStatus({
-        ready: true,
-        guild_count: client.guilds?.cache?.size || 0,
-      });
-    }
-  }, 30000).unref?.();
+  // (The bot-status freshness heartbeat — what keeps /launchers/status from
+  // flipping to STALE while the process is alive — is the 15s timer set up in
+  // the clientReady handler above; it writes the same {ready, guild_count}
+  // patch more often, so a second 30s timer here was pure redundancy.)
 
   // AI-server-gone self-exit watchdog. When Tauri quits, it kills the AI
   // server child but historically left the Discord bot running as an
@@ -12832,6 +12830,15 @@ async function seekdeepHandleImageReplyIntent(message, prompt = '', key = '') {
       remember(key, 'assistant', `img2img edit: ${imgPrompt}`);
       return true;
     }
+    // Some edit feature is enabled (top guard passed) but not the one THIS
+    // change needs (e.g. only inpaint on, yet the reply is an in-place tweak).
+    // Don't silently fall through to return false — that mis-routes the edit
+    // reply into generic chat/command-suggestion handling. Explain instead.
+    seekdeepSetResponseModel(message, seekdeepNoModelLabel());
+    await sendLongMessageReply(message, 'That edit mode isn\'t enabled for this kind of change. Removals need `SEEKDEEP_FEATURE_INPAINT`; in-place tweaks need `SEEKDEEP_FEATURE_INSTRUCT_PIX2PIX`; general re-imagining needs `SEEKDEEP_FEATURE_IMG2IMG`.');
+    remember(key, 'user', `[image-reply-edit-unavailable] ${prompt}`);
+    remember(key, 'assistant', 'Edit mode not enabled for the requested change.');
+    return true;
   }
 
   if (route.intent === 'fresh_image') {
@@ -13313,7 +13320,7 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
 
   if (seekdeepIsFrustrationPrompt(p)) {
     seekdeepLogRoute('frustration-recovery', prompt);
-    const recovery = 'Fair. I gave a bad answer. Send the exact thing you want compared or searched and Iâ€™ll correct it with sources.';
+    const recovery = "Fair. I gave a bad answer. Send the exact thing you want compared or searched and I'll correct it with sources.";
     remember(key, 'user', prompt);
     remember(key, 'assistant', recovery);
     seekdeepSetResponseModel(message, seekdeepNoModelLabel());
@@ -13353,7 +13360,7 @@ async function seekdeepHandleResearchTableMessage(message, prompt, key) {
       return true;
     }
 
-    const answer = 'Yes. Send the exact items/models you want compared, and Iâ€™ll make a table with sourced specs instead of guessing.';
+    const answer = 'Yes. Send the exact items/models you want compared, and I\'ll make a table with sourced specs instead of guessing.';
     seekdeepSetPendingResearchTask(key, { kind: 'table-awaiting-items', topic: '', sourcePrompt: p });
     remember(key, 'user', prompt);
     remember(key, 'assistant', answer);
@@ -13716,19 +13723,15 @@ async function seekdeepResolveContext(message, prompt) {
     return { contextText: targetText, source: 'target' };
   }
 
-  // Priority 3: Recent same-thread context
-  if (message?.channel && typeof message.channel.isThread === 'function' && message.channel.isThread()) {
-    const threadText = await seekdeepResolveChannelContextText(message, 5);
-    if (threadText) {
-      return { contextText: threadText, source: 'thread' };
-    }
-  }
-
-  // Priority 4: Recent same-channel context (fallback only, conservative)
+  // Priority 3/4: Recent same-channel context (label thread vs channel by origin).
+  // seekdeepResolveChannelContextText reads only from message.channel and is
+  // deterministic, so the old thread-then-channel pair re-ran the identical
+  // 30-message fetch when a thread returned empty — one call covers both.
   if (message?.channel) {
+    const isThread = typeof message.channel.isThread === 'function' && message.channel.isThread();
     const channelText = await seekdeepResolveChannelContextText(message, 5);
     if (channelText) {
-      return { contextText: channelText, source: 'channel' };
+      return { contextText: channelText, source: isThread ? 'thread' : 'channel' };
     }
   }
 

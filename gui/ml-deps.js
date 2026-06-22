@@ -164,7 +164,7 @@
     bus.on('deps.install.complete', async (data) => {
       if (modalRefs && modalRefs.statusEl) {
         modalRefs.statusEl.textContent = '✓ INSTALL COMPLETE · restarting the AI server';
-        modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
+        modalRefs.statusEl.style.color = 'var(--good, #58e6a1)';
       }
       appendLogLine('');
       appendLogLine('--- Install finished. Restarting AI server to load torch/transformers/diffusers ---');
@@ -243,7 +243,7 @@
             if (modalRefs && modalRefs.statusEl) {
               if (payload.ok) {
                 modalRefs.statusEl.textContent = '✓ pip finished · respawning sidecar';
-                modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
+                modalRefs.statusEl.style.color = 'var(--good, #58e6a1)';
               } else {
                 modalRefs.statusEl.textContent = '⚠ pip exited with code ' + payload.exit_code;
                 modalRefs.statusEl.style.color = 'var(--bad, #ff6b6b)';
@@ -256,7 +256,7 @@
         await tauri.core.invoke('install_ml_deps');
         if (modalRefs && modalRefs.statusEl) {
           modalRefs.statusEl.textContent = '✓ INSTALL COMPLETE · restarting AI server';
-          modalRefs.statusEl.style.color = 'var(--good, #6df0ff)';
+          modalRefs.statusEl.style.color = 'var(--good, #58e6a1)';
         }
         appendLogLine('--- Reloading page in ~5 seconds. ---');
         clearBanner();

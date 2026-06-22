@@ -5975,6 +5975,11 @@ def upscale(req: UpscaleRequest):
                 print(f"[SeekDeep Local AI] upscale encode candidate failed fmt={fmt}: {exc}", flush=True)
 
         add_candidate("PNG", ".png", img)
+        if not candidates:
+            # The first PNG encode raised (add_candidate swallows it) — on the
+            # default max_bytes<=0 path the next line would index candidates[-1]
+            # on an empty list and raise IndexError. Fail cleanly instead.
+            raise HTTPException(status_code=500, detail="failed to encode upscaled image")
         if max_bytes <= 0 or (candidates and len(candidates[-1][2]) <= max_bytes):
             fmt, ext, encoded, width, height = candidates[-1]
             return {"format": fmt, "ext": ext, "bytes": encoded, "width": width, "height": height}
@@ -6732,7 +6737,8 @@ def chart(req: ChartRequest):
             continue
     if not valid:
         return JSONResponse(status_code=400, content={"error": "day_buckets needs 'YYYY-MM-DD' keys with object rows"})
-    # Sort by date string and fill gaps with zeros so the chart is contiguous.
+    # Sort by date string (chronological for the daily series). Missing days are
+    # line-interpolated by matplotlib, not zero-filled.
     valid.sort(key=lambda kv: kv[0])
     sorted_dates = [k for k, _ in valid]
     date_objs = [d for _, d in valid]
@@ -6740,43 +6746,48 @@ def chart(req: ChartRequest):
     chats  = [_bucket_num(buckets[d], "chats")  for d in sorted_dates]
     vision = [_bucket_num(buckets[d], "vision") for d in sorted_dates]
 
+    # try/finally so a raise during plotting/savefig (caller-supplied data, font
+    # or locator errors) can't leak the figure in pyplot's global Gcf registry —
+    # it must always be closed, not only on the success path.
     fig, ax = plt.subplots(figsize=(10, 4), dpi=120)
-    fig.patch.set_facecolor("#2b2d31")  # Discord dark theme background
-    ax.set_facecolor("#2b2d31")
-
-    ax.fill_between(date_objs, images, alpha=0.25, color="#5865F2")
-    ax.fill_between(date_objs, chats,  alpha=0.25, color="#57F287")
-    ax.fill_between(date_objs, vision, alpha=0.25, color="#FEE75C")
-
-    ax.plot(date_objs, images, color="#5865F2", linewidth=2, label=f"Images ({sum(images)})")
-    ax.plot(date_objs, chats,  color="#57F287", linewidth=2, label=f"Chats ({sum(chats)})")
-    ax.plot(date_objs, vision, color="#FEE75C", linewidth=2, label=f"Vision ({sum(vision)})")
-
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
-    fig.autofmt_xdate(rotation=30, ha="right")
-
-    ax.tick_params(colors="#dcddde")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#40444b")
-    ax.spines["bottom"].set_color("#40444b")
-    ax.yaxis.label.set_color("#dcddde")
-    ax.xaxis.label.set_color("#dcddde")
-
-    # PYS-5: clamp caller-supplied label strings so an oversized title/guild
-    # name can't bloat the render.
-    title = str(req.title or "")[:200]
-    if req.guild_name:
-        title += f"  •  {str(req.guild_name)[:120]}"
-    ax.set_title(title, color="#ffffff", fontsize=13, pad=10)
-    ax.legend(loc="upper left", facecolor="#36393f", edgecolor="#40444b",
-              labelcolor="#dcddde", fontsize=9)
-    ax.grid(axis="y", color="#40444b", linewidth=0.5, alpha=0.5)
-
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
+    try:
+        fig.patch.set_facecolor("#2b2d31")  # Discord dark theme background
+        ax.set_facecolor("#2b2d31")
+
+        ax.fill_between(date_objs, images, alpha=0.25, color="#5865F2")
+        ax.fill_between(date_objs, chats,  alpha=0.25, color="#57F287")
+        ax.fill_between(date_objs, vision, alpha=0.25, color="#FEE75C")
+
+        ax.plot(date_objs, images, color="#5865F2", linewidth=2, label=f"Images ({sum(images)})")
+        ax.plot(date_objs, chats,  color="#57F287", linewidth=2, label=f"Chats ({sum(chats)})")
+        ax.plot(date_objs, vision, color="#FEE75C", linewidth=2, label=f"Vision ({sum(vision)})")
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+        fig.autofmt_xdate(rotation=30, ha="right")
+
+        ax.tick_params(colors="#dcddde")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#40444b")
+        ax.spines["bottom"].set_color("#40444b")
+        ax.yaxis.label.set_color("#dcddde")
+        ax.xaxis.label.set_color("#dcddde")
+
+        # PYS-5: clamp caller-supplied label strings so an oversized title/guild
+        # name can't bloat the render.
+        title = str(req.title or "")[:200]
+        if req.guild_name:
+            title += f"  •  {str(req.guild_name)[:120]}"
+        ax.set_title(title, color="#ffffff", fontsize=13, pad=10)
+        ax.legend(loc="upper left", facecolor="#36393f", edgecolor="#40444b",
+                  labelcolor="#dcddde", fontsize=9)
+        ax.grid(axis="y", color="#40444b", linewidth=0.5, alpha=0.5)
+
+        fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    finally:
+        plt.close(fig)
     buf.seek(0)
     img_b64 = base64.b64encode(buf.read()).decode("utf-8")
 

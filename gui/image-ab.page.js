@@ -93,6 +93,11 @@
     setStatus(panel, 'GENERATING', 'cyan');
     panel.querySelector('[data-seed]').textContent = $('#seed').value;
     panel.querySelector('[data-ms]').textContent = '…';
+    // Revoke any prior generation's blob: object URL BEFORE we wipe `out` below —
+    // the GENERATING placeholder destroys the old <img>, so a revoke after the
+    // wipe (or only in the image branch) can't find it and leaks on every re-run.
+    const _priorImg = out.querySelector('img');
+    if (_priorImg && _priorImg.src && _priorImg.src.startsWith('blob:')) URL.revokeObjectURL(_priorImg.src);
     out.classList.remove('has-image');
     out.innerHTML = '<span style="color:var(--cyan-1);">▸ POST ' + spec.path + '</span>';
 
@@ -145,10 +150,8 @@
       if (ct.includes('image/')) {
         const blob = await r.blob();
         out.classList.add('has-image');
-        // Revoke any prior object URL before replacing the <img> so blob: URLs
-        // from earlier generations don't leak.
-        const oldImg = out.querySelector('img');
-        if (oldImg && oldImg.src && oldImg.src.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
+        // (Prior blob: URL already revoked at the top of runOne, before `out`
+        // was wiped — covers the re-run + JSON/error branches too.)
         out.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="" />`;
         setStatus(panel, 'OK', 'on');
       } else {

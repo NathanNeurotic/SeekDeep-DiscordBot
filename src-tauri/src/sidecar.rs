@@ -887,6 +887,7 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
         if let Ok(out) = quiet_command_str(name).arg("--version").output() {
             if out.status.success() {
                 // Resolve to actual path so we can stub-check.
+                let mut resolved_stub = false;
                 if let Ok(exec) = quiet_command_str(name)
                     .args(["-c", "import sys; print(sys.executable)"])
                     .output()
@@ -895,15 +896,21 @@ pub fn find_python(runtime: &Path) -> Option<PathBuf> {
                         let path = String::from_utf8_lossy(&exec.stdout).trim().to_string();
                         if !path.is_empty() {
                             let pb = PathBuf::from(&path);
-                            if pb.is_file() && !is_windows_store_stub(&pb) {
+                            if is_windows_store_stub(&pb) {
+                                resolved_stub = true;   // positively the Store stub — reject
+                            } else if pb.is_file() {
                                 return Some(pb);
                             }
                         }
                     }
                 }
-                // If we couldn't resolve a path, accept the name as-is (the
-                // env-resolved PATH lookup will work for the spawn too).
-                return Some(PathBuf::from(name));
+                // Accept the bare name ONLY when path resolution genuinely failed
+                // (the env-resolved PATH lookup will work for the spawn too) —
+                // never when we positively identified the Store stub, which would
+                // otherwise re-spawn the very stub the check above rejected.
+                if !resolved_stub {
+                    return Some(PathBuf::from(name));
+                }
             }
         }
     }
@@ -1130,6 +1137,15 @@ fn bind_child_to_job(child: &Child) {
 #[cfg(not(windows))]
 fn bind_child_to_job(_child: &Child) {}
 
+/// True when `python` points inside a virtualenv (a `.venv`/`venv` path
+/// segment), in which case pip's `--user` flag must be dropped (pip refuses to
+/// mix venv + user installs). Shared by the three pip_install* paths so the
+/// detection rule lives in one place.
+fn python_in_venv(python: &Path) -> bool {
+    let p = python.to_string_lossy().to_lowercase();
+    p.contains(".venv") || p.contains("/venv/") || p.contains("\\venv\\")
+}
+
 /// Run `python -m pip install -r requirements-local.txt` and capture
 /// combined output. Called from the install_python_deps Tauri command
 /// when the user clicks "Install Python deps" on the loading screen.
@@ -1154,8 +1170,7 @@ pub fn pip_install(python: &Path, runtime: &Path) -> Result<String, String> {
 
     // Venv detection. `.venv` segment anywhere in the python path means
     // we're already inside one; --user would error.
-    let py_str = python.to_string_lossy().to_lowercase();
-    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+    let in_venv = python_in_venv(python);
 
     let mut args: Vec<&str> = vec!["-m", "pip", "install", "--upgrade",
                                     "--no-cache-dir", "--disable-pip-version-check", "-r"];
@@ -1209,8 +1224,7 @@ pub fn pip_install_ml(app: &AppHandle, python: &Path, runtime: &Path) -> Result<
     use std::io::{BufRead, BufReader};
 
     let req = runtime.join("requirements-ml.txt");
-    let py_str = python.to_string_lossy().to_lowercase();
-    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+    let in_venv = python_in_venv(python);
 
     let mut args: Vec<&str> = vec!["-m", "pip", "install", "--upgrade",
                                     "--no-cache-dir", "--disable-pip-version-check", "-r"];
@@ -1326,8 +1340,7 @@ pub fn pip_install_torch_variant(
     }
     let index_url = format!("https://download.pytorch.org/whl/{}", v);
 
-    let py_str = python.to_string_lossy().to_lowercase();
-    let in_venv = py_str.contains(".venv") || py_str.contains("/venv/") || py_str.contains("\\venv\\");
+    let in_venv = python_in_venv(python);
 
     // Stream uninstall + install lines to the GUI via ml-install:line
     // events, same channel as pip_install_ml. The user gets live
