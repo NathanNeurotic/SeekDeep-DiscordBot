@@ -507,8 +507,13 @@ The user wants information density, not company.`,
       author: getScope().owner_user_id || 'you',
       source: 'own',
       shared: null,
+      uses: 0,
+      lastUsed: '—',
     };
-    if (Array.isArray(window.TEMPLATES)) window.TEMPLATES.push(active);
+    // Push into the module-local TEMPLATES (NOT window.TEMPLATES, which is never
+    // assigned — the old guard was always false, so select() couldn't find the
+    // draft and silently fell back to TEMPLATES[0], opening the wrong template).
+    TEMPLATES.push(active);
     if (typeof select === 'function') select(active.id);
     if (typeof openEdit === 'function') openEdit();
   });

@@ -124,7 +124,16 @@
             await wait(delayFor(attempt, baseDelayMs, maxDelayMs));
             continue;
           }
-          notifyStatus({ connected: true, lastError: null, attemptsSinceSuccess: 0 });
+          // A persistent 5xx on the FINAL attempt reaches here (the retry branch
+          // above is gated on attempt < maxAttempts-1). Don't report a healthy
+          // connection on a hard server error — only a 2xx/3xx/4xx (the server
+          // responded, so the link is alive; 4xx is caller-fault, not unhealthy).
+          if (resp.status >= 500 && resp.status <= 599) {
+            lastErr = new Error(`HTTP ${resp.status}`);
+            notifyStatus({ connected: false, lastError: lastErr.message, attemptsSinceSuccess: attempt + 1 });
+          } else {
+            notifyStatus({ connected: true, lastError: null, attemptsSinceSuccess: 0 });
+          }
           return resp;
         } catch (err) {
           lastErr = err;
