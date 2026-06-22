@@ -2813,7 +2813,15 @@ async function postLocal(pathname, body, options = {}) {
     seekdeepAiCircuitNoteSuccess();
     return result;
   } catch (err) {
-    seekdeepAiCircuitNoteFailure(err);
+    // The circuit breaker exists ONLY for transport-level unreachability. A
+    // genuine HTTP 4xx/5xx means the server is up and responding, so it must NOT
+    // count toward the breaker — 3 consecutive bad-input 400s (or a persistent
+    // 401 after the token self-heal fails) would otherwise open it and block ALL
+    // chat for 60s. Note failure only for unreachable/timeout; a real response
+    // resets the streak. (seekdeepIsServerUnreachableError → true for
+    // AbortError/timeout + connection errnos, false for status >= 400.)
+    if (seekdeepIsServerUnreachableError(err)) seekdeepAiCircuitNoteFailure(err);
+    else seekdeepAiCircuitNoteSuccess();
     if (err?.name === 'AbortError') {
       throw new Error(`Local AI request timed out after ${(timeoutMs / 1000).toFixed(1)} seconds.`);
     }
@@ -4992,8 +5000,18 @@ function seekdeepRememberArchiveSearchCooldown(userId) {
   seekdeepSweepExpiredCooldowns(seekdeepArchiveSearchCooldowns, SEEKDEEP_ARCHIVE_SEARCH_COOLDOWN_MS);
 }
 
-function seekdeepImageQueueCurrentPosition() {
-  return seekdeepImageQueueState.pending.length + (seekdeepImageQueueState.active ? 1 : 0) + 1;
+function seekdeepImageQueueCurrentPosition(job) {
+  const pending = seekdeepImageQueueState.pending || [];
+  const active = seekdeepImageQueueState.active ? 1 : 0;
+  // An admin-priority job front-jumps the queue (see seekdeepEnqueueImageJob),
+  // so its real position is right after any leading priority jobs — not the end.
+  // Mirror that insert index so the queue-ack shows the truthful position.
+  if (job?.priorityAdmin) {
+    let insertAt = 0;
+    while (insertAt < pending.length && pending[insertAt]?.job?.priorityAdmin) insertAt += 1;
+    return active + insertAt + 1;
+  }
+  return pending.length + active + 1;
 }
 
 // BOT-2: bound the image queue so a spammed /image (or a runaway caller) cannot
@@ -5620,7 +5638,6 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
   // the working-loop key prefix uses the same convention.
   const loopKeyPrefix = isInteraction ? 'slash-image' : 'image';
   const targetId = target?.id;  // identical either way — interaction + message both expose .id
-  const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
     source: isInteraction ? 'slash' : 'message',
     userId,
@@ -5648,7 +5665,7 @@ async function seekdeepSendImageWithButtons(target, prompt, width = 1024, height
 
   const workingLoop = seekdeepStartWorkingLoop(target?.channel, `${loopKeyPrefix}:${targetId || prompt}`);
 
-  const startNotice = seekdeepImageQueueAckText(job, position);
+  const startNotice = seekdeepImageQueueAckText(job, seekdeepImageQueueCurrentPosition(job));
   const ackLoadingGif = seekdeepLoadingGifAttachment();
 
   let queueAckReply = null;
@@ -5918,7 +5935,6 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
     : { ...(state?.imageModeOptions || {}), refine: state?.refine !== false, ground: state?.ground !== false, cleanPrompt: state?.originalPrompt || prompt, skipCooldown: true };
   const userId = message?.author?.id || 'unknown';
   const workingLoop = seekdeepStartWorkingLoop(message?.channel, `regen-message:${message?.id || state.id || prompt}`);
-  const position = seekdeepImageQueueCurrentPosition();
   const job = seekdeepCreateImageQueueJob({
     source: 'message-regenerate',
     message,
@@ -5934,7 +5950,7 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
   let regenAckReply = null;
   try {
     regenAckReply = await message.reply({
-      content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, position), {
+      content: seekdeepAppendResponseFooter(seekdeepImageQueueAckText(job, seekdeepImageQueueCurrentPosition(job)), {
         startedAt: job.enqueuedAt || requestStartedAt,
         modelUsed: seekdeepNoModelLabel(),
       }),
@@ -5992,8 +6008,7 @@ async function seekdeepRegenerateLatestImageFromMessage(message) {
 
       const content = seekdeepAppendResponseFooter([
         `Regenerated locally: ${prompt}`,
-        seekdeepRefinedPromptLine(prompt, seekdeepExtractRefinedPrompt(typeof result !== 'undefined' ? result : undefined, typeof imageResult !== 'undefined' ? imageResult : undefined, typeof data !== 'undefined' ? data : undefined, typeof payload !== 'undefined' ? payload : undefined, typeof normalized !== 'undefined' ? normalized : undefined)),
-        seekdeepRefinedPromptLine(prompt, typeof refinedPrompt !== 'undefined' ? refinedPrompt : (typeof imagePrompt !== 'undefined' ? imagePrompt : '')),
+        seekdeepRefinedPromptLine(prompt, seekdeepExtractRefinedPrompt(result, normalized)),
         `Queue Wait: ${seekdeepImageQueueWaitSeconds(runningJob)} seconds`,
         `Job ID: ${runningJob.id}`,
       ].filter(Boolean).join('\n'), {
@@ -6756,7 +6771,10 @@ async function seekdeepArchiveCleanScan(thread, cutoffMs) {
   const entries = [];
   let before = null;
   let scanned = 0;
-  const maxPages = 10;
+  // Env-overridable like the sibling dedupe/backfill scans. "clean older than"
+  // targets the OLDEST entries, which a fixed 10-page (~1000-message) cap can't
+  // reach on a large archive; bounded [1,50] and falls back to 10 on a bad value.
+  const maxPages = Math.max(1, Math.min(50, Number(process.env.SEEKDEEP_ARCHIVE_CLEAN_MAX_PAGES) || 10));
 
   try {
     for (let page = 0; page < maxPages; page++) {
@@ -6910,7 +6928,11 @@ async function seekdeepHandleArchiveCountMessage(message, raw = '') {
     return true;
   }
   const text = seekdeepArchiveCountPromptText(raw || message.content || '');
-  const targetUser = Array.from(message.mentions?.users?.values?.() || []).find((u) => u?.id && u.id !== message.client?.user?.id) || message.author;
+  // Exclude the replied-to author (a reply-ping puts them in message.mentions)
+  // as well as the bot — the command forms only recognize an INLINE <@id>/@name,
+  // so a plain reply must not silently hijack the "other user" path.
+  const repliedUserId = message.mentions?.repliedUser?.id || '';
+  const targetUser = Array.from(message.mentions?.users?.values?.() || []).find((u) => u?.id && u.id !== message.client?.user?.id && u.id !== repliedUserId) || message.author;
   const isOther = targetUser.id !== message.author.id;
   if (isOther && !seekdeepArchiveCanManageOtherCounts(message.member)) {
     await message.reply({ content: 'Only server admins/managers can change another user\'s archive count.', allowedMentions: { repliedUser: false } });
@@ -12459,7 +12481,13 @@ async function seekdeepHandleDiscordMessageLinkRoute(message, prompt, key) {
 
   if (!linkInfo && !inspectCurrentMessage) return false;
 
-  if (linkInfo?.guildId && linkInfo.guildId !== '@me' && message?.guild?.id && linkInfo.guildId !== String(message.guild.id)) {
+  // SECURITY: fire whenever the link's guild doesn't match the CURRENT context,
+  // including DMs (message.guild is null → context id ''). The old guard required
+  // message?.guild?.id to be truthy, so in a 1:1 DM it was skipped entirely and a
+  // user could paste a private guild-channel link and have the bot fetch its
+  // contents with the BOT's permissions (confused-deputy/IDOR). `@me` DM links
+  // stay exempt; same-guild links still pass.
+  if (linkInfo?.guildId && linkInfo.guildId !== '@me' && linkInfo.guildId !== String(message?.guild?.id || '')) {
     seekdeepLogRoute('discord-message-link-cross-guild', prompt);
     const text = 'That Discord message link points to another server. I will only extract message links from the current server context.';
     remember(key, 'user', `[discord-message-link] ${prompt}`);
@@ -17748,6 +17776,14 @@ async function seekdeepHandleReactRuleCommand(message, raw = '') {
       await message.reply({ content: `⚠️ Rule not added — ${patReject}.`, allowedMentions: { parse: [] } });
       return true;
     }
+    // Validate the emoji can actually be reacted with in THIS guild before
+    // saving — mirrors the builtin-emoji + modal handlers. Without this, `add`
+    // stored an unusable emoji that silently failed at react time (only the
+    // pattern was validated above).
+    if (!seekdeepResolveEmojiForReact(emoji, message.guild)) {
+      await message.reply({ content: `⚠️ Rule not added — couldn't use ${emoji ? `\`${emoji}\`` : 'that'} as a reaction. Use a standard emoji (paste it), or a server custom emoji as \`:name:\` / \`<:name:id>\`.`, allowedMentions: { parse: [] } });
+      return true;
+    }
     const rule = {
       id: seekdeepNewReactionRuleId(),
       emoji,
@@ -19169,7 +19205,9 @@ function seekdeepExtractArchiveEntryFromMessage(message) {
   const keyMatch       = content.match(/^\s*Archive\s+Key\s*:\s*(.+?)\s*$/im);
   const promptMatch    = content.match(/^\s*Prompt\s*:\s*(.+?)\s*$/im);
   const refinedMatch   = content.match(/^\s*Refined\s*:\s*(.+?)\s*$/im);
-  const requesterMatch = content.match(/^\s*Requester\s*:\s*<@!?(\d+)>/im);
+  // Accept both labels: the auto-archive path writes "Requester: <@id>" while the
+  // V4 manual shared-archive button writer emits "Saved by: <@id>" (line ~21979).
+  const requesterMatch = content.match(/^\s*(?:Requester|Saved\s+by)\s*:\s*<@!?(\d+)>/im);
   const modelMatch     = content.match(/^\s*Model\s*:\s*(.+?)\s*$/im);
   const seedMatch      = content.match(/^\s*Seed\s*:\s*(.+?)\s*$/im);
   const sizeMatch      = content.match(/^\s*Size\s*:\s*(\d+)x(\d+)/im);
@@ -20437,7 +20475,6 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
         return true;
       }
 
-      const scope = seekdeepGuildArchiveScopeFromTarget(message);
       const config = seekdeepArchiveThreadReadConfig();
       const guildConfig = seekdeepArchiveThreadEnsureGuildConfig(config, guildId);
       const archiveChannelId = guildConfig?.archiveChannelId;
@@ -20731,21 +20768,10 @@ async function seekdeepProcessPreAddressMessageRoutes(message) {
     return true;
   }
 
-  try {
-    const seekdeepArchiveStatusRawContent = String(message?.content || '');
-    if (await seekdeepHandleArchiveStatusMessage(message, seekdeepArchiveStatusRawContent)) {
-      return true;
-    }
-  } catch (err) {
-    console.error('Archive status message handler failed:', err?.stack || err?.message || err);
-    try {
-      await message.reply({
-        content: 'Archive status failed. Check the bot console for details.',
-        allowedMentions: { repliedUser: false },
-      });
-    } catch {}
-    return true;
-  }
+  // (Archive-status routing is handled unconditionally by the early block above
+  // — seekdeepHandleArchiveStatusMessage at the top of this dispatcher — so a
+  // second call here would re-check the same already-false content and never
+  // return true. Removed as dead code.)
 
   return false;
 }
