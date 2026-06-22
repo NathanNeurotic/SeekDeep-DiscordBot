@@ -500,16 +500,17 @@
   // --- Cross-tab event subscription ---------------------------------------
 
   let installBusWired = false;
-  let subscribeRetries = 0;
-  function subscribeToInstallEvents() {
+  function subscribeToInstallEvents(retries = 0) {
     if (installBusWired) return;
     const bus = window.SeekDeepEvents;
     if (!bus) {
       // Bus not loaded yet (slow first-page WS hookup). Keep re-trying for a
       // bounded window (~10s) instead of giving up — openInstallModal only
       // calls this twice (immediate + 1s), so a later bus would otherwise leave
-      // cross-tab install progress permanently unwired and rows stuck.
-      if (subscribeRetries < 20) { subscribeRetries++; setTimeout(subscribeToInstallEvents, 500); }
+      // cross-tab install progress permanently unwired and rows stuck. The retry
+      // count is a per-chain PARAMETER (not a shared module counter) so two
+      // overlapping chains can't burn each other's budget and cut the window short.
+      if (retries < 20) setTimeout(() => subscribeToInstallEvents(retries + 1), 500);
       return;
     }
     installBusWired = true;
