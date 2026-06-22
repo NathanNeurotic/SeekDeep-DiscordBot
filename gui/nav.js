@@ -2195,8 +2195,16 @@
             try {
               it.action();
             } catch (e) {
-              const logger = (typeof window.SeekDeepDebug?.warn === 'function') ? window.SeekDeepDebug.warn : console.warn;
-              try { logger('ctx-menu action failed', e); } catch {}
+              // Call each logger with its own receiver intact — a detached
+              // `console.warn` reference invoked bare can throw "Illegal
+              // invocation" in some engines (lost `this`).
+              try {
+                if (typeof window.SeekDeepDebug?.warn === 'function') {
+                  window.SeekDeepDebug.warn('ctx-menu action failed', e);
+                } else {
+                  console.warn('ctx-menu action failed', e);
+                }
+              } catch {}
             }
           });
         }

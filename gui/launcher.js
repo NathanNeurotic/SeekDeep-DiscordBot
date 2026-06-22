@@ -579,7 +579,14 @@
     // remove the previously-rendered rows instead of leaving them stale. Use the
     // `label` param for a styled "nothing yet" affordance rather than a blank gap.
     if (!entries.length) {
-      host.innerHTML = '<div style="padding: 8px 0; color: var(--hull-3); font-style: italic;">No ' + label + ' activity recorded yet</div>';
+      // textContent (not innerHTML concat): `label` is a fixed literal today,
+      // but building the node + setting textContent keeps it injection-proof if
+      // a caller ever passes a dynamic label.
+      host.innerHTML = '';
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'padding: 8px 0; color: var(--hull-3); font-style: italic;';
+      placeholder.textContent = 'No ' + label + ' activity recorded yet';
+      host.appendChild(placeholder);
       return;
     }
     entries.sort((a, b) => b[1] - a[1]);
