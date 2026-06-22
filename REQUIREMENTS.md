@@ -38,7 +38,6 @@ Current direct dependencies from `package.json`:
 - `discord.js` ^14.18.0
 - `dotenv` ^17.4.2
 - `node-fetch` ^3.3.2
-- `form-data` ^4.0.1
 - `jszip` ^3.10.1 — used by the emoji vault to build/parse the image ZIP backup (feature-flagged off by default since v10.4.3)
 
 ## Python Packages
