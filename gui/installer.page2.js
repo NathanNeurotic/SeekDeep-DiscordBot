@@ -45,6 +45,9 @@
                   runBtn.textContent = '✓ ALL SET';
                   runBtn.disabled = true;
                   if (toggle && !toggle.classList.contains('on')) toggle.classList.add('on');
+                  // Step is complete — stop the 4s visibility poll so it doesn't
+                  // re-fetch bootstrap-status forever for the rest of the session.
+                  if (probeIv) { clearInterval(probeIv); probeIv = null; }
                 } else {
                   hintEl.textContent = '— skips anything already in place';
                   hintEl.style.color = '';
@@ -120,7 +123,8 @@
             // installer.page7.js, which loads AFTER this file — so at parse
             // time it's still in the temporal dead zone and a direct call
             // would throw. By DOMContentLoaded page7 has run.
-            const startProbe = () => { onVisible(); setInterval(onVisible, 4000); };
+            let probeIv = null;
+            const startProbe = () => { onVisible(); probeIv = setInterval(onVisible, 4000); };
             // Run once page7's SEEKDEEP_BASE exists. Check the dependency DIRECTLY
             // (not a readyState proxy): typeof throws for a TDZ const → caught →
             // not-yet-defined → wait for DOMContentLoaded (fires after every parser

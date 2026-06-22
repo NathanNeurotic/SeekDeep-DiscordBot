@@ -561,6 +561,11 @@ function renderResponse({ ep, ok, status, dt, body, error }) {
     inspectorHTML = renderRouteInspector(body);
   }
 
+  // Revoke the prior image-response blob: URL before overwriting the pane, else
+  // every SEND to an image endpoint (/image, /img2img, /inpaint, …) leaks one.
+  const _priorImg = respPane.querySelector('img');
+  if (_priorImg && _priorImg.src && _priorImg.src.startsWith('blob:')) URL.revokeObjectURL(_priorImg.src);
+
   respPane.innerHTML = `
     <div class="resp-head">
       <h2>RESPONSE</h2>

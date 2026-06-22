@@ -76,6 +76,9 @@
       const sel = document.createElement('select');
       const choices = (field.options && field.options.length) ? field.options.slice() : [];
       if (baseline && !choices.includes(baseline)) choices.unshift(baseline);
+      // Ensure the field's own default is selectable, else reset() (sel.value =
+      // defStr) is a silent no-op when the default isn't one of the options.
+      if (defStr && !choices.includes(defStr)) choices.unshift(defStr);
       for (const o of choices) {
         const opt = document.createElement('option');
         opt.value = o; opt.textContent = o;

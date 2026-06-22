@@ -183,11 +183,21 @@
   });
 
   // "USE AS SRC" — copy a generated image into the source URL field
-  $$('[data-act="reuse"]').forEach(b => b.addEventListener('click', e => {
+  $$('[data-act="reuse"]').forEach(b => b.addEventListener('click', async e => {
     const panel = e.target.closest('.pipe-panel');
     const img = panel.querySelector('[data-out] img');
     if (!img) return;
-    $('#srcUrl').value = img.src;
+    let src = img.src;
+    // De-alias a blob: URL into a self-contained data: URL: the panel's object
+    // URL gets revoked when that panel re-runs, which would invalidate the value
+    // still referenced by #srcUrl / #srcPreview. data:/http(s): pass through.
+    if (src.startsWith('blob:')) {
+      try {
+        const blob = await fetch(src).then(r => r.blob());
+        src = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
+      } catch (_) { /* keep the blob: URL (prior behavior) if the snapshot fails */ }
+    }
+    $('#srcUrl').value = src;
     refreshSrcPreview();
   }));
 

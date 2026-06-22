@@ -51,8 +51,9 @@
 
     statusEl.textContent = failing.length + ' to set up · ' + passed + ' / ' + checks.length + ' ready';
     // Render only failing steps in order. Hide passed ones — the user
-    // doesn't need to read what already works.
-    checks.forEach(c => {
+    // doesn't need to read what already works. (Was iterating ALL checks, which
+    // also rendered the passed ✓ steps, contradicting this comment.)
+    failing.forEach(c => {
       const li = document.createElement('li');
       li.className = 'step ' + (c.ok ? 'done' : (c.blocking ? 'bad' : ''));
       const mark = c.ok ? '✓' : (c.blocking ? '✕' : '⚠');

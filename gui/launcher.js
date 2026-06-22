@@ -1304,10 +1304,9 @@
       // stats.tick — server publishes the full /stats/snapshot every 10s
       // when at least one subscriber is connected. UI re-renders in place.
       window.SeekDeepEvents.on('stats.tick',     (data) => pumpStatsSnapshot(data));
-      // service.state.changed is point-in-time (start/stop/exit). It's
-      // already faster than any tick — handle it the same way so the UI
-      // doesn't lag the actual transition.
-      window.SeekDeepEvents.on('service.state.changed', () => pumpStatus());
+      // (service.state.changed is already subscribed once, coalesced to one pump
+      // per 200ms, in wireStateChangeBus() above — a second immediate handler
+      // here defeated that coalescing, so it was removed.)
       // Bus dropped means the AI server is gone or unreachable. Don't
       // sit on the last-known HEALTHY tick payload for 30s waiting for
       // the safety poll to flip cards — kick an immediate poll which
