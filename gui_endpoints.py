@@ -6768,6 +6768,12 @@ def register_gui_endpoints(
                                 pass
                             continue
                     except OSError:
+                        # getmtime failed (lock path appeared/vanished). Don't
+                        # busy-spin: honor the same timeout + backoff as below so a
+                        # flapping lock path can't loop forever with no sleep.
+                        if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
+                            raise HTTPException(503, "config store is busy; retry in a moment")
+                        time.sleep(0.025)
                         continue
                     if (time.time() - start) * 1000.0 >= self._TIMEOUT_MS:
                         # Fail CLOSED (audit M-2): the GUI write paths are a
@@ -7765,11 +7771,13 @@ def register_gui_endpoints(
                 ai["cuda_available"] = h.get("cuda_available")
                 ai["loaded_task"] = h.get("loaded_task")
                 ai["loaded_chat_model_id"] = h.get("loaded_chat_model_id")
-        except Exception:
-            pass
-        try:
-            if tick_providers and tick_providers.get("gpu"):
-                g = tick_providers["gpu"]() or {}
+                # Reuse the gpu block embedded in this SAME health payload rather
+                # than calling the gpu provider too — both run gpu_stats()
+                # (nvidia-smi, no TTL cache), so the old two-call path probed the
+                # GPU twice per 1s tick. health.gpu is raw gpu_stats(), which keeps
+                # the real "device_name" (the gpu provider renamed it to "device",
+                # so the old g.get("device_name") was silently None).
+                g = h.get("gpu") or {}
                 ai["vram_used_mb"] = g.get("used_mb")
                 ai["vram_total_mb"] = g.get("total_mb")
                 ai["device_name"] = g.get("device_name")
@@ -8037,8 +8045,13 @@ def register_gui_endpoints(
         # crash watchdog) skip both so the user's running stack isn't
         # nuked-and-respawned on every routine bounce.
         if os.getenv("SEEKDEEP_FRESH_BOOT", "").strip().lower() in {"1", "true", "yes", "on"}:
-            _clean_stale_stack_at_boot()
-            _autostart_stack_at_boot()
+            # Offload: both run blocking subprocess.run(docker …, timeout=60) +
+            # _kill_pid/_start_service + time.sleep, which would otherwise freeze
+            # the event loop (and uvicorn) for many seconds — up to minutes if
+            # Docker is cold. await keeps clean-before-autostart ordering and
+            # matches the asyncio.to_thread offloads elsewhere in this file.
+            await asyncio.to_thread(_clean_stale_stack_at_boot)
+            await asyncio.to_thread(_autostart_stack_at_boot)
         # Stash the task on app.state so it can be cancelled on shutdown
         app.state.seekdeep_heartbeat_task = loop.create_task(_heartbeat_loop())
         app.state.seekdeep_tick_task = loop.create_task(_tick_loop())
