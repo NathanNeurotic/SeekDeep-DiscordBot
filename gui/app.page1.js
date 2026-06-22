@@ -680,6 +680,10 @@
       window.SeekDeepEvents.on('bot.discord.ready',       () => load());
     }
     setInterval(() => {
+      // Skip in Safe mode (WS bus paused → this'd be the only thing re-fetching
+      // the archive snapshot) or on a hidden tab.
+      if ((typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
+          || (typeof document !== 'undefined' && document.hidden)) return;
       const pane = document.querySelector('[data-pane="archive"]');
       if (pane && pane.classList.contains('active')) load();
     }, 60_000);
