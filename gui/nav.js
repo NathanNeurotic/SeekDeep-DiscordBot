@@ -1109,15 +1109,21 @@
     if (opts.desc)  document.getElementById('sdPromptDesc').innerHTML = opts.desc;
     if (opts.label) document.getElementById('sdPromptLabel').textContent = opts.label;
 
+    // Escape field metadata before it goes into innerHTML — f.placeholder /
+    // f.value land in attributes where a stray " breaks the markup, and f.key /
+    // f.description in text positions. (These come from page field-configs, not
+    // end users, so it's defense-in-depth + a real attribute-break fix.)
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     promptBody.innerHTML = '';
     fields.forEach(f => {
       const wrap = document.createElement('div');
       wrap.className = 'sd-prompt-field';
       const isSecret = f.kind === 'secret' || /TOKEN|KEY|SECRET/.test(f.key);
       wrap.innerHTML = `
-        <label>${f.key}${f.required ? '' : ' <span class="opt">optional</span>'}</label>
-        <input type="${isSecret ? 'password' : 'text'}" data-key="${f.key}" value="${(f.value || '').replace(/"/g,'&quot;')}" autocomplete="off" placeholder="${f.placeholder || ''}" />
-        <div class="desc">${f.description || ''}</div>
+        <label>${esc(f.key)}${f.required ? '' : ' <span class="opt">optional</span>'}</label>
+        <input type="${isSecret ? 'password' : 'text'}" data-key="${esc(f.key)}" value="${esc(f.value)}" autocomplete="off" placeholder="${esc(f.placeholder)}" />
+        <div class="desc">${esc(f.description)}</div>
       `;
       promptBody.appendChild(wrap);
     });
@@ -1200,11 +1206,17 @@
   // Called from both the event-driven health.tick path and the safety-net poll.
   function applyGpuMode(h) {
     try {
-      const torchPresent = (h && h.gpu && h.gpu.torch_present === true);
+      if (!h) return;   // health.tick can fire with no payload; don't deref it
+      const torchPresent = (h.gpu && h.gpu.torch_present === true);
       const noCuda = (h.cuda_available === false) && torchPresent;
       let banner = document.querySelector('.sd-cpu-banner');
       if (noCuda) {
-        if (!banner) {
+        // Check the dismissal flag BEFORE creating: once dismissed while cuda
+        // stays false, recreating the banner every health tick (~5s) just to
+        // remove it again was pure DOM thrash.
+        let dismissed = false;
+        try { dismissed = sessionStorage.getItem('sd-cpu-banner-dismissed') === '1'; } catch {}
+        if (!banner && !dismissed) {
           banner = document.createElement('div');
           banner.className = 'sd-cpu-banner';
           banner.innerHTML = `
@@ -1216,7 +1228,6 @@
             banner.remove();
             try { sessionStorage.setItem('sd-cpu-banner-dismissed', '1'); } catch {}
           });
-          if (sessionStorage.getItem('sd-cpu-banner-dismissed') === '1') banner.remove();
         }
       } else if (banner) {
         banner.remove();
@@ -1317,7 +1328,9 @@
   function setLiveState(state) {
     document.querySelectorAll('.sd-live-pill').forEach(p => {
       p.dataset.state = state;
-      p.querySelector('.sd-live-label').textContent =
+      const label = p.querySelector('.sd-live-label');
+      if (!label) return;   // a pill adopted from page markup may lack the label span
+      label.textContent =
         state === 'live'    ? 'LIVE' :
         state === 'offline' ? 'OFFLINE' :
         state === 'paused'  ? 'PAUSED' :
@@ -2170,7 +2183,7 @@
           el.appendChild(k);
         }
         if (!it.disabled) {
-          el.addEventListener('click', () => { closeMenu(); try { it.action(); } catch (e) {} });
+          el.addEventListener('click', () => { closeMenu(); try { it.action(); } catch (e) { try { (window.SeekDeepDebug && window.SeekDeepDebug.warn || console.warn)('ctx-menu action failed', e); } catch {} } });
         }
         menu.appendChild(el);
       });
