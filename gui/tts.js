@@ -245,6 +245,7 @@
       // Download (idempotent — cached if already present) + activate live.
       const res = await postJSON('/tts/voices/download', { key: v.key });
       // Persist to .env so it survives a restart + enable the Discord bot reader.
+      let cfgFailed = '';
       try {
         await postJSON('/config', { updates: {
           SEEKDEEP_TTS_ENGINE: 'piper',
@@ -252,11 +253,14 @@
           SEEKDEEP_FEATURE_TTS_VOICE: 'on',
         } });
       } catch (cfgErr) {
-        // The voice IS active live; persistence just failed (e.g. token). Warn but continue.
-        setStatus('ready', 'Active (not saved to .env: ' + (cfgErr && cfgErr.message ? cfgErr.message : cfgErr) + ')');
+        // The voice IS active live; persistence just failed (e.g. token). Capture
+        // it and surface AFTER loadVoices() — setting status here would be
+        // immediately overwritten by reflectStatus() + the ready line below.
+        cfgFailed = (cfgErr && cfgErr.message) ? cfgErr.message : String(cfgErr);
       }
       await loadVoices(); // refreshes catalog + engine/enabled state + status
-      if (engineInstalled) setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
+      if (cfgFailed) setStatus('ready', v.label + ' active now, but NOT saved to .env (' + cfgFailed + ') — it won\'t survive a server restart.');
+      else if (engineInstalled) setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
       // else loadVoices already surfaced the "install the engine" prompt
     } catch (err) {
       setStatus('error', 'Voice setup failed: ' + (err && err.message ? err.message : err));

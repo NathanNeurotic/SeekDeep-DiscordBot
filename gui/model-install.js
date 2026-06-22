@@ -116,7 +116,10 @@
       if (backendSet.has('ollama')) return 'Ollama daemon';
       return 'multiple sources';
     })();
-    const fmt = (m) => '<code>' + m.model_id.split('/').pop() + '</code> [' + m.backend + ']';
+    // body is rendered as HTML (html:true below), so escape the dynamic model
+    // id / backend before interpolating into the markup.
+    const esc = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (m) => '<code>' + esc(m.model_id.split('/').pop()) + '</code> [' + esc(m.backend) + ']';
     const names = missing.map(fmt).slice(0, 3).join(', ');
     const more = missing.length > 3 ? (' +' + (missing.length - 3) + ' more') : '';
 
@@ -151,6 +154,7 @@
       tone,
       title,
       body,
+      html: true,   // body is intentional markup (<code>/<em>/<a>); was shown escaped without this
       primary,
       secondary: { label: 'Dismiss', onClick: ({ close }) => { markDismissed(state); close(); } },
       dismissible: false,
