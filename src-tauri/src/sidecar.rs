@@ -59,8 +59,10 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Wrap Command construction so all subprocess spawns get CREATE_NO_WINDOW
-/// on Windows. On other platforms this is a passthrough.
-fn quiet_command(program: &Path) -> Command {
+/// on Windows. On other platforms this is a passthrough. pub(crate) so lib.rs's
+/// curl/docker spawns share the same console-suppression (a raw Command::new on
+/// a console-subsystem tool flashes a stray terminal on every call).
+pub(crate) fn quiet_command(program: &Path) -> Command {
     let mut c = Command::new(program);
     #[cfg(windows)]
     c.creation_flags(CREATE_NO_WINDOW);
@@ -70,7 +72,7 @@ fn quiet_command(program: &Path) -> Command {
 /// Same as quiet_command but takes a &str (for `py`, `python3`, etc. that
 /// resolve via PATH lookup). Known Windows *system* tools are pinned to their
 /// absolute System32 path first (TAU-9) — see resolve_system_tool.
-fn quiet_command_str(program: &str) -> Command {
+pub(crate) fn quiet_command_str(program: &str) -> Command {
     let mut c = Command::new(resolve_system_tool(program));
     #[cfg(windows)]
     c.creation_flags(CREATE_NO_WINDOW);

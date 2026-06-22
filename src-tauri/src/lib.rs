@@ -323,7 +323,10 @@ fn check_for_update_blocking() -> Result<serde_json::Value, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let url = "https://api.github.com/repos/NathanNeurotic/SeekDeep-DiscordBot/releases/latest";
     // TAU-9: pin curl to %SystemRoot%\System32\curl.exe on Windows (PATH-hijack).
-    let out = std::process::Command::new(sidecar::resolve_system_tool("curl"))
+    // quiet_command_str: curl is a console program, so a raw spawn flashes a
+    // stray terminal on every chat.html load (this runs on page load) — and
+    // CREATE_NO_WINDOW suppresses it. (Also resolves the System32 path, as before.)
+    let out = sidecar::quiet_command_str("curl")
         .args([
             "-s", "-L",
             "-H", "Accept: application/vnd.github+json",
@@ -459,7 +462,7 @@ fn try_start_docker_desktop_blocking() -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!({ "ok": true, "state": "running" }));
     }
     // 2. Probe: is Docker installed at all? (bounded `--version`.)
-    let mut ver = std::process::Command::new(&docker_cli);
+    let mut ver = sidecar::quiet_command(std::path::Path::new(&docker_cli));
     ver.arg("--version");
     if !run_capture_within(ver, Duration::from_secs(10)).0 {
         return Ok(serde_json::json!({ "ok": false, "state": "not_installed" }));
@@ -483,17 +486,14 @@ fn launch_docker_desktop() -> Result<(), String> {
         r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
         r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
     ];
-    use std::os::windows::process::CommandExt;
     for path in &candidates {
         if std::path::Path::new(path).exists() {
             // TAU-9: pin cmd to %SystemRoot%\System32\cmd.exe (PATH-hijack).
-            // CREATE_NO_WINDOW (0x0800_0000): suppress cmd.exe's own console
-            // flash (the "extremely ugly UX" the sidecar quiet_command wrappers
-            // exist to avoid). `start ""` still launches Docker Desktop.exe (a
-            // GUI app) normally, so there's no behavior change.
-            if std::process::Command::new(sidecar::resolve_system_tool("cmd"))
+            // quiet_command_str adds CREATE_NO_WINDOW so cmd.exe's own console
+            // doesn't flash (the "extremely ugly UX" the sidecar wrappers avoid).
+            // `start ""` still launches Docker Desktop.exe (a GUI app) normally.
+            if sidecar::quiet_command_str("cmd")
                 .args(["/C", "start", "", path])
-                .creation_flags(0x0800_0000)
                 .spawn()
                 .is_ok()
             {
@@ -581,7 +581,7 @@ fn run_capture_within(
 /// Is the Docker daemon answering? Mirrors gui_endpoints.py
 /// `_seekdeep_docker_daemon_up` (bounded `docker info`).
 fn docker_daemon_up(docker_cli: &std::ffi::OsStr) -> bool {
-    let mut c = std::process::Command::new(docker_cli);
+    let mut c = sidecar::quiet_command(std::path::Path::new(docker_cli));
     c.args(["info", "--format", "{{.ServerVersion}}"]);
     run_capture_within(c, Duration::from_secs(12)).0
 }
@@ -714,7 +714,7 @@ fn ensure_searxng_stack_blocking(app: &tauri::AppHandle) -> Result<serde_json::V
     if !docker_daemon_up(&docker_cli) {
         emit("checking_docker", "Docker daemon is down — checking for Docker Desktop…");
         // Installed at all?
-        let mut ver = std::process::Command::new(&docker_cli);
+        let mut ver = sidecar::quiet_command(std::path::Path::new(&docker_cli));
         ver.arg("--version");
         let installed = run_capture_within(ver, Duration::from_secs(10)).0;
         if !installed {
@@ -766,11 +766,11 @@ fn ensure_searxng_stack_blocking(app: &tauri::AppHandle) -> Result<serde_json::V
 
     // Idempotent: drop any stale container so the flags below take effect
     // (matches the Python path / seekdeep_launcher.bat).
-    let mut rm = std::process::Command::new(&docker_cli);
+    let mut rm = sidecar::quiet_command(std::path::Path::new(&docker_cli));
     rm.args(["rm", "-f", "seekdeep-searxng"]);
     let _ = run_capture_within(rm, Duration::from_secs(15));
 
-    let mut run = std::process::Command::new(&docker_cli);
+    let mut run = sidecar::quiet_command(std::path::Path::new(&docker_cli));
     run.args([
         "run", "-d", "--name", "seekdeep-searxng",
         "--restart", "unless-stopped", "-p", "8080:8080",
