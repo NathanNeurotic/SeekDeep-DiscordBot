@@ -2966,6 +2966,7 @@ async def _seekdeep_unhandled_handler(request, exc):
     name = type(exc).__name__
     msg = str(exc).lower()
     print(f"[SeekDeep Local AI] unhandled {name} on {request.url.path}: {str(exc)[:200]}", flush=True)
+    traceback.print_exc()  # full traceback to the SERVER log (not the client response)
     if "out of memory" in msg or "cuda oom" in msg or "outofmemory" in name.lower():
         return JSONResponse(status_code=503, content={
             "ok": False,
@@ -4293,11 +4294,10 @@ async def gpu_endpoint():
     return stats
 
 
-@app.exception_handler(Exception)
-async def exception_handler(request, exc: Exception):
-    print(f"[SeekDeep] ERROR: {exc!r}", flush=True)
-    traceback.print_exc()
-    return JSONResponse(status_code=500, content={"error": str(exc), "type": type(exc).__name__})
+# (A second @app.exception_handler(Exception) used to live here; Starlette keys
+# handlers by class, so it silently overrode _seekdeep_unhandled_handler above —
+# leaking str(exc)+type name to clients and dropping the CUDA-OOM→503 retryable
+# classification. Removed; the structured handler above is now the single owner.)
 
 
 # ---------------------------------------------------------------------------
@@ -4344,9 +4344,10 @@ def load_chat_model(role: str = "default_chat") -> tuple[str, str]:
             return loaded_chat_role, loaded_chat_model_id
         if chat_model is None:
             # Cold-start case: redirect to default_chat so the pin is
-            # established from the first request.
-            resolved_role = "default_chat"
-            model_id = CHAT_MODEL_ID
+            # established from the first request. Resolve via resolve_chat_role
+            # (live chat_role_map) rather than the import-frozen CHAT_MODEL_ID, so
+            # a POST /config/reload that changed LOCAL_CHAT_MODEL_ID is honored.
+            resolved_role, model_id = resolve_chat_role("default_chat")
             if MODEL_ROUTER_LOG:
                 print(
                     f"[SeekDeep Model Router] cold-start redirect — "
@@ -4947,14 +4948,23 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     inputs = chat_tokenizer(text, return_tensors="pt", truncation=True, max_length=SEEKDEEP_CHAT_MAX_INPUT_TOKENS)
     inputs = move_inputs(inputs, first_model_device(chat_model))
 
+    # Guard the user-settable sampling knobs: raw int()/float() on these env vars
+    # would raise ValueError on EVERY local /chat request (the hot path) if one is
+    # fat-fingered to a non-numeric value. Fall back to the documented default.
+    def _chat_env(key, default, cast):
+        try:
+            return cast((os.getenv(key) or "").strip() or default)
+        except (TypeError, ValueError):
+            return cast(default)
+
     gen_kwargs = {
         "max_new_tokens": int(req.max_new_tokens),
         "do_sample": float(req.temperature) > 0,
         "temperature": max(float(req.temperature), 0.01),
         "top_p": 0.9,
-        "top_k": max(int(os.getenv("CHAT_TOP_K", "50")), 0) or None,
-        "repetition_penalty": max(float(os.getenv("CHAT_REPETITION_PENALTY", "1.08")), 1.0),
-        "no_repeat_ngram_size": max(int(os.getenv("CHAT_NO_REPEAT_NGRAM_SIZE", "4")), 0),
+        "top_k": max(_chat_env("CHAT_TOP_K", "50", int), 0) or None,
+        "repetition_penalty": max(_chat_env("CHAT_REPETITION_PENALTY", "1.08", float), 1.0),
+        "no_repeat_ngram_size": max(_chat_env("CHAT_NO_REPEAT_NGRAM_SIZE", "4", int), 0),
         "use_cache": True,
         "pad_token_id": getattr(chat_tokenizer, "eos_token_id", None),
         "eos_token_id": getattr(chat_tokenizer, "eos_token_id", None),
@@ -5732,10 +5742,8 @@ def image(req: ImageRequest):
     if is_zimage:
         cfg_norm_env = os.getenv("IMAGE_CFG_NORMALIZATION", "false").strip().lower()
         args["cfg_normalization"] = cfg_norm_env in {"1", "true", "yes", "on"}
-
-        negative_prompt = os.getenv("IMAGE_NEGATIVE_PROMPT", "").strip()
-        if negative_prompt and "negative_prompt" not in args:
-            args["negative_prompt"] = negative_prompt
+        # (negative_prompt was already merged from req + IMAGE_NEGATIVE_PROMPT into
+        # args above, so the old env re-read here was dead — removed.)
 
     if generator is not None:
         args["generator"] = generator

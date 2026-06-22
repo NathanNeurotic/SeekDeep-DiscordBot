@@ -234,7 +234,6 @@ def warm_models(items: list[tuple[str, str, str, bool]]) -> int:
                 repo_id=repo,
                 cache_dir=str(CACHE_DIR),
                 token=HF_TOKEN,
-                resume_download=True,
                 revision=revision,
             )
             print(f"           cached/downloaded OK")
