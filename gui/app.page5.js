@@ -240,9 +240,11 @@
   }
   function newLinesStart(prevSigs, newSigs) {
     if (!prevSigs || !prevSigs.length) return 0;          // first poll → show all
-    for (let d = 0; d < prevSigs.length; d++) {           // smallest d = largest overlap (>=1) first; no overlap → falls through to return 0
+    // Start at the smallest d whose overlap fits within newSigs — any smaller d
+    // gives overlap > newSigs.length, which can't align, so we'd only skip it.
+    // Largest viable overlap first; no overlap → falls through to return 0.
+    for (let d = Math.max(0, prevSigs.length - newSigs.length); d < prevSigs.length; d++) {
       const overlap = prevSigs.length - d;
-      if (overlap > newSigs.length) continue;
       let ok = true;
       for (let i = 0; i < overlap; i++) {
         if (prevSigs[d + i] !== newSigs[i]) { ok = false; break; }
