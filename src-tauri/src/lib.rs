@@ -641,9 +641,28 @@ fn ensure_searxng_json_format(searxng_dir: &std::path::Path) {
             }
         }
         Err(_) => {
-            // No settings.yml yet — seed a minimal override that inherits every
-            // SearXNG default (incl. its secret_key handling) and adds json.
-            let seed = "use_default_settings: true\nsearch:\n  formats:\n    - html\n    - json\n";
+            // No settings.yml yet — seed a minimal override that inherits the
+            // SearXNG defaults and adds json. We MUST set a real secret_key: with
+            // use_default_settings the default key is the placeholder
+            // "ultrasecretkey", which recent SearXNG refuses to start on — and
+            // the container entrypoint only auto-generates a key when NO
+            // settings.yml exists, which it no longer does once we write this.
+            // (The Python path uses secrets.token_hex; loopback-only search needs
+            // only a non-placeholder value, so a time-seeded LCG suffices here
+            // without pulling in an RNG crate.)
+            let mut s: u128 = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                ^ (searxng_dir.to_string_lossy().len() as u128);
+            let mut key = String::with_capacity(32);
+            for _ in 0..4 {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                key.push_str(&format!("{:08x}", (s >> 64) as u32));
+            }
+            let seed = format!(
+                "use_default_settings: true\nserver:\n  secret_key: \"{key}\"\nsearch:\n  formats:\n    - html\n    - json\n"
+            );
             let _ = std::fs::write(&sp, seed);
         }
     }
