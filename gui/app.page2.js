@@ -415,7 +415,17 @@ const SEEKDEEP_BASE = (function() {
         busWired = true;
         return true;
       };
-      wireBus();
+      // Wire the bus the instant it appears rather than waiting for the first
+      // (5s) tick — otherwise live gpu.tick/health.tick/_open events emitted in
+      // that startup window are missed. Poll briefly, then stop; bounded (~10s)
+      // so it can't spin forever if events.js never loads (the per-tick wireBus
+      // below is the late-load fallback).
+      if (!wireBus()) {
+        let wireTries = 0;
+        const wireIv = setInterval(() => {
+          if (wireBus() || ++wireTries >= 40) clearInterval(wireIv);
+        }, 250);
+      }
       // Self-rescheduling safety-net poll with FAILURE BACKOFF. Base cadence is
       // 30s once the WS bus is wired (the poll is then just a backstop) or 5s
       // until it is. `failures` was already tracked but never widened the timer,
