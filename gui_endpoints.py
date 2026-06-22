@@ -75,8 +75,10 @@ def _now_iso() -> str:
     """ISO-8601 UTC timestamp ending in 'Z'. Matches what writeJsonAtomic in
     the bot produces via `new Date().toISOString()` so a row updated via
     GUI looks identical to one updated via Discord command."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
-           f"{int(datetime.now(timezone.utc).microsecond / 1000):03d}Z"
+    # Read the clock ONCE: calling now() twice could straddle a second boundary
+    # and pair the first call's seconds with the second call's millis.
+    dt = datetime.now(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
 # ====================================================================
@@ -937,9 +939,18 @@ def _find_active_log(log_dir: Path) -> Path | None:
     """
     if not log_dir.is_dir():
         return None
-    candidates = sorted(log_dir.glob("seekdeep-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Stat tolerantly: a daily-rotating bot can delete/rename a matched log
+    # between glob() and stat(), and calling p.stat() inside the sort key would
+    # then raise FileNotFoundError and 500 the whole /logs/tail request.
+    candidates = []
+    for p in log_dir.glob("seekdeep-*.log"):
+        try:
+            candidates.append((p.stat().st_mtime, p))
+        except OSError:
+            pass  # rotated away mid-scan — skip it
     if candidates:
-        return candidates[0]
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        return candidates[0][1]
     fallback = log_dir / "server.log"
     return fallback if fallback.is_file() else None
 
@@ -2123,18 +2134,25 @@ def register_gui_endpoints(
     # Browser drive-by would read these without auth before this gate.
     @app.get("/logs/tail", dependencies=[Depends(_require_gui_token)])
     async def get_logs_tail(lines: int = 200, file: str | None = None):
-        path = (_log_dir / file).resolve() if file else _find_active_log(_log_dir)
-        if path is None:
-            return {"ok": False, "error": "no log file found"}
-        if not _is_inside(path, _log_dir):
-            raise HTTPException(400, "path traversal blocked")
         lines = max(1, min(2000, int(lines)))
-        return {
-            "ok": True,
-            "file": path.name,
-            "size_bytes": path.stat().st_size if path.is_file() else 0,
-            "lines": _tail(path, lines),
-        }
+        # Offload the blocking file work — _find_active_log (glob + per-file
+        # stat) and _tail (seek/read the file backwards in 4 KB blocks) are
+        # syscalls that, on a large/active log or a dir of rotated files, stall
+        # the asyncio loop (the chronic wedge class). The traversal check stays
+        # inside so it still runs against the resolved path.
+        def _compute():
+            path = (_log_dir / file).resolve() if file else _find_active_log(_log_dir)
+            if path is None:
+                return {"ok": False, "error": "no log file found"}
+            if not _is_inside(path, _log_dir):
+                raise HTTPException(400, "path traversal blocked")
+            return {
+                "ok": True,
+                "file": path.name,
+                "size_bytes": path.stat().st_size if path.is_file() else 0,
+                "lines": _tail(path, lines),
+            }
+        return await asyncio.to_thread(_compute)
 
     # ----- GET /logs/stream -----
     # Token-gated for the same reason as /logs/tail. Browser EventSource
@@ -4706,7 +4724,10 @@ def register_gui_endpoints(
         return token
 
     def _discord_get_json_sync(path: str, token: str):
-        import requests
+        try:
+            import requests
+        except ImportError:
+            raise HTTPException(503, "the 'requests' package isn't installed; install the base deps")
         try:
             r = requests.get(
                 f"{_DISCORD_API}{path}",
@@ -4725,7 +4746,15 @@ def register_gui_endpoints(
         if r.status_code == 429:
             raise HTTPException(503, "Discord rate-limited the request; retry shortly.")
         if r.status_code >= 400:
-            raise HTTPException(502, f"Discord API error {r.status_code}.")
+            # Surface Discord's own error message instead of flattening every
+            # 4xx/5xx to a bare code (a 400 malformed-request and a 500 looked
+            # identical). Mirrors the write path's detail handling.
+            _msg = ""
+            try:
+                _msg = str((r.json() or {}).get("message") or "")
+            except Exception:
+                pass
+            raise HTTPException(502, (f"Discord API error {r.status_code}: {_msg}" if _msg else f"Discord API error {r.status_code}.")[:200])
         try:
             return r.json()
         except Exception:
@@ -4769,7 +4798,10 @@ def register_gui_endpoints(
                 "static": len(items) - animated, "emojis": items}
 
     def _build_emoji_zip_sync(items: list[dict]) -> bytes:
-        import requests
+        try:
+            import requests
+        except ImportError:
+            raise HTTPException(503, "the 'requests' package isn't installed; install the base deps")
         buf = io.BytesIO()
         used: set[str] = set()
         manifest: list[str] = []
@@ -4927,7 +4959,10 @@ def register_gui_endpoints(
 
     def _discord_emoji_write_sync(method: str, path: str, token: str, json_body=None):
         # Returns (status_code, parsed_json_or_None, retry_after_seconds).
-        import requests
+        try:
+            import requests
+        except ImportError:
+            raise HTTPException(503, "the 'requests' package isn't installed; install the base deps")
         r = requests.request(
             method, f"{_DISCORD_API}{path}",
             headers={"Authorization": f"Bot {token}",
