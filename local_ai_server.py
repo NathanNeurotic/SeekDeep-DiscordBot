@@ -332,8 +332,14 @@ TEMP_DIR.mkdir(exist_ok=True)
 # a cap. outputs/ is bounded by count + age; temp/ is swept by age only (its files
 # are short-lived, so an age sweep only reclaims orphans left by a decode failure
 # and can never delete an in-flight file).
-SEEKDEEP_OUTPUTS_MAX_FILES = int(os.getenv("SEEKDEEP_OUTPUTS_MAX_FILES", "200") or 0)
-SEEKDEEP_OUTPUTS_MAX_AGE_HOURS = float(os.getenv("SEEKDEEP_OUTPUTS_MAX_AGE_HOURS", "72") or 0)
+try:
+    SEEKDEEP_OUTPUTS_MAX_FILES = int(os.getenv("SEEKDEEP_OUTPUTS_MAX_FILES", "200") or 0)
+except (ValueError, TypeError):
+    SEEKDEEP_OUTPUTS_MAX_FILES = 200  # a fat-fingered env value must not brick the server at import
+try:
+    SEEKDEEP_OUTPUTS_MAX_AGE_HOURS = float(os.getenv("SEEKDEEP_OUTPUTS_MAX_AGE_HOURS", "72") or 0)
+except (ValueError, TypeError):
+    SEEKDEEP_OUTPUTS_MAX_AGE_HOURS = 72.0
 
 
 def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> None:
@@ -377,10 +383,22 @@ def _prune_dir(directory, max_files: int = 0, max_age_hours: float = 0.0) -> Non
         pass
 
 
+_LAST_PRUNE_AT = 0.0
+
 def _output_path(safe_name: str):
-    """OUTPUT_DIR / safe_name, pruning stale outputs (and temp orphans) first."""
-    _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
-    _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+    """OUTPUT_DIR / safe_name, pruning stale outputs (and temp orphans) first.
+
+    Throttled to once / 60s: pruning ran a full iterdir() + per-entry stat() on
+    BOTH dirs for EVERY image request (the hot path), which is pure overhead —
+    the caps (200 files / 72h) move slowly, so once-a-minute reclaims orphans
+    just as well without the back-to-back rescans.
+    """
+    global _LAST_PRUNE_AT
+    now = time.time()
+    if now - _LAST_PRUNE_AT >= 60.0:
+        _LAST_PRUNE_AT = now
+        _prune_dir(OUTPUT_DIR, SEEKDEEP_OUTPUTS_MAX_FILES, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
+        _prune_dir(TEMP_DIR, 0, SEEKDEEP_OUTPUTS_MAX_AGE_HOURS)
     return OUTPUT_DIR / safe_name
 
 CHAT_MODEL_ID = os.getenv("LOCAL_CHAT_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct")
@@ -403,8 +421,14 @@ SEEKDEEP_TRUST_REMOTE_CODE = os.getenv("SEEKDEEP_TRUST_REMOTE_CODE", "off").lowe
 # messages * 20k chars) can't spike CPU/RAM during tokenization. The char cap is
 # far above any legitimate prompt (memory caps top out ~36k chars); the token cap
 # truncates to a generous model budget. Only abusive inputs are affected.
-SEEKDEEP_CHAT_MAX_INPUT_CHARS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_CHARS", str(200_000)))
-SEEKDEEP_CHAT_MAX_INPUT_TOKENS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_TOKENS", str(16384)))
+try:
+    SEEKDEEP_CHAT_MAX_INPUT_CHARS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_CHARS", str(200_000)))
+except (ValueError, TypeError):
+    SEEKDEEP_CHAT_MAX_INPUT_CHARS = 200_000  # a non-numeric override must not abort import
+try:
+    SEEKDEEP_CHAT_MAX_INPUT_TOKENS = int(os.getenv("SEEKDEEP_CHAT_MAX_INPUT_TOKENS", str(16384)))
+except (ValueError, TypeError):
+    SEEKDEEP_CHAT_MAX_INPUT_TOKENS = 16384
 MODEL_KEEP_MODE = os.getenv("MODEL_KEEP_MODE", "task-lru").lower()
 
 # Opt-in pins to keep specific models resident in VRAM across task switches.
@@ -544,7 +568,6 @@ def _load_vram_estimates() -> dict[str, int]:
     prefix = "VRAM_EST_"
     for key, val in os.environ.items():
         if key.startswith(prefix):
-            mapped = key[len(prefix):].lower().replace("__", ":").replace("_", "_")
             # VRAM_EST_CHAT__DEFAULT_CHAT -> chat:default_chat
             mapped = key[len(prefix):].lower()
             parts = mapped.split("__", 1)
@@ -942,17 +965,21 @@ def _seekdeep_req_family(path: str) -> str:
 async def _seekdeep_count_requests(request, call_next):
     family = _seekdeep_req_family(request.url.path)
     t0 = time.time()
-    response = await call_next(request)
-    elapsed_ms = (time.time() - t0) * 1000.0
-    # WS upgrade requests don't have meaningful elapsed time at this layer;
-    # they'd skew the latency stats. Skip them.
-    if request.scope.get("type") == "http":
-        global _REQ_TOTAL
-        with _REQ_LOCK:
-            _REQ_TOTAL += 1
-            _REQ_BY_FAMILY[family] = _REQ_BY_FAMILY.get(family, 0) + 1
-            _REQ_RECENT.append((t0, elapsed_ms, family))
-    return response
+    try:
+        return await call_next(request)
+    finally:
+        # Record in `finally` so a request whose handler RAISES (before the
+        # app-level exception handlers convert it) still counts toward the
+        # totals/latency — otherwise error spikes were invisible in the metrics.
+        elapsed_ms = (time.time() - t0) * 1000.0
+        # WS upgrade requests don't have meaningful elapsed time at this layer;
+        # they'd skew the latency stats. Skip them.
+        if request.scope.get("type") == "http":
+            global _REQ_TOTAL
+            with _REQ_LOCK:
+                _REQ_TOTAL += 1
+                _REQ_BY_FAMILY[family] = _REQ_BY_FAMILY.get(family, 0) + 1
+                _REQ_RECENT.append((t0, elapsed_ms, family))
 
 def _seekdeep_bump_web_chat(persona: str, model_id: str) -> None:
     """Bump web-playground chat counters by persona + model_id. Called from
@@ -1655,8 +1682,9 @@ _SEEKDEEP_METADATA_HOSTS = frozenset({
 })
 def _seekdeep_assert_provider_url_safe(url: str) -> None:
     """Raise RuntimeError if an outbound provider/probe URL targets a cloud-metadata or
-    link-local address (SSRF). http/https only. DNS-resolution failures are left for the
-    real request to surface (a non-resolving host is not an SSRF)."""
+    link-local address (SSRF). http/https only. Fails CLOSED on a DNS-resolution
+    failure — we can't verify an unresolvable host is safe, and a selectively-failing
+    resolver is itself an SSRF vector."""
     try:
         u = _seekdeep_urlparse(url)
     except Exception:
@@ -1672,7 +1700,10 @@ def _seekdeep_assert_provider_url_safe(url: str) -> None:
     try:
         infos = _seekdeep_socket.getaddrinfo(host, u.port or (443 if scheme == "https" else 80))
     except Exception:
-        return
+        # Fail CLOSED: an unresolvable host can't be verified safe, and the real
+        # request would fail to connect anyway — so refusing here only changes
+        # behavior for the attacker-controlled (selectively-failing DNS) case.
+        raise RuntimeError("provider host did not resolve - refusing for safety")
     for info in infos:
         ip = str(info[4][0]).split("%", 1)[0]
         try:
@@ -2348,7 +2379,7 @@ def open_image_bytes(data: bytes, *, mode: str | None = "RGB", label: str = "ima
     except (UnidentifiedImageError, OSError) as e:
         raise HTTPException(400, f"could not open {label}: {e}") from e
 
-def b64_to_bytes(data: str, *, max_bytes: int = None) -> bytes:
+def b64_to_bytes(data: str, *, max_bytes: int | None = None) -> bytes:
     """Decode a base64 string (with optional data: URL prefix) to bytes.
     Raises HTTPException(400) for invalid base64 or HTTPException(413) when
     the decoded size would exceed `max_bytes` (default: LOCAL_AI_MAX_IMAGE_BYTES).
@@ -2392,7 +2423,7 @@ def _maybe_debug_path(out_path) -> dict:
     return {"debug_path": str(out_path)} if _LOCAL_AI_DEBUG_PATHS else {}
 
 
-def open_image_b64(data: str, *, mode: str = "RGB", max_bytes: int = None) -> Image.Image:
+def open_image_b64(data: str, *, mode: str = "RGB", max_bytes: int | None = None) -> Image.Image:
     """Decode base64 image_b64 → PIL.Image with consistent error handling.
 
     Three image endpoints (/img2img, /instruct-pix2pix, /inpaint) previously
@@ -3833,7 +3864,18 @@ def model_install(req: ModelInstallRequest):
                 "error": "invalid HF repo id",
             })
             raise HTTPException(400, "invalid HF repo id; expected 'name' or 'org/name' (letters/digits/._- only)")
-        install_result = _hf_install(model_id, req.revision or "")
+        # PYS-1b: validate the revision SHAPE too — huggingface_hub uses it as a
+        # URL path segment AND a cache subdir name, so a '..' / odd ref could
+        # traverse. Allow a normal branch/tag/commit ref only (alnum start).
+        rev = (req.revision or "").strip()
+        if rev and (".." in rev or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$", rev)):
+            _publish_model_event("model.install.failed", {
+                "model_id": model_id, "backend": "hf",
+                "role": (req.role or "").strip() or None,
+                "error": "invalid HF revision",
+            })
+            raise HTTPException(400, "invalid HF revision; expected a branch/tag/commit ref (letters/digits/._-/ only, no '..')")
+        install_result = _hf_install(model_id, rev)
         install_result["backend"] = "hf"
 
     if not install_result.get("ok"):
@@ -5245,7 +5287,26 @@ class TTSDepsMissing(RuntimeError):
     """The chosen engine's package/binary isn't installed -> HTTP 501."""
 
 
+_TTS_ENGINE_LOCK = threading.Lock()
+
 def load_tts_engine():
+    """Thread-safe entry point for the lazy TTS engine build (double-checked
+    locking). /tts runs as a sync route in the threadpool and is NOT on the VRAM
+    singleflight lock (TTS is CPU/Piper and must not serialize behind GPU
+    generation), so two concurrent first-call /tts requests could otherwise both
+    run the build and assign the `tts_engine` global twice. A dedicated lock
+    around the build closes that race; the warm-handle fast path stays lock-free.
+    """
+    global tts_engine
+    if tts_engine is not None:
+        return tts_engine
+    with _TTS_ENGINE_LOCK:
+        if tts_engine is not None:   # another thread built it while we waited
+            return tts_engine
+        return _load_tts_engine_unlocked()
+
+
+def _load_tts_engine_unlocked():
     """Lazily build (and cache) the TTS engine handle for the active engine.
 
     Mirrors load_image_pipe(): cached-handle short-circuit -> lazy import inside
@@ -5977,7 +6038,10 @@ def upscale(req: UpscaleRequest):
             ))
 
         selected = select_output_bytes(img)
-        png_bytes = encode_image_bytes(img, "PNG")
+        # Reuse the already-encoded PNG when the selected output IS PNG (the
+        # default max_bytes=0 case) — a second encode_image_bytes(img,'PNG') here
+        # re-PNG'd the same (often 20-megapixel) image for nothing.
+        png_bytes = selected["bytes"] if selected["format"] == "PNG" else encode_image_bytes(img, "PNG")
         ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
         safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
         out_path = _output_path(safe_name)
@@ -6109,7 +6173,9 @@ def upscale(req: UpscaleRequest):
                 ))
 
             selected = select_output_bytes(img)
-            png_bytes = encode_image_bytes(img, "PNG")
+            # Reuse the already-encoded PNG when the selected output IS PNG
+            # (avoids a redundant second full PNG encode of the upscaled image).
+            png_bytes = selected["bytes"] if selected["format"] == "PNG" else encode_image_bytes(img, "PNG")
             ts = time.time_ns()  # nanosecond resolution defeats same-second filename collisions (AUD-015)
             safe_name = f"seekdeep_upscale_{ts}{selected['ext']}"
             out_path = _output_path(safe_name)
