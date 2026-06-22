@@ -4952,19 +4952,25 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     # would raise ValueError on EVERY local /chat request (the hot path) if one is
     # fat-fingered to a non-numeric value. Fall back to the documented default.
     def _chat_env(key, default, cast):
+        val = os.getenv(key)
+        if val is None:
+            return default
+        val = val.strip()
+        if not val:
+            return default
         try:
-            return cast((os.getenv(key) or "").strip() or default)
+            return cast(val)
         except (TypeError, ValueError):
-            return cast(default)
+            return default
 
     gen_kwargs = {
         "max_new_tokens": int(req.max_new_tokens),
         "do_sample": float(req.temperature) > 0,
         "temperature": max(float(req.temperature), 0.01),
         "top_p": 0.9,
-        "top_k": max(_chat_env("CHAT_TOP_K", "50", int), 0) or None,
-        "repetition_penalty": max(_chat_env("CHAT_REPETITION_PENALTY", "1.08", float), 1.0),
-        "no_repeat_ngram_size": max(_chat_env("CHAT_NO_REPEAT_NGRAM_SIZE", "4", int), 0),
+        "top_k": max(_chat_env("CHAT_TOP_K", 50, int), 0) or None,
+        "repetition_penalty": max(_chat_env("CHAT_REPETITION_PENALTY", 1.08, float), 1.0),
+        "no_repeat_ngram_size": max(_chat_env("CHAT_NO_REPEAT_NGRAM_SIZE", 4, int), 0),
         "use_cache": True,
         "pad_token_id": getattr(chat_tokenizer, "eos_token_id", None),
         "eos_token_id": getattr(chat_tokenizer, "eos_token_id", None),

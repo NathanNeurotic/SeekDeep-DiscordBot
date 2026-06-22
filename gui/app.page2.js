@@ -422,7 +422,8 @@ const SEEKDEEP_BASE = (function() {
       // below is the late-load fallback).
       if (!wireBus()) {
         let wireTries = 0;
-        const wireIv = setInterval(() => {
+        let wireIv;
+        wireIv = setInterval(() => {
           if (wireBus() || ++wireTries >= 40) clearInterval(wireIv);
         }, 250);
       }
