@@ -259,8 +259,14 @@
         cfgFailed = (cfgErr && cfgErr.message) ? cfgErr.message : String(cfgErr);
       }
       await loadVoices(); // refreshes catalog + engine/enabled state + status
-      if (cfgFailed) setStatus('ready', v.label + ' active now, but NOT saved to .env (' + cfgFailed + ') — it won\'t survive a server restart.');
-      else if (engineInstalled) setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
+      // Don't clobber an error state loadVoices() may have set (if the server is
+      // down it renders "not responding" + status 'error') — only post the
+      // success line when the refresh didn't fail.
+      const _ttsStatus = $('ttsStatus');
+      if (!_ttsStatus || _ttsStatus.dataset.state !== 'error') {
+        if (cfgFailed) setStatus('ready', v.label + ' active now, but NOT saved to .env (' + cfgFailed + ') — it won\'t survive a server restart.');
+        else if (engineInstalled) setStatus('ready', v.label + ' ready — type text and hit Speak to test.');
+      }
       // else loadVoices already surfaced the "install the engine" prompt
     } catch (err) {
       setStatus('error', 'Voice setup failed: ' + (err && err.message ? err.message : err));

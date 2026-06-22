@@ -640,7 +640,10 @@ fn ensure_searxng_json_format(searxng_dir: &std::path::Path) {
     let sp = searxng_dir.join("settings.yml");
     match std::fs::read_to_string(&sp) {
         Ok(text) => {
-            if text.lines().any(|l| l.trim() == "- json") {
+            // Whitespace-tolerant (same as the `- html` anchor below): a `- json`
+            // already present as `-  json` / `-json` must still count as enabled,
+            // else we'd insert a duplicate.
+            if text.lines().any(|l| l.trim().strip_prefix('-').map(str::trim) == Some("json")) {
                 return; // already enabled
             }
             // Insert `- json` right after the formats block's `- html` entry
