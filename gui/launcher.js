@@ -170,6 +170,7 @@
         const sbLauncher = document.getElementById('sbLauncherBadge');
         if (sbLauncher) {
           sbLauncher.textContent = '— OFFLINE';
+          sbLauncher.classList.remove('warn');   // drop a prior degraded(warn) state so the badge shows exactly one status colour
           sbLauncher.classList.add('bad');
         }
       }
@@ -465,6 +466,15 @@
                              + '<span>' + pick(buckets.length - 1) + '</span>';
         }
       }
+    } else {
+      // Empty live snapshot: clear any previously-rendered bars + labels so
+      // they don't linger as stale (the render path only runs when non-empty).
+      const bars = document.getElementById('statsBars');
+      if (bars) {
+        bars.innerHTML = '';
+        const labelsEl = bars.parentElement && bars.parentElement.querySelector('.bars-labels');
+        if (labelsEl) labelsEl.innerHTML = '';
+      }
     }
 
     // ---- Stats pane: Persona / Image-style / Chat-model breakdowns --------
@@ -494,13 +504,17 @@
         const mk = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; el.textContent = text; return el; };
         const tag = String(u.tag || ('@' + (u.id || '').slice(-6) || '?'));
         row.appendChild(mk('span', 'rk', String(i + 1).padStart(2, '0')));
-        row.appendChild(mk('span', 'av', tag.charAt(1) || tag.charAt(0) || '?'));
+        // Initial from the first MEANINGFUL letter: strip a leading '@' first so
+        // a plain display name ('Nathan') shows 'N', not its 2nd char ('a').
+        row.appendChild(mk('span', 'av', (tag.replace(/^@/, '').charAt(0) || '?').toUpperCase()));
         row.appendChild(mk('span', '',   tag));
         row.appendChild(mk('span', 'count', String(u.count || 0)));
         row.appendChild(mk('span', 'pct', pct + '%'));
         row.title = `chats ${u.chats || 0} · images ${u.images || 0} · vision ${u.vision || 0}`;
         lb.appendChild(row);
       });
+    } else if (lb) {
+      lb.innerHTML = '';   // empty live snapshot → clear stale rows (render runs only when non-empty)
     }
 
     // ---- Sidebar Models badge --------------------------------------------
@@ -559,7 +573,10 @@
     const host = document.getElementById(hostId);
     if (!host || !dict) return;
     const entries = Object.entries(dict).filter(([_, v]) => Number(v) > 0);
-    if (!entries.length) return;  // keep the empty-state placeholder
+    // Clear (don't just return) on empty: on the live stats.tick path this
+    // re-renders repeatedly, so a snapshot that drops to all-zero counts must
+    // remove the previously-rendered rows instead of leaving them stale.
+    if (!entries.length) { host.innerHTML = ''; return; }
     entries.sort((a, b) => b[1] - a[1]);
     const top = entries.slice(0, 8);
     const total = entries.reduce((s, [, v]) => s + Number(v || 0), 0) || 1;
@@ -685,7 +702,12 @@
     // Restart action sets the global flag itself so subsequent polls + sibling
     // launcherCalls during the bounce don't surface "server unreachable" red
     // toasts. The user already saw "restarting" — we don't need 4 follow-ups.
-    if (action === 'restart' || action === 'start') {
+    // Only the AI server's restart should suppress the "server unreachable"
+    // toast + the UNKNOWN pill flip: that 12s window silences the loopback
+    // health probes that genuinely blip during an ai-server bounce. For
+    // bot/searxng, a start/restart failure should surface normally, not hide
+    // behind the ai-server's restart window.
+    if ((action === 'restart' || action === 'start') && svc === 'ai-server') {
       window.__seekdeepRestartingUntil = Date.now() + 12000;
     }
     let result = await tryOnce();
@@ -888,7 +910,7 @@
         } catch {}
       }
       pullLockState();
-      setInterval(pullLockState, 15000);
+      setInterval(() => { if (_skipBackgroundPoll()) return; pullLockState(); }, 15000);  // 4th poller — gate it on Safe mode / hidden tab too
       lockBtn.addEventListener('click', async () => {
         if (lockBusy) return;
         const desired = lockState === true ? '0' : '1';
@@ -1289,6 +1311,7 @@
       // any pending drop-pump).
       let _busDropPump = null;
       const pumpOnBusDrop = () => {
+        if (_skipBackgroundPoll()) return;   // Safe mode / hidden tab: don't re-fetch on WS reconnect churn
         if (_busDropPump) return;
         _busDropPump = setTimeout(() => { _busDropPump = null; pumpStatus(); pumpGpuBadge(); }, 1000);
       };
