@@ -4952,10 +4952,7 @@ def _run_chat_generation(req: ChatRequest, role: str) -> tuple[str, str, str]:
     # would raise ValueError on EVERY local /chat request (the hot path) if one is
     # fat-fingered to a non-numeric value. Fall back to the documented default.
     def _chat_env(key, default, cast):
-        val = os.getenv(key)
-        if val is None:
-            return default
-        val = val.strip()
+        val = (os.getenv(key) or "").strip()
         if not val:
             return default
         try:
