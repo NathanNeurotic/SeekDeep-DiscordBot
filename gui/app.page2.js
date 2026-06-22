@@ -199,22 +199,37 @@ const SEEKDEEP_BASE = (function() {
         const role = row.dataset.role;
         const cell = row.querySelector('[data-role-state]');
         if (!cell) return;
+        // "Loaded in VRAM right now" and "pinned (Keep Resident on)" are TWO
+        // ORTHOGONAL facts — a model can be either, both, or neither. The old
+        // badge collapsed them into one word and checked loaded-first, so a
+        // loaded+pinned model looked identical to a loaded-only one, and a
+        // pinned-but-not-yet-loaded model showed a same-colour "PINNED" that
+        // read like a sibling of RESIDENT. Surface both dimensions + a tooltip.
         const isResident =
           (role === loadedChatRole) ||
           (role === 'vision' && visionLoaded) ||
           (role === 'image'  && imageLoaded);
-        if (isResident) {
-          cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>RESIDENT</span>';
-        } else if (pinned[role]) {
-          cell.innerHTML = '<span class="pill cyan" style="padding: 2px 6px;"><span class="dot"></span>PINNED</span>';
+        const isPinned = !!pinned[role];
+        let _label, _cls, _tip;
+        if (isResident && isPinned) {
+          _label = 'RESIDENT · PINNED'; _cls = 'cyan';
+          _tip = 'Loaded in VRAM right now AND pinned (Keep Resident is on) — it stays in VRAM across task switches.';
+        } else if (isResident) {
+          _label = 'RESIDENT'; _cls = 'cyan';
+          _tip = 'Loaded in VRAM right now. Not pinned, so it can be evicted when another task needs the memory.';
+        } else if (isPinned) {
+          _label = 'PINNED'; _cls = 'warn';
+          _tip = 'Keep Resident is on, but it is not loaded yet — it loads on first use (or after the AI server restarts) and then stays in VRAM.';
         } else {
           // Honest "not loaded right now" instead of fake CACHED/EVICTABLE.
-          // We can't tell from /health whether the weights are downloaded
-          // — that requires an HF cache scan (cache.hf_repo_count from
-          //   /stats/snapshot tells you how many; individual presence is
-          //   not exposed). So just say UNLOADED.
-          cell.innerHTML = '<span class="pill" style="padding: 2px 6px;"><span class="dot"></span>UNLOADED</span>';
+          // We can't tell from /health whether the weights are downloaded —
+          // that requires an HF cache scan (cache.hf_repo_count from
+          // /stats/snapshot tells you how many; individual presence is not
+          // exposed). So just say UNLOADED.
+          _label = 'UNLOADED'; _cls = '';
+          _tip = 'Not in VRAM. Loads on demand and is unloaded again after the task finishes.';
         }
+        cell.innerHTML = '<span class="pill ' + _cls + '" style="padding: 2px 6px;" title="' + _tip + '"><span class="dot"></span>' + _label + '</span>';
       });
 
       // Resident models list in the GPU pane — populate from the same
