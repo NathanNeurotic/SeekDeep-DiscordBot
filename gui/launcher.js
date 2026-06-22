@@ -127,9 +127,10 @@
   // be the ONLY background work left — defeating the whole zero-background tier)
   // or when the tab is hidden. Guards only the HTTP-fetch path; the WS
   // externalData path still renders so live ticks aren't affected.
+  // Thin delegator to the shared nav.js global (single source of truth); falls
+  // back to false (= don't skip) if nav hasn't defined it yet.
   function _skipBackgroundPoll() {
-    return (typeof window.SeekDeepSafeMode === 'function' && window.SeekDeepSafeMode())
-        || (typeof document !== 'undefined' && document.hidden);
+    return typeof window.seekdeepSkipBgPoll === 'function' && window.seekdeepSkipBgPoll();
   }
 
   async function pumpStatus(externalData) {
@@ -575,8 +576,12 @@
     const entries = Object.entries(dict).filter(([_, v]) => Number(v) > 0);
     // Clear (don't just return) on empty: on the live stats.tick path this
     // re-renders repeatedly, so a snapshot that drops to all-zero counts must
-    // remove the previously-rendered rows instead of leaving them stale.
-    if (!entries.length) { host.innerHTML = ''; return; }
+    // remove the previously-rendered rows instead of leaving them stale. Use the
+    // `label` param for a styled "nothing yet" affordance rather than a blank gap.
+    if (!entries.length) {
+      host.innerHTML = '<div style="padding: 8px 0; color: var(--hull-3); font-style: italic;">No ' + label + ' activity recorded yet</div>';
+      return;
+    }
     entries.sort((a, b) => b[1] - a[1]);
     const top = entries.slice(0, 8);
     const total = entries.reduce((s, [, v]) => s + Number(v || 0), 0) || 1;

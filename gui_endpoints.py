@@ -949,8 +949,8 @@ def _find_active_log(log_dir: Path) -> Path | None:
         except OSError:
             pass  # rotated away mid-scan — skip it
     if candidates:
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        return candidates[0][1]
+        # Only the single newest is needed — max() is O(n) vs sort()'s O(n log n).
+        return max(candidates, key=lambda c: c[0])[1]
     fallback = log_dir / "server.log"
     return fallback if fallback.is_file() else None
 
@@ -4751,7 +4751,9 @@ def register_gui_endpoints(
             # identical). Mirrors the write path's detail handling.
             _msg = ""
             try:
-                _msg = str((r.json() or {}).get("message") or "")
+                _body = r.json()
+                if isinstance(_body, dict):   # Discord errors are objects, but guard a list/str body
+                    _msg = str(_body.get("message") or "")
             except Exception:
                 pass
             raise HTTPException(502, (f"Discord API error {r.status_code}: {_msg}" if _msg else f"Discord API error {r.status_code}.")[:200])
@@ -4991,6 +4993,11 @@ def register_gui_endpoints(
             try:
                 status, data, retry_after = _discord_emoji_write_sync(
                     "POST", f"/guilds/{guild_id}/emojis", token, payload)
+            except HTTPException:
+                # e.g. 503 "requests not installed" — a real server-config error,
+                # not a per-emoji network blip. Let it propagate so the whole
+                # import 503s instead of reporting every emoji as "network: ...".
+                raise
             except Exception as exc:
                 return {"name": name, "ok": False, "error": f"network: {str(exc)[:120]}"}
             if status in (200, 201):
@@ -5079,6 +5086,10 @@ def register_gui_endpoints(
             status, data, _ = await asyncio.to_thread(
                 _discord_emoji_write_sync, "DELETE",
                 f"/guilds/{guild_id}/emojis/{emoji_id}", token, None)
+        except HTTPException:
+            # e.g. 503 "requests not installed" — propagate the real status
+            # instead of flattening it to a misleading 502 Bad Gateway.
+            raise
         except Exception as exc:
             raise HTTPException(502, f"Discord API connection failed: {str(exc)[:120]}")
         if status in (200, 204):
