@@ -396,18 +396,35 @@ const SEEKDEEP_BASE = (function() {
     start() {
       this.probe();
       // Live-event path: subscribe to gpu.tick / health.tick / route.changed
-      // on the WS event bus. The setInterval below stays as a 30s safety
-      // net for when the WS is down (sidecar restarting, etc).
+      // on the WS event bus. The poll below stays as a safety net for when the
+      // WS is down (sidecar restarting, etc).
       const ev = window.SeekDeepEvents;
-      if (ev && typeof ev.on === 'function') {
+      const hasBus = ev && typeof ev.on === 'function';
+      if (hasBus) {
         ev.on('gpu.tick',     (data) => { if (data) this.applyGpu(data); });
         ev.on('health.tick',  (data) => { if (data) this.applyHealth(data); });
         ev.on('route.changed', () => this.probe());
         ev.on('_open',         () => this.probe());
-        this.timer = setInterval(() => { if (seekdeepSkipBgPoll()) return; this.probe(); }, 30000);
-      } else {
-        this.timer = setInterval(() => { if (seekdeepSkipBgPoll()) return; this.probe(); }, 5000);
       }
+      // Self-rescheduling safety-net poll with FAILURE BACKOFF. Base cadence is
+      // 30s when the WS bus is up (this is just a backstop) or 5s when there's
+      // no bus at all. `failures` was already tracked but never widened the
+      // timer, so an offline server got probed at the base rate forever (the 5s
+      // no-bus case = 12 dead /health fetches/min indefinitely in Full mode,
+      // where Safe mode isn't engaged). Now each consecutive miss doubles the
+      // delay up to 60s; the next success resets failures (in probe()) so the
+      // cadence snaps back to base. await-ing probe() also prevents overlap.
+      const base = hasBus ? 30000 : 5000;
+      const tick = async () => {
+        if (!seekdeepSkipBgPoll()) {
+          try { await this.probe(); } catch (_) {}
+        }
+        const delay = this.failures > 0
+          ? Math.min(base * Math.pow(2, Math.min(this.failures, 4)), 60000)
+          : base;
+        this.timer = setTimeout(tick, delay);
+      };
+      this.timer = setTimeout(tick, base);
     }
   };
   LIVE.start();
