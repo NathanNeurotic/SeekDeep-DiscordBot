@@ -120,45 +120,99 @@
     let n = 0; const iv = setInterval(() => { if (attachModelBus() || ++n > 30) clearInterval(iv); }, 250);
   }
 
-  // ---- Task 5 · logs viewer ----
+  // ---- Task 5 · logs viewer (single consolidated owner) ----
+  // Real-time via SSE /logs/stream (which tails the active log FILE directly, so
+  // it works WITHOUT SEEKDEEP_EMIT_LOG_LINES), a /logs/tail poll fallback with a
+  // dedup cursor when SSE is unavailable, an initial backlog load + header
+  // truth-up, and the level/source/search filters. (The SSE+filters+header half
+  // used to live in a SECOND viewer in app.page2.js that double-wired these same
+  // nodes; that one was removed — this is now the only Logs-pane viewer.)
   const logsWrap = $('#logs-wrap');
   const pill     = $('#logsModePill');
   const pauseBtn = $('#logsPauseBtn');
   const clearBtn = $('#logsClearBtn');
   if (!logsWrap || !pill) return;
 
+  function logBase() {
+    if (typeof window.SeekDeepResolveBase === 'function') return window.SeekDeepResolveBase();
+    if (window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') return 'http://127.0.0.1:7865';
+    if (window.SEEKDEEP_BASE) return window.SEEKDEEP_BASE;
+    if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+    return 'http://127.0.0.1:7865';
+  }
+
   let paused = false;
   let liveMode = false;
   let lineCount = 0;
-  const MAX_LINES = 500;
+  let sse = null;
+  const MAX_LINES = 1500;
 
   function setMode(mode) {
     liveMode = mode === 'live';
     pill.classList.remove('on', 'warn', 'cyan', 'bad');
     pill.style.cursor = ''; pill.onclick = null;
-    if (mode === 'live') { pill.classList.add('cyan'); pill.innerHTML = '<span class="dot"></span>LIVE · /events'; pill.title = 'Live log streaming is on — pushing each line as it happens.'; }
-    else if (mode === 'poll') {
-      // Live streaming needs the log bus on (SEEKDEEP_EMIT_LOG_LINES). Make the
-      // pill a one-click deep-link to that setting instead of just naming the
-      // env var — no "go edit your .env" dead-end.
-      pill.classList.add('warn');
-      pill.innerHTML = '<span class="dot"></span>POLL · /logs/tail';
-      pill.title = 'Live log streaming is off — click to turn it on in All Settings, then ↻ Restart bot. Until then, polling /logs/tail every 3s.';
-      pill.style.cursor = 'pointer';
-      pill.onclick = () => { location.href = 'settings.html#SEEKDEEP_EMIT_LOG_LINES'; };
-    }
-    else { pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.title = 'no source available'; }
+    if (mode === 'live') { pill.classList.add('cyan'); pill.innerHTML = '<span class="dot"></span>LIVE · /logs/stream'; pill.title = 'Live log streaming (SSE) — pushing each line as it happens.'; }
+    else if (mode === 'poll') { pill.classList.add('warn'); pill.innerHTML = '<span class="dot"></span>POLL · /logs/tail'; pill.title = 'Live stream (SSE) unavailable — polling /logs/tail every 3s.'; }
+    else { pill.innerHTML = '<span class="dot"></span>OFFLINE'; pill.title = 'no log source available'; }
   }
   setMode('poll');
 
-  function appendLine(d) {
+  // ---- Filters: search input + level chips + source chips (ported from the
+  // old app.page2 viewer; operate on the data-level/data-src set in appendRaw) ----
+  const logFilters  = document.querySelector('.log-filters');
+  const searchInput = logFilters?.querySelector('input[placeholder*="Search"]');
+  let searchQ = '';
+  let activeLevel = 'all';
+  const activeSources = new Set();
+  function rowMatches(row) {
+    const lvl = row.dataset.level || 'info';
+    const src = row.dataset.src || '';
+    const okQ = !searchQ || (row.textContent || '').toLowerCase().includes(searchQ);
+    const okLvl = activeLevel === 'all' || lvl === activeLevel;
+    // 'file'-sourced lines carry no bot/ai-server/searxng token, so a source
+    // chip must not hide them (else the file-log format goes blank).
+    const okSrc = !activeSources.size || src === 'file' || [...activeSources].some(s => src.includes(s));
+    return okQ && okLvl && okSrc;
+  }
+  function applyFilters() { logsWrap.querySelectorAll('.log-line').forEach(r => { r.style.display = rowMatches(r) ? '' : 'none'; }); }
+
+  // Parse a raw log line (string OR {level,src,msg,ts} object) into a normalized
+  // {ts,level,src,msg}. Both /logs/tail and SSE /logs/stream deliver raw STRING
+  // lines, so we parse out the timestamp/level the way the old app.page2 viewer
+  // did (file-logger format first, then the legacy HH:MM:SS [LEVEL] [src] form),
+  // instead of dumping the whole line into msg with level='info'.
+  const FILE_LOG_RE   = /^\s*\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]\s*\[(INFO|WARN|ERR|ERROR|DBG|DEBUG)\]\s*(.*)$/i;
+  const LEGACY_LOG_RE = /^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*\[?(INFO|WARN|ERR|ERROR|DBG|DEBUG)?\]?\s*\[?([A-Za-z][\w-]*)?\]?\s*[:|]?\s*(.*)$/i;
+  function parseLogLine(raw) {
+    if (raw && typeof raw === 'object') {
+      let lvl = String(raw.level || 'info').toLowerCase().replace('warning', 'warn').replace('error', 'err').replace('debug', 'dbg');
+      return { ts: raw.ts || '', level: ['info','warn','err','dbg'].includes(lvl) ? lvl : 'info', src: raw.src || 'file', msg: raw.msg != null ? String(raw.msg) : String(raw) };
+    }
+    const s = String(raw);
+    let ts = '', lvl = '', src = '', msg = s;
+    const fm = FILE_LOG_RE.exec(s);
+    if (fm) { ts = fm[1] || ''; lvl = (fm[2] || '').toLowerCase(); msg = fm[3] || ''; src = 'file'; }
+    else { const sm = LEGACY_LOG_RE.exec(s) || [null, '', '', '', s]; ts = sm[1] || ''; lvl = (sm[2] || '').toLowerCase(); src = sm[3] || ''; msg = sm[4] || s; }
+    // Older Tee mis-tagged uvicorn's "INFO: Started server process" as [ERR]
+    // (stderr defaulted to ERR). Re-detect from the message so it displays right.
+    if ((lvl === 'err' || lvl === 'error') && /^\s*INFO[:\s]/i.test(msg)) lvl = 'info';
+    lvl = lvl.replace('error', 'err').replace('debug', 'dbg');
+    return { ts, level: ['info','warn','err','dbg'].includes(lvl) ? lvl : 'info', src: src || '', msg };
+  }
+
+  function appendRaw(raw) {
     if (paused) return;
     if (lineCount === 0) logsWrap.innerHTML = '';
+    const d = parseLogLine(raw);
     const row = document.createElement('div');
     row.className = 'log-line';
-    const level = (d.level || 'info').toLowerCase();
-    const colorMap = { info: 'var(--cyan-1)', warn: 'var(--warn)', warning: 'var(--warn)', error: 'var(--bad)', err: 'var(--bad)', debug: 'var(--hull-3)' };
-    const time = d.ts ? new Date(d.ts).toLocaleTimeString('en-US', { hour12: false }) : new Date().toLocaleTimeString('en-US', { hour12: false });
+    row.dataset.level = d.level;                     // for the level filter chips
+    row.dataset.src = (d.src || '').toLowerCase();   // for the source filter chips
+    const colorMap = { info: 'var(--cyan-1)', warn: 'var(--warn)', err: 'var(--bad)', dbg: 'var(--hull-3)' };
+    // ISO ts → HH:MM:SS; bare HH:MM:SS → shown raw; none → current time.
+    let time;
+    if (d.ts) { const dt = new Date(d.ts); time = isNaN(dt.getTime()) ? String(d.ts) : dt.toLocaleTimeString('en-US', { hour12: false }); }
+    else { time = new Date().toLocaleTimeString('en-US', { hour12: false }); }
     row.style.fontFamily = 'var(--font-mono)';
     row.style.fontSize = '12px';
     row.style.padding = '5px 14px';
@@ -168,17 +222,16 @@
     row.style.lineHeight = '1.6';
     row.style.borderBottom = '1px solid color-mix(in oklab, var(--cyan-1) 5%, transparent)';
     // Build the four columns with createElement + textContent so untrusted
-    // log fields (d.src, d.msg) can never break out into markup. textContent
-    // means no manual escaping is needed. Styling/colors preserved exactly.
+    // log fields (src, msg) can never break out into markup.
     const timeSpan = document.createElement('span');
     timeSpan.style.color = 'var(--hull-3)';
     timeSpan.textContent = time;
     const levelSpan = document.createElement('span');
-    levelSpan.style.color = colorMap[level] || 'var(--hull-2)';
+    levelSpan.style.color = colorMap[d.level] || 'var(--hull-2)';
     levelSpan.style.textTransform = 'uppercase';
     levelSpan.style.letterSpacing = '0.12em';
     levelSpan.style.fontSize = '10px';
-    levelSpan.textContent = level;
+    levelSpan.textContent = d.level;
     const srcSpan = document.createElement('span');
     srcSpan.style.color = 'var(--hull-3)';
     srcSpan.textContent = d.src || '—';
@@ -190,41 +243,121 @@
     row.appendChild(srcSpan);
     row.appendChild(msgSpan);
     logsWrap.appendChild(row);
+    if (!rowMatches(row)) row.style.display = 'none';   // honor active filters on new lines
     lineCount++;
     while (lineCount > MAX_LINES) { logsWrap.firstChild?.remove(); lineCount--; }
     logsWrap.scrollTop = logsWrap.scrollHeight;
   }
 
+  // Filter chip + search wiring (the markup lives in the logs pane in app.html).
+  if (searchInput) searchInput.addEventListener('input', (e) => { searchQ = (e.target.value || '').trim().toLowerCase(); applyFilters(); });
+  if (logFilters) {
+    const allChips = logFilters.querySelectorAll('.chip');
+    // First 5 chips are levels (ALL/INFO/WARN/ERROR/DEBUG), single-select;
+    // the rest are sources (bot/ai-server/searxng/image/vision), multi-select.
+    const levelChips = [...allChips].slice(0, 5);
+    const sourceChips = [...allChips].slice(5);
+    levelChips.forEach(c => c.addEventListener('click', () => {
+      levelChips.forEach(x => x.classList.remove('active')); c.classList.add('active');
+      const t = (c.textContent || '').trim().toLowerCase();
+      activeLevel = t === 'all' ? 'all' : t === 'info' ? 'info' : t === 'warn' ? 'warn' : t === 'error' ? 'err' : t === 'debug' ? 'dbg' : 'all';
+      applyFilters();
+    }));
+    sourceChips.forEach(c => c.addEventListener('click', () => {
+      const src = (c.textContent || '').trim().toLowerCase();
+      if (activeSources.has(src)) { activeSources.delete(src); c.classList.remove('active'); }
+      else { activeSources.add(src); c.classList.add('active'); }
+      applyFilters();
+    }));
+  }
+
   pauseBtn?.addEventListener('click', () => {
     paused = !paused;
     pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    if (paused) { try { sse?.close(); } catch {} sse = null; }   // stop the SSE push (poll also skips while paused)
+    else startSSE();
   });
   clearBtn?.addEventListener('click', () => {
     logsWrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ cleared · waiting for new lines</div>';
     lineCount = 0;
   });
 
-  function attachLogBus() {
-    if (!window.SeekDeepEvents || typeof window.SeekDeepEvents.on !== 'function') return false;
-    let liveSeen = false;
-    window.SeekDeepEvents.on('log.line', (d) => {
-      if (!liveSeen) { liveSeen = true; setMode('live'); }
-      appendLine(d);
-    });
-    window.SeekDeepEvents.on('_open',  () => { /* live status driven by first log.line */ });
-    window.SeekDeepEvents.on('_close', () => setMode('offline'));
-    // Probe: if we don't see a log.line in 6s, assume EMIT_LOG_LINES=off and fall back to poll mode
-    setTimeout(() => { if (!liveSeen) setMode('poll'); }, 6000);
-    return true;
+  // ---- Header truth-up: real filename / returned-line count / file size.
+  // Was previously only set by the app.page2 viewer; folded in here so the one
+  // remaining viewer keeps the subtitle honest. ----
+  function updateHeader(data) {
+    if (!data) return;
+    const fileEl = document.getElementById('logsFilePath');
+    const cntEl  = document.getElementById('logsLineCount');
+    const sizeEl = document.getElementById('logsFileSize');
+    if (fileEl && data.file) fileEl.textContent = 'logs/' + data.file;
+    if (cntEl && Array.isArray(data.lines)) cntEl.textContent = data.lines.length.toLocaleString();
+    if (sizeEl && data.size_bytes != null) {
+      const n = data.size_bytes;
+      sizeEl.textContent = n < 1024 ? n + ' B'
+        : n < 1048576 ? (n / 1024).toFixed(1) + ' KB'
+        : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB'
+        : (n / 1073741824).toFixed(2) + ' GB';
+    }
   }
-  // Fall back to /logs/tail polling when bus isn't pumping log.line.
+
+  // ---- Real-time via SSE /logs/stream. EventSource can't set headers, so the
+  // GUI token rides as ?token= (the server accepts either form). The endpoint
+  // seeks to end-of-file and tails it directly, so it streams live WITHOUT
+  // SEEKDEEP_EMIT_LOG_LINES and never replays the backlog we just loaded. On any
+  // SSE error we drop to POLL mode and the /logs/tail poll loop below takes over. ----
+  async function startSSE() {
+    if (paused || sse) return;
+    try {
+      let url = logBase() + '/logs/stream';
+      try {
+        if (window.SeekDeepAuth && typeof window.SeekDeepAuth.get === 'function') {
+          const tok = await window.SeekDeepAuth.get();
+          if (tok) url += '?token=' + encodeURIComponent(tok);
+        }
+      } catch {}
+      sse = new EventSource(url);
+      sse.onopen = () => setMode('live');
+      sse.onmessage = (e) => {
+        // SSE sends each line JSON-encoded (usually a raw string; tolerate objects).
+        try { const line = JSON.parse(e.data); if (line != null) appendRaw(line); }
+        catch (err) { window.SeekDeepDebug?.warn('SSE log line parse', err); }
+      };
+      sse.onerror = () => { try { sse?.close(); } catch {} sse = null; setMode('poll'); };
+    } catch (err) { window.SeekDeepDebug?.warn('EventSource /logs/stream', err); setMode('poll'); }
+  }
+
+  // ---- Initial backlog load: render the last 200 lines, truth-up the header,
+  // and seed the dedup cursor so the poll fallback won't re-append the backlog.
+  // Then open SSE for the live tail. ----
+  let _initLoaded = false;
+  async function loadInitial() {
+    if (_initLoaded) return;
+    _initLoaded = true;
+    try {
+      const r = await fetch(logBase() + '/logs/tail?lines=200', { signal: AbortSignal.timeout(4000), cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+      logsWrap.innerHTML = ''; lineCount = 0;
+      lines.forEach(appendRaw);
+      updateHeader(data);
+      _prevLogSigs = lines.map(logLineSig);
+    } catch (err) {
+      _initLoaded = false;
+      window.SeekDeepDebug?.warn('/logs/tail initial', err);
+    }
+    startSSE();
+  }
+
+  // Fall back to /logs/tail polling when SSE isn't delivering (liveMode false).
   // Returns true on a good poll, false on a failed fetch, null when skipped
-  // (live bus active, paused, or tab hidden) — the scheduler backs off only on
+  // (SSE live, paused, or tab hidden) — the scheduler backs off only on
   // real failures.
   //
   // Dedup cursor: /logs/tail returns the last N lines on EVERY poll, so without
   // a cursor the same lines re-append every ~3s (the common idle case flooded
-  // the viewer with ~100 dupes/min and pushed real history out of the 500-line
+  // the viewer with ~100 dupes/min and pushed real history out of the 1500-line
   // ring). /logs/tail is a sliding window, so on each poll it advances by `d`
   // new lines and prev.slice(d) lines up with the head of the new batch. We
   // track the WHOLE previous batch's signatures and find that alignment, then
@@ -254,29 +387,27 @@
     return 0;                                             // no overlap (big burst) → re-show window once
   }
   async function pollOnce() {
-    // Skip in Safe mode too (the WS bus is paused there, so this fallback poll
-    // would be the only thing still hitting /logs/tail — exactly the background
-    // work Safe mode exists to eliminate), alongside live/paused/hidden.
+    // Skip in Safe mode too (this fallback poll would be the only thing still
+    // hitting /logs/tail — exactly the background work Safe mode exists to
+    // eliminate), alongside SSE-live/paused/hidden.
     if (liveMode || paused
         || (typeof window.seekdeepSkipBgPoll === 'function' && window.seekdeepSkipBgPoll())) return null;
     try {
-      const base = (typeof window !== 'undefined' && typeof window.SeekDeepResolveBase === 'function') ? window.SeekDeepResolveBase() : ((window.__TAURI__ || (location.hostname || '') === 'tauri.localhost') ? 'http://127.0.0.1:7865' : ((location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'http://127.0.0.1:7865'));
-      const r = await fetch(base + '/logs/tail?n=20', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+      const r = await fetch(logBase() + '/logs/tail?lines=200', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
       if (!r.ok) return false;
       const data = await r.json().catch(() => null);
       const lines = Array.isArray(data?.lines) ? data.lines : [];
+      updateHeader(data);
       const sigs = lines.map(logLineSig);
       const start = newLinesStart(_prevLogSigs, sigs);
-      for (const ln of lines.slice(start)) {
-        appendLine({ level: ln.level || 'info', src: ln.src || 'file', msg: ln.msg || String(ln), ts: ln.ts });
-      }
+      for (const ln of lines.slice(start)) appendRaw(ln);   // appendRaw parses strings + objects
       _prevLogSigs = sigs;
       return true;
     } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); return false; }
   }
-  if (!attachLogBus()) {
-    let n = 0; const iv = setInterval(() => { if (attachLogBus() || ++n > 30) clearInterval(iv); }, 250);
-  }
+  // Load the backlog (which then opens SSE), and run the poll loop as the
+  // fallback for whenever SSE is down — pollOnce skips itself while SSE is live.
+  loadInitial();
   // Self-rescheduling poll with failure backoff (3s → cap 30s), reset to 3s on a
   // good poll or a skip. Replaces a flat setInterval(3000) that fetched
   // /logs/tail every 3s forever even while the server was down or the tab was

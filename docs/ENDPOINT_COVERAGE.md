@@ -49,7 +49,7 @@
 | POST | `/launcher/{service}/{action}` | token | app.page5.js | yes |
 | POST | `/launcher/bot/kill-all` | token | nav.js | yes |
 | GET | `/launchers/status` | open | api.page.js | yes |
-| GET | `/logs/stream` | token* | app.page2.js | no |
+| GET | `/logs/stream` | token* | app.page5.js | no |
 | GET | `/logs/tail` | token | — | no |
 | GET | `/memory/presets/{user_id}` | token | — | yes |
 | POST | `/memory/presets/{user_id}` | token | — | yes |
