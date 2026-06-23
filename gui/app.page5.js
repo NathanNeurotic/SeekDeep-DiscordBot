@@ -304,8 +304,10 @@
   // ---- Real-time via SSE /logs/stream. EventSource can't set headers, so the
   // GUI token rides as ?token= (the server accepts either form). The endpoint
   // seeks to end-of-file and tails it directly, so it streams live WITHOUT
-  // SEEKDEEP_EMIT_LOG_LINES and never replays the backlog we just loaded. On any
-  // SSE error we drop to POLL mode and the /logs/tail poll loop below takes over. ----
+  // SEEKDEEP_EMIT_LOG_LINES and never replays the backlog we just loaded. On an
+  // SSE error we drop to POLL mode but DON'T force-close: EventSource auto-
+  // reconnects on a transient drop and its onopen restores live (the poll loop
+  // covers the gap); we only release the handle once it has truly given up. ----
   async function startSSE() {
     if (paused || sse) return;
     try {
@@ -323,7 +325,15 @@
         try { const line = JSON.parse(e.data); if (line != null) appendRaw(line); }
         catch (err) { window.SeekDeepDebug?.warn('SSE log line parse', err); }
       };
-      sse.onerror = () => { try { sse?.close(); } catch {} sse = null; setMode('poll'); };
+      sse.onerror = () => {
+        // Drop to poll while SSE is interrupted. Don't force-close on a transient
+        // drop — EventSource auto-reconnects (readyState CONNECTING) and its
+        // onopen restores live mode. Only release our handle once EventSource has
+        // truly given up (readyState CLOSED: a fatal HTTP status / wrong content-
+        // type, which it does NOT retry), so a later pause->resume can re-open it.
+        setMode('poll');
+        if (sse && sse.readyState === EventSource.CLOSED) sse = null;
+      };
     } catch (err) { window.SeekDeepDebug?.warn('EventSource /logs/stream', err); setMode('poll'); }
   }
 
@@ -346,6 +356,17 @@
     } catch (err) {
       _initLoaded = false;
       window.SeekDeepDebug?.warn('/logs/tail initial', err);
+      // Surface the failure instead of leaving the pane blank (the old app.page2
+      // viewer did this). textContent keeps the error string injection-proof.
+      // This is transient: if SSE then connects — or a later poll succeeds —
+      // appendRaw clears it on the first line (lineCount===0).
+      logsWrap.innerHTML = '';
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.style.cssText = 'grid-template-columns:1fr; padding:14px; color:var(--warn); font-style:italic;';
+      el.textContent = '▸ logs unavailable · ' + (err && err.message ? err.message : String(err));
+      logsWrap.appendChild(el);
+      lineCount = 0;
     }
     startSSE();
   }
