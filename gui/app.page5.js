@@ -432,17 +432,31 @@
     try {
       const r = await fetch(logBase() + '/logs/tail?lines=200', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
       if (!r.ok) { showLogsWaiting(); return false; }   // e.g. 401 while the token loads during boot
-      const data = await r.json().catch(() => null);
+      // Let a JSON parse failure THROW to the outer catch — which preserves
+      // _prevLogSigs. Swallowing it to null (then writing the empty result into
+      // the cursor below) would reset the dedup cursor to [] and make the NEXT
+      // good poll re-append the whole 200-line window (a duplication flood).
+      const data = await r.json();
       const lines = Array.isArray(data?.lines) ? data.lines : [];
       updateHeader(data);
-      const sigs = lines.map(logLineSig);
-      const start = newLinesStart(_prevLogSigs, sigs);
-      for (const ln of lines.slice(start)) appendRaw(ln);   // appendRaw parses strings + objects
-      _prevLogSigs = sigs;
-      // The server's reachable again — upgrade from poll back to live SSE if it
-      // isn't already connected (e.g. SSE gave up on a boot-time 401 before the
-      // token was ready). startSSE no-ops if SSE is already live/connecting.
-      if (!sse) startSSE();
+      if (lines.length) {
+        const sigs = lines.map(logLineSig);
+        const start = newLinesStart(_prevLogSigs, sigs);
+        for (const ln of lines.slice(start)) appendRaw(ln);   // appendRaw parses strings + objects
+        // Only advance the cursor when we genuinely got lines. A zero-line poll —
+        // a server {ok:false} "no log file" payload, or any empty result — must
+        // NOT clobber _prevLogSigs to [] (same duplication-flood reason).
+        // /logs/tail is append-only, so a real log never shrinks to zero.
+        _prevLogSigs = sigs;
+        // Server has logs and is reachable — upgrade from poll back to live SSE if
+        // it isn't connected (e.g. SSE gave up on a boot-time 401). startSSE
+        // no-ops if SSE is already live/connecting.
+        if (!sse) startSSE();
+      } else {
+        // Reachable but no usable log payload yet (no log file at boot). Keep the
+        // cursor + stay calm; don't re-arm SSE here (it'd 404 and thrash).
+        showLogsWaiting();
+      }
       return true;
     } catch (err) {
       // Background poll failure (server booting / restarting / unreachable). Keep
