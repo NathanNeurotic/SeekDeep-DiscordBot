@@ -1699,9 +1699,16 @@ const SEEKDEEP_BASE = (function() {
             const rawChip = document.querySelector('#ipRefine .chip[data-refine="raw"]');
             if (rawChip) rawChip.classList.add('active');
             // Same seed (useLastSeed=true) so the only variable is refinement.
-            Promise.resolve(generate(true)).finally(() => {
-              allChips.forEach(c => c.classList.remove('active'));
-              if (wasActive) wasActive.classList.add('active');
+            // (generate is async, so no Promise.resolve() wrapper is needed.)
+            generate(true).finally(() => {
+              // Only restore the pre-pass selection if the user hasn't manually
+              // picked a different refine chip while this pass was generating —
+              // otherwise we'd clobber their choice. If the raw chip we set is
+              // still the active one, the selection is "ours" to revert.
+              if (document.querySelector('#ipRefine .chip.active') === rawChip) {
+                allChips.forEach(c => c.classList.remove('active'));
+                if (wasActive) wasActive.classList.add('active');
+              }
             });
           }, 0);
         }

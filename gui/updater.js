@@ -92,6 +92,15 @@
     // 200ms — which never happens (the banner has no auto-dismiss and a human
     // can't close it that fast) — so the skip path was effectively dead.
     document.addEventListener('click', function skipHandler(ev) {
+      // Self-clean: if the banner was dismissed by any other path (the ✕, "Remind
+      // me later", or "View release"), its node is gone but this document-level
+      // listener would otherwise leak for the life of the page. Detach on the next
+      // click and bail. (Registered after the banner is in the DOM, so this can't
+      // fire-and-detach prematurely while the banner is still showing.)
+      if (!document.querySelector('[data-id="sd-updater-banner"]')) {
+        document.removeEventListener('click', skipHandler);
+        return;
+      }
       if (ev.target && ev.target.matches && ev.target.matches('[data-sd-skip-update]')) {
         ev.preventDefault();
         localStorage.setItem(SKIP_KEY, result.latest);
