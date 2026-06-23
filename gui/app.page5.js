@@ -145,6 +145,7 @@
   let liveMode = false;
   let lineCount = 0;
   let sse = null;
+  let _sseStarting = false;
   const MAX_LINES = 1500;
 
   function setMode(mode) {
@@ -282,6 +283,16 @@
     lineCount = 0;
   });
 
+  // Calm placeholder for when logs can't load yet — most often during boot, when
+  // the AI server is still coming up so the GUI token isn't ready and /logs/tail
+  // 401s. This is NOT an error state (the boot-sequence panel + the POLL/OFFLINE
+  // pill already explain it), so it must never toast. Only shown when the pane is
+  // empty; appendRaw clears it on the first real line (lineCount===0).
+  function showLogsWaiting() {
+    if (lineCount > 0) return;
+    logsWrap.innerHTML = '<div class="log-line" style="grid-template-columns:1fr; padding:14px; color:var(--hull-3); font-style:italic;">▸ waiting for the server…</div>';
+  }
+
   // ---- Header truth-up: real filename / returned-line count / file size.
   // Was previously only set by the app.page2 viewer; folded in here so the one
   // remaining viewer keeps the subtitle honest. ----
@@ -309,7 +320,10 @@
   // reconnects on a transient drop and its onopen restores live (the poll loop
   // covers the gap); we only release the handle once it has truly given up. ----
   async function startSSE() {
-    if (paused || sse) return;
+    // _sseStarting guards the await window below (token fetch) so a poll-driven
+    // re-arm can't open a second EventSource before this one is assigned to sse.
+    if (paused || sse || _sseStarting) return;
+    _sseStarting = true;
     try {
       let url = logBase() + '/logs/stream';
       try {
@@ -334,7 +348,12 @@
         setMode('poll');
         if (sse && sse.readyState === EventSource.CLOSED) sse = null;
       };
-    } catch (err) { window.SeekDeepDebug?.warn('EventSource /logs/stream', err); setMode('poll'); }
+    } catch (err) {
+      // console-only — a failed SSE just means we stay in poll mode, which the
+      // pill already shows; no need to toast.
+      console.warn('[logs] EventSource /logs/stream failed:', err && err.message || err);
+      setMode('poll');
+    } finally { _sseStarting = false; }
   }
 
   // ---- Initial backlog load: render the last 200 lines, truth-up the header,
@@ -354,19 +373,16 @@
       updateHeader(data);
       _prevLogSigs = lines.map(logLineSig);
     } catch (err) {
+      // The initial load almost always fails during boot — the AI server isn't up
+      // yet, so the GUI token can't be fetched and /logs/tail 401s. That's
+      // TRANSIENT, not a real failure: don't toast (SeekDeepDebug.warn would, and
+      // a red "HTTP 401" toast on every boot looks broken) or paint a scary
+      // "logs unavailable" banner. The poll loop below retries silently and
+      // renders the backlog on its first success (then re-arms SSE);
+      // showLogsWaiting keeps the pane calm until then.
       _initLoaded = false;
-      window.SeekDeepDebug?.warn('/logs/tail initial', err);
-      // Surface the failure instead of leaving the pane blank (the old app.page2
-      // viewer did this). textContent keeps the error string injection-proof.
-      // This is transient: if SSE then connects — or a later poll succeeds —
-      // appendRaw clears it on the first line (lineCount===0).
-      logsWrap.innerHTML = '';
-      const el = document.createElement('div');
-      el.className = 'log-line';
-      el.style.cssText = 'grid-template-columns:1fr; padding:14px; color:var(--warn); font-style:italic;';
-      el.textContent = '▸ logs unavailable · ' + (err && err.message ? err.message : String(err));
-      logsWrap.appendChild(el);
-      lineCount = 0;
+      console.warn('[logs] initial /logs/tail failed (will retry via poll):', err && err.message || err);
+      showLogsWaiting();
     }
     startSSE();
   }
@@ -415,7 +431,7 @@
         || (typeof window.seekdeepSkipBgPoll === 'function' && window.seekdeepSkipBgPoll())) return null;
     try {
       const r = await fetch(logBase() + '/logs/tail?lines=200', { signal: AbortSignal.timeout(3000), cache: 'no-store' });
-      if (!r.ok) return false;
+      if (!r.ok) { showLogsWaiting(); return false; }   // e.g. 401 while the token loads during boot
       const data = await r.json().catch(() => null);
       const lines = Array.isArray(data?.lines) ? data.lines : [];
       updateHeader(data);
@@ -423,8 +439,18 @@
       const start = newLinesStart(_prevLogSigs, sigs);
       for (const ln of lines.slice(start)) appendRaw(ln);   // appendRaw parses strings + objects
       _prevLogSigs = sigs;
+      // The server's reachable again — upgrade from poll back to live SSE if it
+      // isn't already connected (e.g. SSE gave up on a boot-time 401 before the
+      // token was ready). startSSE no-ops if SSE is already live/connecting.
+      if (!sse) startSSE();
       return true;
-    } catch (err) { window.SeekDeepDebug?.warn('/logs/tail poll', err); return false; }
+    } catch (err) {
+      // Background poll failure (server booting / restarting / unreachable). Keep
+      // it calm — the POLL/OFFLINE pill already signals it; don't toast.
+      console.warn('[logs] /logs/tail poll failed:', err && err.message || err);
+      showLogsWaiting();
+      return false;
+    }
   }
   // Load the backlog (which then opens SSE), and run the poll loop as the
   // fallback for whenever SSE is down — pollOnce skips itself while SSE is live.
