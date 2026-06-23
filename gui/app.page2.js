@@ -1704,8 +1704,10 @@ const SEEKDEEP_BASE = (function() {
               // Only restore the pre-pass selection if the user hasn't manually
               // picked a different refine chip while this pass was generating —
               // otherwise we'd clobber their choice. If the raw chip we set is
-              // still the active one, the selection is "ours" to revert.
-              if (document.querySelector('#ipRefine .chip.active') === rawChip) {
+              // still the active one, the selection is "ours" to revert. The
+              // rawChip guard avoids a null===null false-match if no raw chip
+              // existed to set (then nothing here was ours to restore).
+              if (rawChip && document.querySelector('#ipRefine .chip.active') === rawChip) {
                 allChips.forEach(c => c.classList.remove('active'));
                 if (wasActive) wasActive.classList.add('active');
               }
