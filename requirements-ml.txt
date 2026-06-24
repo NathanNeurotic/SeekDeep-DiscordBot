@@ -89,7 +89,7 @@ imageio-ffmpeg>=0.5.1
 # torch 2.11 / torchvision 0.26 above. Powers the right-click "Upscale" path's
 # Real-ESRGAN mode (gated behind SEEKDEEP_FEATURE_UPSCALE_REALESRGAN=on; weights
 # pulled on demand from the Upscale Model page). Light — just torch + safetensors.
-spandrel>=0.4.1
+spandrel>=0.4.2
 # Piper TTS engine — powers /tts (the Discord `tts say` command + the GUI's
 # TTS Voice page). Provides the `piper` module (PiperVoice + SynthesisConfig)
 # and pulls a CPU onnxruntime (~14 MB; Piper is tiny/fast on CPU, no GPU needed).
