@@ -80,7 +80,7 @@ einops>=0.8.0
 timm>=1.0.27
 open-clip-torch>=3.3.0
 qwen-vl-utils>=0.0.14
-imageio>=2.36.0
+imageio>=2.37.3
 imageio-ffmpeg>=0.5.1
 # spandrel — loads ESRGAN / Real-ESRGAN .pth upscaler weights with the
 # architecture auto-detected, and (unlike basicsr+realesrgan) runs on modern
