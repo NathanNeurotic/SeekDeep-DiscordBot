@@ -284,7 +284,8 @@ def _self_update_checks() -> None:
         content = b"# patched by self-update smoke test\n"
         single = ["local_ai_server.py", "gui_endpoints.py", "warmup_local_cache.py",
                   "release_signing.py",
-                  "package.json", "requirements-local.txt", "requirements-ml.txt"]
+                  "package.json", "index.js", "package-lock.json",
+                  "requirements-local.txt", "requirements-ml.txt"]
         tree_paths = {name: _git_blob_sha(content) for name in single}
         with mock.patch.object(_urlreq, "urlopen", _make_urlopen(content, tree_paths)):
             r = c2.post("/system/self-update", json={"ref": "v9.9.9"}, headers=H)
