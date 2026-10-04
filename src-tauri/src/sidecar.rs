@@ -644,6 +644,8 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
         // runs. Was absent everywhere (repo-only) → self-update 500'd on import.
         "release_signing.py",
         "package.json",
+        "package-lock.json",
+        "index.js",
         "requirements-local.txt",
         "requirements-ml.txt",
         ".env.default",
@@ -709,6 +711,22 @@ pub fn maybe_extract_resources(app: &AppHandle) -> Result<(), String> {
     for gui_src in &gui_candidates {
         if gui_src.is_dir() {
             copy_dir_skipping(gui_src, &gui_dst, &skip_list, "gui")?;
+            copied += 1;
+            break;
+        }
+    }
+
+    // lib/ directory — the bundled Discord bot imports these leaf modules.
+    // Keeping the whole directory in the runtime makes the installed desktop
+    // app capable of starting the bot without a separate Git checkout.
+    let lib_candidates = [
+        resource_root.join("_up_").join("lib"),
+        resource_root.join("lib"),
+    ];
+    let lib_dst = runtime.join("lib");
+    for lib_src in &lib_candidates {
+        if lib_src.is_dir() {
+            copy_dir_skipping(lib_src, &lib_dst, &skip_list, "lib")?;
             copied += 1;
             break;
         }

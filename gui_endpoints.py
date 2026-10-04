@@ -995,12 +995,93 @@ async def _stream_log(path: Path):
 # LAUNCHER
 # ====================================================================
 
+def _resolve_node_executable() -> str:
+    """Resolve Node without trusting the GUI process' PATH alone.
+
+    Windows desktop launches frequently inherit a stale/malformed PATH (and the
+    Microsoft Store / terminal environment can differ from Explorer). Prefer a
+    real absolute node.exe when we can find one, then fall back to PATH.
+    """
+    override = (os.getenv("SEEKDEEP_NODE") or "").strip()
+    if override:
+        try:
+            p = Path(override).expanduser()
+            if p.is_file():
+                return str(p.resolve())
+        except OSError:
+            pass
+        found = shutil.which(override)
+        if found:
+            return found
+
+    found = shutil.which("node")
+    if found:
+        return found
+
+    if os.name == "nt":
+        candidates = []
+        for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+            base = (os.getenv(env_name) or "").strip()
+            if base:
+                candidates.append(Path(base) / "nodejs" / "node.exe")
+        local = (os.getenv("LOCALAPPDATA") or "").strip()
+        if local:
+            candidates.extend([
+                Path(local) / "Programs" / "nodejs" / "node.exe",
+                Path(local) / "nodejs" / "node.exe",
+            ])
+        for p in candidates:
+            try:
+                if p.is_file():
+                    return str(p.resolve())
+            except OSError:
+                continue
+    return "node"
+
+
+def _npm_bootstrap_command(node_exe: str) -> list[str]:
+    """Return an npm command that does not depend on cmd.exe finding node."""
+    try:
+        node_path = Path(node_exe)
+        if node_path.is_file():
+            npm_cli = node_path.parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+            if npm_cli.is_file():
+                return [str(node_path), str(npm_cli)]
+    except OSError:
+        pass
+    for name in (("npm.cmd", "npm") if os.name == "nt" else ("npm",)):
+        found = shutil.which(name)
+        if found:
+            return [found]
+    return ["npm"]
+
+
+def _dotenv_has_nonempty_key(path: Path, key: str) -> bool:
+    """Small read-only dotenv probe used for actionable launcher diagnostics."""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, value = line.split("=", 1)
+        if k.strip() != key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1].strip()
+        return bool(value)
+    return False
+
+
 def _service_command(service: str) -> list[str] | None:
     """Map a whitelisted service name to its start command."""
     if service == "ai-server":
         return ["python", "local_ai_server.py"]
     if service == "bot":
-        return ["node", "index.js"]
+        return [_resolve_node_executable(), "index.js"]
     if service == "searxng":
         return ["docker", "compose", "-f", "searxng/docker-compose.yml", "up", "-d"]
     return None
@@ -1279,6 +1360,7 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     cmd = _service_command(service)
     if not cmd:
         raise HTTPException(400, f"no command mapping for service {service!r}")
+    child_env = os.environ.copy()
     # For the Discord bot we need index.js + node_modules in cwd. In Tauri
     # mode the AI server runs from %APPDATA%/SeekDeep/app/ where these
     # files don't exist. Auto-resolve to the user's actual repo dir.
@@ -1291,10 +1373,48 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
                 f"SeekDeep-DiscordBot repo (the directory that contains "
                 f"index.js + node_modules), then click Start again.")
         if not (cwd / "node_modules").is_dir():
+            # Desktop installs now carry index.js + package-lock.json. Bootstrap
+            # production bot deps on first Start instead of requiring a terminal
+            # or a developer checkout to have already run npm install.
+            npm_cmd = _npm_bootstrap_command(cmd[0])
+            install_mode = "ci" if (cwd / "package-lock.json").is_file() else "install"
+            try:
+                dep = subprocess.run(
+                    npm_cmd + [install_mode, "--omit=dev", "--no-audit", "--no-fund"],
+                    cwd=str(cwd), env=child_env, capture_output=True, text=True,
+                    timeout=900,
+                )
+            except FileNotFoundError as exc:
+                raise HTTPException(500,
+                    f"bot dependencies are missing and npm could not be launched: {exc}. "
+                    f"Node resolved to {cmd[0]!r}; install Node 22.12+ or set SEEKDEEP_NODE.")
+            except subprocess.TimeoutExpired:
+                raise HTTPException(504,
+                    "bot dependency bootstrap timed out after 15 minutes; check npm/network access.")
+            if dep.returncode != 0:
+                detail = (dep.stderr or dep.stdout or "npm failed").strip()[-1800:]
+                raise HTTPException(500,
+                    f"bot dependency bootstrap failed (npm {install_mode}, exit {dep.returncode}): {detail}")
+            if not (cwd / "node_modules").is_dir():
+                raise HTTPException(500,
+                    f"npm reported success but {cwd / 'node_modules'} was not created.")
+
+        # A provider API key is NOT required to bring the bot process up, but a
+        # Discord token is. Surface that before spawning a process that instantly
+        # exits and leaves the launcher looking mysteriously broken.
+        token_present = bool((child_env.get("DISCORD_TOKEN") or "").strip())
+        managed_env = _GUI_RUNTIME_PATHS.get("env_path")
+        if not token_present and isinstance(managed_env, Path):
+            token_present = _dotenv_has_nonempty_key(managed_env, "DISCORD_TOKEN")
+        if not token_present:
+            token_present = _dotenv_has_nonempty_key(cwd / ".env", "DISCORD_TOKEN")
+        if (not token_present and not os.getenv("CI")
+                and not os.getenv("SEEKDEEP_TEST_MODE")):
             raise HTTPException(400,
-                f"bot dependencies missing · `node_modules` is not present in {cwd}. "
-                f"Run `npm install` in that directory (or use the Installer's "
-                f"setup button), then click Start again.")
+                "Discord bot token is missing. Set DISCORD_TOKEN in SeekDeep's "
+                "Tweaks/Installer (or .env), reload .env, then Start Bot again. "
+                "OpenAI/Anthropic/Gemini/Hugging Face API keys are not required "
+                "just to boot the Discord bot.")
     # Route stdout/stderr to per-launch log files so failures aren't invisible.
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -1309,7 +1429,6 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     # the bot's emit-event path 401s and disables itself with the error
     # "GUI events emit got 401 (after .env re-read) — token mismatch
     # persists; disabling further emits."
-    child_env = os.environ.copy()
     if service == "bot":
         # Audit §2: lock the canonical bot cwd. _resolve_bot_cwd walks up to
         # five candidate paths every boot; once we've successfully resolved
@@ -1369,8 +1488,24 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
                 creationflags=_flags,
             )
             _PROCESSES[service] = proc
+            if (service == "bot" and not os.getenv("CI")
+                    and not os.getenv("SEEKDEEP_TEST_MODE")):
+                # Catch bad/missing Discord credentials, module-import failures,
+                # etc. while the launch request can still report the real reason.
+                time.sleep(1.0)
+                rc = proc.poll()
+                if rc is not None:
+                    _PROCESSES.pop(service, None)
+                    try:
+                        detail = err_log.read_text(encoding="utf-8", errors="replace")[-2200:].strip()
+                    except OSError:
+                        detail = ""
+                    raise HTTPException(500,
+                        f"bot exited immediately (code {rc})"
+                        + (f": {detail}" if detail else f"; see {err_log.name}"))
             return {"ok": True, "service": service, "state": "starting",
-                    "pid": proc.pid, "log": str(out_log.name), "cwd": str(cwd)}
+                    "pid": proc.pid, "log": str(out_log.name), "cwd": str(cwd),
+                    "node": cmd[0]}
     except FileNotFoundError as e:
         raise HTTPException(500,
             f"failed to start {service}: {e} · is `{cmd[0]}` on PATH? "
