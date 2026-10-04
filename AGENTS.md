@@ -411,6 +411,31 @@ Read: `seekdeepReadAutoReactions()` / Write: `seekdeepWriteAutoReactions(data)`
 - `src-tauri/src/sidecar.rs::shutdown_all(state)` — exit-time sweep for the tracked child plus orphan SeekDeep Python/bot processes.
 - `src-tauri/src/lib.rs::restart_sidecar(app)` — GUI/tray command: kill tracked child, sweep orphan AI servers, then re-run `boot_sequence`.
 
+## DataDash Activity
+
+**Purpose**: Browser-canvas arcade activity embedded under the GUI activity
+surface.
+
+**Key Files**:
+- `gui/activity/datadash.config.js` — reskin surface for copy, sound mappings,
+  sprite animation frames, draw scale, colors, and gameplay tuning. The normal
+  player accepts an optional `SPRITES.player.standard` animation with `frames`,
+  `fps`, `scale`, and `glow`; failed or missing frames fall back to the existing
+  single-frame/procedural player.
+- `gui/activity/datadash.game.js` — runtime state, input, collision, progression,
+  effects, and canvas rendering. The standard player loop runs at its configured
+  frame rate while collision dimensions remain anchored to
+  `SPRITES.player.w/h`.
+- `gui/activity/datadash.audio.js` — decoded one-shot and loop playback for the
+  event keys declared in `DATADASH.SOUNDS`.
+- `scripts/datadash_build_standard_frames.py` — reproducible green-screen
+  extraction for the approved 12-frame standard loop. It maps detected helmet,
+  chest-core, and ear-optic anchors into one shared pose space, then applies a
+  feathered helmet-only correction before writing the runtime PNG set
+  atomically.
+- `gui/activity/DATADASH_SOUND_GAPS.md` — audited list of silent lifecycle events
+  and events that currently reuse a generic sound.
+
 ## Integration Points
 
 | Source | Path |
