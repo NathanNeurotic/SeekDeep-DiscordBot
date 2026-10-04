@@ -3540,7 +3540,8 @@ def register_gui_endpoints(
             # module landed in the repo but was never added here, so it never
             # reached the app dir). Keep it in this list.
             "release_signing.py",
-            "package.json", "requirements-local.txt", "requirements-ml.txt",
+            "package.json", "index.js", "package-lock.json",
+            "requirements-local.txt", "requirements-ml.txt",
         ]
         event_bus.publish_sync({"type": "self-update.started",
                                 "data": {"ref": ref, "phase": "stage"}})
@@ -3609,10 +3610,10 @@ def register_gui_endpoints(
                                         "data": {"line": f"FAIL {fname}: {str(exc)[:120]}"}})
             event_bus.publish_sync({"type": "self-update.progress",
                                     "data": {"current": len(staged), "label": fname}})
-        # gui/ + scripts/ trees — list via contents API, then fetch each
-        # file. scripts/doctor.mjs has to exist for the Installer's System
-        # check step.
-        for sub in ("gui", "scripts"):
+        # gui/ + scripts/ + lib/ trees — list via contents API, then fetch
+        # each top-level file. lib/ is now part of the installed Discord bot,
+        # so self-update must keep it in lockstep with index.js.
+        for sub in ("gui", "scripts", "lib"):
             sub_contents_url = f"https://api.github.com/repos/{REPO}/contents/{sub}?ref={ref}"
             try:
                 api_resp = _fetch(sub_contents_url, max_bytes=_SELF_UPDATE_MAX_API_BYTES)

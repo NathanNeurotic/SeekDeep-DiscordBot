@@ -50,6 +50,7 @@ const sot = JSON.parse(read('release-files.json'));
 const core = sot.core_files;
 const bundleExtra = sot.bundle_extra;
 const subdirs = sot.subdirs;
+const bundleSubdirs = sot.bundle_subdirs || ['gui'];
 
 const errors = [];
 // Gemini: sort-compare (the Set-size trick mis-passes lists with differing
@@ -72,16 +73,25 @@ function check(label, got, want) {
 // 1. self-updater single_files == core
 check('gui_endpoints.py single_files', extractArray(read('gui_endpoints.py'), 'single_files = '), core);
 
+// 1b. self-updater fetched top-level subtrees == subdirs.
+{
+  const src = read('gui_endpoints.py');
+  const m = src.match(/for sub in \(([^)]*)\):\s*\n\s*sub_contents_url/);
+  const got = m ? [...m[1].matchAll(/["']([^"']+)["']/g)].map((x) => x[1]) : null;
+  check('gui_endpoints.py self-update subdirs', got, subdirs);
+}
+
 // 2. signing manifest single files == core; subdirs == subdirs
 const signingSrc = read('release_signing.py');
 check('release_signing.py MANIFEST_SINGLE_FILES', extractArray(signingSrc, 'MANIFEST_SINGLE_FILES = '), core);
 check('release_signing.py MANIFEST_SUBDIRS', extractArray(signingSrc, 'MANIFEST_SUBDIRS = '), subdirs);
 
-// 3. tauri bundle.resources (strip ../) == core + bundle_extra + gui glob
+// 3. tauri bundle.resources (strip ../) == core + bundle_extra + recursively bundled dirs
 {
   const conf = JSON.parse(read('src-tauri/tauri.conf.json'));
   const res = (conf.bundle?.resources || []).map((r) => r.replace(/^\.\.\//, ''));
-  check('tauri.conf.json bundle.resources', res, [...core, ...bundleExtra, 'gui/**/*']);
+  check('tauri.conf.json bundle.resources', res,
+    [...core, ...bundleExtra, ...bundleSubdirs.map((d) => d + '/**/*')]);
 }
 
 // 4. sidecar extraction files == core + bundle_extra

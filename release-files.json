@@ -1,22 +1,24 @@
 {
   "__doc__": [
     "DUP-1 single source of truth for the runtime file set that must stay in sync",
-    "across the four consumers below. The preflight `release-files` guard",
-    "(scripts/check-release-files.mjs) parses each consumer and fails if it drifts",
-    "from this file. When you add or remove a shipped runtime file, edit THIS file",
-    "first; preflight then names exactly which consumer lists to update.",
+    "across self-update/signing/bundling/extraction consumers. The preflight",
+    "`release-files` guard (scripts/check-release-files.mjs) parses each consumer",
+    "and fails if it drifts from this file. When you add/remove shipped runtime",
+    "code, edit THIS file first; preflight names the consumer lists to update.",
     "",
-    "Consumers and what each must contain:",
-    "  gui_endpoints.py        self-updater `single_files`      == core_files",
-    "  release_signing.py      MANIFEST_SINGLE_FILES            == core_files",
-    "                          MANIFEST_SUBDIRS                 == subdirs",
-    "  src-tauri/tauri.conf.json  bundle.resources (../-prefixed) == core_files + bundle_extra + ['gui/**/*']",
-    "  src-tauri/src/sidecar.rs   extraction `let files = [...]`  == core_files + bundle_extra",
+    "Consumers:",
+    "  gui_endpoints.py            self-updater `single_files` == core_files",
+    "                              fetched top-level subtrees == subdirs",
+    "  release_signing.py          MANIFEST_SINGLE_FILES == core_files",
+    "                              MANIFEST_SUBDIRS == subdirs",
+    "  src-tauri/tauri.conf.json   bundle.resources == core_files + bundle_extra",
+    "                              + bundle_subdirs globs",
+    "  src-tauri/src/sidecar.rs    extraction `let files = [...]` == core_files",
+    "                              + bundle_extra; gui/ + lib/ recurse separately",
     "",
-    "Why the asymmetry is intentional: the .env templates + the three runtime",
-    "scripts are BUNDLED + EXTRACTED (so a fresh install can read them) but not",
-    "self-updated/signed individually (gui/ and scripts/ ship as whole subdirs on",
-    "the network path). sidecar.rs does not re-extract gui/ (served from the bundle)."
+    "scripts/ is self-updated/signed as a subtree, but the installer only needs",
+    "the specific runtime scripts in bundle_extra. gui/ and lib/ are bundled",
+    "recursively because the installed GUI and Discord bot execute them directly."
   ],
   "core_files": [
     "local_ai_server.py",
@@ -24,6 +26,8 @@
     "warmup_local_cache.py",
     "release_signing.py",
     "package.json",
+    "package-lock.json",
+    "index.js",
     "requirements-local.txt",
     "requirements-ml.txt"
   ],
@@ -36,6 +40,11 @@
   ],
   "subdirs": [
     "gui",
-    "scripts"
+    "scripts",
+    "lib"
+  ],
+  "bundle_subdirs": [
+    "gui",
+    "lib"
   ]
 }

@@ -66,6 +66,7 @@ const IGNORE = new Set([
   'CI',                            // CI detection (set by the CI runner)
   'PYTEST_CURRENT_TEST',           // pytest internal
   'VIRTUAL_ENV',                   // Python venv standard
+  'LOCALAPPDATA',                  // Windows system profile path
   'GITHUB_TOKEN',                  // standard GitHub token (self-update rate limit)
   'SEEKDEEP_TEST_MODE',            // test-harness flag (smoke_test.mjs / pytest)
   'SEEKDEEP_FRESH_BOOT',           // internal IPC flag the launcher sets, not user-set

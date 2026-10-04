@@ -47,7 +47,7 @@ from pathlib import Path
 RELEASE_SIGNING_PUBKEY_HEX = ""
 
 # Files the manifest covers (must mirror the self-updater's `single_files` plus
-# the top-level gui/ and scripts/ files it fetches). The signing script walks
+# the top-level gui/, scripts/, and lib/ files it fetches). The signing script walks
 # these; the server checks every staged file is present + matches.
 MANIFEST_SINGLE_FILES = [
     "local_ai_server.py",
@@ -55,10 +55,12 @@ MANIFEST_SINGLE_FILES = [
     "warmup_local_cache.py",
     "release_signing.py",
     "package.json",
+    "index.js",
+    "package-lock.json",
     "requirements-local.txt",
     "requirements-ml.txt",
 ]
-MANIFEST_SUBDIRS = ["gui", "scripts"]
+MANIFEST_SUBDIRS = ["gui", "scripts", "lib"]
 MANIFEST_NAME = "release-manifest.json"
 MANIFEST_SIG_NAME = "release-manifest.json.sig"
 
@@ -208,7 +210,7 @@ def sha256_hex(data: bytes) -> str:
 
 def list_manifest_files(root: Path) -> list[str]:
     """Repo-relative paths the manifest should cover: the single files plus the
-    TOP-LEVEL files in gui/ and scripts/ (mirrors what the self-updater fetches —
+    TOP-LEVEL files in gui/, scripts/, and lib/ (mirrors what the self-updater fetches —
     it lists each subdir non-recursively and fetches type==file entries).
 
     NESTED files (e.g. gui/activity/datadash.game.js) are INTENTIONALLY out of
