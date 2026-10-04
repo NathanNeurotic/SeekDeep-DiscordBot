@@ -1076,6 +1076,40 @@ def _dotenv_has_nonempty_key(path: Path, key: str) -> bool:
     return False
 
 
+def _dotenv_values_for_child(path: Path) -> dict[str, str]:
+    """Read the canonical runtime dotenv file into a child-process env map.
+
+    The desktop app's .env lives in the extracted Tauri runtime, while the
+    Discord bot may execute from a separate repo checkout. POST /config updates
+    the runtime file immediately, but Python's os.environ is only a startup
+    snapshot and Node's dotenv reads the bot cwd. Without an explicit handoff,
+    a newly-saved DISCORD_TOKEN/provider key can pass GUI preflight yet still be
+    absent from node index.js, causing an immediate bot exit.
+
+    Runtime-file values intentionally win for the spawned bot because they are
+    the settings the user just saved in SeekDeep. SEEKDEEP_GUI_TOKEN is still
+    overwritten later with _current_token() so token rotation remains exact.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        m = _ENV_LINE_RE.match(line)
+        if not m:
+            continue
+        key = m.group(1)
+        value = line.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
 def _service_command(service: str) -> list[str] | None:
     """Map a whitelisted service name to its start command."""
     if service == "ai-server":
@@ -1361,6 +1395,16 @@ def _start_service(service: str, cwd: Path, log_dir: Path) -> dict:
     if not cmd:
         raise HTTPException(400, f"no command mapping for service {service!r}")
     child_env = os.environ.copy()
+    # The installed app's canonical configuration lives in the Tauri runtime
+    # .env, while the bot often runs from a separate repo checkout. Pull the
+    # LIVE file values into the child env on every Start so GUI-saved secrets
+    # and routing settings (DISCORD_TOKEN, provider keys, model knobs, etc.)
+    # actually reach index.js without a sidecar restart or duplicate repo .env.
+    # This also refreshes values changed since Python booted.
+    if service == "bot":
+        managed_env = _GUI_RUNTIME_PATHS.get("env_path")
+        if isinstance(managed_env, Path):
+            child_env.update(_dotenv_values_for_child(managed_env))
     # For the Discord bot we need index.js + node_modules in cwd. In Tauri
     # mode the AI server runs from %APPDATA%/SeekDeep/app/ where these
     # files don't exist. Auto-resolve to the user's actual repo dir.
