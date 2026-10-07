@@ -33,7 +33,7 @@
 # it caused a ResolutionImpossible: torchaudio 2.10.0+cu128 hard-pins
 # torch==2.10.0, which conflicts with our torch 2.11.0 pin. Keep it out
 # until SeekDeep actually grows an audio surface.
-torch==2.11.0+cu128 ; platform_system == "Windows"
+torch==2.14.1 ; platform_system == "Windows"
 torchvision==0.26.0+cu128 ; platform_system == "Windows"
 # AUD-007: non-Windows (Linux/macOS) was previously UNPINNED — `pip install -r`
 # would pull whatever torch/torchvision the index currently serves, so a future
